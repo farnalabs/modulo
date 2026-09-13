@@ -10,9 +10,11 @@ Covers previously-untested code paths in ``modulo.core.feature_flags``:
 
 import asyncio
 import uuid
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import InvalidRequestError
 
 from modulo.core.feature_flags import (
     CommunityTier,
@@ -361,6 +363,15 @@ class TestOverrideDbLookups:
         account_error: Exception | None = None,
     ) -> object:
         session = AsyncMock()
+        # The fixed ``_override_from_entity`` always opens ``session.begin()``.
+        # An AsyncMock's ``begin()`` returns a coroutine (not an async CM), and
+        # its auto-created ``__aexit__`` returns a truthy MagicMock (which
+        # would wrongly suppress in-block exceptions) — wire a proper
+        # transaction context manager instead.
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=session)
         cm.__aexit__ = AsyncMock(return_value=False)
@@ -456,6 +467,152 @@ class TestOverrideDbLookups:
         registry = FeatureFlagRegistry()
         account = MagicMock(preferences=None)
         assert await self._lookup(registry._get_user_override, account=account) is None
+
+
+class _ExpiringEntity:
+    """ORM-row double whose settings attribute expires on commit (FAR-820).
+
+    Mirrors real AsyncSession semantics: ``expire_on_commit`` defaults to True,
+    so once the transaction commits the attribute is expired and reading it
+    triggers a refresh — which requires a new transaction and raises
+    ``InvalidRequestError`` on an ``autobegin=False`` session.
+    """
+
+    def __init__(self, attr: str, value: dict | None) -> None:
+        object.__setattr__(self, "_attr", attr)
+        object.__setattr__(self, "_value", value)
+        object.__setattr__(self, "_in_txn", False)
+
+    def __getattr__(self, name: str) -> object:
+        if name == object.__getattribute__(self, "_attr"):
+            if not object.__getattribute__(self, "_in_txn"):
+                raise InvalidRequestError("Autobegin is disabled on this Session")
+            return object.__getattribute__(self, "_value")
+        raise AttributeError(name)
+
+
+class _AutobeginFalseSession:
+    """Session double with real ``autobegin=False`` semantics.
+
+    Freshly constructed, so ``in_transaction()`` is False; ``begin()`` opens a
+    transaction for the duration of the ``async with`` block.
+    """
+
+    def __init__(self, entity: _ExpiringEntity) -> None:
+        self._entity = entity
+
+    def in_transaction(self) -> bool:
+        return False
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    def begin(self) -> "_ExpiringTransaction":
+        return _ExpiringTransaction(self._entity)
+
+
+class _ExpiringTransaction:
+    def __init__(self, entity: _ExpiringEntity) -> None:
+        self._entity = entity
+
+    async def __aenter__(self) -> None:
+        self._entity._in_txn = True
+
+    async def __aexit__(self, *exc: object) -> bool:
+        self._entity._in_txn = False
+        return False
+
+
+class TestOverrideFromEntitySessionSemantics:
+    """FAR-820 regression: the settings column must be read INSIDE the open
+    transaction.
+
+    The prod failure: ``_override_from_entity`` builds an ``autobegin=False``
+    session, loads the entity inside ``session.begin()``, then reads the
+    settings attribute AFTER the block commits. On a real AsyncSession the
+    commit expires ORM attributes, so the post-commit read triggers a refresh
+    that requires a new transaction and raises ``InvalidRequestError`` —
+    swallowed by the except block, so every org/team/user override resolved to
+    the tier default (e.g. ``library_collection`` 404'd despite a persisted
+    org override).
+    """
+
+    async def _resolve(
+        self,
+        scope: str,
+        flag_name: str,
+        settings_attr: str,
+        overrides: dict,
+    ) -> object:
+        registry = FeatureFlagRegistry()
+        entity = _ExpiringEntity(settings_attr, {"feature_overrides": overrides})
+        session = _AutobeginFalseSession(entity)
+        with (
+            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
+            patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+            patch("modulo.settings.get_settings", return_value=MagicMock()),
+            patch(
+                "modulo.db.crud.organisation.get_organisation",
+                new_callable=AsyncMock,
+                return_value=entity,
+            ),
+            patch(
+                "modulo.db.crud.team.get_team",
+                new_callable=AsyncMock,
+                return_value=entity,
+            ),
+            patch(
+                "modulo.db.crud.account.get_account_by_id",
+                new_callable=AsyncMock,
+                return_value=entity,
+            ),
+        ):
+            if scope == "org":
+                return await registry.resolve_flag(flag_name, org_id=uuid.uuid4())
+            if scope == "team":
+                return await registry.resolve_flag(flag_name, team_id=uuid.uuid4())
+            return await registry.resolve_flag(flag_name, user_id=uuid.uuid4())
+
+    async def test_org_override_true_on_default_off_flag_resolves_true(self) -> None:
+        """The prod failure mode: override persisted in settings_json, but
+        resolve_flag fell through to the default-off value."""
+        result = await self._resolve(
+            "org",
+            "library_collection",
+            "settings_json",
+            {"library_collection": True},
+        )
+        assert result is True
+
+    async def test_org_override_false_on_default_on_flag_resolves_false(self) -> None:
+        result = await self._resolve(
+            "org",
+            "parallel_branches",
+            "settings_json",
+            {"parallel_branches": False},
+        )
+        assert result is False
+
+    async def test_team_override_resolves_inside_transaction(self) -> None:
+        result = await self._resolve(
+            "team",
+            "library_collection",
+            "settings",
+            {"library_collection": True},
+        )
+        assert result is True
+
+    async def test_user_override_resolves_inside_transaction(self) -> None:
+        result = await self._resolve(
+            "user",
+            "library_collection",
+            "preferences",
+            {"library_collection": True},
+        )
+        assert result is True
 
 
 class TestGetRegistry:

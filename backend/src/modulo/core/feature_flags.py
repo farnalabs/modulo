@@ -734,15 +734,17 @@ class FeatureFlagRegistry:
             load_row = load_row_factory()
             engine = get_or_create_engine(get_settings())
             async with AsyncSession(engine, autobegin=False) as session:
-                in_transaction = session.in_transaction()
-                if asyncio.iscoroutine(in_transaction):
-                    in_transaction = await in_transaction
-                if in_transaction:
+                # The session is freshly constructed with ``autobegin=False``,
+                # so it is never in a transaction here — open one explicitly.
+                # The settings column MUST be read inside the open transaction:
+                # after ``begin()`` commits, ORM attributes are expired and
+                # reading them triggers a refresh that requires a new
+                # transaction, which raises ``InvalidRequestError`` on an
+                # ``autobegin=False`` session (FAR-820) — silently nullifying
+                # every org/team/user override.
+                async with session.begin():
                     entity = await load_row(session)
-                else:
-                    async with session.begin():
-                        entity = await load_row(session)
-                settings = getattr(entity, settings_attr, None) if entity is not None else None
+                    settings = getattr(entity, settings_attr, None) if entity is not None else None
                 if entity and settings:
                     overrides = settings.get("feature_overrides", {})
                     if flag_name in overrides:
