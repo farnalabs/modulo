@@ -260,7 +260,7 @@ def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, d
             "— an empty prompt would dispatch the agent with no instructions"
         )
     if agent_commands_raw:
-        agent_command = commands_concatenation_string.join(agent_commands_raw)
+        agent_command = commands_concatenation_string.join(str(c) for c in agent_commands_raw)
         if not agent_command.strip():
             agent_command = ""
     if not agent_commands_raw or not agent_command:
