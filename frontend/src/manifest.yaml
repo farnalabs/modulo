@@ -3095,9 +3095,6 @@ elements:
       - testid: pipeline-editor-node-commands-editor
         type: element
         dynamic_testid: false
-      - testid: pipeline-editor-node-command-scalar
-        type: input
-        dynamic_testid: false
       - testid: pipeline-editor-node-command-add
         type: button
         dynamic_testid: false

@@ -593,7 +593,7 @@ describe('PipelineEditorView', () => {
     expect(savedNode.agent_command).toBeNull()
   })
 
-  it('saves a scalar-only sandbox command without inventing a list', async () => {
+  it('saves a single-command sandbox node as a one-item list', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
@@ -605,7 +605,7 @@ describe('PipelineEditorView', () => {
         node_type: 'sandbox_agent',
         template_id: 'opencode',
         agent_prompt: 'do the thing',
-        agent_command: 'opencode run --auto',
+        agent_commands: ['opencode run --auto'],
         label: 'Sandbox',
         description: '',
         position: { x: 0, y: 0 },
@@ -618,9 +618,8 @@ describe('PipelineEditorView', () => {
     await vm.saveGraph()
 
     const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
-    expect(savedNode.agent_command).toBe('opencode run --auto')
-    expect(savedNode.agent_commands).toBeNull()
-    expect(savedNode.commands_concatenation_string).toBeNull()
+    expect(savedNode.agent_commands).toEqual(['opencode run --auto'])
+    expect(savedNode.commands_concatenation_string).toBe(' && ')
   })
 
   it('falls back the join operator to the default when a list is saved without one', async () => {
@@ -700,8 +699,7 @@ describe('PipelineEditorView', () => {
         node_type: 'sandbox_agent',
         template_id: 'opencode',
         mode: 'llm',
-        agent_command: 'opencode run --auto',
-        agent_commands: null,
+        agent_commands: ['opencode run --auto'],
         commands_concatenation_string: ' && ',
         agent_prompt: 'do the thing',
         egress_policy: 'selected',
@@ -742,8 +740,8 @@ describe('PipelineEditorView', () => {
     expect(savedNode.autonomy_recommendation).toBe('autonomy_low')
     expect(savedNode.input_schema_pin).toEqual({ schema_id: 'schema-1', schema_version: 'v1' })
     // command normalisation still layers on top of the spread
-    expect(savedNode.agent_command).toBe('opencode run --auto')
-    expect(savedNode.agent_commands).toBeNull()
+    expect(savedNode.agent_command).toBeNull()
+    expect(savedNode.agent_commands).toEqual(['opencode run --auto'])
   })
 
   it('keeps composite node identity + schema pins in the save payload and omits UI-only keys', async () => {
@@ -802,8 +800,7 @@ describe('PipelineEditorView', () => {
         id: 'node-1',
         node_type: 'agent',
         agent_id: 'agent-1',
-        agent_command: 'node-level-legacy-command',
-        agent_commands: null,
+        agent_commands: ['node-level-command-a', 'node-level-command-b'],
         commands_concatenation_string: ' && ',
         label: 'Agent Node',
         description: '',
@@ -819,16 +816,15 @@ describe('PipelineEditorView', () => {
     expect(wrapper.find('[data-testid="pipeline-editor-node-commands-editor"]').exists()).toBe(false)
     const readonly = wrapper.find('[data-testid="pipeline-editor-node-commands-readonly"]')
     expect(readonly.exists()).toBe(true)
-    expect(readonly.text()).toContain('node-level-legacy-command')
+    expect(readonly.text()).toContain('node-level-command-a')
+    expect(readonly.text()).toContain('node-level-command-b')
 
     await vm.saveGraph()
 
     const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
-    // the save payload round-trips the stored command verbatim — the editor
-    // never fabricates or rewrites commands on a non-sandbox node (FAR-488a
-    // syncs a node-level agent_command into the bound Agent's row)
-    expect(savedNode.agent_command).toBe('node-level-legacy-command')
-    expect(savedNode.agent_commands).toBeNull()
+    // the save payload round-trips the stored commands verbatim — the editor
+    // never fabricates or rewrites commands on a non-sandbox node
+    expect(savedNode.agent_commands).toEqual(['node-level-command-a', 'node-level-command-b'])
     expect(savedNode.commands_concatenation_string).toBe(' && ')
   })
 

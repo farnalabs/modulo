@@ -1,40 +1,18 @@
 <template>
   <div class="space-y-3" data-testid="pipeline-editor-node-commands-editor">
-    <!-- Single (scalar) command — mutually exclusive with the list below -->
-    <div>
-      <label for="pipeline-editor-node-command-scalar" class="block text-xs font-medium">{{ $t('views.PipelineEditorView.commands_single') }}</label>
-      <input
-        id="pipeline-editor-node-command-scalar"
-        :value="scalarModel"
-        type="text"
-        class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1 font-mono text-xs"
-        :disabled="listActive"
-        :placeholder="$t('views.PipelineEditorView.commands_single_placeholder')"
-        :aria-label="$t('views.PipelineEditorView.commands_single')"
-        data-testid="pipeline-editor-node-command-scalar"
-        @input="onScalarInput"
-      />
-      <p class="mt-0.5 text-[11px] text-muted-foreground">
-        {{ listActive ? $t('views.PipelineEditorView.commands_single_disabled_hint') : $t('views.PipelineEditorView.commands_single_hint') }}
-      </p>
-    </div>
-
     <!-- Commands list — one row per command -->
-    <div :class="{ 'opacity-60': scalarActive }">
+    <div>
       <div class="flex items-center justify-between gap-2">
         <span class="block text-xs font-medium">{{ $t('views.PipelineEditorView.commands') }}</span>
         <button
           type="button"
-          class="shrink-0 rounded border border-input bg-background px-2 py-0.5 text-[11px] hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="scalarActive"
+          class="shrink-0 rounded border border-input bg-background px-2 py-0.5 text-[11px] hover:bg-accent"
           :aria-label="$t('views.PipelineEditorView.commands_add')"
           data-testid="pipeline-editor-node-command-add"
           @click="addRow"
         >{{ $t('views.PipelineEditorView.commands_add') }}</button>
       </div>
-      <p class="mt-0.5 text-[11px] text-muted-foreground">
-        {{ scalarActive ? $t('views.PipelineEditorView.commands_list_disabled_hint') : $t('views.PipelineEditorView.commands_list_hint') }}
-      </p>
+      <p class="mt-0.5 text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.commands_list_hint') }}</p>
       <p
         v-if="rows.length === 0"
         class="mt-1 text-[11px] italic text-muted-foreground"
@@ -47,7 +25,6 @@
             :value="row"
             type="text"
             class="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 font-mono text-xs"
-            :disabled="scalarActive"
             :aria-label="$t('views.PipelineEditorView.commands_row_label', { n: idx + 1 })"
             :data-testid="`pipeline-editor-node-command-row-${idx}`"
             @input="onRowInput(idx, $event)"
@@ -56,7 +33,7 @@
             <button
               type="button"
               class="rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-              :disabled="idx === 0 || scalarActive"
+              :disabled="idx === 0"
               :aria-label="$t('views.PipelineEditorView.commands_row_move_up', { n: idx + 1 })"
               :data-testid="`pipeline-editor-node-command-up-${idx}`"
               @click="moveRow(idx, -1)"
@@ -66,7 +43,7 @@
             <button
               type="button"
               class="rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-              :disabled="idx === rows.length - 1 || scalarActive"
+              :disabled="idx === rows.length - 1"
               :aria-label="$t('views.PipelineEditorView.commands_row_move_down', { n: idx + 1 })"
               :data-testid="`pipeline-editor-node-command-down-${idx}`"
               @click="moveRow(idx, 1)"
@@ -75,8 +52,7 @@
             </button>
             <button
               type="button"
-              class="rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
-              :disabled="scalarActive"
+              class="rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-destructive"
               :aria-label="$t('views.PipelineEditorView.commands_row_remove', { n: idx + 1 })"
               :data-testid="`pipeline-editor-node-command-remove-${idx}`"
               @click="removeRow(idx)"
@@ -85,8 +61,8 @@
         </li>
       </ol>
 
-      <!-- Join operator + effective-command preview (only meaningful for a list) -->
-      <div v-if="listActive" class="mt-2 space-y-1">
+      <!-- Join operator + effective-command preview -->
+      <div class="mt-2 space-y-1">
         <div>
           <label for="pipeline-editor-node-command-joiner" class="block text-xs font-medium">{{ $t('views.PipelineEditorView.commands_join_operator') }}</label>
           <input
@@ -116,13 +92,11 @@ import { computed, ref, watch } from 'vue'
 const DEFAULT_JOINER = ' && '
 
 const props = defineProps<{
-  scalarCommand?: string | null
   commands?: string[] | null
   joiner?: string | null
 }>()
 
 const emit = defineEmits<{
-  (e: 'update:scalarCommand', value: string): void
   (e: 'update:commands', value: string[]): void
   (e: 'update:joiner', value: string): void
 }>()
@@ -142,23 +116,7 @@ watch(
   { immediate: true },
 )
 
-const scalarModel = computed(() => props.scalarCommand ?? '')
 const joinerModel = computed(() => props.joiner ?? '')
-
-const listActive = computed(() => rows.value.some((c) => c.trim() !== ''))
-const scalarActive = computed(() => scalarModel.value.trim() !== '')
-
-// Backend semantics (routes/agents.py create/update XOR; the runtime resolves
-// the list first): a non-empty list clears the scalar command.
-watch(
-  listActive,
-  (active) => {
-    if (active && scalarActive.value) {
-      emit('update:scalarCommand', '')
-    }
-  },
-  { immediate: true },
-)
 
 function emitCommands() {
   emit('update:commands', [...rows.value])
@@ -186,10 +144,6 @@ function moveRow(idx: number, direction: -1 | 1) {
 function onRowInput(idx: number, event: Event) {
   rows.value[idx] = (event.target as HTMLInputElement).value
   emitCommands()
-}
-
-function onScalarInput(event: Event) {
-  emit('update:scalarCommand', (event.target as HTMLInputElement).value)
 }
 
 function onJoinerInput(event: Event) {
