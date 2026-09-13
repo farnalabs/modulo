@@ -948,6 +948,12 @@ elements:
       - testid: collection-create-connector
         type: button
         dynamic_testid: false
+      - testid: collection-install
+        type: button
+        dynamic_testid: false
+      - testid: collection-install-error
+        type: element
+        dynamic_testid: false
     /accept-invite:
       - testid: accept-invite-missing-token
         type: element
