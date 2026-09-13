@@ -330,8 +330,9 @@ class TestMigrationBackfillGrace:
         # and 0224_agents_add_indexes chains on top of 0223,
         # and 0225_agents_constraints_rls chains on top of 0224,
         # and 0226_agents_json_to_jsonb chains on top of 0225,
+        # and 0227_drop_scalar_agent_command chains on top of 0226,
         # so it is now the single linear head of the chain.
-        assert heads == ["0226_agents_json_to_jsonb"], f"expected a single head, got {heads}"
+        assert heads == ["0227_drop_scalar_agent_command"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
