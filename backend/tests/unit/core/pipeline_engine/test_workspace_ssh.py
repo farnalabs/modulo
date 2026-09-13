@@ -587,7 +587,9 @@ class TestHostKeyFingerprints:
 
     def test_verify_pinned_host_keys_passes_on_genuine_keys(self) -> None:
         """The gate accepts the real, published keys."""
-        verify_pinned_host_keys()
+        # The gate must return cleanly (None) when given the genuine keys,
+        # proving it neither raises nor silently shorthands the verification.
+        assert verify_pinned_host_keys() is None
 
     def test_tampered_key_is_refused(self) -> None:
         """A key whose blob does not match the published fingerprint is rejected."""
@@ -629,6 +631,7 @@ class TestHostKeyFingerprints:
                         capture_output=True,
                         text=True,
                         check=False,
+                        timeout=30,
                     )
                 assert result.returncode == 0, f"{hostname} key did not parse: {result.stderr.strip()}"
 
@@ -703,6 +706,7 @@ class TestSshTransportScriptRoundTrip:
                 text=True,
                 check=False,
                 cwd=tmp,
+                timeout=60,
             )
             assert result.returncode == 0, result.stderr
             # The known_hosts file must exist and be non-empty.
@@ -716,6 +720,7 @@ class TestSshTransportScriptRoundTrip:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=30,
             )
             assert lookup.returncode == 0, lookup.stderr
             assert "github.com" in lookup.stdout
@@ -745,6 +750,7 @@ class TestSshTransportScriptRoundTrip:
                 text=True,
                 check=False,
                 cwd=tmp,
+                timeout=60,
             )
             assert result.returncode == 0, result.stderr
             assert "HostName=140.82.121.3" in result.stdout
