@@ -403,3 +403,282 @@ class TestCancelledErrorPropagation:
                 session=self._make_session(),
                 principal=self._principal(),
             )
+
+
+# ---------------------------------------------------------------------------
+# DB error branches — HTTP-triggered via TestClient
+# ---------------------------------------------------------------------------
+
+_PREFIX = "modulo.api.routes.node_categories."
+
+
+class TestListErrorBranches:
+    def test_programming_error_returns_501(self, client: TestClient) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("s", {}, Exception()),
+        ):
+            resp = client.get("/api/v1/node-categories")
+        assert resp.status_code == 501
+
+    def test_integrity_error_returns_409(self, client: TestClient) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("s", {}, Exception()),
+        ):
+            resp = client.get("/api/v1/node-categories")
+        assert resp.status_code == 409
+
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError(),
+        ):
+            resp = client.get("/api/v1/node-categories")
+        assert resp.status_code == 503
+
+    def test_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.get("/api/v1/node-categories")
+        assert resp.status_code == 500
+
+
+class TestCreateErrorBranches:
+    def test_programming_error_returns_501(self, client: TestClient) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("s", {}, Exception()),
+        ):
+            resp = client.post("/api/v1/node-categories", json={"name": "X"})
+        assert resp.status_code == 501
+
+    def test_integrity_error_returns_409(self, client: TestClient) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("s", {}, Exception()),
+        ):
+            resp = client.post("/api/v1/node-categories", json={"name": "X"})
+        assert resp.status_code == 409
+
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError(),
+        ):
+            resp = client.post("/api/v1/node-categories", json={"name": "X"})
+        assert resp.status_code == 503
+
+    def test_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.post("/api/v1/node-categories", json={"name": "X"})
+        assert resp.status_code == 500
+
+
+class TestGetErrorBranches:
+    def test_programming_error_returns_501(self, client: TestClient) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("s", {}, Exception()),
+        ):
+            resp = client.get(f"/api/v1/node-categories/{_CATEGORY_ID}")
+        assert resp.status_code == 501
+
+    def test_integrity_error_returns_409(self, client: TestClient) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("s", {}, Exception()),
+        ):
+            resp = client.get(f"/api/v1/node-categories/{_CATEGORY_ID}")
+        assert resp.status_code == 409
+
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError(),
+        ):
+            resp = client.get(f"/api/v1/node-categories/{_CATEGORY_ID}")
+        assert resp.status_code == 503
+
+    def test_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.get(f"/api/v1/node-categories/{_CATEGORY_ID}")
+        assert resp.status_code == 500
+
+
+class TestUpdateErrorBranches:
+    def test_programming_error_returns_501(self, client: TestClient) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("s", {}, Exception()),
+        ):
+            resp = client.patch(f"/api/v1/node-categories/{_CATEGORY_ID}", json={"name": "X"})
+        assert resp.status_code == 501
+
+    def test_integrity_error_returns_409(self, client: TestClient) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("s", {}, Exception()),
+        ):
+            resp = client.patch(f"/api/v1/node-categories/{_CATEGORY_ID}", json={"name": "X"})
+        assert resp.status_code == 409
+
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError(),
+        ):
+            resp = client.patch(f"/api/v1/node-categories/{_CATEGORY_ID}", json={"name": "X"})
+        assert resp.status_code == 503
+
+    def test_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.patch(f"/api/v1/node-categories/{_CATEGORY_ID}", json={"name": "X"})
+        assert resp.status_code == 500
+
+
+class TestDeleteErrorBranches:
+    def test_programming_error_returns_501(self, client: TestClient) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("s", {}, Exception()),
+        ):
+            resp = client.delete(f"/api/v1/node-categories/{_CATEGORY_ID}")
+        assert resp.status_code == 501
+
+    def test_integrity_error_returns_409(self, client: TestClient) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("s", {}, Exception()),
+        ):
+            resp = client.delete(f"/api/v1/node-categories/{_CATEGORY_ID}")
+        assert resp.status_code == 409
+
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError(),
+        ):
+            resp = client.delete(f"/api/v1/node-categories/{_CATEGORY_ID}")
+        assert resp.status_code == 503
+
+    def test_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.delete(f"/api/v1/node-categories/{_CATEGORY_ID}")
+        assert resp.status_code == 500
+
+
+class TestRestoreEndpoint:
+    def test_returns_200(self, client: TestClient) -> None:
+        category = _make_category()
+        with (
+            patch(f"{_PREFIX}restore_node_category", return_value=category),
+            patch(f"{_PREFIX}set_rls_org"),
+            patch(f"{_PREFIX}set_rls_user_context"),
+        ):
+            resp = client.post(f"/api/v1/node-categories/{_CATEGORY_ID}/restore")
+        assert resp.status_code == 200
+
+    def test_not_found_returns_404(self, client: TestClient) -> None:
+        with (
+            patch(f"{_PREFIX}restore_node_category", return_value=None),
+            patch(f"{_PREFIX}set_rls_org"),
+            patch(f"{_PREFIX}set_rls_user_context"),
+        ):
+            resp = client.post(f"/api/v1/node-categories/{uuid.uuid4()}/restore")
+        assert resp.status_code == 404
+
+    def test_programming_error_returns_501(self, client: TestClient) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("s", {}, Exception()),
+        ):
+            resp = client.post(f"/api/v1/node-categories/{_CATEGORY_ID}/restore")
+        assert resp.status_code == 501
+
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError(),
+        ):
+            resp = client.post(f"/api/v1/node-categories/{_CATEGORY_ID}/restore")
+        assert resp.status_code == 503
+
+    def test_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            f"{_PREFIX}set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.post(f"/api/v1/node-categories/{_CATEGORY_ID}/restore")
+        assert resp.status_code == 500
