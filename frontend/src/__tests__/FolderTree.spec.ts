@@ -70,18 +70,6 @@ const ButtonStub = {
   template: '<button type="button" :disabled="disabled || loading" @click="$emit(\'click\')"><slot /></button>',
 }
 
-const DraggableStub = {
-  name: 'DraggableStub',
-  props: ['modelValue', 'itemKey'],
-  emits: ['end', 'change'],
-  template: `
-    <div data-testid="draggable-stub">
-      <template v-for="element in modelValue" :key="element.folder.id">
-        <slot name="item" :element="element" />
-      </template>
-    </div>`,
-}
-
 function mountTree(props: Record<string, unknown> = {}) {
   return mount(FolderTree, {
     props: { selectedFolderId: null, ...props },
@@ -91,7 +79,6 @@ function mountTree(props: Record<string, unknown> = {}) {
         InputText: InputTextStub,
         Select: SelectStub,
         Button: ButtonStub,
-        draggable: DraggableStub,
       },
     },
   })
@@ -371,30 +358,36 @@ describe('FolderTree drag and drop', () => {
     })
     expect(wrapper.emitted('move-pipeline')).toBeUndefined()
   })
+})
 
-  it('persists sort_order changes on drag end', async () => {
+describe('FolderTree alphabetical sorting', () => {
+  it('sorts root folders alphabetically by name (case-insensitive, numeric)', async () => {
     const wrapper = await mountTreeWithFolders([
-      makeFolder(),
-      makeFolder({ id: 'f2', name: 'Second', sort_order: 5 }),
+      makeFolder({ id: 'f3', name: 'Zeta', sort_order: 2 }),
+      makeFolder({ id: 'f1', name: 'alpha', sort_order: 0 }),
+      makeFolder({ id: 'f2', name: 'Beta', sort_order: 1 }),
     ])
-    const draggable = wrapper.findComponent({ name: 'DraggableStub' })
-    draggable.vm.$emit('end')
-    await flushPromises()
-    expect(patchMock).toHaveBeenCalledWith('/api/v1/pipeline-folders/f2/move', { sort_order: 1 })
-    expect(patchMock).not.toHaveBeenCalledWith('/api/v1/pipeline-folders/f1/move', expect.anything())
+    const items = wrapper.findAll('[data-testid^="folder-tree-item-"]')
+    expect(items.map(i => i.attributes('data-testid'))).toEqual([
+      'folder-tree-item-f1',
+      'folder-tree-item-f2',
+      'folder-tree-item-f3',
+    ])
   })
 
-  it('warns and continues when a sort_order patch fails', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    patchMock.mockRejectedValue(new Error('move failed'))
+  it('sorts child folders alphabetically within each parent', async () => {
     const wrapper = await mountTreeWithFolders([
-      makeFolder(),
-      makeFolder({ id: 'f2', name: 'Second', sort_order: 5 }),
+      makeFolder({ id: 'p1', name: 'Parent' }),
+      makeFolder({ id: 'c3', name: 'Charlie', parent_id: 'p1', sort_order: 2 }),
+      makeFolder({ id: 'c1', name: 'Alpha', parent_id: 'p1', sort_order: 0 }),
+      makeFolder({ id: 'c2', name: 'bravo', parent_id: 'p1', sort_order: 1 }),
     ])
-    const draggable = wrapper.findComponent({ name: 'DraggableStub' })
-    draggable.vm.$emit('end')
-    await flushPromises()
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('f2'))
-    warnSpy.mockRestore()
+    const items = wrapper.findAll('[data-testid^="folder-tree-item-"]')
+    expect(items.map(i => i.attributes('data-testid'))).toEqual([
+      'folder-tree-item-p1',
+      'folder-tree-item-c1',
+      'folder-tree-item-c2',
+      'folder-tree-item-c3',
+    ])
   })
 })
