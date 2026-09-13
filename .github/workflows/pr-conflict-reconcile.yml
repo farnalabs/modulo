@@ -43,7 +43,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Fetch all open PRs with the fields we need
+          # Fetch open PRs with the fields we need. NOTE: --limit caps at 200;
+          # if the repo ever exceeds 200 open PRs this silently truncates and
+          # conflicted PRs beyond the cap would go undetected for a cycle. Raise
+          # the limit (or page) if modulo's open-PR count approaches this bound.
           gh pr list --state open --limit 200 \
             --json number,headRefName,mergeable,isDraft,labels \
             > /tmp/open_prs.json 2>/dev/null
@@ -108,6 +111,7 @@ jobs:
       - name: Dispatch the Branch Fixer
         if: steps.detect.outputs.api_failed == 'false'
         env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
         shell: bash
@@ -150,7 +154,7 @@ jobs:
             # Retry with exponential backoff on 429/5xx (max 5 attempts)
             DISPATCH_OK=false
             for attempt in 1 2 3 4 5; do
-              RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
+              RESPONSE=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
                 -H "Content-Type: application/json" \
                 -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
                 -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
