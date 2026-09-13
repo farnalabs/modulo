@@ -322,26 +322,31 @@ def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
     the db layer cannot import core, so create-run / decorator emissions arrive
     here through the hook. Unknown events are ignored (forward compatibility).
     """
+    surface = attrs.get("surface")
+    source = attrs.get("source")
+    count = attrs.get("count")
     if event == REFS_EVENT_SHADOW_STRIP_HIT:
-        surface = attrs.get("surface")
-        record_refs_shadow_strip_hit(surface if surface is not None else "unknown")
+        record_refs_shadow_strip_hit(str(surface) if surface is not None else "unknown")
     elif event == REFS_EVENT_ASSIGNED_SOURCE:
-        source = attrs.get("source")
-        record_refs_by_source(source if source is not None else "unknown", int(attrs.get("count", 1)))
+        record_refs_by_source(
+            str(source) if source is not None else "unknown",
+            int(count) if count is not None else 1,
+        )
     elif event == REFS_EVENT_UNKNOWN_SOURCE:
-        record_refs_unknown_source(int(attrs.get("count", 1)))
+        record_refs_unknown_source(int(count) if count is not None else 1)
     elif event == REFS_EVENT_MALFORMED:
-        record_refs_malformed(int(attrs.get("count", 1)))
+        record_refs_malformed(int(count) if count is not None else 1)
     elif event == _REFS_EVENT_CAP_DROPPED:
-        record_refs_cap_dropped(int(attrs.get("count", 1)))
+        record_refs_cap_dropped(int(count) if count is not None else 1)
 
 
 def _init_once_register_refs_counter_hook() -> None:
-    """Wire the db-layer ref-event sink into the core counters.
+    """Register the ``lifecycle_refs`` counter hook (idempotent, safe at import).
 
-    Wrapped in an ``_init_once_*`` helper so the architecture side-effect test
-    permits this module-level registration (the db layer cannot import core,
-    so core wires the hook at import time).
+    The db layer cannot import core, so create-run / decorator ref emissions
+    arrive here through this hook. Registered once at import time; the
+    ``_init_once`` prefix keeps it a no-op if already registered and satisfies
+    the no-module-level-side-effects architecture gate.
     """
     set_refs_counter_hook(_refs_event_sink)
 
