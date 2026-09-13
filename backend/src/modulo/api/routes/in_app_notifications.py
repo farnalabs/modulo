@@ -108,9 +108,9 @@ _DASHBOARD_LEVEL_KEY = "notification_dashboard_level"
 async def _load_dashboard_level(session: AsyncSession, account_id: uuid.UUID) -> str:
     account = await get_account_by_id(session, account_id)
     if account is None:
-        return "warning"
+        return "info"
     prefs = account.preferences if isinstance(account.preferences, dict) else {}
-    return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, "warning"))
+    return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, "info"))
 
 
 def _notification_to_response(n: Notification) -> NotificationResponse:
@@ -140,10 +140,12 @@ async def get_dashboard(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            min_level = await _load_dashboard_level(session, principal.account_id)
             notifications = await get_dashboard_notifications(
                 session=session,
                 org_id=principal.organisation_id,
                 user_id=principal.account_id,
+                min_level=min_level,
                 limit=5,
             )
             unread = await get_unread_count(
