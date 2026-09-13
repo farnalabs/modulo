@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from typing import Any
 
 from modulo.core.pipeline_engine.sandbox_mode import _SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST as _GIT_ALLOWED_HOST
@@ -70,6 +71,89 @@ _WORKSPACE = "/home/user"
 # host for a SCOPED git credential is imported from ``sandbox_mode`` (single
 # source of truth for the allowlisted host).
 _AGENT_GIT_CONFIG = f"{_WORKSPACE}/.gitconfig"
+
+
+# ---------------------------------------------------------------------------
+# SSH transport hardening (FAR-799 — managed workspace inputs P1)
+# ---------------------------------------------------------------------------
+
+# Pinned known_hosts path inside the E2B sandbox.  The orchestration wiring
+# (later ticket) seeds forge host-key material into this file and then sets
+# ``GIT_SSH_COMMAND`` to reference it via :func:`build_ssh_transport_options`.
+# The path is intentionally read-only to the agent user after provisioning.
+SANDBOX_KNOWN_HOSTS_PINNED_PATH = "/home/user/.ssh/known_hosts"
+
+
+def build_ssh_transport_options(
+    *,
+    host: str,
+    resolved_ip: str,
+    known_hosts_path: str = SANDBOX_KNOWN_HOSTS_PINNED_PATH,
+) -> str:
+    """Build the ``-o`` option fragment for ``GIT_SSH_COMMAND``.
+
+    Returns a POSIX-sh-safe string of ``-o Key=Value`` pairs that pins the SSH
+    connection to a validated IP while verifying the host key against a pinned
+    ``known_hosts`` file keyed by *hostname*.  Every value is ``shlex.quote``-d
+    so adversarial host / path values cannot inject extra options.
+
+    Security rationale
+    ------------------
+    * ``StrictHostKeyChecking=yes`` + ``UserKnownHostsFile=<path>``: the host
+      key MUST be in the pinned known_hosts — ``accept-new`` and ``no`` are
+      forbidden because an ephemeral sandbox has no first-use continuity (a
+      MITM on the first handshake captures the credential and nothing notices).
+    * ``HostKeyAlias=<host>``: the host key is looked up under the *original
+      hostname* (e.g. ``github.com``) even though the TCP connection targets
+      ``resolved_ip`` — so the key material matches what the operator seeded
+      for the hostname, not the resolved address.
+    * ``HostName=<resolved_ip>``: OpenSSH connects to the validated IP.
+    """
+    return (
+        f"-o StrictHostKeyChecking=yes"
+        f" -o UserKnownHostsFile={shlex.quote(known_hosts_path)}"
+        f" -o HostKeyAlias={shlex.quote(host)}"
+        f" -o HostName={shlex.quote(resolved_ip)}"
+    )
+
+
+async def resolve_and_validate_ssh_host(host: str) -> str:
+    """Resolve *host* and return the single validated IP address to pin to.
+
+    Resolves the hostname via the event-loop resolver, then validates every
+    candidate IP against the existing SSRF primitives
+    (:func:`modulo.core.ssrf._is_blocked_ip`).  Returns the first
+    non-blocked address; raises ``ValueError`` if the host resolves to only
+    blocked or empty addresses.
+
+    If ``core/ssrf.py`` lacks a usable helper this function documents that
+    gap rather than duplicating SSRF logic.
+    """
+    from modulo.core.ssrf import _check_resolved, _resolve_all_async
+
+    ips = await _resolve_all_async(host)
+    # _check_resolved raises ValueError on empty or blocked sets (fail-closed).
+    _check_resolved(host, ips)
+    return ips[0]
+
+
+def assert_known_hosts_is_pinned(path: str) -> None:
+    """Fail closed if the pinned known_hosts file is missing or empty.
+
+    An SSH clone MUST NEVER proceed without pinned host keys — this is the
+    enforcement point the runtime calls before any ``git clone`` over SSH.
+    """
+    from pathlib import Path
+
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(
+            f"Pinned known_hosts file not found at {path!r}. SSH clone cannot proceed without pinned host keys."
+        )
+    if p.stat().st_size == 0:
+        raise ValueError(
+            f"Pinned known_hosts file at {path!r} is empty. SSH clone cannot proceed without pinned host keys."
+        )
 
 
 def build_read_only_script() -> str:
@@ -312,9 +396,13 @@ async def apply_sandbox_policy(
 
 
 __all__ = [
+    "SANDBOX_KNOWN_HOSTS_PINNED_PATH",
     "apply_sandbox_policy",
+    "assert_known_hosts_is_pinned",
     "build_egress_selected_script",
     "build_git_none_script",
     "build_git_scoped_script",
     "build_read_only_script",
+    "build_ssh_transport_options",
+    "resolve_and_validate_ssh_host",
 ]
