@@ -1170,12 +1170,12 @@ def test_post_upgrade_guidance_no_snapshot() -> None:
 
 
 def test_post_upgrade_guidance_not_dict() -> None:
-    assert entry_module._post_upgrade_guidance(None) == ""
-    assert entry_module._post_upgrade_guidance("string") == ""
+    assert not entry_module._post_upgrade_guidance(None)
+    assert not entry_module._post_upgrade_guidance("string")
 
 
 def test_post_upgrade_guidance_no_post_upgrade() -> None:
-    assert entry_module._post_upgrade_guidance({"reason": "x"}) == ""
+    assert not entry_module._post_upgrade_guidance({"reason": "x"})
 
 
 # ---------------------------------------------------------------------------
@@ -1205,28 +1205,28 @@ def test_prepare_database_env_missing_keys() -> None:
 
 def test_upgrade_context_provider_no_marker(tmp_path: Path) -> None:
     provider = entry_module._upgrade_context_provider(tmp_path / "upgrade.json", lambda: 1000.0, window_seconds=600.0)
-    assert provider() == {}
+    assert not provider()
 
 
 def test_upgrade_context_provider_expired(tmp_path: Path) -> None:
     path = tmp_path / "upgrade.json"
     path.write_text('{"upgraded_at": 100.0}', encoding="utf-8")
     provider = entry_module._upgrade_context_provider(path, lambda: 10000.0, window_seconds=600.0)
-    assert provider() == {}
+    assert not provider()
 
 
 def test_upgrade_context_provider_non_numeric_timestamp(tmp_path: Path) -> None:
     path = tmp_path / "upgrade.json"
     path.write_text('{"upgraded_at": "not-a-number"}', encoding="utf-8")
     provider = entry_module._upgrade_context_provider(path, lambda: 1000.0, window_seconds=600.0)
-    assert provider() == {}
+    assert not provider()
 
 
 def test_upgrade_context_provider_bool_timestamp(tmp_path: Path) -> None:
     path = tmp_path / "upgrade.json"
     path.write_text('{"upgraded_at": true}', encoding="utf-8")
     provider = entry_module._upgrade_context_provider(path, lambda: 1000.0, window_seconds=600.0)
-    assert provider() == {}
+    assert not provider()
 
 
 def test_upgrade_context_provider_no_snapshot_string(tmp_path: Path) -> None:
@@ -1276,7 +1276,7 @@ def test_serve_watch_force_exit() -> None:
 
 
 def test_bundled_service_env_empty_base() -> None:
-    assert entry_module._bundled_service_env({}) == {}
+    assert not entry_module._bundled_service_env({})
 
 
 # ---------------------------------------------------------------------------
