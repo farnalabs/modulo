@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator
 from sqlalchemy import Date, case, cast, delete, func, select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +41,11 @@ from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
+from modulo.core.runtime_config import (
+    FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
+    read_org_flag,
+    set_org_flag,
+)
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.invitations import (
@@ -3764,6 +3769,179 @@ async def admin_update_sandbox_concurrency(
         },
     )
     return SandboxConcurrencyResponse(sandbox_concurrency_limit=req.sandbox_concurrency_limit)
+
+
+# ── Org Work-Item Agent-Minting Flag (FAR-795 Slice A) ─────────────────────
+# Org self-service route: principal's own org only, admin-role-gated, mirroring
+# the sandbox-concurrency endpoints above. The flag lives in
+# ``Organisation.settings_json`` under ``work_item_agent_minting_enabled`` and
+# is read through the TTL-cached, fail-closed substrate in
+# ``core.runtime_config.org_flags`` so SAQ worker processes (which finalise /
+# reconcile minting) observe the same value. Missing/off/out-of-order reads all
+# resolve OFF: agent minting is disabled by default and stays disabled on
+# unknown state.
+
+
+class WorkItemAgentMintingResponse(BaseModel):
+    """Public admin response for the agent-minting kill-switch flag."""
+
+    work_item_agent_minting_enabled: bool = False
+
+
+class UpdateWorkItemAgentMintingRequest(BaseModel):
+    # StrictBool: reject pydantic's truthiness coercion (1 / "true" → True) —
+    # an agent-minting kill-switch must only ever be armed explicitly.
+    work_item_agent_minting_enabled: StrictBool
+
+
+@router.get("/org/work-item-agent-minting")
+async def admin_get_work_item_agent_minting(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> WorkItemAgentMintingResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can view work-item agent minting",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            enabled = await read_org_flag(
+                session,
+                current_user.organisation_id,
+                FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
+            )
+    except asyncio.CancelledError:
+        raise
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ADMIN)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        logger.exception(_CODE_ROUTES_ADMIN)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except Exception:
+        logger.exception(_CODE_ROUTES_ADMIN)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    return WorkItemAgentMintingResponse(work_item_agent_minting_enabled=enabled)
+
+
+@router.put("/org/work-item-agent-minting", status_code=status.HTTP_200_OK)
+async def admin_update_work_item_agent_minting(
+    req: UpdateWorkItemAgentMintingRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> WorkItemAgentMintingResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can update work-item agent minting",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_org_flag(
+                session,
+                current_user.organisation_id,
+                FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
+                req.work_item_agent_minting_enabled,
+            )
+    except asyncio.CancelledError:
+        raise
+    except LookupError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=MSG_ORGANISATION_NOT_FOUND,
+        ) from None
+    except IntegrityError:
+        logger.exception("admin.admin_update_work_item_agent_minting")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ADMIN)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        logger.exception(_CODE_ROUTES_ADMIN)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(_CODE_ROUTES_ADMIN)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    from modulo.core.audit_logger import append_audit_event
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="org.work_item_agent_minting_updated",
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={"work_item_agent_minting_enabled": req.work_item_agent_minting_enabled},
+            )
+    except IntegrityError:
+        logger.exception("admin.admin_update_work_item_agent_minting.audit")
+    except ProgrammingError:
+        logger.warning(
+            "work_item_agent_minting audit event ProgrammingError — flag was updated",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "work_item_agent_minting_enabled": req.work_item_agent_minting_enabled,
+            },
+        )
+    except SQLAlchemyError:
+        logger.warning(
+            "work_item_agent_minting audit event SQLAlchemyError — flag was updated",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "work_item_agent_minting_enabled": req.work_item_agent_minting_enabled,
+            },
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "admin.admin_update_work_item_agent_minting.audit",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "work_item_agent_minting_enabled": req.work_item_agent_minting_enabled,
+            },
+        )
+
+    logger.info(
+        "work_item_agent_minting.updated",
+        extra={
+            "org_id": str(current_user.organisation_id),
+            "work_item_agent_minting_enabled": req.work_item_agent_minting_enabled,
+        },
+    )
+    return WorkItemAgentMintingResponse(work_item_agent_minting_enabled=req.work_item_agent_minting_enabled)
 
 
 # ── Org Run Concurrency Limit ──────────────────────────────────────────────
