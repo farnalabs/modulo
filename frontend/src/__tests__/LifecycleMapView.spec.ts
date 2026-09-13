@@ -657,3 +657,80 @@ describe('LifecycleMapView node position persistence (FAR-829)', () => {
     vi.useRealTimers()
   })
 })
+
+describe('LifecycleMapView position persistence edge cases (FAR-829)', () => {
+  let localStorageStore: Record<string, string>
+
+  beforeEach(() => {
+    localStorageStore = {}
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => localStorageStore[key] ?? null),
+      setItem: vi.fn((key: string, value: string) => { localStorageStore[key] = value }),
+      removeItem: vi.fn((key: string) => { delete localStorageStore[key] }),
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('falls back to empty positions when stored JSON is corrupt', async () => {
+    localStorageStore['lifecycle-map-positions:map-1:1'] = 'not-json{'
+    const wrapper = mountView()
+    await flushPromises()
+
+    const renderer = wrapper.findComponent(LifecycleMapRenderer)
+    expect(renderer.props('savedPositions')).toEqual({})
+  })
+
+  it('surfaces an error status when the localStorage write throws', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const setItem = localStorage.setItem as unknown as ReturnType<typeof vi.fn>
+    setItem.mockImplementation(() => { throw new Error('quota exceeded') })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { handlePositionsChanged: (p: Record<string, { x: number; y: number }>) => void }
+    vm.handlePositionsChanged({ 'stage-1': { x: 1, y: 2 } })
+    await vi.advanceTimersByTimeAsync(600)
+
+    const status = wrapper.find('[data-testid="lifecycle-map-save-status"]')
+    expect(status.exists()).toBe(true)
+    expect(status.text()).toContain('failed')
+  })
+
+  it('clears a pending save timer when a newer position change arrives', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { handlePositionsChanged: (p: Record<string, { x: number; y: number }>) => void }
+    // First change schedules a 500ms debounce that sets statusTimeout on fire.
+    vm.handlePositionsChanged({ 'stage-1': { x: 1, y: 2 } })
+    await vi.advanceTimersByTimeAsync(500)
+    // Second change arrives while statusTimeout is still pending: persistPositions
+    // must clear both the previous saveTimeout and statusTimeout before rescheduling.
+    vm.handlePositionsChanged({ 'stage-2': { x: 3, y: 4 } })
+    await vi.advanceTimersByTimeAsync(600)
+
+    expect(localStorageStore['lifecycle-map-positions:map-1:1']).toBe(
+      JSON.stringify({ 'stage-2': { x: 3, y: 4 } }),
+    )
+  })
+
+  it('clears pending timers on unmount before the debounce fires', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { handlePositionsChanged: (p: Record<string, { x: number; y: number }>) => void }
+    vm.handlePositionsChanged({ 'stage-1': { x: 1, y: 2 } })
+    // Unmount before the 500ms debounce fires: onBeforeUnmount must clear the
+    // pending save timer so the write never lands after the component is gone.
+    wrapper.unmount()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(localStorageStore['lifecycle-map-positions:map-1:1']).toBeUndefined()
+  })
+})
