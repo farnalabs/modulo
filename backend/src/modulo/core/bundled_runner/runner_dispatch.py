@@ -467,6 +467,29 @@ def _resolve_stall_timeout(stall_timeout_override: Any) -> float:
         return float(_SANDBOX_IDLE_TIMEOUT)
 
 
+def _resolve_stdout_cap(node_def: dict[str, Any]) -> int:
+    """Resolve the effective stdout/stderr retention cap for a node (FAR-792).
+
+    Node-level free-form config (mirroring the E2B path): ``"tail"`` keeps the
+    legacy bounded 512KB artifact cap; ``"full"`` retains up to
+    ``stdout_max_bytes`` when set (defaulting to the 5MB fallback when absent).
+    Coercion + resolution delegate to the shared node_runner helpers so this
+    path can never drift from the E2B retention semantics.
+    """
+    from modulo.core.pipeline_engine.node_runner import (
+        _coerce_stdout_max_bytes,
+        _coerce_stdout_retention_mode,
+    )
+    from modulo.core.pipeline_engine.node_runner import (
+        _resolve_stdout_cap as _resolve_shared_cap,
+    )
+
+    return _resolve_shared_cap(
+        _coerce_stdout_retention_mode(node_def.get("stdout_retention_mode")),
+        _coerce_stdout_max_bytes(node_def.get("stdout_max_bytes")),
+    )
+
+
 def _combine_raw_outputs(raw_file: str, stdout_raw: str) -> str:
     from modulo.core.pipeline_engine.node_runner import _normalize_marker_text
 
@@ -498,7 +521,6 @@ async def run_bundled_runner_node(
     gate replaces all pre-gates for every tier.
     """
     from modulo.core.pipeline_engine.node_runner import (
-        _MAX_ARTIFACT_LOG,
         SandboxNodeFailedError,
         ScriptBudgetKilledError,
         ScriptFailedError,
@@ -787,6 +809,10 @@ async def run_bundled_runner_node(
         agent_stdout_raw = "".join(data for (stream_name, data) in collected if stream_name == "stdout")
         agent_stderr_raw = "".join(data for (stream_name, data) in collected if stream_name == "stderr")
         elapsed = time.monotonic() - start_time
+        # FAR-792: resolve the node's effective stdout/stderr retention cap
+        # early so both the envelope artifacts AND the raw-output retention
+        # markers honour it (E2B parity).
+        stdout_cap = _resolve_stdout_cap(node_def)
 
         # Stream error / engine-proxy drop / no exit code: RETRYABLE — never
         # a fabricated zero-exit completion (D4 acceptance criteria).
@@ -850,6 +876,7 @@ async def run_bundled_runner_node(
                 stdout_length=len(agent_stdout_raw),
                 stderr_length=len(agent_stderr_raw),
                 delivery_sentinel=delivery_sentinel,
+                max_artifact_bytes=stdout_cap,
             )
             if output_json is None:
                 # Truly-empty read (read failure / JSON null): a node with zero
@@ -904,16 +931,32 @@ async def run_bundled_runner_node(
                     stdout_length=len(agent_stdout_raw),
                     stderr_length=len(agent_stderr_raw),
                     delivery_sentinel=delivery_sentinel,
+                    max_artifact_bytes=stdout_cap,
                 )
                 raise SandboxNodeFailedError(
                     _schema_failure_message(node_id=node_id, schema_exc=str(schema_exc)),
                     node_id=node_id,
                 ) from None
 
-        agent_stdout = _redact_raw_output(agent_stdout_raw[:_MAX_ARTIFACT_LOG])
-        agent_stderr = _redact_raw_output(agent_stderr_raw[:_MAX_ARTIFACT_LOG])
+        # FAR-792: redact BEFORE truncation so credential-scrubbing sees the
+        # full stream, then slice to the node's effective retention cap.
+        agent_stdout = _redact_raw_output(agent_stdout_raw)[:stdout_cap]
+        agent_stderr = _redact_raw_output(agent_stderr_raw)[:stdout_cap]
         stdout_len = len(agent_stdout_raw)
         stderr_len = len(agent_stderr_raw)
+        stdout_truncated = stdout_len > stdout_cap
+        if stdout_truncated or stderr_len > stdout_cap:
+            _log.warning(
+                "sandbox_agent.stdout_stderr_truncated",
+                extra={
+                    "node_id": node_id,
+                    "run_id": run_id,
+                    "retention_cap_bytes": stdout_cap,
+                    "stderr_truncated": stderr_len > stdout_cap,
+                    "stdout_length": stdout_len,
+                    "stderr_length": stderr_len,
+                },
+            )
         cost = _compute_sandbox_cost(elapsed, output_json)
         status = "completed" if exit_code == 0 else "failed"
         result_summary = ""
@@ -963,6 +1006,7 @@ async def run_bundled_runner_node(
                     stderr_length=stderr_len,
                     delivery_sentinel=delivery_sentinel,
                     status=status,
+                    max_artifact_bytes=stdout_cap,
                 )
             except Exception:
                 _log.exception(
@@ -984,6 +1028,7 @@ async def run_bundled_runner_node(
                 agent_stderr=agent_stderr,
                 stdout_length=stdout_len,
                 stderr_length=stderr_len,
+                stdout_truncated=stdout_truncated,
                 attempt_key=attempt_key,
                 agent_status=agent_status,
                 agent_outcome=agent_outcome,

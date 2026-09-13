@@ -7,7 +7,8 @@ command guard) and the streaming/file IO helpers
 (:func:`_write_file_via_exec`, :func:`_read_file_via_exec`,
 :func:`_publish_stream_chunk`, :func:`_consume_stream`,
 :func:`_resolve_stall_timeout`, :func:`_combine_raw_outputs`,
-:func:`_source_contains_sentinel`).
+:func:`_source_contains_sentinel`), plus the FAR-792 per-node stdout/stderr
+retention cap (:func:`_resolve_stdout_cap`).
 """
 
 from __future__ import annotations
@@ -38,6 +39,9 @@ from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError as _RealSandboxNodeFailedError,
 )
 from modulo.core.pipeline_engine.node_runner import (
+    _redact_raw_output as _real_redact_raw_output,
+)
+from modulo.core.pipeline_engine.node_runner import (
     _validate_against_schema as _real_validate_against_schema,
 )
 
@@ -61,6 +65,7 @@ class _FakeOutput:
     agent_stderr: str = ""
     stdout_length: int = 0
     stderr_length: int = 0
+    stdout_truncated: bool = False
     attempt_key: str | None = None
     agent_status: object = None
     agent_outcome: object = None
@@ -77,6 +82,7 @@ def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
 
     stubs: dict[str, object] = {
         "_MAX_ARTIFACT_LOG": 2000,
+        "_FULL_MODE_DEFAULT_MAX_BYTES": 5_242_880,
         "SandboxNodeFailedError": _FakeError,
         "ScriptBudgetKilledError": _FakeError,
         "ScriptFailedError": _FakeError,
@@ -497,6 +503,102 @@ async def test_run_context_files_written(patch_node_runner, monkeypatch) -> None
     assert written.get("notes.txt") == "hi"
 
 
+# ---------------------------------------------------------------------------
+# FAR-792: per-node stdout/stderr retention — tail (512KB) vs full
+# (stdout_max_bytes) on the Bundled Runner path.
+# ---------------------------------------------------------------------------
+
+
+async def test_run_stdout_tail_mode_caps_at_legacy_limit(patch_node_runner) -> None:
+    """stdout_retention_mode="tail" (the default) keeps the legacy artifact cap
+    (the patched ``_MAX_ARTIFACT_LOG`` here) EVEN when stdout_max_bytes is
+    offered — full retention must be opted into."""
+    cfg = _config(node_def={"capability_scope": {}, "stdout_retention_mode": "tail", "stdout_max_bytes": 999})
+    cap = runner_dispatch._resolve_stdout_cap(cfg.node_def)
+    long_stdout = "x" * 4096
+    provider = _FakeProvider(stream_chunks=[("stdout", long_stdout)], stream_exit=0)
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(provider))
+    assert out["output"].agent_stdout == "x" * cap
+    assert out["output"].stdout_length == len(long_stdout)
+    assert out["output"].stdout_truncated is True
+
+
+async def test_run_stdout_full_retention_honors_stdout_max_bytes(patch_node_runner) -> None:
+    """stdout_retention_mode="full" + stdout_max_bytes keeps up to the configured
+    cap (not the fixed 512KB) and surfaces stdout_truncated + the full length."""
+    cfg = _config(node_def={"capability_scope": {}, "stdout_retention_mode": "full", "stdout_max_bytes": 2048})
+    long_stdout = "x" * 4096
+    provider = _FakeProvider(stream_chunks=[("stdout", long_stdout)], stream_exit=0)
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(provider))
+    assert out["output"].agent_stdout == "x" * 2048
+    assert out["output"].stdout_length == len(long_stdout)
+    assert out["output"].stdout_truncated is True
+
+
+async def test_run_full_retention_caps_raw_output_marker(patch_node_runner, monkeypatch) -> None:
+    """FAR-792: in full mode the raw-output retention marker honours the
+    node's effective cap too (E2B parity), not just the envelope artifacts."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    retained = {}
+
+    async def _retain(*a, **k):
+        retained.update(k)
+
+    monkeypatch.setattr(nrm, "_retain_raw_output_marker", _retain, raising=False)
+    monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value="not json {"))
+    cfg = _config(node_def={"capability_scope": {}, "stdout_retention_mode": "full", "stdout_max_bytes": 2048})
+    with pytest.raises(_FakeError):
+        await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
+    assert retained.get("max_artifact_bytes") == 2048
+
+
+async def test_run_stdout_full_retention_default_holds_whole_stream(patch_node_runner) -> None:
+    """stdout_retention_mode="full" without stdout_max_bytes retains the whole
+    stream (default 5MB cap) — no truncation flag for an under-cap stream."""
+    cfg = _config(node_def={"capability_scope": {}, "stdout_retention_mode": "full"})
+    long_stdout = "x" * 4096
+    provider = _FakeProvider(stream_chunks=[("stdout", long_stdout)], stream_exit=0)
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(provider))
+    assert out["output"].agent_stdout == long_stdout
+    assert out["output"].stdout_length == len(long_stdout)
+    assert out["output"].stdout_truncated is False
+
+
+async def test_run_stdout_redacts_before_truncation(patch_node_runner, monkeypatch) -> None:
+    """Redaction runs on the FULL stream before the cap slice, so a tokenized
+    URL whose terminating ``@`` would be cut by the cap is still masked in the
+    retained artifact (FAR-792 redact-before-truncate ordering)."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    monkeypatch.setattr(nrm, "_redact_raw_output", _real_redact_raw_output, raising=False)
+    cfg = _config(node_def={"capability_scope": {}, "stdout_retention_mode": "full", "stdout_max_bytes": 100})
+    # The ``@`` terminator of the tokenized URL sits at offset 100+ — beyond a
+    # 100-byte cap. Truncate-then-redact keeps the raw `https://git:BBBB...`
+    # prefix (no @ in the window, so the URL pattern cannot match it).
+    secret_url = "https://git:" + ("B" * 40) + "@github.com/org/repo"
+    provider = _FakeProvider(stream_chunks=[("stdout", "u" * 80 + secret_url)], stream_exit=0)
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(provider))
+    assert "<redacted>" in out["output"].agent_stdout
+    assert "BBB" not in out["output"].agent_stdout
+    assert out["output"].stdout_truncated is True
+
+
+async def test_run_stdout_truncation_warns(patch_node_runner, caplog) -> None:
+    """Truncation emits a warning log carrying the node id and the effective cap."""
+    import logging
+
+    cfg = _config(node_def={"capability_scope": {}, "stdout_retention_mode": "full", "stdout_max_bytes": 128})
+    provider = _FakeProvider(stream_chunks=[("stdout", "x" * 4096)], stream_exit=0)
+    with caplog.at_level(logging.WARNING):
+        out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(provider))
+    assert out["output"].stdout_truncated is True
+    assert "sandbox_agent.stdout_stderr_truncated" in caplog.text
+    record = next(r for r in caplog.records if r.getMessage() == "sandbox_agent.stdout_stderr_truncated")
+    assert record.__dict__.get("node_id") == "node-1"
+    assert record.__dict__.get("retention_cap_bytes") == 128
+
+
 async def test_write_file_via_exec_success(patch_node_runner) -> None:
     calls = {}
 
@@ -629,6 +731,27 @@ def test_resolve_stall_timeout_invalid_falls_back(patch_node_runner, monkeypatch
 
 def test_resolve_stall_timeout_explicit(patch_node_runner) -> None:
     assert _resolve_stall_timeout(12.5) == 12.5
+
+
+def test_resolve_stdout_cap_coercion(patch_node_runner) -> None:
+    """FAR-792: the effective cap falls back to the safe legacy defaults for
+    malformed / missing per-node retention config."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    assert runner_dispatch._resolve_stdout_cap({}) == nrm._MAX_ARTIFACT_LOG
+    assert runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full"}) == nrm._FULL_MODE_DEFAULT_MAX_BYTES
+    assert (
+        runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "all", "stdout_max_bytes": 99})
+        == nrm._MAX_ARTIFACT_LOG
+    )
+    assert (
+        runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full", "stdout_max_bytes": -3})
+        == nrm._FULL_MODE_DEFAULT_MAX_BYTES
+    )
+    assert (
+        runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full", "stdout_max_bytes": True})
+        == nrm._FULL_MODE_DEFAULT_MAX_BYTES
+    )
 
 
 def test_combine_raw_outputs(patch_node_runner) -> None:
