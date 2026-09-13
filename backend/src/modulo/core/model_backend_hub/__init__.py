@@ -92,7 +92,7 @@ class ModelBackendHub:
         # per resolved backend. Best-effort: a failing close is logged and
         # never masks the original exit state. Adapters without ``aclose``
         # are simply dropped with the registry.
-        for backend in list(self._backends.values()):
+        for backend in self._backends.values():
             aclose = getattr(backend, "aclose", None)
             if not callable(aclose):
                 continue
@@ -212,7 +212,7 @@ class ModelBackendHub:
                             continue
                     if parsed:
                         fallback_map[mb.id] = parsed
-            except (AttributeError, TypeError, ValueError, KeyError, BackendDecryptError):
+            except (AttributeError, TypeError, ValueError, KeyError):
                 logger.exception("Failed to initialise backend %s", mb.id)
                 continue
 

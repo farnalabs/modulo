@@ -518,7 +518,6 @@ class ConnectorHub:
                     self._acls[ci.id] = acl
                     self.healthy.add(ci.id)
                 except (
-                    ConnectorDecryptError,
                     ValueError,
                     TypeError,
                     KeyError,

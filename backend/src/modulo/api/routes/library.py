@@ -456,7 +456,7 @@ async def _lookup_pin_primitive(
     )
     try:
         result = await session.execute(stmt)
-    except (ProgrammingError, SQLAlchemyError):
+    except SQLAlchemyError:
         return None
     return result.scalar_one_or_none()
 

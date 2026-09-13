@@ -30,7 +30,7 @@ from redis.asyncio import Redis
 
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.core.license import parse_and_verify
-from modulo.core.license_signing import LicenseSigningError, generate_team_license
+from modulo.core.license_signing import generate_team_license
 from modulo.settings import Settings
 
 _log = logging.getLogger(__name__)
@@ -197,7 +197,7 @@ async def fulfil_team_purchase(
             term_months=term_months,
             private_key_hex=settings.modulo_license_private_key or None,
         )
-    except (LicenseSigningError, ValueError):
+    except ValueError:
         _log.exception("stripe.fulfilment.license_generation_failed event_id=%s", event_id)
         return None
 

@@ -27,7 +27,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette import status as http_status
 
@@ -384,7 +384,7 @@ async def _resolve_scoped_team_ids(
                 )
             )
             return tuple(rows.scalars().all())
-    except (ProgrammingError, SQLAlchemyError):
+    except SQLAlchemyError:
         _log.exception("analytics.route.team_boundary_db_error", extra={"org_id": str(org_id)})
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,

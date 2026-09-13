@@ -1170,7 +1170,7 @@ def _terminate_boot_process_group(process: subprocess.Popen[bytes]) -> None:
             os.killpg(process_group, signal.SIGTERM)
         else:  # pragma: no cover - the platform gate refuses Windows earlier
             process.terminate()
-    except (ProcessLookupError, PermissionError, OSError):
+    except (ProcessLookupError, OSError):
         pass
     try:
         process.wait(timeout=30)
@@ -1183,7 +1183,7 @@ def _terminate_boot_process_group(process: subprocess.Popen[bytes]) -> None:
         else:  # pragma: no cover
             process.kill()
         process.wait(timeout=10)
-    except (ProcessLookupError, PermissionError, OSError, subprocess.TimeoutExpired):
+    except (ProcessLookupError, OSError, subprocess.TimeoutExpired):
         _log.exception("upgrade.boot_group_kill_incomplete pid=%s", process.pid)
 
 
