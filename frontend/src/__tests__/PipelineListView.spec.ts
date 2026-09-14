@@ -759,6 +759,67 @@ describe('PipelineListView', () => {
     expect(wrapper.find('[data-testid="pipeline-list-move-error"]').exists()).toBe(false)
   })
 
+  it('sorts the mobile folder select options alphabetically when API returns unsorted folders', async () => {
+    mockResponses['/api/v1/pipeline-folders'] = [
+      { id: 'f3', organisation_id: 'org1', name: 'Zeta', parent_id: null, sort_order: 2 },
+      { id: 'f1', organisation_id: 'org1', name: 'alpha', parent_id: null, sort_order: 0 },
+      { id: 'f2', organisation_id: 'org1', name: 'Beta', parent_id: null, sort_order: 1 },
+    ]
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Pipeline One', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: { ErrorAlert: true, FolderTree: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const select = wrapper.find('[data-testid="pipeline-list-mobile-folder-select"]')
+    expect(select.exists()).toBe(true)
+    // PrimeVue Select renders options in its props, not as native <option> elements
+    const selectComponent = select.findComponent({ name: 'Select' })
+    const options = selectComponent.props('options') as Array<{ value: string; label: string }>
+    expect(options.map(o => o.label)).toEqual(['All Pipelines', 'alpha', 'Beta', 'Zeta'])
+  })
+
+  it('sorts the move-to-folder dialog folder choices alphabetically', async () => {
+    mockResponses['/api/v1/pipeline-folders'] = [
+      { id: 'f3', organisation_id: 'org1', name: 'Zeta', parent_id: null, sort_order: 2 },
+      { id: 'f1', organisation_id: 'org1', name: 'alpha', parent_id: null, sort_order: 0 },
+      { id: 'f2', organisation_id: 'org1', name: 'Beta', parent_id: null, sort_order: 1 },
+    ]
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Move Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: null }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openMoveToFolder: (p: typeof pipeline) => void }
+    vm.openMoveToFolder(pipeline)
+    await flushPromises()
+    await nextTick()
+
+    const dialog = wrapper.find('[aria-label="Move to Folder"]')
+    expect(dialog.exists()).toBe(true)
+    // Folder buttons inside the dialog (excluding "No folder") should be alphabetically sorted
+    const folderButtons = dialog.findAll('button').filter(b => b.text() !== 'Cancel' && b.text() !== 'Save' && b.text() !== 'No folder')
+    expect(folderButtons.map(b => b.text())).toEqual(['alpha', 'Beta', 'Zeta'])
+  })
+
   it('opens the pipeline editor via keyboard (Enter / Space) for a11y (FAR-821)', async () => {
     const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Keyboard Pipeline', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
     mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }

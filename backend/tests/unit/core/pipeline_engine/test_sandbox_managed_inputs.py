@@ -113,42 +113,42 @@ class TestValidConfigs:
 
 class TestGitCloneDetection:
     def test_literal_git_clone_rejected(self) -> None:
-        node = _base_node(agent_command="git clone https://example.com/repo.git && do_stuff")
+        node = _base_node(agent_commands=["git clone https://example.com/repo.git && do_stuff"])
         with pytest.raises(ValueError, match="literal 'git clone'"):
             _validate_sandbox_managed_inputs_config(node)
 
     def test_git_clone_in_jinja_block_not_rejected(self) -> None:
         """{{ git_clone }} is interpolation — must NOT trigger."""
-        node = _base_node(agent_command="{{ git_clone }} && do_stuff")
+        node = _base_node(agent_commands=["{{ git_clone }} && do_stuff"])
         assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_git_clone_after_jinja_block_rejected(self) -> None:
         """Static git clone AFTER a jinja block is still a literal."""
-        node = _base_node(agent_command="echo {{ greeting }} && git clone https://x.com/r.git")
+        node = _base_node(agent_commands=["echo {{ greeting }} && git clone https://x.com/r.git"])
         with pytest.raises(ValueError, match="literal 'git clone'"):
             _validate_sandbox_managed_inputs_config(node)
 
     def test_git_clone_in_if_block_rejected(self) -> None:
         """{% if clone %}git clone foo{% endif %} — after stripping Jinja
         control blocks, ``git clone foo`` remains as a literal. Reject it."""
-        node = _base_node(agent_command="{% if clone %}git clone foo{% endif %}")
+        node = _base_node(agent_commands=["{% if clone %}git clone foo{% endif %}"])
         with pytest.raises(ValueError, match="literal 'git clone'"):
             _validate_sandbox_managed_inputs_config(node)
 
     def test_clone_without_git_prefix_not_rejected(self) -> None:
         """Just 'clone' without 'git' prefix is fine."""
-        node = _base_node(agent_command="clone https://example.com/r.git")
+        node = _base_node(agent_commands=["clone https://example.com/r.git"])
         assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_git_clone_in_multiline_command(self) -> None:
-        node = _base_node(agent_command="#!/bin/bash\necho setup\ngit clone https://x.com/r.git")
+        node = _base_node(agent_commands=["#!/bin/bash\necho setup\ngit clone https://x.com/r.git"])
         with pytest.raises(ValueError, match="literal 'git clone'"):
             _validate_sandbox_managed_inputs_config(node)
 
-    def test_no_agent_command_passes(self) -> None:
-        """No agent_command means no git clone check needed."""
+    def test_no_agent_commands_passes(self) -> None:
+        """No agent_commands means no git clone check needed."""
         node = _base_node()
-        node.pop("agent_command", None)
+        node.pop("agent_commands", None)
         assert _validate_sandbox_managed_inputs_config(node) is None
 
 
@@ -336,19 +336,19 @@ class TestInputItemValidation:
 class TestJinjaSplitCloneBypass:
     def test_literal_git_clone_in_jinja_block_rejected(self) -> None:
         """``{{ 'git clone' }}`` renders to a clone at runtime — must be rejected."""
-        node = _base_node(agent_command="{{ 'git clone' }} https://x.com/r.git")
+        node = _base_node(agent_commands=["{{ 'git clone' }} https://x.com/r.git"])
         with pytest.raises(ValueError, match="literal 'git clone'"):
             _validate_sandbox_managed_inputs_config(node)
 
     def test_git_clone_var_in_jinja_block_rejected(self) -> None:
         """``git {{ clone_cmd }}`` (variable resolves to clone) must be rejected."""
-        node = _base_node(agent_command="git {{ clone_cmd }}")
+        node = _base_node(agent_commands=["git {{ clone_cmd }}"])
         with pytest.raises(ValueError, match="literal 'git clone'"):
             _validate_sandbox_managed_inputs_config(node)
 
     def test_git_jinja_var_clone_rejected(self) -> None:
         """``git {{ x }} clone`` (empties to a clone) must be rejected."""
-        node = _base_node(agent_command="git {{ x }} clone https://x.com/r.git")
+        node = _base_node(agent_commands=["git {{ x }} clone https://x.com/r.git"])
         with pytest.raises(ValueError, match="literal 'git clone'"):
             _validate_sandbox_managed_inputs_config(node)
 

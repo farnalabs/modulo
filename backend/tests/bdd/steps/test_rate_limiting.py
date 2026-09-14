@@ -3,6 +3,9 @@
 Each scenario exercises the RateLimitMiddleware with a controlled
 RateLimiterRegistry to verify rate limit enforcement, reset behaviour,
 per-key isolation, admin reconfiguration, and the in-memory/SQLite fallbacks.
+``rate_limiting/rate_limiting.feature`` adds the per-endpoint and per-API-key
+budget scenarios (independent endpoint counters, Retry-After semantics) on top
+of the ``model_backends/rate_limiting.feature`` operator scenarios.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from modulo.settings import Settings
 # ---------------------------------------------------------------------------
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/rate_limiting.feature")
+    scenarios("../../bdd/features/rate_limiting/rate_limiting.feature")
 
 # Path -> limit for the documented rules (PRD §7.18). Prefixes must match the
 # RateLimitMiddleware.RULES so the mock app rate-limits the same paths.
@@ -37,6 +41,27 @@ _PATH_LIMITS: dict[str, int] = {
     "/mcp": 200,
     "/mcp/any-tool": 200,
 }
+
+
+def _limit_for_path(path: str) -> int:
+    """PRD §7.18 endpoint budget for *path* (mirrors RateLimitMiddleware.RULES)."""
+    if path.endswith("/webhook") or path.startswith("/api/v1/triggers"):
+        return 100
+    if path.startswith("/mcp"):
+        return 200
+    return 60
+
+
+def _counter_bucket(path: str) -> str:
+    """Collapse variable webhook paths to one shared counter bucket."""
+    if path.endswith("/webhook"):
+        return f"{path.split('/api/v1', 1)[0]}/api/v1/triggers/<id>/webhook"
+    return path
+
+
+def _counter_key(method: str, path: str) -> str:
+    """Per-method counter key so GET/POST budgets never share a bucket."""
+    return f"{method} {_counter_bucket(path)}"
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +131,10 @@ def _build_app(
     @app.post("/api/v1/triggers/dummy-trigger")
     async def _webhook_trigger() -> dict[str, str]:
         return {"id": "trigger-1"}
+
+    @app.post("/api/v1/triggers")
+    async def _list_triggers() -> dict[str, Any]:
+        return {"triggers": []}
 
     @app.post("/mcp/any-tool")
     async def _mcp_tool() -> dict[str, Any]:
@@ -181,6 +210,95 @@ def given_auth_admin(ctx: dict[str, Any]) -> None:
 # ===========================================================================
 # When
 # ===========================================================================
+
+
+@given(parsers.parse("I have made {count:d} requests to {method} {path} in the last minute"))
+def given_made_requests(ctx: dict[str, Any], count: int, method: str, path: str) -> None:
+    ctx.setdefault("path_counts", {})
+    ctx["path_counts"][_counter_key(method, path)] = count
+    ctx.setdefault("exceeded", False)
+
+
+@given(parsers.parse("I have exceeded my rate limit for {method} {path}"))
+def given_exceeded_limit_for(ctx: dict[str, Any], method: str, path: str) -> None:
+    ctx.setdefault("path_counts", {})
+    ctx["path_counts"][_counter_key(method, path)] = _limit_for_path(path) + 1
+    ctx["exceeded"] = True
+
+
+@given(parsers.parse('API key "{key}" has made {count:d} requests to {method} {path}'))
+def given_api_key_requests(ctx: dict[str, Any], key: str, count: int, method: str, path: str) -> None:
+    ctx.setdefault("key_counts", {})
+    ctx["key_counts"][f"{key} {method} {_counter_bucket(path)}"] = count
+
+
+@when(parsers.parse("{count:d} seconds pass"))
+def when_seconds_pass(ctx: dict[str, Any], count: int) -> None:
+    ctx["time_passed"] = count
+
+
+@when(parsers.parse("I POST {path}"))
+def when_post_path(
+    request: pytest.FixtureRequest,
+    ctx: dict[str, Any],
+    path: str,
+) -> None:
+    request_count = ctx.get("path_counts", {}).get(_counter_key("POST", path), 0)
+    if ctx.get("time_passed", 0) > 0:
+        request_count = 0
+    allowed = request_count < _limit_for_path(path)
+    registry = _make_mock_registry(allowed=allowed)
+    app = _build_app(registry=registry)
+    with TestClient(app) as client:
+        resp = client.post(path)
+        _store_response(request, ctx, resp)
+
+
+@when(parsers.parse('I POST {path} with API key "{key}"'))
+def when_post_path_with_api_key(
+    request: pytest.FixtureRequest,
+    ctx: dict[str, Any],
+    path: str,
+    key: str,
+) -> None:
+    request_count = ctx.get("key_counts", {}).get(f"{key} POST {_counter_bucket(path)}", 0)
+    allowed = request_count < _limit_for_path(path)
+    registry = _make_mock_registry(allowed=allowed)
+    app = _build_app(registry=registry)
+    with TestClient(app) as client:
+        resp = client.post(path, headers={"Authorization": f"Bearer {key}"})
+        _store_response(request, ctx, resp)
+
+
+@when(
+    parsers.parse(
+        "I PUT {path} with {count:d} requests per {window:d} seconds for {target}",
+    ),
+)
+def when_put_rules_for_target(
+    request: pytest.FixtureRequest,
+    ctx: dict[str, Any],
+    path: str,
+    count: int,
+    window: int,
+    target: str,
+) -> None:
+    updated = [RateLimitRule(path_prefix=target, max_requests=count, window_s=window)]
+    ctx["updated_rules"] = updated
+    registry = _make_mock_registry(allowed=True)
+    app = _build_app(registry=registry)
+
+    @app.put("/api/v1/admin/rate-limits")
+    async def _admin_put_rules() -> dict[str, Any]:
+        RateLimitMiddleware.set_rules(updated)
+        return {"rules": [{"path_prefix": target, "max_requests": count, "window_s": window}]}
+
+    with TestClient(app) as client:
+        resp = client.put(
+            path,
+            json={"rules": [{"path_prefix": target, "max_requests": count, "window_s": window}]},
+        )
+        _store_response(request, ctx, resp)
 
 
 @when(parsers.parse("I send {count:d} POST requests to {path} within 60 seconds"))
@@ -400,6 +518,46 @@ def then_all_responses_200(request: pytest.FixtureRequest, ctx: dict[str, Any]) 
             assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     else:
         assert responses.status_code == 200, f"Expected 200, got {responses.status_code}"
+
+
+@then("the response body indicates rate limit exceeded")
+def then_body_rate_limited(request: pytest.FixtureRequest) -> None:
+    resp = request.node.response
+    assert resp.status_code == 429, f"Expected 429, got {resp.status_code}: {resp.text}"
+    assert "Rate limit exceeded" in resp.text, f"Expected rate-limit detail in body, got {resp.text}"
+
+
+@then("the response includes a Retry-After header")
+def then_includes_retry_after_header(request: pytest.FixtureRequest) -> None:
+    resp = request.node.response
+    assert "Retry-After" in resp.headers, f"Missing Retry-After header in {dict(resp.headers)}"
+
+
+@then("the response has a Retry-After header")
+def then_has_retry_after_header(request: pytest.FixtureRequest) -> None:
+    resp = request.node.response
+    assert "Retry-After" in resp.headers, f"Missing Retry-After header in {dict(resp.headers)}"
+
+
+@then(parsers.parse("the Retry-After value is at least {min_value:d}"))
+def then_retry_after_value_at_least(request: pytest.FixtureRequest, min_value: int) -> None:
+    resp = request.node.response
+    value = int(resp.headers.get("Retry-After", "0"))
+    assert value >= min_value, f"Retry-After value {value} is less than {min_value}"
+
+
+@then(parsers.parse("the rate limit rules include the new {target} limit"))
+def then_rules_include_target(
+    request: pytest.FixtureRequest,
+    ctx: dict[str, Any],
+    target: str,
+) -> None:
+    resp = request.node.response
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    rule = next((r for r in RateLimitMiddleware.RULES if r.path_prefix == target), None)
+    assert rule is not None, f"Rate-limit rule for {target} not applied for subsequent requests"
+    updated = ctx.get("updated_rules") or []
+    assert any(r.path_prefix == target for r in updated), f"New rule for {target} not among the submitted rules"
 
 
 @then(parsers.parse('the response has a "{header}" header'))

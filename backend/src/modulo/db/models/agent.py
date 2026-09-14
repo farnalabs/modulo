@@ -10,7 +10,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -47,7 +46,6 @@ class Agent(OrgScoped):
         ),
         CheckConstraint("token_budget IS NULL OR token_budget > 0", name="ck_agents_token_budget"),
         CheckConstraint("max_input_length IS NULL OR max_input_length > 0", name="ck_agents_max_input_length"),
-        UniqueConstraint("organisation_id", "name", name="uq_agents_organisation_name"),
     )
 
     is_executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -55,8 +53,9 @@ class Agent(OrgScoped):
     template_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("composite_templates.id", ondelete="SET NULL"), nullable=True, default=None
     )
-    agent_command: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
-    agent_commands: Mapped[list[str] | None] = mapped_column(_JSONB_COL, nullable=True, default=None)
+    agent_commands: Mapped[list[str] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True, default=None
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     input_schema_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)

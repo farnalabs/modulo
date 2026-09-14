@@ -28,9 +28,13 @@ function mountHarness(initial: { commands?: string[]; joiner?: string } = {}) {
 }
 
 describe('SandboxCommandsEditor', () => {
-  it('shows empty state when no commands are provided', () => {
+  it('renders the empty list editor when no commands are present (no scalar input)', () => {
     const { wrapper } = mountHarness()
+    // No scalar input exists anymore — commands are list-only (FAR-820).
+    expect(wrapper.find('[data-testid="pipeline-editor-node-command-scalar"]').exists()).toBe(false)
+    // A commandless node shows the empty-state and no joiner UI.
     expect(wrapper.find('[data-testid="pipeline-editor-node-command-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-node-command-joiner"]').exists()).toBe(false)
   })
 
   it('renders pre-existing command-list rows (read-back legibility)', () => {
@@ -40,14 +44,6 @@ describe('SandboxCommandsEditor', () => {
     const preview = wrapper.find('[data-testid="pipeline-editor-node-command-preview"]')
     expect(preview.exists()).toBe(true)
     expect(preview.text()).toContain('cmd-a ; cmd-b')
-  })
-
-  it('renders a single-item list as a one-row editor', () => {
-    const { wrapper } = mountHarness({ commands: ['opencode run --auto'] })
-    expect((wrapper.find('[data-testid="pipeline-editor-node-command-row-0"]').element as HTMLInputElement).value).toBe('opencode run --auto')
-    expect(wrapper.find('[data-testid="pipeline-editor-node-command-empty"]').exists()).toBe(false)
-    // joiner UI is always shown
-    expect(wrapper.find('[data-testid="pipeline-editor-node-command-joiner"]').exists()).toBe(true)
   })
 
   it('authoring a two-command list emits the array and previews with the default joiner', async () => {
@@ -97,6 +93,17 @@ describe('SandboxCommandsEditor', () => {
     // second row added but left empty — it must NOT be dropped while editing
     await wrapper.find('[data-testid="pipeline-editor-node-command-add"]').trigger('click')
     expect(commands.value).toEqual(['cmd-a', ''])
+  })
+
+  it('whitespace-only rows do not activate the list (empty list == no commands)', async () => {
+    const { wrapper } = mountHarness()
+    await wrapper.find('[data-testid="pipeline-editor-node-command-add"]').trigger('click')
+    await wrapper.find('[data-testid="pipeline-editor-node-command-row-0"]').setValue('   ')
+    // list not active: joiner UI absent
+    expect(wrapper.find('[data-testid="pipeline-editor-node-command-joiner"]').exists()).toBe(false)
+    // positive control: a non-empty row activates the list UI
+    await wrapper.find('[data-testid="pipeline-editor-node-command-row-0"]').setValue('cmd-a')
+    expect(wrapper.find('[data-testid="pipeline-editor-node-command-joiner"]').exists()).toBe(true)
   })
 
   it('labels rows and icon-only buttons for accessibility', () => {

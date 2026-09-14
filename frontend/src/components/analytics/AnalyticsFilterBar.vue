@@ -111,7 +111,7 @@
           @change="onFolderChange"
         >
           <option value="">{{ $t("views.AnalyticsView.all") }}</option>
-          <option v-for="f in folders" :key="f.id" :value="f.id">{{ f.name }}</option>
+          <option v-for="f in [...folders].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }))" :key="f.id" :value="f.id">{{ f.name }}</option>
         </select>
       </label>
 

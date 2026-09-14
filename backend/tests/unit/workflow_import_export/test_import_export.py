@@ -791,7 +791,7 @@ def _pipeline_fakes() -> dict[str, Any]:
         retry_policy={"on": ["failure"], "max_retries": 1},
         token_budget=100,
         template_id=None,
-        agent_command=None,
+        agent_commands=[None],
     )
     schema = SimpleNamespace(id=schema_id, name="Schema A", description="sd", abstract_name="abs")
     sv = SimpleNamespace(version="3.0", definition_json={"type": "object"})
@@ -1387,7 +1387,7 @@ async def test_export_pipeline_bundle_v2_agent_without_refs(monkeypatch: pytest.
         output_schema_id=None,
         prompt_template="",
         template_id=None,
-        agent_command=None,
+        agent_commands=[None],
         model_backend_id=None,
         connector_type_refs=[],
         evals=[],
