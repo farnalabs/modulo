@@ -308,6 +308,42 @@ def make_retrying_node_fn(
         # side-effecting node can dedupe its write across retry attempts.
         return await _invoke_with_key(raw_fn, node_id, state)
 
+    async def _execute_edge_retry_source(
+        edge: dict[str, Any],
+        state: dict[str, Any],
+        failed_event: str,
+    ) -> dict[str, Any] | None:
+        """Re-execute a single eligible edge's SOURCE node; return the re-run result.
+
+        Iterates the edge's retry budget: sleeps, re-invokes the source with its
+        own idempotency key, merges the source output into state, then re-runs
+        THIS node against the merged state. Returns the successful re-run result,
+        or ``None`` when the edge budget is exhausted or the failure is
+        non-retryable (caller proceeds to the next edge or to compensation).
+        """
+        source_id = rc._string_or_default(edge.get("source", edge.get("source_node_id")))
+        source_fn = raw_fn_resolver(source_id) if raw_fn_resolver is not None else None
+        if source_fn is None:
+            return None
+        edge_policy = rc.parse_edge_retry(edge.get("retry")) or effective_policy
+        attempts = 0
+        while attempts < edge_policy.max_attempts:
+            attempts += 1
+            try:
+                await _sleep(attempts, edge_policy)
+                src_out = await _invoke_with_key(source_fn, source_id, state)
+                merged = dict(state)
+                if isinstance(src_out, dict):
+                    merged.update(src_out)
+                return await _invoke_with_key(raw_fn, node_id, merged)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                event = failure_event(exc)
+                if event is None or not rc.node_retries_on(edge_policy, event):
+                    break
+        return None
+
     async def _edge_retry(state: dict[str, Any], failed_event: str | None) -> dict[str, Any] | None:
         """Re-execute an incoming edge's SOURCE node; return the re-run result.
 
@@ -330,7 +366,6 @@ def make_retrying_node_fn(
         compensation (FAR-402 MAJOR-1 — the trailing fall-through must be live,
         not dead code behind a raised exception).
         """
-        # Never-retryable watched-node failure → do NOT re-run the source.
         if failed_event is None:
             return None
         for edge in incoming_edges:
@@ -340,35 +375,46 @@ def make_retrying_node_fn(
                 continue
             if raw_fn_resolver is None:
                 continue
-            source_id = rc._string_or_default(edge.get("source", edge.get("source_node_id")))
-            source_fn = raw_fn_resolver(source_id)
-            if source_fn is None:
-                continue
-            edge_policy = rc.parse_edge_retry(edge.get("retry")) or effective_policy
-            attempts = 0
-            # Re-execute the source (with its own idempotency key), then re-run
-            # THIS node against the fresh source output. The edge budget bounds
-            # the source re-executions.
-            while attempts < edge_policy.max_attempts:
-                attempts += 1
-                try:
-                    await _sleep(attempts, edge_policy)
-                    src_out = await _invoke_with_key(source_fn, source_id, state)
-                    merged = dict(state)
-                    if isinstance(src_out, dict):
-                        merged.update(src_out)
-                    return await _invoke_with_key(raw_fn, node_id, merged)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    event = failure_event(exc)
-                    if event is None or not rc.node_retries_on(edge_policy, event):
-                        break
-            # Edge budget exhausted / non-retryable → fall through to the next
-            # edge, or to compensation / normal failure. Do NOT raise here, or the
-            # compensation branch becomes unreachable (FAR-402 MAJOR-1).
-            continue
+            result = await _execute_edge_retry_source(edge, state, failed_event)
+            if result is not None:
+                return result
         return None
+
+    async def _handle_compensation(
+        state: dict[str, Any],
+        exc: BaseException,
+    ) -> bool:
+        """Attempt compensation edge routing after terminal node failure.
+
+        Returns ``True`` if compensation succeeded (caller should return the
+        compensated marker) and ``False`` if no compensation applies (caller
+        should re-raise the original exception). Control-flow terminal faults
+        (RunCancelledError / GraphInterrupt / EvalBlockedError /
+        SupersededNodeError / OutputRejectedError / RunawayRunError) bypass
+        compensation entirely and re-raise so the executor can terminalize
+        the run as designed.
+        """
+        if _is_control_flow_fault(exc):
+            raise
+        comp_target = resolve_compensation_target(node_id, outgoing_edges)
+        if not comp_target or raw_fn_resolver is None:
+            return False
+        comp_fn = raw_fn_resolver(comp_target)
+        if comp_fn is None:
+            return False
+        try:
+            await _invoke_with_key(comp_fn, comp_target, state)
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as comp_exc:
+            if _is_never_retryable(comp_exc):
+                raise
+            raise CompensationFailedError(
+                node_id=node_id,
+                compensation_target=comp_target,
+                cause=comp_exc,
+            ) from comp_exc
 
     async def _wrapped(state: dict[str, Any]) -> dict[str, Any]:
         attempts = 0
@@ -376,7 +422,6 @@ def make_retrying_node_fn(
             attempts += 1
             try:
                 result = await _invoke_raw(state)
-                # "stall" is a returned marker, not an exception.
                 if (
                     _stall_event(result)
                     and rc.node_retries_on(effective_policy, "stall")
@@ -389,8 +434,6 @@ def make_retrying_node_fn(
                 raise
             except Exception as exc:
                 event = failure_event(exc)
-                # Per-node retry: only when the event is retryable, on the
-                # policy's event set, and budget remains.
                 if (
                     event is not None
                     and rc.node_retries_on(effective_policy, event)
@@ -398,48 +441,11 @@ def make_retrying_node_fn(
                 ):
                     await _sleep(attempts, effective_policy)
                     continue
-                # Per-edge retry: node-retry exhausted → re-execute the source.
-                # Pass the watched node's own failure event so the edge retry can
-                # skip a side-effecting source re-execution for a never-retryable
-                # terminal fault (FAR-402 MAJOR-2).
                 edge_result = await _edge_retry(state, event)
                 if edge_result is not None:
                     return edge_result
-                # Compensation edge: terminal failure with an on_failure_target.
-                # Control-flow terminal faults (RunCancelledError / GraphInterrupt /
-                # EvalBlockedError / SupersededNodeError / OutputRejectedError /
-                # RunawayRunError) MUST reach the run-level terminal path, NOT be
-                # swallowed by a compensation edge that would continue the run. The
-                # edge-retry branch above is guarded by the same invariant
-                # (failure_event returns None for these), but the compensation branch
-                # was not — so a watched node cancelled / interrupted / eval-blocked /
-                # superseded / output-rejected / runaway would have its control-flow
-                # exception absorbed and the run wrongly CONTINUED. Re-raise so the
-                # executor can cancel / interrupt / eval-fail / supersede as designed.
-                # NOTE: the script-execution terminal faults (Script*Error) are
-                # intentionally NOT in this set — a script that failed exactly-once is
-                # a genuine TERMINAL node failure a compensation edge may continue from
-                # (see test_per_edge_retry_does_not_reexecute_source_for_never_retryable_major2).
-                if _is_control_flow_fault(exc):
-                    raise
-                comp_target = resolve_compensation_target(node_id, outgoing_edges)
-                if comp_target and raw_fn_resolver is not None:
-                    comp_fn = raw_fn_resolver(comp_target)
-                    if comp_fn is not None:
-                        try:
-                            await _invoke_with_key(comp_fn, comp_target, state)
-                            return _compensated_marker(node_id)
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as comp_exc:
-                            if _is_never_retryable(comp_exc):
-                                raise
-                            raise CompensationFailedError(
-                                node_id=node_id,
-                                compensation_target=comp_target,
-                                cause=comp_exc,
-                            ) from comp_exc
-                # No retry / edge / compensation applies → normal failure.
+                if await _handle_compensation(state, exc):
+                    return _compensated_marker(node_id)
                 raise
 
     _wrapped.__name__ = f"retry_{node_id}"
