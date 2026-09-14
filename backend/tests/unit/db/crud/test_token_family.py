@@ -18,9 +18,11 @@ import modulo.db.crud.token_family as token_family_module
 from modulo.db.crud.token_family import (
     advance_sequence,
     blacklist_family,
+    create_family,
     list_families_for_account,
 )
 from modulo.db.models.base import Base
+from modulo.db.models.organisation import ORPHAN_ORG_ID
 from modulo.db.models.token_family import TokenFamily
 
 _ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
@@ -115,6 +117,28 @@ class TestBlacklistFamily:
 
         assert ok is True
         assert family.is_blacklisted is True
+
+
+class TestCreateFamily:
+    async def test_creates_family_under_explicit_org(self, session: AsyncSession) -> None:
+        family = await create_family(session, _ACCOUNT_A, _ORG_A)
+        await session.commit()
+        await session.refresh(family)
+
+        assert family.organisation_id == _ORG_A
+
+    async def test_falls_back_to_orphan_org_when_org_unresolved(self, session: AsyncSession) -> None:
+        # Migration 0236 makes token_families.organisation_id NOT NULL and
+        # backfills NULLs to the orphan-organisation sentinel; system-admin
+        # logins resolve no org, so create_family must fall back to that sentinel
+        # rather than writing NULL (which would raise IntegrityError on the NOT
+        # NULL column). This is the prove-the-fix for the sentinel fallback: without
+        # it the insert below fails; with it the row persists under ORPHAN_ORG_ID.
+        family = await create_family(session, _ACCOUNT_A, None)
+        await session.commit()
+        await session.refresh(family)
+
+        assert family.organisation_id == ORPHAN_ORG_ID
 
 
 class TestAdvanceSequenceTheftDetection:

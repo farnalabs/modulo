@@ -28,7 +28,10 @@ async def get_or_create_family(
         family = TokenFamily(
             family_id=family_id,
             account_id=account_id,
-            organisation_id=org_id,
+            # Migration 0236 makes token_families.organisation_id NOT NULL and
+            # backfills NULLs to the orphan-organisation sentinel; resolve no org
+            # (system-admin logins) -> fall back to that sentinel rather than NULL.
+            organisation_id=org_id or ORPHAN_ORG_ID,
             max_sequence=0,
         )
         session.add(family)
