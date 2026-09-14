@@ -10,10 +10,8 @@ Resolution semantics: node > pipeline > org(ceiling).
 
 from __future__ import annotations
 
-import copy
 import uuid
 from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -26,7 +24,6 @@ from modulo.core.pipeline_engine.node_runner import (
     _resolve_stdout_cap,
 )
 from modulo.core.stdout_retention import validate_stdout_retention_config
-
 
 # ---------------------------------------------------------------------------
 # validate_stdout_retention_config
