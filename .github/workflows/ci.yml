@@ -523,8 +523,9 @@ jobs:
           # (rather than `uv run python <script>`), so no `uv run` setup-script
           # path is exercised and the script finds diff-cover next to this
           # interpreter.  The script validates its CLI args before subprocess.
+          # NOSONAR - full sync is required (ibm-cos-sdk is sdist-only and pytest-bdd is a pinned git archive, both need a source build that --no-build forbids); --frozen locks exact revisions so the build is deterministic and trusted (no untrusted setup scripts execute)
           .venv/bin/python ../scripts/run_coverage_gate.py \
-            --compare-branch "origin/${{ github.base_ref || 'main' }}" \  # NOSONAR
+            --compare-branch "origin/${{ github.base_ref || 'main' }}" \
             --python-report coverage.xml \
             --js-report ../frontend/coverage/lcov.info
 
