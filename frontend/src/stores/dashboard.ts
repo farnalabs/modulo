@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "../lib/api/client";
 import { withTimeout } from "../lib/asyncUtils";
-import { registerHandler } from "./syncRegistry";
+import { registerSyncHandlers, disposeSyncHandlers } from "./syncRegistry";
 import { formatApiError, type ProblemDetail } from "../lib/api/formatError";
 import type { EventBusEvent } from "@/types/events";
 
@@ -300,21 +300,13 @@ export const useDashboardStore = defineStore("dashboard", () => {
     }
   }
 
-  unsubHandlers.push(
-    registerHandler("run", handleSyncEvent),
-    registerHandler("pipeline", handleSyncEvent),
-  );
-
-  if (import.meta.hot) {
-    import.meta.hot.dispose(() => {
-      disposeHandlers();
-    });
-  }
+  registerSyncHandlers(unsubHandlers, syncingIds, [
+    ["run", handleSyncEvent],
+    ["pipeline", handleSyncEvent],
+  ]);
 
   function disposeHandlers(): void {
-    for (const unsub of unsubHandlers) unsub();
-    unsubHandlers.length = 0;
-    syncingIds.value.clear();
+    disposeSyncHandlers(unsubHandlers, syncingIds);
   }
 
   return {
