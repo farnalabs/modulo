@@ -13,7 +13,7 @@ Design contract:
 
 - **Storage** — ``org_mint_budget_usage(organisation_id, window_start, used)``
    keyed by ``(organisation_id, window_start)`` (committed by migration
-   ``0231_org_mint_budget_usage``). Window rollover is natural: a new ``window_start`` is a new row,
+   ``0233_org_mint_budget_usage``). Window rollover is natural: a new ``window_start`` is a new row,
   so usage resets with zero code.
 - **Config** — limit + window length are env-overridable at read time
   (``MODULO_AGENT_MINT_BUDGET_LIMIT``, default 500;

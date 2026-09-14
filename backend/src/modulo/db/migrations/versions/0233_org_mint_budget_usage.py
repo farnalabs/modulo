@@ -1,7 +1,7 @@
 """org_mint_budget_usage — atomic per-org agent-mint budget tally (FAR-795).
 
-Revision ID: 0231_org_mint_budget_usage
-Revises: 0230_journey_dismissal
+Revision ID: 0233_org_mint_budget_usage
+Revises: 0232_journey_dismissal
 Create Date: 2026-09-14
 
 What this migration does:
@@ -42,8 +42,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0231_org_mint_budget_usage"
-down_revision: str | None = "0230_journey_dismissal"
+revision: str = "0233_org_mint_budget_usage"
+down_revision: str | None = "0232_journey_dismissal"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
