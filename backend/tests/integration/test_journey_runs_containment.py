@@ -40,6 +40,7 @@ async def app_role_rls_session(
     """AsyncSession as the production ``modulo_app`` role (RLS enforced)."""
     factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
     async with factory() as session:
+        await session.begin()
         await set_rls_org(session, test_org)
         yield session
         await session.rollback()
