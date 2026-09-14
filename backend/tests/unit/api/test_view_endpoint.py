@@ -7,7 +7,9 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -436,3 +438,240 @@ class TestCancelledErrorPropagation:
                 session=self._make_session(),
                 principal=self._principal(),
             )
+
+
+class TestRestoreView:
+    """Cover the POST /{view_id}/restore endpoint (lines 289-324)."""
+
+    def test_returns_200(self, client: TestClient) -> None:
+        view = _make_view(name="Restored View")
+        with (
+            patch("modulo.api.routes.views.restore_view", return_value=view),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.post(f"/api/v1/views/{_VIEW_ID}/restore")
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Restored View"
+
+    def test_not_found_returns_404(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.restore_view", return_value=None),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.post(f"/api/v1/views/{uuid.uuid4()}/restore")
+        assert resp.status_code == 404
+
+    def test_programming_error_returns_501(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.views.restore_view",
+                side_effect=ProgrammingError("stmt", "params", Exception("orig")),
+            ),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.post(f"/api/v1/views/{_VIEW_ID}/restore")
+        assert resp.status_code == 501
+
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.restore_view", side_effect=SQLAlchemyError()),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.post(f"/api/v1/views/{_VIEW_ID}/restore")
+        assert resp.status_code == 503
+
+    def test_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.restore_view", side_effect=ValueError("boom")),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.post(f"/api/v1/views/{_VIEW_ID}/restore")
+        assert resp.status_code == 500
+
+
+class TestExceptionHandlers:
+    """ProgrammingError → 501, SQLAlchemyError → 503, Exception → 500 on all endpoints."""
+
+    # ── list views ───────────────────────────────────────────────────
+
+    def test_list_programming_error(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.views.list_views", side_effect=ProgrammingError("stmt", "params", Exception("orig"))
+            ),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.get("/api/v1/views")
+        assert resp.status_code == 501
+
+    def test_list_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.list_views", side_effect=SQLAlchemyError()),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.get("/api/v1/views")
+        assert resp.status_code == 503
+
+    def test_list_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.list_views", side_effect=ValueError("boom")),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.get("/api/v1/views")
+        assert resp.status_code == 500
+
+    # ── create view ──────────────────────────────────────────────────
+
+    def test_create_programming_error(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.views.create_view", side_effect=ProgrammingError("stmt", "params", Exception("orig"))
+            ),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.post("/api/v1/views", json={"name": "T", "view_type": "run_list"})
+        assert resp.status_code == 501
+
+    def test_create_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.create_view", side_effect=SQLAlchemyError()),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.post("/api/v1/views", json={"name": "T", "view_type": "run_list"})
+        assert resp.status_code == 503
+
+    def test_create_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.create_view", side_effect=RuntimeError("fail")),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.post("/api/v1/views", json={"name": "T", "view_type": "run_list"})
+        assert resp.status_code == 500
+
+    # ── get view ─────────────────────────────────────────────────────
+
+    def test_get_programming_error(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.views.get_view", side_effect=ProgrammingError("stmt", "params", Exception("orig"))
+            ),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.get(f"/api/v1/views/{_VIEW_ID}")
+        assert resp.status_code == 501
+
+    def test_get_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.get_view", side_effect=SQLAlchemyError()),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.get(f"/api/v1/views/{_VIEW_ID}")
+        assert resp.status_code == 503
+
+    def test_get_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.get_view", side_effect=RuntimeError("fail")),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.get(f"/api/v1/views/{_VIEW_ID}")
+        assert resp.status_code == 500
+
+    # ── update view ──────────────────────────────────────────────────
+
+    def test_update_programming_error(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.views.update_view", side_effect=ProgrammingError("stmt", "params", Exception("orig"))
+            ),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/views/{_VIEW_ID}", json={"name": "X"})
+        assert resp.status_code == 501
+
+    def test_update_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.update_view", side_effect=SQLAlchemyError()),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/views/{_VIEW_ID}", json={"name": "X"})
+        assert resp.status_code == 503
+
+    def test_update_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.update_view", side_effect=RuntimeError("fail")),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/views/{_VIEW_ID}", json={"name": "X"})
+        assert resp.status_code == 500
+
+    # ── delete view ──────────────────────────────────────────────────
+
+    def test_delete_programming_error(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.views.soft_delete_view",
+                side_effect=ProgrammingError("stmt", "params", Exception("orig")),
+            ),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.delete(f"/api/v1/views/{_VIEW_ID}")
+        assert resp.status_code == 501
+
+    def test_delete_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.soft_delete_view", side_effect=SQLAlchemyError()),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.delete(f"/api/v1/views/{_VIEW_ID}")
+        assert resp.status_code == 503
+
+    def test_delete_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.views.soft_delete_view", side_effect=RuntimeError("fail")),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.delete(f"/api/v1/views/{_VIEW_ID}")
+        assert resp.status_code == 500
+
+    # ── HTTPException passthrough ────────────────────────────────────
+
+    def test_list_http_exception_passthrough(self, client: TestClient) -> None:
+        """HTTPException raised inside the endpoint body must re-raise."""
+        custom_exc = HTTPException(status_code=409, detail="conflict")
+        with (
+            patch("modulo.api.routes.views.list_views", side_effect=custom_exc),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.get("/api/v1/views")
+        assert resp.status_code == 409
+
+    def test_create_http_exception_passthrough(self, client: TestClient) -> None:
+        custom_exc = HTTPException(status_code=409, detail="conflict")
+        with (
+            patch("modulo.api.routes.views.create_view", side_effect=custom_exc),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = client.post("/api/v1/views", json={"name": "T", "view_type": "run_list"})
+        assert resp.status_code == 409
