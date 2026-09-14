@@ -9,7 +9,7 @@ required-team-id normaliser.
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -679,6 +679,28 @@ class TestReadOrgStdoutRetentionCeiling:
         with patch(
             "modulo.core.cost_controller.system_config.read_system_config",
             new=AsyncMock(side_effect=RuntimeError("db down")),
+        ):
+            assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
+
+    async def test_non_scalar_read_is_ignored(self) -> None:
+        """Unit-test ``_FakeSession`` fakes return a bare MagicMock for un-routed
+        ``system_config`` reads; `float(MagicMock()) == 1.0`, so a non-scalar
+        read MUST reject to None or it would clamp real nodes to 1 byte."""
+        with patch(
+            "modulo.core.cost_controller.system_config.read_system_config",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
+
+    async def test_bool_and_float_values_reject(self) -> None:
+        with patch(
+            "modulo.core.cost_controller.system_config.read_system_config",
+            new=AsyncMock(return_value=True),
+        ):
+            assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
+        with patch(
+            "modulo.core.cost_controller.system_config.read_system_config",
+            new=AsyncMock(return_value=5_500_000.5),
         ):
             assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
 

@@ -8101,6 +8101,28 @@ def _coerce_stdout_max_bytes(raw: Any) -> int | None:
     return int(value)
 
 
+def _coerce_org_stdout_ceiling(raw: Any) -> int | None:
+    """Coerce the org-level stdout retention ceiling (FAR-811) to a positive int or None.
+
+    Stricter than ``_coerce_stdout_max_bytes``: only genuine scalar DB values
+    (int/float/str) are accepted. Non-scalar values - including the
+    bare ``MagicMock`` results unit-test ``_FakeSession`` fakes return for
+    un-routed queries - reject to ``None``, so a mock artifact can never clamp
+    real nodes to a bogus 1-byte ceiling. ``bool``, non-positive, non-integral
+    and non-finite values are rejected too (a ceiling can only ever be a
+    positive whole byte count).
+    """
+    if raw is None or isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not value.is_integer() or value <= 0 or value == float("inf"):
+        return None
+    return int(value)
+
+
 def _resolve_stdout_cap(
     stdout_retention_mode: str,
     stdout_max_bytes: int | None,
@@ -8151,7 +8173,7 @@ async def _read_org_stdout_retention_ceiling(
             extra={"key": _ORG_SANDBOX_STDOUT_RETENTION_MAX_BYTES},
         )
         return None
-    return _coerce_stdout_max_bytes(raw)
+    return _coerce_org_stdout_ceiling(raw)
 
 
 def _filter_watch_globs(raw: Any) -> list[str]:
