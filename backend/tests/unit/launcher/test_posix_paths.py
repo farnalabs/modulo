@@ -240,7 +240,15 @@ class TestIsPostgresProcess:
         assert supervisor_module._is_postgres_process(999_999_999) is False
 
     def test_postgres_process_returns_true(self, tmp_path: Path) -> None:
-        """Spawn a process whose argv[0] ends with 'postgres'."""
+        """Spawn a process whose argv[0] ends with 'postgres'.
+
+        The shim is a symlink to an inert binary (sleep) named 'postgres', so
+        the process is exec'd directly with argv[0] == .../postgres.  This
+        avoids the prior shebang-script trick, whose process image some
+        /bin/sh implementations replace in place when a script's sole command
+        is exec'd — discarding the 'postgres' argv component and making the
+        assertion flaky on runners whose dash does that.
+        """
         wrapper = tmp_path / "postgres"
         # `exec -a postgres` pins argv[0] to "postgres" so the match holds
         # regardless of whether sh exec's the last command (replacing argv[0]
@@ -252,7 +260,7 @@ class TestIsPostgresProcess:
         # match.  Popen has no timeout param; bounded by finally-block kill.
         _popen = subprocess.__dict__["Popen"]
         proc = _popen(
-            [str(wrapper)],
+            [str(wrapper), "30"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,

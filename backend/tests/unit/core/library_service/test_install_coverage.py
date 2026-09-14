@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.library_service import install as install_mod
+from modulo.core.library_service._seed_data import MODULO_ORG_ID
 from modulo.core.library_service.install import (
     CollectionInstallError,
     CollectionNotPublishedError,
@@ -32,7 +33,7 @@ from modulo.core.library_service.install import (
     _connector_ref_type_id,
     _definition_from_field_spec,
     _definition_from_fields,
-    _persist_builtin_primitives,
+    _persist_collection_row,
     _resolve_collection,
     _resolve_pin,
     _schema_definition_from_content,
@@ -321,50 +322,123 @@ class TestResolvePin:
 
 
 # ---------------------------------------------------------------------------
-# _persist_builtin_primitives
+# _persist_collection_row
 # ---------------------------------------------------------------------------
 
 
-def _mock_session_for_persist(*, org_exists: bool, prim_exists: bool) -> MagicMock:
+def _session_with_get_dispatch(**gets: Any) -> MagicMock:
+    """AsyncMock session whose ``get`` dispatches on the model class name."""
     session = MagicMock(name="session")
-    no_autoflush = MagicMock()
-    no_autoflush.__enter__ = MagicMock(return_value=None)
-    no_autoflush.__exit__ = MagicMock(return_value=False)
-    session.no_autoflush = no_autoflush
     session.add = MagicMock()
     session.flush = AsyncMock()
 
-    def _get(model: Any, key: Any) -> Any:
-        if model.__name__ == "Organisation":
-            return None if not org_exists else MagicMock()
-        return None if not prim_exists else MagicMock()
+    async def _get(model: Any, key: Any) -> Any:
+        return gets.get(model.__name__)
 
     session.get = AsyncMock(side_effect=_get)
     return session
 
 
-class TestPersistBuiltinPrimitives:
-    async def test_empty_returns_early(self) -> None:
+def _execute_returning(value: Any) -> AsyncMock:
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=value)
+    return AsyncMock(return_value=result)
+
+
+class TestPersistCollectionRow:
+    async def test_persistent_row_returned_untouched(self) -> None:
+        coll = _prim(uuid.uuid4(), primitive_type="library_collection")
         session = MagicMock(name="session")
-        session.get = AsyncMock()
-        await _persist_builtin_primitives(session, _ORG_ID, [])
-        session.get.assert_not_called()
-
-    async def test_creates_org_and_prims(self) -> None:
-        prim = _prim(uuid.uuid4(), primitive_type="agent")
-        session = _mock_session_for_persist(org_exists=False, prim_exists=False)
-        with patch.object(install_mod, "set_rls_org", new=AsyncMock()):
-            await _persist_builtin_primitives(session, _ORG_ID, [prim])
-        added = [call.args[0] for call in session.add.call_args_list]
-        assert any(getattr(a, "__tablename__", None) == "organisations" for a in added)
-        assert any(a.id == prim.id for a in added)
-
-    async def test_reuses_existing_rows(self) -> None:
-        prim = _prim(uuid.uuid4(), primitive_type="agent")
-        session = _mock_session_for_persist(org_exists=True, prim_exists=True)
-        with patch.object(install_mod, "set_rls_org", new=AsyncMock()):
-            await _persist_builtin_primitives(session, _ORG_ID, [prim])
+        with (
+            patch.object(install_mod, "_transient_primitives", new=MagicMock(return_value=[])),
+            patch.object(install_mod, "set_rls_org", new=AsyncMock()) as rls,
+        ):
+            result = await _persist_collection_row(session, _ORG_ID, coll)
+        assert result == coll.id
+        rls.assert_not_called()
         session.add.assert_not_called()
+
+    async def test_missing_sentinel_org_raises_actionable(self) -> None:
+        coll = _collection()
+        session = _session_with_get_dispatch(Organisation=None)
+        with (
+            patch.object(install_mod, "set_rls_org", new=AsyncMock()),
+            pytest.raises(CollectionInstallError, match="alembic upgrade head"),
+        ):
+            await _persist_collection_row(session, _ORG_ID, coll)
+
+    async def test_rls_context_restored_even_on_error(self) -> None:
+        coll = _collection()
+        session = _session_with_get_dispatch(Organisation=None)
+        with (
+            patch.object(install_mod, "set_rls_org", new=AsyncMock()) as rls,
+            pytest.raises(CollectionInstallError),
+        ):
+            await _persist_collection_row(session, _ORG_ID, coll)
+        assert [call.args[1] for call in rls.call_args_list] == [MODULO_ORG_ID, _ORG_ID]
+
+    async def test_tuple_hit_same_content_reuses_row(self) -> None:
+        coll = _collection()
+        existing = _prim(
+            coll.id,
+            primitive_type="library_collection",
+            name="My Collection",
+            slug="my-collection",
+            source="local",
+            version="1.0",
+            manifest_pins=[],
+        )
+        session = _session_with_get_dispatch(Organisation=MagicMock())
+        session.execute = _execute_returning(existing)
+        with patch.object(install_mod, "set_rls_org", new=AsyncMock()):
+            result = await _persist_collection_row(session, _ORG_ID, coll)
+        assert result == existing.id
+        session.add.assert_not_called()
+        session.flush.assert_not_awaited()
+
+    async def test_tuple_hit_stale_content_resyncs(self) -> None:
+        coll = _collection()
+        existing = _prim(
+            coll.id,
+            primitive_type="library_collection",
+            name="My Collection",
+            slug="my-collection",
+            source="local",
+            version="1.0",
+            manifest_pins=[],
+        )
+        existing.checksum = "stale-checksum"
+        session = _session_with_get_dispatch(Organisation=MagicMock())
+        session.execute = _execute_returning(existing)
+        with patch.object(install_mod, "set_rls_org", new=AsyncMock()):
+            result = await _persist_collection_row(session, _ORG_ID, coll)
+        assert result == existing.id
+        assert existing.checksum == coll.checksum
+        assert existing.manifest_pins == coll.manifest_pins
+        session.add.assert_not_called()
+        session.flush.assert_awaited_once()
+
+    async def test_tuple_miss_soft_deleted_pk_holder_reused(self) -> None:
+        coll = _collection()
+        holder = _prim(coll.id, primitive_type="library_collection", deleted_at="2020-01-01")
+        session = _session_with_get_dispatch(Organisation=MagicMock(), LibraryPrimitive=holder)
+        session.execute = _execute_returning(None)
+        with patch.object(install_mod, "set_rls_org", new=AsyncMock()):
+            result = await _persist_collection_row(session, _ORG_ID, coll)
+        assert result == coll.id
+        session.add.assert_not_called()
+
+    async def test_tuple_and_pk_miss_inserts_clone(self) -> None:
+        coll = _collection()
+        session = _session_with_get_dispatch(Organisation=MagicMock(), LibraryPrimitive=None)
+        session.execute = _execute_returning(None)
+        with patch.object(install_mod, "set_rls_org", new=AsyncMock()):
+            result = await _persist_collection_row(session, _ORG_ID, coll)
+        added = [call.args[0] for call in session.add.call_args_list]
+        assert len(added) == 1
+        assert added[0].id == coll.id
+        assert result == coll.id
+        session.flush.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -432,36 +506,36 @@ def _make_workflow_pin(pid: uuid.UUID) -> LibraryPrimitive:
 
 
 class TestBuildBundleFromPins:
-    async def test_schema_pin(self) -> None:
+    def test_schema_pin(self) -> None:
         pid = uuid.uuid4()
         pin = _make_schema_pin(pid, fields=[{"name": "x", "type": "string", "required": True}])
-        bundle = await _build_bundle_from_pins([pin])
+        bundle = _build_bundle_from_pins([pin])
         assert bundle["schemas"][0]["id"] == str(pid)
         assert bundle["schemas"][0]["definition_json"]["type"] == "object"
         assert bundle["pipeline"]["name"] == "Collection Install"
 
-    async def test_schema_pin_with_definition_json(self) -> None:
+    def test_schema_pin_with_definition_json(self) -> None:
         pid = uuid.uuid4()
         pin = _make_schema_pin(pid, definition_json={"type": "object", "properties": {}})
-        bundle = await _build_bundle_from_pins([pin])
+        bundle = _build_bundle_from_pins([pin])
         assert bundle["schemas"][0]["definition_json"] == {"type": "object", "properties": {}}
 
-    async def test_agent_pin_resolves_schema_refs(self) -> None:
+    def test_agent_pin_resolves_schema_refs(self) -> None:
         schema_pid = uuid.uuid4()
         agent_pid = uuid.uuid4()
         schema_pin = _make_schema_pin(schema_pid)
         agent_pin = _make_agent_pin(agent_pid, input_schema="schema", output_schema="schema")
-        bundle = await _build_bundle_from_pins([schema_pin, agent_pin])
+        bundle = _build_bundle_from_pins([schema_pin, agent_pin])
         agent = bundle["agents"][0]
         assert agent["input_schema_id"] == str(schema_pid)
         assert agent["output_schema_id"] == str(schema_pid)
         assert agent["prompt_template"] == "do the thing"
         assert bundle["pipeline"]["graph_nodes_json"][0]["agent_id"] == str(agent_pid)
 
-    async def test_pipeline_template_pin(self) -> None:
+    def test_pipeline_template_pin(self) -> None:
         pid = uuid.uuid4()
         pin = _make_pipeline_template_pin(pid)
-        bundle = await _build_bundle_from_pins([pin])
+        bundle = _build_bundle_from_pins([pin])
         assert len(bundle["agents"]) == 1
         assert bundle["agents"][0]["name"] == "Tpl Agent"
         node = bundle["pipeline"]["graph_nodes_json"][0]
@@ -469,19 +543,19 @@ class TestBuildBundleFromPins:
         assert node["position"] == {"x": 1, "y": 2}
         assert bundle["edges"][0]["hitl_gate_config"] == {"k": "v"}
 
-    async def test_workflow_pin_merges_bundle(self) -> None:
+    def test_workflow_pin_merges_bundle(self) -> None:
         pid = uuid.uuid4()
         pin = _make_workflow_pin(pid)
-        bundle = await _build_bundle_from_pins([pin])
+        bundle = _build_bundle_from_pins([pin])
         assert len(bundle["agents"]) == 1
         assert len(bundle["schemas"]) == 1
         assert len(bundle["pipeline"]["graph_nodes_json"]) == 1
         assert len(bundle["edges"]) == 1
 
-    async def test_unknown_pin_type_raises(self) -> None:
+    def test_unknown_pin_type_raises(self) -> None:
         pin = _prim(uuid.uuid4(), primitive_type="composite", name="X", slug="x")
         with pytest.raises(CollectionInstallError, match="unsupported primitive"):
-            await _build_bundle_from_pins([pin])
+            _build_bundle_from_pins([pin])
 
 
 class TestAppendAgentPin:
@@ -515,10 +589,22 @@ class TestAppendPipelineTemplatePin:
 
 
 def _mock_session(
-    collection: LibraryPrimitive, *, existing_install: Any = None, execute_result: Any = None
+    collection: LibraryPrimitive,
+    *,
+    tuple_row: Any = None,
+    pk_row: Any = None,
+    existing_install: Any = None,
 ) -> MagicMock:
+    """Contract-correct session mock for the install_collection flow.
+
+    ``get`` dispatches on the model class: the Organisation lookup in
+    _persist_collection_row finds the sentinel, the LibraryPrimitive lookups
+    (collection resolution + PK guard) find ``collection`` / ``pk_row``.
+    ``execute`` dispatches on the statement text: the collection_installs
+    existence check returns ``existing_install``, the library_primitives
+    tuple lookup in _persist_collection_row returns ``tuple_row``.
+    """
     session = MagicMock(name="session")
-    session.get = AsyncMock(return_value=collection)
     no_autoflush = MagicMock()
     no_autoflush.__enter__ = MagicMock(return_value=None)
     no_autoflush.__exit__ = MagicMock(return_value=False)
@@ -526,9 +612,22 @@ def _mock_session(
     session.add = MagicMock()
     session.flush = AsyncMock()
 
-    ex_result = MagicMock()
-    ex_result.scalar_one_or_none = MagicMock(return_value=existing_install)
-    session.execute = AsyncMock(return_value=execute_result if execute_result is not None else ex_result)
+    async def _get(model: Any, key: Any) -> Any:
+        if model.__name__ == "Organisation":
+            return MagicMock(name="sentinel-org")
+        if model.__name__ == "LibraryPrimitive":
+            return collection if pk_row is None else pk_row
+        return None
+
+    session.get = AsyncMock(side_effect=_get)
+
+    async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
+        result = MagicMock()
+        is_install_check = "collection_install" in str(stmt)
+        result.scalar_one_or_none = MagicMock(return_value=existing_install if is_install_check else tuple_row)
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
     return session
 
 
@@ -627,6 +726,7 @@ class TestInstallCollectionPaths:
 
         assert install.status == "installed"
         assert install.organisation_id == _ORG_ID
+        assert install.collection_id == coll.id
         manifest = install.resolved_manifest
         assert isinstance(manifest, dict)
         assert not manifest["warnings"]
