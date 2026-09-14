@@ -68,9 +68,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and 0237_fix_token_family_org_nullable chains off 0236_add_organisations_constraints,
 # and FAR-801's 0238_workspace_input_drift_and_audit chains off
 # 0237_fix_token_family_org_nullable,
-# and 0239_journey_dismissal (FAR-795) chains off 0238_workspace_input_drift_and_audit,
-# and 0240_org_mint_budget_usage (FAR-795) chains off 0239_journey_dismissal as the chain head.
-_CHAIN_HEAD_MIGRATION = "0240_org_mint_budget_usage"
+# and 0240_journey_dismissal (FAR-795) chains off 0238_workspace_input_drift_and_audit,
+# and 0241_org_mint_budget_usage (FAR-795) chains off 0240_journey_dismissal as the chain head.
+_CHAIN_HEAD_MIGRATION = "0241_org_mint_budget_usage"
 
 
 def _source(name: str) -> str:
