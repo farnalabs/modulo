@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { defineComponent, h, nextTick, ref } from 'vue'
+import { defineComponent, h, ref } from 'vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
 
 // Harness wires the exact v-model contract the pipeline editor uses, so
