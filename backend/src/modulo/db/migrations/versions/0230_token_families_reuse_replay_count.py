@@ -1,7 +1,7 @@
 """Add per-window reuse replay counter to token families.
 
-Revision ID: 0228_token_families_reuse_replay_count
-Revises: 0227_token_families_refresh_grace
+Revision ID: 0230_token_families_reuse_replay_count
+Revises: 0229_token_families_refresh_grace
 Create Date: 2026-09-14
 
 Adds ``reuse_replay_count`` (integer, NOT NULL default 0) to ``token_families``
@@ -14,8 +14,8 @@ current window requires a persisted counter distinct from the window marker.
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0228_token_families_reuse_replay_count"
-down_revision = "0227_token_families_refresh_grace"
+revision = "0230_token_families_reuse_replay_count"
+down_revision = "0229_token_families_refresh_grace"
 branch_labels = None
 depends_on = None
 
