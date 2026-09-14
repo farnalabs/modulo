@@ -5,6 +5,7 @@ there is no default command, and a missing command is a hard error.
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import shutil
@@ -17,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.artifacts.store import LocalArtifactStore
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.node_runner import (
     _E2B_SANDBOX_USD_PER_HOUR,
@@ -1238,6 +1240,59 @@ async def test_full_retention_redacts_before_truncation():
     assert "<redacted>" in output["agent_stdout"]
     assert "BBB" not in output["agent_stdout"]
     assert output["stdout_truncated"] is True
+
+
+async def test_over_cap_stdout_written_to_artifact_store_with_pointer(tmp_path):
+    """Over-cap redacted stdout is retained IN FULL in the artifact store and
+    the envelope carries a stdout_artifact pointer (rel_path / size_bytes /
+    sha256, truncated: False, redacted: True) instead of only the truncated
+    head (FAR-811)."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=2048)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox, _ = _sandbox_with_std_bytes("x" * 4096)
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == "x" * 2048
+    assert output["stdout_truncated"] is True
+    pointer = output["stdout_artifact"]
+    assert pointer["truncated"] is False
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stdout"
+    assert pointer["compression"] == "zstd"
+    assert pointer["size_bytes"] == 4096
+    assert pointer["sha256"] == hashlib.sha256(b"x" * 4096).hexdigest()
+    assert pointer["rel_path"].endswith(".zst")
+    assert store.read_bytes(pointer) == b"x" * 4096
+    assert result["artifacts"][0]["output"]["stdout_artifact"] == output["stdout_artifact"]
+
+
+async def test_under_cap_stdout_stays_inline_no_artifact(tmp_path):
+    """Under-cap stdout keeps today's inline behaviour: no stdout_artifact key
+    and no artifact written to the store (FAR-811 backwards compatibility)."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=8192)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox, _ = _sandbox_with_std_bytes("x" * 2048)
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["agent_stdout"] == "x" * 2048
+    assert "stdout_truncated" not in output
+    assert "stdout_artifact" not in output
+    assert not list(tmp_path.rglob("*.zst"))
 
 
 async def test_full_retention_drain_keeps_beyond_512kb():

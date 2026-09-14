@@ -628,6 +628,32 @@ class TestStdoutTruncatedEnvelopeKey:
         )
         assert "stdout_truncated" not in envelope["output"]
 
+    def test_stdout_artifact_pointer_is_opt_in_extra_key(self) -> None:
+        pointer = {
+            "rel_path": "org/run/node/key.stdout.zst",
+            "size_bytes": 600_000,
+            "sha256": "d1b2c3",
+            "stream": "stdout",
+            "compression": "zstd",
+            "truncated": False,
+            "redacted": True,
+        }
+        envelope = _build_sandbox_node_envelope(
+            node_id="n1",
+            output=self._output(stdout_truncated=True, stdout_length=600_000, stdout_artifact=pointer),
+        )
+        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
+            assert view["stdout_artifact"]["truncated"] is False
+            assert view["stdout_artifact"]["redacted"] is True
+            assert view["stdout_artifact"]["size_bytes"] == 600_000
+            assert view["stdout_artifact"]["sha256"] == "d1b2c3"
+            assert view["stdout_artifact"]["rel_path"].endswith(".zst")
+
+    def test_stdout_artifact_absent_when_inline(self) -> None:
+        envelope = _build_sandbox_node_envelope(node_id="n1", output=self._output())
+        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
+            assert "stdout_artifact" not in view
+
 
 # ---------------------------------------------------------------------------
 # FAR-792: per-node stdout retention must be reachable through REAL config paths
