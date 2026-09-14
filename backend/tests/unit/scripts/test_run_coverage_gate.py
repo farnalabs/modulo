@@ -27,6 +27,57 @@ _loader.exec_module(mod)
 
 
 # ---------------------------------------------------------------------------
+# Captured real diff-cover 10.5.1 output (--compare-branch=origin/main).
+# These are the *actual* strings the tool emits — the gate must parse these,
+# not synthetic text.  The combined form is stdout + "\n" + stderr, which is
+# exactly what run_coverage_gate._run_diff_cover returns.
+# ---------------------------------------------------------------------------
+REAL_DIFF_COVER_PASS_STDOUT = """-------------
+Diff Coverage
+Diff: origin/main...HEAD, staged and unstaged changes
+-------------
+src/calc.py (100%): No lines missing
+-------------
+Total:   1 line
+Missing: 0 lines
+Coverage: 100%
+-------------"""
+
+REAL_DIFF_COVER_PASS_90_STDOUT = """-------------
+Diff Coverage
+Diff: origin/main...HEAD, staged and unstaged changes
+-------------
+src/calc.py (90%): No lines missing
+-------------
+Total:   1 line
+Missing: 0 lines
+Coverage: 90%
+-------------"""
+
+REAL_DIFF_COVER_FAIL_STDOUT = """-------------
+Diff Coverage
+Diff: origin/main...HEAD, staged and unstaged changes
+-------------
+src/calc.py (0%): Missing lines 4
+-------------
+Total:   1 line
+Missing: 1 line
+Coverage: 0%
+-------------"""
+
+REAL_DIFF_COVER_FAIL_STDERR = "Failure. Coverage is below 90%."
+
+REAL_DIFF_COVER_FAIL_COMBINED = REAL_DIFF_COVER_FAIL_STDOUT + "\n" + REAL_DIFF_COVER_FAIL_STDERR
+
+REAL_DIFF_COVER_NO_LINES_STDOUT = """-------------
+Diff Coverage
+Diff: origin/main...HEAD, staged and unstaged changes
+-------------
+No lines with coverage information in this diff.
+-------------"""
+
+
+# ---------------------------------------------------------------------------
 # Missing report — fail-closed (the default, CI behaviour)
 # ---------------------------------------------------------------------------
 def test_evaluate_missing_report_fails_closed():
@@ -91,7 +142,7 @@ def test_evaluate_no_changed_lines_skips(tmp_path):
     fake_report = tmp_path / "coverage.xml"
     fake_report.write_text("<coverage/>")
 
-    with patch.object(mod, "_run_diff_cover", return_value=(0, "No lines with coverage information in this diff")):
+    with patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_NO_LINES_STDOUT)):
         result = mod.evaluate(
             language="Python",
             report_path=fake_report,
@@ -105,14 +156,13 @@ def test_evaluate_no_changed_lines_skips(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Coverage above threshold → pass
+# Coverage above threshold → pass (real diff-cover 10.5.1 stdout)
 # ---------------------------------------------------------------------------
 def test_evaluate_above_threshold_passes(tmp_path):
     fake_report = tmp_path / "coverage.xml"
     fake_report.write_text("<coverage/>")
 
-    output = "Coverage on lines differing from 'origin/main': 95.0%"
-    with patch.object(mod, "_run_diff_cover", return_value=(0, output)):
+    with patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)):
         result = mod.evaluate(
             language="Python",
             report_path=fake_report,
@@ -122,18 +172,17 @@ def test_evaluate_above_threshold_passes(tmp_path):
 
     assert result.skipped is False
     assert result.passed is True
-    assert result.actual_pct == 95.0
+    assert result.actual_pct == 100.0
 
 
 # ---------------------------------------------------------------------------
-# Coverage below threshold → fail
+# Coverage below threshold → fail (real diff-cover 10.5.1 combined output)
 # ---------------------------------------------------------------------------
 def test_evaluate_below_threshold_fails(tmp_path):
     fake_report = tmp_path / "coverage.xml"
     fake_report.write_text("<coverage/>")
 
-    output = "Coverage on lines differing from 'origin/main': 75.0%\nCoverage threshold not met: 75.0% < 90%"
-    with patch.object(mod, "_run_diff_cover", return_value=(1, output)):
+    with patch.object(mod, "_run_diff_cover", return_value=(1, REAL_DIFF_COVER_FAIL_COMBINED)):
         result = mod.evaluate(
             language="Python",
             report_path=fake_report,
@@ -143,7 +192,8 @@ def test_evaluate_below_threshold_fails(tmp_path):
 
     assert result.skipped is False
     assert result.passed is False
-    assert result.actual_pct == 75.0
+    assert result.actual_pct == 0.0
+    assert "below" in result.skip_reason.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +203,7 @@ def test_evaluate_exact_threshold_passes(tmp_path):
     fake_report = tmp_path / "coverage.xml"
     fake_report.write_text("<coverage/>")
 
-    output = "Coverage on lines differing from 'origin/main': 90.0%"
-    with patch.object(mod, "_run_diff_cover", return_value=(0, output)):
+    with patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_90_STDOUT)):
         result = mod.evaluate(
             language="Python",
             report_path=fake_report,
@@ -165,6 +214,58 @@ def test_evaluate_exact_threshold_passes(tmp_path):
     assert result.skipped is False
     assert result.passed is True
     assert result.actual_pct == 90.0
+
+
+# ---------------------------------------------------------------------------
+# Round-trip against captured REAL diff-cover 10.5.1 output.
+# These must fail against the old regexes (which matched synthetic strings diff-cover
+# never emits) and pass against the corrected ones — proving the gate actually parses
+# real tool output instead of passing only on invented text.
+# ---------------------------------------------------------------------------
+def test_real_output_pass_parses_coverage_and_passes(tmp_path):
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+    with patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+    assert result.skipped is False
+    assert result.passed is True
+    assert result.actual_pct == 100.0
+
+
+def test_real_output_fail_parses_coverage_and_fails(tmp_path):
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+    with patch.object(mod, "_run_diff_cover", return_value=(1, REAL_DIFF_COVER_FAIL_COMBINED)):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+    assert result.skipped is False
+    assert result.passed is False
+    assert result.actual_pct == 0.0
+    assert "below" in result.skip_reason.lower()
+
+
+def test_real_output_no_changed_lines_skips(tmp_path):
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+    with patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_NO_LINES_STDOUT)):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+    assert result.skipped is True
+    assert result.passed is True
+    assert "no changed coverable lines" in result.skip_reason.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -224,13 +325,13 @@ def test_no_changed_lines_regex_case_insensitive():
 
 
 def test_coverage_line_regex_extracts_value():
-    m = mod._COVERAGE_LINE_RE.search("Coverage on lines differing from 'origin/main': 87.5%")
+    m = mod._COVERAGE_LINE_RE.search("Coverage: 87.5%")
     assert m is not None
     assert float(m.group(1)) == 87.5
 
 
 def test_threshold_not_met_regex_matches():
-    assert mod._THRESHOLD_NOT_MET_RE.search("Coverage threshold not met: 75.0% < 90%")
+    assert mod._THRESHOLD_NOT_MET_RE.search("Failure. Coverage is below 90%.")
 
 
 # ---------------------------------------------------------------------------

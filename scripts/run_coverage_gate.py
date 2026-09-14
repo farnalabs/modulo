@@ -51,10 +51,15 @@ COVERAGE_THRESHOLD = 90
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Sentinel strings from diff-cover output
+# Sentinel strings from diff-cover output.  These are matched against diff-cover
+# 10.5.1's *real* human-readable output (verified empirically):
+#   - stdout always ends with a ``Coverage: <pct>%`` line.
+#   - on a threshold breach stderr carries ``Failure. Coverage is below <n>%.``
+#   - a docs/test-only diff prints ``No lines with coverage information in this diff.``
+# We parse this real text rather than inventing a format diff-cover never emits.
 _NO_CHANGED_LINES_RE = re.compile(r"No lines with coverage information in this diff", re.IGNORECASE)
-_COVERAGE_LINE_RE = re.compile(r"Coverage on lines differing from.*?:\s*(\d+(?:\.\d+)?)\s*%")
-_THRESHOLD_NOT_MET_RE = re.compile(r"Coverage threshold not met", re.IGNORECASE)
+_COVERAGE_LINE_RE = re.compile(r"Coverage:\s*(\d+(?:\.\d+)?)\s*%")
+_THRESHOLD_NOT_MET_RE = re.compile(r"Failure\. Coverage is below", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -72,7 +77,8 @@ class GateResult:
         if self.skipped:
             return f"[{self.language}] SKIPPED — {self.skip_reason}"
         if self.passed:
-            return f"[{self.language}] PASS — {self.actual_pct:.1f}% >= {self.threshold}%"
+            pct = f"{self.actual_pct:.1f}%" if self.actual_pct is not None else "?"
+            return f"[{self.language}] PASS — {pct} >= {self.threshold}%"
         if self.actual_pct is not None:
             return f"[{self.language}] FAIL — {self.actual_pct:.1f}% < {self.threshold}%"
         return f"[{self.language}] FAIL — {self.skip_reason}"
@@ -165,34 +171,33 @@ def evaluate(
         )
 
     # --- Extract actual coverage percentage ---
-    # The regex only matches valid numeric strings (\d+(?:\.\d+)?), so
-    # float() is safe here — no ValueError guard needed.
+    # The regex only matches the real ``Coverage: <pct>%`` line and valid
+    # numeric strings (\d+(?:\.\d+)?), so float() is safe here.
     actual_pct: float | None = None
     m = _COVERAGE_LINE_RE.search(output)
     if m:
         actual_pct = float(m.group(1))
 
     # --- Determine pass/fail ---
-    # diff-cover exits 0 when coverage >= fail-under, 1 when below.
-    # We also check the output for extra robustness.
-    if rc == 0 and actual_pct is not None:
-        passed = True
-    elif rc != 0 and _THRESHOLD_NOT_MET_RE.search(output):
+    # diff-cover exits 0 when coverage >= fail-under, 1 when below (or on a
+    # genuine tool error).  We distinguish a threshold breach from a tool error
+    # using the stderr sentinel ``Failure. Coverage is below <n>%.``
+    if rc == 0:
+        # Gate met.  diff-cover reports the percentage it compared, so a
+        # missing value here means the output shape drifted — treat that as a
+        # gate failure rather than silently passing.
+        passed = actual_pct is not None
+        reason = "" if passed else "diff-cover exited 0 but reported no coverage percentage"
+    elif _THRESHOLD_NOT_MET_RE.search(output):
         passed = False
-    elif rc != 0:
+        pct = f"{actual_pct:.1f}" if actual_pct is not None else "?"
+        reason = f"coverage {pct}% is below threshold {fail_under}%"
+    else:
         # Non-zero for a reason other than threshold — tool error or
         # malformed report.  Capture the last non-empty line as the reason.
         passed = False
         error_lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
         reason = error_lines[-1] if error_lines else "diff-cover returned non-zero"
-    else:
-        passed = actual_pct is not None and actual_pct >= fail_under
-        reason = ""
-
-    if not passed and rc != 0 and not _THRESHOLD_NOT_MET_RE.search(output):
-        pass  # reason already set above
-    else:
-        reason = ""
 
     return GateResult(
         language=language,
