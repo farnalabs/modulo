@@ -664,6 +664,41 @@ describe('LifecycleMapView node position persistence (FAR-833)', () => {
     vi.useRealTimers()
   })
 
+  it('sends edge description/condition_expression keys (not stale aliases) so they round-trip', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const mapWithTransition = {
+      ...mapDetail,
+      transitions: [
+        { id: 'e1', source_stage_id: 'stage-1', target_stage_id: 'stage-1', trigger_type: 'auto', description: 'on merge', condition_expression: null },
+      ],
+    }
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/journeys')) return Promise.resolve(okJson({ items: [] }))
+      return Promise.resolve(okJson(mapWithTransition))
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { handlePositionsChanged: (p: Record<string, { x: number; y: number }>) => void }
+    vm.handlePositionsChanged({ 'stage-1': { x: 123, y: 456 } })
+    await vi.advanceTimersByTimeAsync(600)
+
+    const putCalls = fetchMock.mock.calls.filter((call: unknown[]) => {
+      const [url, init] = call
+      return String(url).includes('/versions/00000000-0000-0000-0000-000000000001') && (init as { method?: string })?.method === 'PUT'
+    })
+    expect(putCalls).toHaveLength(1)
+    const [, init] = putCalls[0]
+    const body = JSON.parse((init as { body: string }).body)
+    // Edges must use the server read-back keys so descriptions survive a save.
+    expect(body.edges[0].description).toBe('on merge')
+    expect(body.edges[0].condition_expression).toBeNull()
+    expect(body.edges[0].trigger_description).toBeUndefined()
+    expect(body.edges[0].condition).toBeUndefined()
+    vi.useRealTimers()
+  })
+
   it('shows saved indicator after successful server write', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     fetchMock.mockImplementation((url: string) => {
@@ -783,6 +818,41 @@ describe('LifecycleMapView position persistence edge cases (FAR-833)', () => {
     const body = JSON.parse((init as { body: string }).body)
     expect(body.stages[0].x).toBe(10)
     expect(body.stages[0].y).toBe(20)
+  })
+
+  it('aborts the in-flight PUT when a newer position change supersedes it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const signals: AbortSignal[] = []
+    fetchMock.mockImplementation((url: string, init?: { method?: string; signal?: AbortSignal }) => {
+      if (String(url).includes('/journeys')) return Promise.resolve(okJson({ items: [] }))
+      if (String(url).includes('/versions/')) {
+        const signal = init?.signal
+        if (signal) signals.push(signal)
+        // Stay in flight, but reject with AbortError if the request is aborted so
+        // the older save cannot complete after the newer one.
+        return new Promise<Response>((_resolve, reject) => {
+          if (signal) signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      }
+      return Promise.resolve(okJson(mapDetail))
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { handlePositionsChanged: (p: Record<string, { x: number; y: number }>) => void }
+    // First change schedules + fires a debounced save (in flight).
+    vm.handlePositionsChanged({ 'stage-1': { x: 1, y: 2 } })
+    await vi.advanceTimersByTimeAsync(500)
+    // Second change aborts the in-flight save and starts a fresh one.
+    vm.handlePositionsChanged({ 'stage-1': { x: 10, y: 20 } })
+    await vi.advanceTimersByTimeAsync(600)
+
+    expect(signals).toHaveLength(2)
+    // The superseded first save must be aborted; the latest one must still be live.
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
+    vi.useRealTimers()
   })
 
   it('clears pending timers on unmount before the debounce fires', async () => {

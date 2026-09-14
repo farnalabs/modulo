@@ -1315,6 +1315,52 @@ class TestLifecycleMapConcurrentSaves:
         finally:
             await engine.dispose()
 
+    async def test_save_round_trips_node_positions_and_edge_descriptions(self, tmp_path: Path) -> None:
+        """A position-persist save (stages with x/y + edges with description /
+        condition_expression) must survive the save -> read-back path so the
+        editor's PUT/GET round-trip does not silently null out edge metadata.
+        """
+        engine = await self._engine(tmp_path)
+        try:
+            await self._seed(engine, version=1)
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+
+            stages = [
+                {"id": "stage-1", "name": "Build", "type": "modulo", "x": 123.0, "y": 456.0},
+                {"id": "stage-2", "name": "Merge", "type": "manual", "x": 0.0, "y": 0.0},
+            ]
+            edges = [
+                {
+                    "id": "e1",
+                    "source": "stage-1",
+                    "target": "stage-2",
+                    "trigger_type": "auto",
+                    "description": "on merge",
+                    "condition_expression": "x > 1",
+                    "estimated_frequency": None,
+                }
+            ]
+            async with maker() as s, s.begin():
+                lm = await save_map_version(s, _MAP_ID, stages=stages, edges=edges, notes="positions")
+                assert lm is not None
+
+            async with maker() as s, s.begin():
+                final = await get_lifecycle_map(s, _MAP_ID)
+            assert final is not None
+
+            entry = _build_version_entry(final)
+            assert entry.stages[0].x == 123.0
+            assert entry.stages[0].y == 456.0
+            assert entry.edges[0].description == "on merge"
+            assert entry.edges[0].condition_expression == "x > 1"
+
+            detail = _build_detail(final)
+            assert detail.stages[0].x == 123.0
+            assert detail.stages[0].y == 456.0
+            assert detail.transitions[0].description == "on merge"
+        finally:
+            await engine.dispose()
+
     async def test_read_during_open_write_transaction_sees_committed_snapshot(self, tmp_path: Path) -> None:
         """A version-list read concurrent with an uncommitted save must see the
         last committed snapshot — never a half-written map."""

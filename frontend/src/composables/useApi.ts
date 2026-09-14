@@ -10,6 +10,7 @@ const BASE = ''
 
 interface ApiOptions {
   headers?: Record<string, string>
+  signal?: AbortSignal
 }
 
 const REQUEST_TIMEOUT_MS = 30000
@@ -17,6 +18,10 @@ const REQUEST_TIMEOUT_MS = 30000
 async function requestWorker(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  // A caller-supplied signal (e.g. a drag-save abort) must also cancel the
+  // request, not just the local timeout controller.
+  const onCallerAbort = () => controller.abort()
+  if (options?.signal) options.signal.addEventListener('abort', onCallerAbort)
   try {
     const headers = {
       'Content-Type': 'application/json',
@@ -32,6 +37,7 @@ async function requestWorker(method: string, path: string, body?: unknown, optio
     })
     return res
   } finally {
+    if (options?.signal) options.signal.removeEventListener('abort', onCallerAbort)
     clearTimeout(timer)
   }
 }

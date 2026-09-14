@@ -474,20 +474,27 @@ async function persistPositions(positions: Record<string, { x: number; y: number
       source: t.source_stage_id,
       target: t.target_stage_id,
       trigger_type: t.trigger_type,
-      trigger_description: t.description,
-      condition: null,
+      description: t.description,
+      condition_expression: t.condition_expression ?? null,
       estimated_frequency: null,
     }))
     const controller = new AbortController()
     saveAbortController = controller
     try {
-      await store.updateVersion(mapId.value, versionId, stages, edges)
+      const updated = await store.updateVersion(mapId.value, versionId, stages, edges, undefined, {
+        signal: controller.signal,
+      })
       if (!controller.signal.aborted) {
         // Write to localStorage as a fallback cache.
         try {
           const key = localStorageKey(mapId.value, selectedVersion.value)
           localStorage.setItem(key, JSON.stringify(positions))
         } catch { /* quota exceeded — non-critical */ }
+        // Keep the server-bumped version in sync so the selectedVersion ===
+        // current_version comparison in onVersionChange stays correct.
+        if (updated && typeof updated.version === 'number') {
+          store.applyVersionBump(updated.version)
+        }
         saveStatus.value = 'saved'
         statusTimeout = setTimeout(() => { saveStatus.value = 'idle' }, 2000)
       }

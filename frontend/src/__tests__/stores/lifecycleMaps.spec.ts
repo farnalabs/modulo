@@ -262,7 +262,7 @@ describe('useLifecycleMapsStore', () => {
     fetchMock.mockResolvedValue(okJsonResponse(version()))
     const store = useLifecycleMapsStore()
     const stages = [canvasStage()]
-    const edges = [{ id: 'e1', source: 'stage-1', target: 'stage-2', trigger_type: null, trigger_description: null, condition: null, estimated_frequency: null }]
+    const edges = [{ id: 'e1', source: 'stage-1', target: 'stage-2', trigger_type: null, description: null, condition_expression: null, estimated_frequency: null }]
 
     const result = await store.saveVersion('map-1', stages, edges, 'second cut')
 
