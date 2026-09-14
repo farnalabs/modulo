@@ -39,7 +39,7 @@ from modulo.db.crud.organisation import (
     list_organisations,
     update_organisation,
 )
-from modulo.db.models.organisation import ORPHAN_ORG_ID, Organisation
+from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, ORPHAN_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org
 
 _CODE_SYSTEM_ORG_MANAGE = "system.org.manage"
@@ -240,6 +240,11 @@ class ListOrgItem(BaseModel):
     created_at: str
 
 
+# Reserved orgs are infrastructure, never customer tenants — hide them from
+# the admin listing. One frozenset so future reserved orgs are a single edit.
+RESERVED_ORG_IDS = frozenset({ORPHAN_ORG_ID, MODULO_REGISTRY_ORG_ID})
+
+
 @router.get("")
 @handle_db_errors("admin.orgs.admin_list_orgs")
 async def admin_list_orgs(
@@ -257,9 +262,9 @@ async def admin_list_orgs(
         raise
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_list_orgs", exc)
-    # The nil-UUID orphan org (public-error-ingest sentinel, migration 0171)
-    # is infrastructure, never a customer org — hide it from the admin listing.
-    return [_list_org_item(o) for o in orgs if o.id != ORPHAN_ORG_ID]
+    # Reserved sentinel orgs (nil-UUID public-error ingest, modulo-library
+    # registry) are infrastructure, never customer orgs — hide them.
+    return [_list_org_item(o) for o in orgs if o.id not in RESERVED_ORG_IDS]
 
 
 # --- Create User in Org ---
