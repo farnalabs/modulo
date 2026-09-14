@@ -49,7 +49,9 @@ export function parseDefinitionToFields(
       type: (prop.type as string | undefined) ?? 'string',
       required: Array.isArray(def.required) && def.required.includes(name),
       description: (prop.description as string | undefined) ?? '',
-      defaultValue: prop.default !== undefined ? String(prop.default) : '',
+      defaultValue: prop.default !== undefined
+        ? (typeof prop.default === 'object' ? JSON.stringify(prop.default) : String(prop.default))
+        : '',
     })
   }
   return loadedFields

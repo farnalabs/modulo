@@ -189,9 +189,11 @@ export const usePlanStore = defineStore("plan", () => {
     }
   }
 
-  unsubHandlers.push(registerHandler("team", handleSyncEvent));
-  unsubHandlers.push(registerHandler("license", handleSyncEvent));
-  unsubHandlers.push(registerHandler("plan", handleSyncEvent));
+  unsubHandlers.push(
+    registerHandler("team", handleSyncEvent),
+    registerHandler("license", handleSyncEvent),
+    registerHandler("plan", handleSyncEvent),
+  );
 
   if (import.meta.hot) {
     import.meta.hot.dispose(() => {

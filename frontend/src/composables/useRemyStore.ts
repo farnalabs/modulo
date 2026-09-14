@@ -295,7 +295,7 @@ export const useRemyStore = defineStore('remy', () => {
 
   function appendToken(text: string) {
     const lastMsg = messages.value[messages.value.length - 1]
-    if (lastMsg && lastMsg.role === 'assistant') {
+    if (lastMsg?.role === 'assistant') {
       lastMsg.content = (lastMsg.content ?? '') + text
     } else {
       messages.value.push(createMessage('assistant', text, {

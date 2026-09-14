@@ -67,7 +67,7 @@ function stringifyErrorObject(obj: Record<string, unknown>, err: unknown): strin
   try {
     return truncateErrorText(JSON.stringify(obj))
   } catch {
-    return String(err)
+    return typeof err === 'string' ? err : (err instanceof Error ? err.message : 'Unknown error')
   }
 }
 

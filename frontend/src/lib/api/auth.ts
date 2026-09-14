@@ -19,7 +19,7 @@ const DEMO_ENDED_KEY = 'modulo_demo_ended'
 // S8475: only store well-formed, opaque token strings in browser storage.
 // Rejects anything containing control/whitespace chars or exceeding a sane
 // length, so tainted/untrusted data can never be persisted as a token.
-const TOKEN_PATTERN = /^[A-Za-z0-9._\-]+$/
+const TOKEN_PATTERN = /^[A-Za-z0-9._-]+$/
 const MAX_TOKEN_LENGTH = 8192
 
 export function isValidToken(value: unknown): value is string {
@@ -138,25 +138,29 @@ export function setAccessToken(token: string): void {
   notifyListeners()
 }
 
-export interface ClearAccessTokenOptions {
-  /**
-   * Whether clearing this session counts as the demo session having ended
-   * involuntarily (token expiry, forced clear) and should therefore persist
-   * the demo-ended tombstone. Defaults to true. Pass false for an EXPLICIT
-   * user logout (AppLayout.logout): the visitor chose to leave, so after the
-   * reload they must land on the normal login flow, not be re-minted into
-   * /demo (which would burn the mint budget against their will).
-   */
-  demoEnded?: boolean
-}
-
-export function clearAccessToken(options?: ClearAccessTokenOptions): void {
+/**
+ * Clear the access token and associated session state.
+ *
+ * By default (expiry / forced clear), if the session was a demo session, the
+ * demo-ended tombstone is persisted so auto-login is not re-triggered. For an
+ * EXPLICIT user logout, use `clearAccessTokenForLogout` instead.
+ */
+export function clearAccessToken(options?: { demoEnded?: boolean }): void {
   const demoEnded = options?.demoEnded ?? true
   if (demoEnded && isDemoSession()) {
-    // Persist the demo-ended signal BEFORE removing the marker, so it outlives
-    // the token clear and any reload (App.vue's mount-time check consumes it).
     markDemoSessionEnded()
   }
+  localStorage.removeItem(TOKEN_KEY)
+  clearRefreshToken()
+  setDemoSession(false)
+  notifyListeners()
+}
+
+/**
+ * Explicit user-initiated logout. Never writes the demo-ended tombstone so
+ * the visitor can actually leave the demo and land on the normal login flow.
+ */
+export function clearAccessTokenForLogout(): void {
   localStorage.removeItem(TOKEN_KEY)
   clearRefreshToken()
   setDemoSession(false)

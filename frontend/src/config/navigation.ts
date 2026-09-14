@@ -151,7 +151,8 @@ function buildSidebarGroups(): NavGroup[] {
       continue
     }
 
-    (itemsByGroup[route.sidebar_group] ??= []).push({
+    const groupItems = itemsByGroup[route.sidebar_group] ??= []
+    groupItems.push({
       to: path,
       icon: routeConfigMap[route.name]?.icon || 'File',
       label: route.breadcrumb || route.name,

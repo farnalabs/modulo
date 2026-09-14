@@ -300,8 +300,10 @@ export const useDashboardStore = defineStore("dashboard", () => {
     }
   }
 
-  unsubHandlers.push(registerHandler("run", handleSyncEvent));
-  unsubHandlers.push(registerHandler("pipeline", handleSyncEvent));
+  unsubHandlers.push(
+    registerHandler("run", handleSyncEvent),
+    registerHandler("pipeline", handleSyncEvent),
+  );
 
   if (import.meta.hot) {
     import.meta.hot.dispose(() => {

@@ -4,7 +4,7 @@ let _collectorInstance: BreadcrumbCollector | null = null
 
 export class BreadcrumbCollector {
   private buffer: Breadcrumb[] = []
-  private maxSize: number
+  private readonly maxSize: number
   private clickHandler: ((e: MouseEvent) => void) | null = null
   private origFetch: typeof window.fetch | null = null
 
