@@ -5,6 +5,7 @@ there is no default command, and a missing command is a hard error.
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import shutil
@@ -17,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.artifacts.store import LocalArtifactStore
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.node_runner import (
     _E2B_SANDBOX_USD_PER_HOUR,
@@ -25,6 +27,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _compute_sandbox_cost,
     _delta_ratio,
     _fetch_sandbox_log_tail,
+    _persist_full_stdout_artifact,
     _StallDetector,
     _wait_command_with_idle_watchdog,
     _wrap_sandbox_command_with_log_redirect,
@@ -1238,6 +1241,190 @@ async def test_full_retention_redacts_before_truncation():
     assert "<redacted>" in output["agent_stdout"]
     assert "BBB" not in output["agent_stdout"]
     assert output["stdout_truncated"] is True
+
+
+async def test_over_cap_stdout_written_to_artifact_store_with_pointer(tmp_path):
+    """Over-cap redacted stdout is retained IN FULL in the artifact store and
+    the envelope carries a stdout_artifact pointer (rel_path / size_bytes /
+    sha256, truncated: False, redacted: True) instead of only the truncated
+    head (FAR-811)."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=2048)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox, _ = _sandbox_with_std_bytes("x" * 4096)
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == "x" * 2048
+    assert output["stdout_truncated"] is True
+    pointer = output["stdout_artifact"]
+    assert pointer["truncated"] is False
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stdout"
+    assert pointer["compression"] == "zstd"
+    assert pointer["size_bytes"] == 4096
+    assert pointer["sha256"] == hashlib.sha256(b"x" * 4096).hexdigest()
+    assert pointer["rel_path"].endswith(".zst")
+    assert store.read_bytes(pointer) == b"x" * 4096
+    assert result["artifacts"][0]["output"]["stdout_artifact"] == output["stdout_artifact"]
+
+
+async def test_under_cap_stdout_stays_inline_no_artifact(tmp_path):
+    """Under-cap stdout keeps today's inline behaviour: no stdout_artifact key
+    and no artifact written to the store (FAR-811 backwards compatibility)."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=8192)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox, _ = _sandbox_with_std_bytes("x" * 2048)
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["agent_stdout"] == "x" * 2048
+    assert "stdout_truncated" not in output
+    assert "stdout_artifact" not in output
+    assert not list(tmp_path.rglob("*.zst"))
+
+
+# --- _persist_full_stdout_artifact direct unit tests (full branch coverage) ---
+
+
+def _fake_store_with_pointer() -> MagicMock:
+    store = MagicMock()
+    store.finalize.return_value = {
+        "rel_path": "org/run/node/key.stdout.zst",
+        "size_bytes": 4096,
+        "sha256": "abc123",
+        "compression": "zstd",
+    }
+    return store
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stdout_artifact_happy_path_returns_pointer(mock_get_store):
+    """FAR-811: a successful store write returns the pointer with the
+    truncated: False / redacted: True flags and the full pre-truncation size."""
+    store = _fake_store_with_pointer()
+    mock_get_store.return_value = store
+    pointer = _persist_full_stdout_artifact(
+        org_id="org",
+        run_id="run",
+        node_id="node",
+        attempt_key="a1",
+        node_cap=2048,
+        redacted_stdout="x" * 4096,
+    )
+    assert pointer is not None
+    assert pointer["truncated"] is False
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stdout"
+    assert pointer["compression"] == "zstd"
+    assert pointer["size_bytes"] == 4096
+    assert pointer["sha256"] == "abc123"
+    assert pointer["rel_path"].endswith(".zst")
+    # The overflow key is suffixed so it never collides with the FAR-582 side-car.
+    store.append.assert_called_once_with("org", "run", "node", "a1:full:2048", "stdout", "x" * 4096)
+    store.finalize.assert_called_once_with("org", "run", "node", "a1:full:2048", "stdout")
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stdout_artifact_store_failure_returns_none(mock_get_store):
+    """A store failure must be non-fatal: return None so the caller keeps the
+    inline (truncated) behaviour with no stdout_artifact key (FAR-811)."""
+    store = MagicMock()
+    store.append.side_effect = RuntimeError("disk full")
+    mock_get_store.return_value = store
+    pointer = _persist_full_stdout_artifact(
+        org_id="org",
+        run_id="run",
+        node_id="node",
+        attempt_key="a1",
+        node_cap=2048,
+        redacted_stdout="x" * 4096,
+    )
+    assert pointer is None
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stdout_artifact_none_pointer_returns_none(mock_get_store):
+    """If finalize yields no pointer (store could not materialize the artifact),
+    return None rather than publishing a half-built envelope (FAR-811)."""
+    store = MagicMock()
+    store.finalize.return_value = None
+    mock_get_store.return_value = store
+    pointer = _persist_full_stdout_artifact(
+        org_id="org",
+        run_id="run",
+        node_id="node",
+        attempt_key="a1",
+        node_cap=2048,
+        redacted_stdout="x" * 4096,
+    )
+    assert pointer is None
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stdout_artifact_missing_attempt_key_returns_none(mock_get_store):
+    """Without an attempt key there is no stable overflow key to write under,
+    so skip the store write and return None (FAR-811)."""
+    store = _fake_store_with_pointer()
+    mock_get_store.return_value = store
+    pointer = _persist_full_stdout_artifact(
+        org_id="org",
+        run_id="run",
+        node_id="node",
+        attempt_key=None,
+        node_cap=2048,
+        redacted_stdout="x" * 4096,
+    )
+    assert pointer is None
+    store.append.assert_not_called()
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stdout_artifact_empty_redacted_stdout_returns_none(mock_get_store):
+    """Nothing to retain if the redacted transcript is empty; return None and do
+    not touch the store (FAR-811)."""
+    store = _fake_store_with_pointer()
+    mock_get_store.return_value = store
+    pointer = _persist_full_stdout_artifact(
+        org_id="org",
+        run_id="run",
+        node_id="node",
+        attempt_key="a1",
+        node_cap=2048,
+        redacted_stdout="",
+    )
+    assert pointer is None
+    store.append.assert_not_called()
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stdout_artifact_propagates_cancelled_error(mock_get_store):
+    """A CancelledError during the store write must propagate (not be swallowed
+    into the non-fatal None path) so task cancellation is honoured (FAR-811)."""
+    store = MagicMock()
+    store.append.side_effect = asyncio.CancelledError()
+    mock_get_store.return_value = store
+    with pytest.raises(asyncio.CancelledError):
+        _persist_full_stdout_artifact(
+            org_id="org",
+            run_id="run",
+            node_id="node",
+            attempt_key="a1",
+            node_cap=2048,
+            redacted_stdout="x" * 4096,
+        )
 
 
 async def test_full_retention_drain_keeps_beyond_512kb():

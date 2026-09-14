@@ -13188,6 +13188,12 @@ export interface components {
             trigger_type?: string | null;
             /** Description */
             description?: string | null;
+            /** Condition Expression */
+            condition_expression?: string | null;
+            /** Estimated Frequency */
+            estimated_frequency?: string | null;
+            /** Trigger Link */
+            trigger_link?: string | null;
         };
         /** LifecycleMapUpdate */
         LifecycleMapUpdate: {
@@ -13206,6 +13212,11 @@ export interface components {
         };
         /** LifecycleMapVersionMeta */
         LifecycleMapVersionMeta: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
             /** Version */
             version: number;
             /**
@@ -15962,6 +15973,10 @@ export interface components {
             input_payload?: {
                 [key: string]: unknown;
             } | null;
+            /** Workspace Inputs */
+            workspace_inputs?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** RunSummary */
         RunSummary: {

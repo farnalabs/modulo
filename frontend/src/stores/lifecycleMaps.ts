@@ -30,9 +30,13 @@ export interface LifecycleMapTransition {
   target_stage_id: string
   trigger_type: string | null
   description: string | null
+  condition_expression?: string | null
+  estimated_frequency?: string | null
+  trigger_link?: string | null
 }
 
 export interface LifecycleMapVersion {
+  id: string
   version: number
   created_at: string
   created_by: string | null
@@ -87,8 +91,8 @@ export interface LifecycleEdge {
   source: string
   target: string
   trigger_type: string | null
-  trigger_description: string | null
-  condition: string | null
+  description: string | null
+  condition_expression: string | null
   estimated_frequency: string | null
 }
 
@@ -487,19 +491,34 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     }
   }
 
-  async function updateVersion(mapId: string, versionId: string, stages: LifecycleStage[], edges: LifecycleEdge[], notes?: string) {
+  async function updateVersion(
+    mapId: string,
+    versionId: string,
+    stages: LifecycleStage[],
+    edges: LifecycleEdge[],
+    notes?: string,
+    options?: { signal?: AbortSignal },
+  ) {
     saving.value = true
     error.value = null
     try {
-      const data = await put<LifecycleMapVersion>(`/api/v1/lifecycle-maps/${mapId}/versions/${versionId}`, {
-        stages, edges, notes: notes || ''
-      })
+      const data = await put<LifecycleMapVersion>(
+        `/api/v1/lifecycle-maps/${mapId}/versions/${versionId}`,
+        { stages, edges, notes: notes || '' },
+        options?.signal ? { signal: options.signal } : undefined,
+      )
       return data
     } catch (e: unknown) {
       error.value = formatApiError(e)
       throw e
     } finally {
       saving.value = false
+    }
+  }
+
+  function applyVersionBump(version: number) {
+    if (currentMap.value) {
+      currentMap.value = { ...currentMap.value, current_version: version }
     }
   }
 
@@ -585,6 +604,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     fetchMapVersion,
     saveVersion,
     updateVersion,
+    applyVersionBump,
     graduateStage,
     fetchPipelines,
     fetchJourneys,

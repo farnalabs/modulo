@@ -2841,3 +2841,104 @@ class TestListRunsObservability:
             "concurrency_limit": 3,
             "waiting": True,
         }
+
+
+# ---------------------------------------------------------------------------
+# FAR-802: workspace-inputs run-detail loader (_do_get_workspace_inputs)
+# ---------------------------------------------------------------------------
+
+
+def _principal() -> TenantPrincipal:
+    return TenantPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+
+def _factory_for(session: MagicMock) -> MagicMock:
+    factory_cm = MagicMock()
+    factory_cm.__aenter__ = AsyncMock(return_value=session)
+    factory_cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=factory_cm)
+
+
+def _session_with_row(row: object) -> MagicMock:
+    session = _make_mock_session()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = row
+    session.execute = AsyncMock(return_value=result)
+    return session
+
+
+async def test_do_get_workspace_inputs_returns_list_when_present() -> None:
+    inputs = [{"url": "https://example.com", "ref": "abc123"}]
+    session = _session_with_row(SimpleNamespace(outputs_json={"workspace_inputs": inputs}))
+    factory = _factory_for(session)
+    with patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock):
+        out = await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID)
+    assert out == inputs
+
+
+async def test_do_get_workspace_inputs_none_when_no_audit_row() -> None:
+    session = _session_with_row(None)
+    factory = _factory_for(session)
+    with patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock):
+        assert await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID) is None
+
+
+async def test_do_get_workspace_inputs_none_when_outputs_not_dict() -> None:
+    session = _session_with_row(SimpleNamespace(outputs_json="not-a-dict"))
+    factory = _factory_for(session)
+    with patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock):
+        assert await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID) is None
+
+
+async def test_do_get_workspace_inputs_none_when_inputs_not_list() -> None:
+    session = _session_with_row(SimpleNamespace(outputs_json={"workspace_inputs": "nope"}))
+    factory = _factory_for(session)
+    with patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock):
+        assert await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID) is None
+
+
+async def test_do_get_workspace_inputs_none_on_db_error() -> None:
+    session = _make_mock_session()
+    session.execute = AsyncMock(side_effect=RuntimeError("boom"))
+    factory = _factory_for(session)
+    with patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock):
+        assert await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID) is None
+
+
+async def test_do_get_workspace_inputs_propagates_cancelled() -> None:
+    import asyncio
+
+    session = _make_mock_session()
+    factory = _factory_for(session)
+    with (
+        patch(
+            "modulo.api.routes.runs.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=asyncio.CancelledError,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID)
+
+
+def test_get_run_status_includes_workspace_inputs(client: TestClient) -> None:
+    run = _make_run(status="complete")
+    inputs = [{"url": "https://example.com", "ref": "abc123"}]
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch(
+            "modulo.api.routes.runs._do_get_workspace_inputs",
+            new_callable=AsyncMock,
+            return_value=inputs,
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["workspace_inputs"] == inputs

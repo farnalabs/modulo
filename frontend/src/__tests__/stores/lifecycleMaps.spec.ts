@@ -80,7 +80,7 @@ const map = (overrides: Partial<LifecycleMap> = {}): LifecycleMap => ({
   owner_team_id: null,
   stages: [stage(), stage({ id: 'stage-2', name: 'Prod', graduated: true, type: 'manual' })],
   transitions: [],
-  versions: [{ version: 1, created_at: '2026-01-01T00:00:00Z', created_by: 'alice' }],
+  versions: [{ id: '00000000-0000-0000-0000-000000000001', version: 1, created_at: '2026-01-01T00:00:00Z', created_by: 'alice' }],
   current_version: 1,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
@@ -88,6 +88,7 @@ const map = (overrides: Partial<LifecycleMap> = {}): LifecycleMap => ({
 })
 
 const version = (overrides: Partial<LifecycleMapVersion> = {}): LifecycleMapVersion => ({
+  id: '00000000-0000-0000-0000-000000000001',
   version: 2,
   created_at: '2026-01-02T00:00:00Z',
   created_by: 'alice',
@@ -261,7 +262,7 @@ describe('useLifecycleMapsStore', () => {
     fetchMock.mockResolvedValue(okJsonResponse(version()))
     const store = useLifecycleMapsStore()
     const stages = [canvasStage()]
-    const edges = [{ id: 'e1', source: 'stage-1', target: 'stage-2', trigger_type: null, trigger_description: null, condition: null, estimated_frequency: null }]
+    const edges = [{ id: 'e1', source: 'stage-1', target: 'stage-2', trigger_type: null, description: null, condition_expression: null, estimated_frequency: null }]
 
     const result = await store.saveVersion('map-1', stages, edges, 'second cut')
 

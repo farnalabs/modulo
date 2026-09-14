@@ -57,9 +57,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and 0226_agents_json_to_jsonb chains off 0225,
 # and 0227_env_profiles_initialisation_strategy_check chains off 0226_agents_json_to_jsonb,
 # and 0228_drop_scalar_agent_command chains off 0227_env_profiles_initialisation_strategy_check,
-# and 0229_workspace_input_drift_and_audit (FAR-801 audit persistence) chains off 0228
+# and FAR-802's 0229_add_workspace_inputs_count chains off 0228_drop_scalar_agent_command,
+# and FAR-801's 0230_workspace_input_drift_and_audit chains off 0229_add_workspace_inputs_count
 # as the chain head.
-_CHAIN_HEAD_MIGRATION = "0229_workspace_input_drift_and_audit"
+_CHAIN_HEAD_MIGRATION = "0230_workspace_input_drift_and_audit"
 
 
 def _source(name: str) -> str:

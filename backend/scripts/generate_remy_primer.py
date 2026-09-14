@@ -316,6 +316,7 @@ def _truncate_primer(primer: str, max_tokens: int = _MAX_PRIMER_TOKENS) -> str:
         if p.startswith("Key Concepts"):
             key_concepts_section = p
         elif p.startswith("Pages & Navigation"):
+            # Navigation section is dropped first when truncating to token budget.
             pass
         elif p.startswith("Active Context"):
             active_context_section = p

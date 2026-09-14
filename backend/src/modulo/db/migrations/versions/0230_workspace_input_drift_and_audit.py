@@ -1,8 +1,12 @@
-"""Add workspace-input drift column, daily-facts count, and audit partial index (FAR-801).
+"""Add workspace-input drift column and audit partial index (FAR-801).
 
-Revision ID: 0229_workspace_input_drift_and_audit
-Revises: 0228_drop_scalar_agent_command
+Revision ID: 0230_workspace_input_drift_and_audit
+Revises: 0229_add_workspace_inputs_count
 Create Date: 2026-09-13
+
+Chains on top of FAR-802's 0229_add_workspace_inputs_count, which already
+adds ``run_daily_facts.workspace_inputs_count``; this migration therefore
+does NOT re-add that column (it would collide on upgrade).
 
 Schema legs (Postgres only; SQLite/ORM-created test schemas get the columns
 from the ``Run`` / ``RunDailyFact`` models' ``create_all``):
@@ -13,12 +17,7 @@ from the ``Run`` / ``RunDailyFact`` models' ``create_all``):
    row so terminalization reads the correct value before classifying
    the run.
 
-2. ``run_daily_facts.workspace_inputs_count`` — nullable ``integer``, no
-   default.  The count of managed workspace inputs resolved for the run,
-   computed by the analytics backfill from the audit row in
-   ``run_node_outputs``.
-
-3. Partial index ``ix_run_node_outputs_audit`` on ``run_node_outputs
+2. Partial index ``ix_run_node_outputs_audit`` on ``run_node_outputs
    (run_id, node_id) WHERE node_id = '__mwi_audit__'`` — the
    compensating sweep and the analytics backfill both query audit rows
    by ``(run_id, node_id)``; the partial index bounds the scan to audit
@@ -28,8 +27,8 @@ from the ``Run`` / ``RunDailyFact`` models' ``create_all``):
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0229_workspace_input_drift_and_audit"
-down_revision = "0228_drop_scalar_agent_command"
+revision = "0230_workspace_input_drift_and_audit"
+down_revision = "0229_add_workspace_inputs_count"
 branch_labels = None
 depends_on = None
 
@@ -38,10 +37,7 @@ def upgrade() -> None:
     # 1. runs.workspace_inputs_drift_detected
     op.add_column("runs", sa.Column("workspace_inputs_drift_detected", sa.Boolean(), nullable=True))
 
-    # 2. run_daily_facts.workspace_inputs_count
-    op.add_column("run_daily_facts", sa.Column("workspace_inputs_count", sa.Integer(), nullable=True))
-
-    # 3. Partial index for audit rows
+    # 2. Partial index for audit rows
     op.create_index(
         "ix_run_node_outputs_audit",
         "run_node_outputs",
@@ -52,5 +48,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_run_node_outputs_audit", table_name="run_node_outputs")
-    op.drop_column("run_daily_facts", "workspace_inputs_count")
     op.drop_column("runs", "workspace_inputs_drift_detected")

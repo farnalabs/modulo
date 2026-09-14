@@ -36,6 +36,13 @@ _AGENT_ID = str(uuid.uuid4())
 def _remote_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Script mode requires a remote E2B provider (same seam as the bindings tests)."""
     monkeypatch.setenv("MODULO_E2B_API_KEY", "test-e2b-key")
+    # FAR-802: these tests exercise the managed-workspace-inputs path, which is
+    # gated behind the MODULO_WORKSPACE_INPUTS_ENABLED kill-switch (OFF by
+    # default). Enable it so the happy/failure paths actually run.
+    monkeypatch.setenv("MODULO_WORKSPACE_INPUTS_ENABLED", "true")
+    from modulo.settings import get_settings
+
+    get_settings.cache_clear()
 
 
 def _read_router(output_json: str) -> Callable[..., str]:
@@ -269,3 +276,78 @@ async def test_workspace_drift_detected_sets_run_flag() -> None:
 
     assert result["output"]["status"] == "completed"
     assert result["output"]["workspace_drift_detected"] is True
+
+
+async def test_killswitch_disabled_blocks_workspace_inputs_before_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-802 killswitch (prove-the-fix): with MODULO_WORKSPACE_INPUTS_ENABLED
+    false (the default) and a node declaring ``workspace_inputs``,
+    ``_sandbox_agent_impl`` must refuse provisioning and report the disabled
+    failure — without EVER creating a sandbox or resolving inputs first.
+
+    This exercises the real dispatch gate (node_runner.py:6699), not just the
+    error-code registry — removing the gate would fail this test (the node would
+    proceed to host-side resolution and sandbox creation).
+    """
+    # Override the autouse fixture's enabled state.
+    monkeypatch.setenv("MODULO_WORKSPACE_INPUTS_ENABLED", "false")
+    from modulo.settings import get_settings
+
+    get_settings.cache_clear()
+
+    fn = make_sandbox_agent_fn(_workspace_node_def())
+    sandbox = _script_sandbox_mock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
+        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch(
+            "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+            new=AsyncMock(return_value=_resolved_inputs()),
+        ) as resolve_mock,
+    ):
+        result = await fn(_run_state())
+
+    # The node fails (not completes) with the disablement surfaced on the envelope.
+    assert result["output"]["status"] == "failed"
+    assert result["output"]["error_type"] == "ProvisioningError"
+    assert "workspace inputs are disabled" in result["output"]["error_message"]
+    # Gate fires pre-claim: no sandbox created, no host-side resolution attempted.
+    create_mock.assert_not_called()
+    resolve_mock.assert_not_called()
+
+
+async def test_killswitch_enabled_allows_workspace_inputs() -> None:
+    """Complementary path: with the kill-switch ON the disabled error is never
+    raised and host-side resolution actually runs (proving the gate is conditional,
+    not always-on). Mirrors the autouse fixture's enabled state.
+    """
+    from modulo.settings import get_settings
+
+    assert get_settings().modulo_workspace_inputs_enabled is True
+
+    fn = make_sandbox_agent_fn(_workspace_node_def())
+    sandbox = _script_sandbox_mock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch(
+            "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+            new=AsyncMock(return_value=_resolved_inputs()),
+        ) as resolve_mock,
+        patch(
+            "modulo.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
+            new=AsyncMock(),
+        ),
+        patch(
+            "modulo.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
+            new=AsyncMock(return_value=_drift_results()),
+        ),
+    ):
+        result = await fn(_run_state())
+
+    # Enabled gate: no disabled error, resolution proceeds to completion.
+    assert result["output"]["status"] == "completed"
+    resolve_mock.assert_awaited_once()

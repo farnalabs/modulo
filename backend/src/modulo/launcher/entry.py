@@ -386,15 +386,15 @@ def _run_foreground(
             # Boot failures must reach the operator as actionable text, not
             # raw tracebacks (missing binaries, bind errors, driver errors).
             raise BootError(_boot_failure_message(exc, effective_bin_dir)) from exc
-    except BaseException:
-        # The ORIGINAL boot error must never be masked by a teardown
-        # failure, and the remaining children must still be torn down.
-        if supervisor is not None:
-            try:
-                supervisor.shutdown()
-            except Exception:
-                _log.exception("supervisor.shutdown_failed during boot error handling")
-        raise
+        except BaseException:
+            # The ORIGINAL boot error must never be masked by a teardown
+            # failure, and the remaining children must still be torn down.
+            if supervisor is not None:
+                try:
+                    supervisor.shutdown()
+                except (OSError, RuntimeError):
+                    _log.exception("supervisor.shutdown_failed during boot error handling")
+            raise
     finally:
         lock.release()
 

@@ -561,6 +561,10 @@ class TestDriftFailureStillCompletes:
                 "modulo.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
                 new=AsyncMock(side_effect=TimeoutError()),
             ),
+            patch(
+                "modulo.settings.get_settings",
+                new=MagicMock(return_value=MagicMock(modulo_workspace_inputs_enabled=True)),
+            ),
         ):
             result = await make_sandbox_agent_fn(node_def)(state)
         assert result["output"]["status"] == "completed"
