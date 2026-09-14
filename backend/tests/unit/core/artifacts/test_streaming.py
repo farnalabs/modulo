@@ -408,3 +408,47 @@ def test_write_cap_truncated_delegates_partial(tmp_path):
         mock_append.assert_called_once()
         call_args = mock_append.call_args
         assert call_args[0][5] == "hel"  # 6th positional arg is text
+
+
+# ── credential redaction (FAR-188) ────────────────────────────────────
+
+
+def test_write_redacts_canonical_token(tmp_path):
+    """A canonical GitHub PAT written to the stream must not survive to the artifact."""
+    writer, store = _make_writer(tmp_path)
+    writer.write("cloning https://x-access-token:ghp_SECRETPAT1234567890@github.com/repo.git")
+    ptr = writer.finalize()
+
+    assert ptr is not None
+    content = store.read_bytes(ptr).decode("utf-8")
+    # The bare token value pattern must be scrubbed — the literal PAT never
+    # reaches the artifact store.
+    assert "ghp_SECRETPAT1234567890" not in content
+    assert "<redacted>" in content
+
+
+def test_write_redacts_token_split_across_writes(tmp_path):
+    """A token split across two write() calls is still scrubbed (carry-over overlap)."""
+    writer, store = _make_writer(tmp_path)
+    # Split a github_pat_ token across the write boundary: first write ends
+    # mid-token, second completes it.
+    writer.write("log line token=github_pat_")
+    writer.write("ABCDEF1234567890GHIJKLMNOPQRSTUVWXYZ and more")
+    ptr = writer.finalize()
+
+    assert ptr is not None
+    content = store.read_bytes(ptr).decode("utf-8")
+    assert "github_pat_ABCDEF1234567890GHIJKLMNOPQRSTUVWXYZ" not in content
+    assert "<redacted>" in content
+
+
+def test_write_redaction_preserves_non_credential_text(tmp_path):
+    """Redaction is a no-op for ordinary output (pointer integrity intact)."""
+    writer, store = _make_writer(tmp_path)
+    writer.write("hello world\n")
+    ptr = writer.finalize()
+
+    assert ptr is not None
+    # No credential present → stored verbatim, incremental hash matches.
+    assert store.read_bytes(ptr) == b"hello world\n"
+    assert ptr["sha256"] == hashlib.sha256(b"hello world\n").hexdigest()

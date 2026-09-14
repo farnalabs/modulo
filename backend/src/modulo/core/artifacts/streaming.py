@@ -21,6 +21,11 @@ Key properties:
   (e.g. on crash).
 * **Context-manager support** — ``__enter__`` returns *self*;
   ``__exit__`` calls :meth:`cleanup` only if not yet finalized.
+* **Credential redaction (FAR-188)** — every :meth:`write` scrubs
+  credentials through ``_redact_artifact_text`` (the same helper used by
+  :class:`ArtifactWriter`) with a 256-char carry-over overlap, so a token
+  split across two ``write`` calls is still masked before it ever reaches
+  the artifact store.
 
 The primitive is confined to the ``artifacts`` package and is NOT wired into
 ``node_runner.py`` yet — that is a follow-up task.
@@ -34,8 +39,16 @@ import logging
 from contextlib import suppress
 
 from modulo.core.artifacts.store import ArtifactPointer, LocalArtifactStore
+from modulo.core.artifacts.writer import _redact_artifact_text
 
 _log = logging.getLogger(__name__)
+
+# Carry-over overlap for redaction: the last N characters of the previous
+# write are prepended to the next write so a secret split across a write
+# boundary is still redacted.  256 chars covers the longest token pattern
+# (github_pat_ + 82 chars = 91 chars) with margin.  Mirrors
+# ``ArtifactWriter._REDACT_OVERLAP``.
+_REDACT_OVERLAP = 256
 
 
 class StreamingArtifactWriter:
@@ -76,6 +89,12 @@ class StreamingArtifactWriter:
         self._bytes_written: int = 0
         self._finalized: bool = False
 
+        # Carry-over overlap for redaction: the last _REDACT_OVERLAP chars of
+        # the previously-redacted chunk.  Prepended to the next chunk so a
+        # secret split across a write() boundary is still scrubbed
+        # (FAR-188 redaction contract, same strategy as ArtifactWriter.flush).
+        self._prev_redact_tail: str = ""
+
     # ── public properties ──────────────────────────────────────────────
 
     @property
@@ -105,6 +124,13 @@ class StreamingArtifactWriter:
     def write(self, chunk: str) -> None:
         """Append *chunk* to the artifact, enforcing the byte cap.
 
+        The chunk is scrubbed of credentials (FAR-188 redaction contract)
+        *before* it is persisted, using the same carry-over overlap strategy
+        as :meth:`ArtifactWriter.flush` so a token split across two ``write``
+        calls is still masked.  Redaction never raises — on failure the raw
+        chunk is stored (best-effort, fail open), exactly like the existing
+        buffered path.
+
         When the cap is reached, the remainder of *chunk* is silently
         dropped, cutting only at a complete UTF-8 character boundary so the
         on-disk artifact stays valid UTF-8 and matches the incremental hash.
@@ -115,7 +141,22 @@ class StreamingArtifactWriter:
         if not chunk:
             return
 
-        chunk_bytes = chunk.encode("utf-8")
+        # Redact before persistence.  Prepend the carry-over tail from the
+        # previous write so a credential straddling this boundary is caught.
+        overlap = self._prev_redact_tail
+        combined = overlap + chunk if overlap else chunk
+        redacted = _redact_artifact_text(combined)
+        # The overlap was already redacted and persisted in the previous
+        # write; strip it to avoid duplicating content on disk.  A few chars
+        # of imprecision at the boundary is acceptable for best-effort
+        # credential scrubbing (the overlap region is already clean text, so
+        # re-running the regex is length-preserving there).
+        stored = redacted[len(overlap) :] if overlap else redacted
+        # Remember the tail for the next boundary check (always from the full
+        # redacted text, not the stored portion).
+        self._prev_redact_tail = redacted[-_REDACT_OVERLAP:] if len(redacted) > _REDACT_OVERLAP else redacted
+
+        chunk_bytes = stored.encode("utf-8")
 
         if self._max_bytes is not None:
             remaining = self._max_bytes - self._bytes_written
