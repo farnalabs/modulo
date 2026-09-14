@@ -99,12 +99,11 @@ export const NODE_NUDGE_STEP = 16
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { MarkerType, VueFlow, type DefaultEdgeOptions } from '@vue-flow/core'
+import { MarkerType, VueFlow, type DefaultEdgeOptions, type Node, type Edge } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
-import type { Node, Edge } from '@vue-flow/core'
 import type { LifecycleMap, LifecycleMapStage, LifecycleMapTransition } from '../../stores/lifecycleMaps'
 import type { JourneySummary } from '../../types/lifecycleMap'
 import { computeLifecycleMapLayout } from '../../stores/lifecycleMaps'
@@ -204,11 +203,14 @@ function buildNodes(): Node<Record<string, unknown>>[] {
   return stages.map((stage) => {
     const saved = props.savedPositions?.[stage.id]
     const hasPosition = stage.x != null && stage.y != null
-    const position = saved
-      ? { x: saved.x, y: saved.y }
-      : hasPosition
-        ? { x: stage.x as number, y: stage.y as number }
-        : autoLayout[stage.id] ?? { x: 0, y: 0 }
+    let position: { x: number; y: number }
+    if (saved) {
+      position = { x: saved.x, y: saved.y }
+    } else if (hasPosition) {
+      position = { x: stage.x as number, y: stage.y as number }
+    } else {
+      position = autoLayout[stage.id] ?? { x: 0, y: 0 }
+    }
     return {
       id: stage.id,
       type: 'stage',
