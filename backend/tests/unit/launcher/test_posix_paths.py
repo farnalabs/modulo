@@ -14,6 +14,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -260,7 +261,18 @@ class TestIsPostgresProcess:
             start_new_session=True,
         )
         try:
-            result = supervisor_module._is_postgres_process(proc.pid)
+            # Bounded retry: immediately after Popen there is a fork->exec window
+            # where /proc/<pid>/cmdline still shows the parent interpreter's argv
+            # before the symlinked 'postgres' image is exec'd in place, so an
+            # immediate read can return False.  Poll briefly until the process is
+            # recognised (or the window passes), then assert.
+            result = False
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if supervisor_module._is_postgres_process(proc.pid):
+                    result = True
+                    break
+                time.sleep(0.01)
             assert result is True
         finally:
             try:
