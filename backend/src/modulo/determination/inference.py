@@ -203,7 +203,7 @@ def _find_stale_prs(data: _InferenceData) -> list[Finding]:
         return [
             Finding(
                 category="bottleneck",
-                finding=f"Potential review bottleneck: {data.stale_pr_count} PRs/MRs open for >5 days without merge",
+                finding=(f"Potential review bottleneck: {data.stale_pr_count} PRs/MRs open for >5 days without merge"),
                 evidence=evidence_detail,
                 confidence="medium",
                 uncertainty="Cannot determine if PRs are waiting for review "

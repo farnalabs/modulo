@@ -567,7 +567,7 @@ def test_refresh_theft_detected_returns_401(client: tuple[TestClient, AsyncMock]
     with (
         patch(f"{_PREFIX}get_account_by_id", new=AsyncMock(return_value=_make_account())),
         patch(f"{_PREFIX}resolve_role_from_membership", new=AsyncMock(return_value="admin")),
-        patch(f"{_PREFIX}advance_sequence", new=AsyncMock(return_value=(1, True))),
+        patch(f"{_PREFIX}advance_sequence", new=AsyncMock(return_value=(1, True, False))),
     ):
         resp = http.post(_REFRESH_URL, json={"refresh_token": _refresh_token()})
 
@@ -575,12 +575,27 @@ def test_refresh_theft_detected_returns_401(client: tuple[TestClient, AsyncMock]
     assert "suspected theft" in resp.json()["detail"]
 
 
+def test_refresh_stale_replay_returns_409(client: tuple[TestClient, AsyncMock]) -> None:
+    http, _session = client
+    with (
+        patch(f"{_PREFIX}get_account_by_id", new=AsyncMock(return_value=_make_account())),
+        patch(f"{_PREFIX}resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch(f"{_PREFIX}advance_sequence", new=AsyncMock(return_value=(1, False, True))),
+    ):
+        resp = http.post(_REFRESH_URL, json={"refresh_token": _refresh_token()})
+
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["type"] == "urn:problem:modulo:stale_refresh_token"
+    assert "stale" in body["detail"].lower()
+
+
 def test_refresh_happy_path_rotates_tokens(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with (
         patch(f"{_PREFIX}get_account_by_id", new=AsyncMock(return_value=_make_account())),
         patch(f"{_PREFIX}resolve_role_from_membership", new=AsyncMock(return_value="operator")),
-        patch(f"{_PREFIX}advance_sequence", new=AsyncMock(return_value=(1, False))),
+        patch(f"{_PREFIX}advance_sequence", new=AsyncMock(return_value=(1, False, False))),
     ):
         resp = http.post(_REFRESH_URL, json={"refresh_token": _refresh_token()})
 
