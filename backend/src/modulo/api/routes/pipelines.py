@@ -622,6 +622,11 @@ class PipelineResponse(BaseModel):
         # partial ORM objects may expose None — the no-policy default is {}.
         return value if isinstance(value, dict) else {}
 
+    @field_validator("stdout_retention_config", mode="before")
+    @classmethod
+    def _coerce_stdout_retention_config(cls, value: Any) -> dict[str, Any] | None:
+        return value if isinstance(value, dict) else None
+
     model_config = {"from_attributes": True, "populate_by_name": True}
 
 
