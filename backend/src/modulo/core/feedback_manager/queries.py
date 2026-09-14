@@ -49,7 +49,7 @@ async def get_or_create_feedback_record(
     Returns None when no record exists and no account is available to own a
     new one (nothing to anchor the record to).
     """
-    from modulo.utils.uuid import coerce_uuid
+    from modulo.util.uuid import coerce_uuid
 
     record = await get_feedback_record_for_node(session, org_id, run_id, node_id)
     if record is not None:

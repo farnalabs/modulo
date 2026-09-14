@@ -47,7 +47,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo._types import _DICT_STR_ANY
-from modulo.utils.uuid import coerce_uuid
+from modulo.util.uuid import coerce_uuid
 
 _log = logging.getLogger(__name__)
 

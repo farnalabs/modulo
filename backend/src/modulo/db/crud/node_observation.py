@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.node_observation import NodeObservation
-from modulo.utils.uuid import coerce_uuid
+from modulo.util.uuid import coerce_uuid
 
 
 async def observe_node(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -153,17 +154,24 @@ class RemyRedisRegistry:
     async def publish_permission_response(self, request_id: str, decision: JsonObject) -> None:
         await _redis_result(self._redis.publish(f"remy:channel:permission:{request_id}", json.dumps(decision)))
 
-    async def subscribe_permission_response(self, request_id: str, timeout: float = 60.0) -> JsonObject | None:  # noqa: ASYNC109 — Redis pubsub timeout, not asyncio.wait_for()
+    async def subscribe_permission_response(
+        self,
+        request_id: str,
+        timeout: float = 60.0,  # noqa: ASYNC109
+    ) -> JsonObject | None:
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(f"remy:channel:permission:{request_id}")
         try:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=timeout)
-            if message and message.get("data"):
-                try:
-                    return _json_object(message["data"])
-                except (ValueError, TypeError):
-                    logger.warning("Invalid JSON in permission pubsub response for %s", request_id)
-                    return None
+            async with asyncio.timeout(timeout):
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
+                if message and message.get("data"):
+                    try:
+                        return _json_object(message["data"])
+                    except (ValueError, TypeError):
+                        logger.warning("Invalid JSON in permission pubsub response for %s", request_id)
+                        return None
+                return None
+        except TimeoutError:
             return None
         finally:
             await pubsub.unsubscribe(f"remy:channel:permission:{request_id}")
@@ -172,12 +180,19 @@ class RemyRedisRegistry:
     async def publish_ui_results(self, session_id: str) -> None:
         await _redis_result(self._redis.publish(f"remy:channel:ui_results:{session_id}", "ready"))
 
-    async def subscribe_ui_results(self, session_id: str, timeout: float = 120.0) -> bool:  # noqa: ASYNC109 — Redis pubsub timeout, not asyncio.wait_for()
+    async def subscribe_ui_results(
+        self,
+        session_id: str,
+        timeout: float = 120.0,  # noqa: ASYNC109
+    ) -> bool:
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(f"remy:channel:ui_results:{session_id}")
         try:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=timeout)
-            return message is not None
+            async with asyncio.timeout(timeout):
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
+                return message is not None
+        except TimeoutError:
+            return False
         finally:
             await pubsub.unsubscribe(f"remy:channel:ui_results:{session_id}")
             await pubsub.aclose()  # type: ignore[no-untyped-call]
@@ -185,12 +200,19 @@ class RemyRedisRegistry:
     async def publish_resume(self, session_id: str) -> None:
         await _redis_result(self._redis.publish(f"remy:channel:resume:{session_id}", "resume"))
 
-    async def subscribe_resume(self, session_id: str, timeout: float = 300.0) -> bool:  # noqa: ASYNC109 — Redis pubsub timeout, not asyncio.wait_for()
+    async def subscribe_resume(
+        self,
+        session_id: str,
+        timeout: float = 300.0,  # noqa: ASYNC109
+    ) -> bool:
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(f"remy:channel:resume:{session_id}")
         try:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=timeout)
-            return message is not None
+            async with asyncio.timeout(timeout):
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
+                return message is not None
+        except TimeoutError:
+            return False
         finally:
             await pubsub.unsubscribe(f"remy:channel:resume:{session_id}")
             await pubsub.aclose()  # type: ignore[no-untyped-call]

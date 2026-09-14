@@ -38,3 +38,6 @@ class TokenFamily(Base):
         DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
     )
     blacklisted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reuse_window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reuse_replay_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

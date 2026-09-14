@@ -42,6 +42,43 @@ function storeToken(key: string, token: string): void {
 let _authListeners: Array<(token: string | null) => void> = []
 let _refreshingPromise: Promise<boolean> | null = null
 
+// Stable per-tab identifier so other tabs can tell refresh hints apart when
+// adopting rotated tokens across tabs (pattern: useUiCommandExecutor TAB_ID).
+const TAB_ID =
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : Date.now().toString(36)
+
+let _authChannel: BroadcastChannel | null = null
+let _authChannelInitialized = false
+
+function getAuthChannel(): BroadcastChannel | null {
+  if (_authChannelInitialized) return _authChannel
+  _authChannelInitialized = true
+  if (typeof BroadcastChannel === 'undefined') return null
+  _authChannel = new BroadcastChannel('modulo-auth')
+  _authChannel.addEventListener('message', (e: MessageEvent) => {
+    const data = e.data || {}
+    if (data.type !== 'refresh') return
+    // A sibling tab rotated its session. Adopt the tokens it just persisted —
+    // but only into a live session: never adopt into a tab with no access token
+    // of its own, and never resurrect a session whose demo tombstone is set.
+    if (getAccessToken() === null) return
+    if (wasDemoSessionEnded()) return
+    const storedAccess = getAccessToken()
+    const storedRefresh = getRefreshToken()
+    if (storedAccess) setAccessToken(storedAccess)
+    if (storedRefresh) setRefreshToken(storedRefresh)
+  })
+  return _authChannel
+}
+
+function broadcastRefreshAdopted(): void {
+  const channel = getAuthChannel()
+  if (!channel) return
+  channel.postMessage({ type: 'refresh', tabId: TAB_ID, ts: Date.now() })
+}
+
 export function isDemoSession(): boolean {
   return localStorage.getItem(DEMO_SESSION_KEY) === '1'
 }
@@ -144,28 +181,89 @@ function clearRefreshToken(): void {
   localStorage.removeItem(REFRESH_TOKEN_KEY)
 }
 
-export async function attemptTokenRefresh(): Promise<boolean> {
-  if (_refreshingPromise) return _refreshingPromise
+// Check whether the navigator.locks API is available (Web Locks are supported
+// in all modern browsers but absent in some test environments and older WebViews).
+function hasWebLocks(): boolean {
+  return (
+    typeof navigator !== 'undefined' && 'locks' in navigator && typeof navigator.locks?.request === 'function'
+  )
+}
 
-  _refreshingPromise = (async () => {
-    const refreshToken = getRefreshToken()
-    if (!refreshToken) return false
+// Bounded retry delays (ms) for 409 stale_refresh_token — re-reads localStorage
+// on each iteration in case a sibling tab rotated the token while we waited.
+const STALE_RETRY_DELAYS = [150, 300, 600]
 
-    try {
+async function doRefresh(): Promise<boolean> {
+  try {
+    // Capture the refresh token at entry so we can detect cross-tab rotation.
+    const entryRefreshToken = getRefreshToken()
+    if (!entryRefreshToken) return false
+
+    // --- 409 stale-token bounded retry loop ---
+    // If the server responds 409 stale_refresh_token, another tab likely rotated
+    // while we waited for the lock. Re-read localStorage (shared across tabs) and
+    // retry up to 3 times with a short backoff.
+    for (let attempt = 0; ; attempt++) {
+      // Before the POST, check if storage already has a newer token (sibling
+      // rotated while we were waiting for the lock or between retries).
+      const currentRefresh = getRefreshToken()
+      if (currentRefresh && currentRefresh !== entryRefreshToken) {
+        // A sibling already rotated — adopt its token.
+        setRefreshToken(currentRefresh)
+        broadcastRefreshAdopted()
+        return true
+      }
+
+      const refreshToken = getRefreshToken()
+      if (!refreshToken) return false
+
       const resp = await fetch('/api/v1/auth/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: refreshToken }),
       })
-      if (!resp.ok) return false
-      const data = await resp.json()
-      setAccessToken(data.access_token)
-      if (data.refresh_token) setRefreshToken(data.refresh_token)
-      return true
-    } catch (err) {
-      console.warn('[auth] Token refresh failed:', err)
+
+      if (resp.ok) {
+        const data = await resp.json()
+        setAccessToken(data.access_token)
+        if (data.refresh_token) setRefreshToken(data.refresh_token)
+        broadcastRefreshAdopted()
+        return true
+      }
+
+      // 409 from /auth/refresh: treat as retryable stale-token race. The
+      // endpoint has no other 409 semantic that justifies killing the session
+      // (its IntegrityError 409 is also a race a retry can resolve). Re-read
+      // localStorage — a fresh token may have appeared — and retry with bounded
+      // backoff. Only fall through to `return false` after retries are exhausted.
+      if (resp.status === 409 && attempt < STALE_RETRY_DELAYS.length) {
+        await new Promise((r) => setTimeout(r, STALE_RETRY_DELAYS[attempt]))
+        continue
+      }
+
+      // Genuine failure (network, non-ok, non-409).
       return false
     }
+  } catch (err) {
+    console.warn('[auth] Token refresh failed:', err)
+    return false
+  }
+}
+
+export async function attemptTokenRefresh(): Promise<boolean> {
+  if (_refreshingPromise) return _refreshingPromise
+
+  _refreshingPromise = (async () => {
+    if (hasWebLocks()) {
+      // Web Locks serialise cross-tab refresh attempts. The lock is released
+      // when the callback settles, allowing the next queued tab to run.
+      return navigator.locks!.request(
+        'modulo-auth-refresh',
+        { mode: 'exclusive' },
+        () => doRefresh(),
+      )
+    }
+    return doRefresh()
   })()
 
   try {

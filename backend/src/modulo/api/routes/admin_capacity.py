@@ -37,7 +37,7 @@ class DbCapacityResponse(BaseModel):
     capacity_bytes: int | None
 
 
-@router.get("", response_model=DbCapacityResponse)
+@router.get("")
 async def get_db_capacity(
     principal: TenantPrincipal = require_system_or_org_admin("housekeeping.manage"),
 ) -> DbCapacityResponse:

@@ -58,11 +58,13 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and 0227_env_profiles_initialisation_strategy_check chains off 0226_agents_json_to_jsonb,
 # and 0228_drop_scalar_agent_command chains off 0227_env_profiles_initialisation_strategy_check,
 # and FAR-802's 0229_add_workspace_inputs_count chains off 0228_drop_scalar_agent_command,
-# and 0232_add_updated_at_audit_to_organisations chains off 0229,
-# and 0233_add_organisations_indexes chains off 0230,
-# and 0234_promote_organisations_json_to_jsonb chains off 0231,
-# and 0235_add_organisations_constraints chains off 0232,
-# and 0236_fix_token_family_org_nullable chains off 0233 as the chain head.
+# and 0230_token_families_refresh_grace chains off 0229_add_workspace_inputs_count,
+# and 0231_token_families_reuse_replay_count chains off 0230_token_families_refresh_grace,
+# and 0232_add_updated_at_audit_to_organisations chains off 0231_token_families_reuse_replay_count,
+# and 0233_add_organisations_indexes chains off 0232,
+# and 0234_promote_organisations_json_to_jsonb chains off 0233,
+# and 0235_add_organisations_constraints chains off 0234,
+# and 0236_fix_token_family_org_nullable chains off 0235 as the chain head.
 _CHAIN_HEAD_MIGRATION = "0236_fix_token_family_org_nullable"
 
 
