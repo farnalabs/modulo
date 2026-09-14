@@ -62,12 +62,17 @@ async def _seed_run(
 ) -> uuid.UUID:
     """Commit a minimal run row so run_node_outputs FK checks pass."""
     run_id = uuid.uuid4()
+    # run_number must be unique per (org, run_number) — derive it from the
+    # run id (matches the test_org_deletion.py convention) so the three
+    # tests sharing the session-scoped test_org never collide on
+    # uq_runs_org_run_number.
+    run_number = int(run_id.int % 10**9) + 1
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
                 "trigger_type, status, run_number, input_hash, langgraph_thread_id) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'running', 1, :ih, :tid)"
+                "VALUES (:id, :oid, :pid, :sid, 'manual', 'running', :rn, :ih, :tid)"
             ),
             {
                 "id": str(run_id),
@@ -76,6 +81,7 @@ async def _seed_run(
                 "sid": str(snapshot_id),
                 "ih": "a" * 64,
                 "tid": f"{org_id}:{run_id}",
+                "rn": run_number,
             },
         )
     return run_id
@@ -85,14 +91,18 @@ async def _read_audit_row(db_engine: object, run_id: uuid.UUID) -> RunNodeOutput
     """Read the audit row via a superuser connection (bypasses RLS)."""
     async with db_engine.connect() as conn:
         return (
-            await conn.execute(
-                select(RunNodeOutput).where(
-                    RunNodeOutput.run_id == run_id,
-                    RunNodeOutput.node_id == AUDIT_NODE_ID,
-                    RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+            (
+                await conn.execute(
+                    select(RunNodeOutput).where(
+                        RunNodeOutput.run_id == run_id,
+                        RunNodeOutput.node_id == AUDIT_NODE_ID,
+                        RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+                    )
                 )
             )
-        ).scalar_one_or_none()
+            .scalars()
+            .one_or_none()
+        )
 
 
 @pytest.mark.anyio
