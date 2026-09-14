@@ -242,7 +242,11 @@ class TestIsPostgresProcess:
     def test_postgres_process_returns_true(self, tmp_path: Path) -> None:
         """Spawn a process whose argv[0] ends with 'postgres'."""
         wrapper = tmp_path / "postgres"
-        wrapper.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+        # `exec -a postgres` pins argv[0] to "postgres" so the match holds
+        # regardless of whether sh exec's the last command (replacing argv[0]
+        # with "sleep"). Without it, the shell's last-command exec optimization
+        # drops the "postgres" suffix and the detection flakes (FAR-835).
+        wrapper.write_text("#!/bin/sh\nexec -a postgres sleep 30\n", encoding="utf-8")
         wrapper.chmod(0o755)
         # Use __dict__ to avoid the test-style scanner's subprocess.Popen AST
         # match.  Popen has no timeout param; bounded by finally-block kill.
