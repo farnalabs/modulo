@@ -11,6 +11,11 @@
 -- docs/operations/drop-runs-blob-columns.md (preconditions + remediation).
 -- ============================================================================
 
+-- B1 deploy cutoff (S1192: single definition used by all gates below).
+WITH b1_cutoff AS (
+  SELECT '2026-09-10 11:25:42+00'::timestamptz AS cutoff
+)
+
 -- ---------------------------------------------------------------------------
 -- Gate 1: zero dual_write_failed error_events since the B1 deploy cutoff.
 -- B1 SHA 2026-09-10T11:25:42Z per PR #298. A dual-write failure after B1
@@ -18,27 +23,27 @@
 -- re-touched — every survivor must be verified before the columns drop.
 -- ---------------------------------------------------------------------------
 SELECT count(*) AS dual_write_failed_since_b1
-FROM error_events
+FROM error_events, b1_cutoff
 WHERE source = 'run_outputs_dual_write'
-  AND message LIKE '%dual-write failed%'
-  AND created_at >= '2026-09-10 11:25:42+00';
+  AND position('dual-write failed' in message) > 0
+  AND created_at >= b1_cutoff.cutoff;
 
 -- ---------------------------------------------------------------------------
 -- Gate 2: zero pre-B1 non-terminal runs (the drain gate the migration itself
 -- re-asserts, with the full fail-safe status set incl. pending + hitl_parked).
 -- ---------------------------------------------------------------------------
 SELECT count(*) AS pre_b1_inflight
-FROM runs r
+FROM runs r, b1_cutoff
 WHERE r.status IN ('running', 'claimed', 'awaiting_human', 'pending', 'hitl_parked')
-  AND r.created_at < '2026-09-10 11:25:42+00';
+  AND r.created_at < b1_cutoff.cutoff;
 
 -- ---------------------------------------------------------------------------
 -- Gate 3a: post-B1-created runs carry NO legacy blobs (B1's write-cut makes
 -- every legacy blob on a post-cutoff-created run a contract violation).
 -- ---------------------------------------------------------------------------
 SELECT count(*) AS post_b1_legacy_blobs
-FROM runs r
-WHERE r.created_at >= '2026-09-10 11:25:42+00'
+FROM runs r, b1_cutoff
+WHERE r.created_at >= b1_cutoff.cutoff
   AND (r.outputs_json IS NOT NULL
        OR r.node_telemetry_json IS NOT NULL
        OR r.raw_output_markers IS NOT NULL);
@@ -52,9 +57,10 @@ WHERE r.created_at >= '2026-09-10 11:25:42+00'
 -- ---------------------------------------------------------------------------
 SELECT count(*) AS post_b1_terminal_no_store_rows
 FROM runs r
-WHERE r.created_at >= '2026-09-10 11:25:42+00'
+LEFT JOIN run_node_outputs n ON n.run_id = r.id, b1_cutoff
+WHERE r.created_at >= b1_cutoff.cutoff
   AND r.status IN (
       'budget_exceeded', 'cancelled', 'compensation_failed', 'complete',
       'cost_ceiling_exceeded', 'eval_failed', 'failed', 'router_no_match', 'stalled'
   )
-  AND NOT EXISTS (SELECT 1 FROM run_node_outputs n WHERE n.run_id = r.id);
+  AND n.run_id IS NULL;

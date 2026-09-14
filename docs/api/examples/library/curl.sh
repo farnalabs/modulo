@@ -14,10 +14,11 @@ set -euo pipefail
 BASE_URL="${MODULO_URL:-http://localhost:8000}"
 EMAIL="${MODULO_EMAIL:?MODULO_EMAIL is required}"
 PASSWORD="${MODULO_PASSWORD:?MODULO_PASSWORD is required}"
+CONTENT_TYPE="Content-Type: application/json"
 
 echo "=== Login ==="
 TOKEN=$(curl -s -X POST "$BASE_URL/api/v1/auth/login" \
-  -H "Content-Type: application/json" \
+  -H "$CONTENT_TYPE" \
   -d "$(jq -n --arg e "$EMAIL" --arg p "$PASSWORD" '{email: $e, password: $p}')" \
   | jq -r '.access_token')
 AUTH="Authorization: Bearer $TOKEN"
@@ -43,20 +44,20 @@ if [[ -n "$PRIMITIVE_ID" ]]; then
   echo ""
   echo "=== Copy-to-Adapt ==="
   curl -s -X POST "$BASE_URL/api/v1/libraries/$PRIMITIVE_ID/adapt" \
-    -H "Content-Type: application/json" \
+    -H "$CONTENT_TYPE" \
     -H "$AUTH" -d '{}' | jq
 
   echo ""
   echo "=== Submit Rating ==="
   curl -s -X POST "$BASE_URL/api/v1/libraries/$PRIMITIVE_ID/ratings" \
-    -H "Content-Type: application/json" \
+    -H "$CONTENT_TYPE" \
     -H "$AUTH" \
     -d '{"thumbs_up": true, "comment": "Very useful primitive!"}' | jq
 else
   echo ""
   echo "=== Create a Primitive ==="
   curl -s -X POST "$BASE_URL/api/v1/libraries" \
-    -H "Content-Type: application/json" \
+    -H "$CONTENT_TYPE" \
     -H "$AUTH" \
     -d '{
       "name": "Code Review Agent",

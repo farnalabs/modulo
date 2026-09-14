@@ -4,6 +4,7 @@
     v-if="isDesktop"
     class="h-screen sticky top-0 border-r bg-background flex flex-col overflow-hidden transition-[width] duration-200"
     :class="collapsed ? 'w-16' : 'w-64 p-4 pr-3'"
+    :aria-label="$t('components.AppLayout.main_navigation')"
   >
     <SidebarRail
       v-if="collapsed"
@@ -40,6 +41,7 @@
   <template v-if="!isDesktop && mobileRailFlag">
     <aside
       class="h-screen sticky top-0 border-r bg-background flex flex-col overflow-hidden w-16"
+      :aria-label="$t('components.AppLayout.main_navigation')"
     >
       <SidebarRail
         ref="railRef"
