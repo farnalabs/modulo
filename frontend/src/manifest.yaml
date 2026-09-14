@@ -933,6 +933,12 @@ elements:
         type: element
         dynamic_testid: false
     /library/collections/:id:
+      - testid: collection-install
+        type: button
+        dynamic_testid: false
+      - testid: collection-install-error
+        type: element
+        dynamic_testid: false
       - testid: collection-publish
         type: button
         dynamic_testid: false
@@ -2757,6 +2763,9 @@ elements:
       - testid: page-header-right
         type: element
         dynamic_testid: false
+      - testid: lifecycle-map-save-status
+        type: element
+        dynamic_testid: false
     /notifications:
       - testid: notifications-apply-filters
         type: button
@@ -3094,9 +3103,6 @@ elements:
         dynamic_testid: false
       - testid: pipeline-editor-node-commands-editor
         type: element
-        dynamic_testid: false
-      - testid: pipeline-editor-node-command-scalar
-        type: input
         dynamic_testid: false
       - testid: pipeline-editor-node-command-add
         type: button

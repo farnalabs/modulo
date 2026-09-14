@@ -122,7 +122,7 @@
     <div
       v-else-if="status === 'claimed' && isForeignClaim"
       data-testid="hitl-gate-foreign-claim"
-      role="status"
+      aria-live="polite"
       class="pt-2 text-sm text-muted-foreground"
     >
       {{ $t('hitl.gate.claimed_by_other_note') }}

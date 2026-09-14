@@ -864,7 +864,7 @@ async def _mark_fork_copies(s: AsyncSession, prim: LibraryPrimitive) -> None:
     )
     result = await s.execute(stmt)
 
-    for copy in list(result.scalars()):
+    for copy in result.scalars():
         if not copy.auto_update:
             continue
         try:

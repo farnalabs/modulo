@@ -6731,11 +6731,21 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 resolve_managed_inputs_host_side,
             )
 
+            # Wire a real (pinned-transport) httpx client so the least-privilege
+            # read-only credential assertion is ACTIVE in production (the assertion
+            # probes https://api.github.com/user; without a client it is unreachable
+            # and the advertised guarantee silently no-ops). The client is built
+            # through the SSRF egress factory so the resolved address is pinned onto
+            # the connection (no DNS-rebinding window).
+            from modulo.core.ssrf import pinned_async_client_sync
+
+            _http_client = pinned_async_client_sync("https://api.github.com", timeout=10.0)
             try:
                 _resolved_workspace_inputs = await resolve_managed_inputs_host_side(
                     workspace_inputs,
                     org_id=org_id,
                     session_factory=session_factory,
+                    http_client=_http_client,
                 )
             except WorkspaceProvisioningError as exc:
                 _log.warning(
@@ -6752,6 +6762,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     f"Workspace input resolution failed: {str(exc)[:_MAX_ERROR_MSG]}",
                     node_id=node_id,
                 ) from exc
+            finally:
+                await _http_client.aclose()
 
         # FAR-296 Phase 3/3b-3: egress control + resource limits. deny_all
         # and selected map to allow_internet_access=False; resource_limits

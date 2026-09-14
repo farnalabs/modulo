@@ -32,10 +32,9 @@
           <span class="flex-1">{{ $t('components.OwnershipPicker.orgwide') }}</span>
           <span class="text-xs text-muted-foreground">{{ $t('components.OwnershipPicker.everyone_in_the_org') }}</span>
         </button>
-        <div
+        <hr
           v-if="teams.length > 0"
-          class="my-1 h-px bg-border"
-          role="separator"
+          class="my-1 border-border"
         />
         <template v-if="loading">
           <div class="px-2 py-4 text-center text-sm text-muted-foreground">

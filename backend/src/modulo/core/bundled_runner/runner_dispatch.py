@@ -564,6 +564,20 @@ async def run_bundled_runner_node(
     session_factory = config.session_factory
     single_sandbox_node = config.single_sandbox_node
     loop_intercept = config.loop_intercept_config
+    workspace_inputs: list[dict[str, Any]] = getattr(config, "workspace_inputs", None) or []
+
+    # FAR-800 follow-up: the Bundled Runner path does NOT yet support managed
+    # workspace inputs (no host-side ref resolution, no in-workspace clone
+    # provisioning).  Fail CLOSED with a clear error when inputs are configured
+    # rather than silently ignoring them.
+    if workspace_inputs:
+        raise SandboxNodeFailedError(
+            f"Bundled Runner (runner_docker) does not support managed workspace inputs "
+            f"yet — node '{node_id}' has {len(workspace_inputs)} input(s) configured. "
+            "Use the E2B path (provider_type=e2b) or remove workspace_inputs from "
+            "the node configuration.",
+            node_id=node_id,
+        )
 
     run_id, pipeline_id, org_id = _run_identity_strs(state)
     org_uuid = _parse_uuid(org_id)

@@ -17,7 +17,7 @@
         <ChangePasswordForm quiet @changed="onChanged" />
       </div>
 
-      <p v-if="changed" class="text-center text-sm text-success" role="status">
+      <p v-if="changed" class="text-center text-sm text-success" aria-live="polite">
         {{ $t('views.ForceChangePasswordView.password_changed_sign_in_again') }}
       </p>
 

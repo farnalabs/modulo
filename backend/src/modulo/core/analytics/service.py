@@ -298,7 +298,7 @@ async def _facts_freshness(
                     ).scalar_one_or_none()
             except asyncio.CancelledError:
                 raise
-            except (ProgrammingError, SQLAlchemyError):
+            except SQLAlchemyError:
                 _log.exception("analytics.freshness.db_error", extra={"org_id": str(org_id)})
                 return None, False
     except Exception:
@@ -552,7 +552,7 @@ async def _resolve_pool_reference(
                     return await _resolve_pool_reference_value(session, org_id=org_id, pipeline_ids=pipeline_ids)
             except asyncio.CancelledError:
                 raise
-            except (ProgrammingError, SQLAlchemyError):
+            except SQLAlchemyError:
                 _log.exception("analytics.pool_reference.db_error", extra={"org_id": str(org_id)})
                 return None
     except Exception:

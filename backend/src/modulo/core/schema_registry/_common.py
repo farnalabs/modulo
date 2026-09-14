@@ -69,7 +69,7 @@ def _extract_content(response: BaseMessage, *, context: str, error_cls: type[Exc
 def _parse_content(content: str, *, context: str, error_cls: type[Exception]) -> dict[str, Any]:
     try:
         return parse_schema_from_response(content)
-    except (json.JSONDecodeError, ValueError) as exc:
+    except ValueError as exc:
         _log.exception("Failed to parse %s schema from LLM response", context)
         raise error_cls(f"Failed to parse {context} schema from LLM response") from exc
 

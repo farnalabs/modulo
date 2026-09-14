@@ -19,16 +19,13 @@
       <p v-if="snapshots.length === 0" class="text-sm text-muted-foreground">{{ $t('components.PipelineSnapshotTimeline.no_snapshots_yet') }}</p>
 
       <div v-else class="mb-3 max-h-56 space-y-1 overflow-y-auto">
-        <div
+        <button
+          type="button"
           v-for="s in snapshots"
           :key="s.id"
-          role="button"
-          tabindex="0"
           :data-testid="`snapshot-timeline-row-${s.id}`"
-          class="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5"
+          class="flex w-full items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-left"
           @click="selectA(s.id)"
-          @keydown.enter="selectA(s.id)"
-          @keydown.space.prevent="selectA(s.id)"
         >
           <div class="flex min-w-0 items-center gap-2">
             <span class="text-xs font-medium">v{{ s.snapshot_version }}</span>
@@ -47,7 +44,7 @@
             <span class="truncate text-[10px] text-muted-foreground">{{ formatDate(s.created_at) }}</span>
           </div>
           <span class="shrink-0 text-[10px] text-muted-foreground">{{ s.tag || '' }}</span>
-        </div>
+        </button>
       </div>
 
       <span class="mb-1 block text-[10px] text-muted-foreground">{{ $t('components.PipelineSnapshotTimeline.compare_to') }}</span>

@@ -124,7 +124,6 @@
             >
               <span
                 v-if="isNonTerminalStatus(row.status as string) && row.started_at"
-                role="status"
                 aria-live="polite"
                 class="tabular-nums"
               >{{ formatElapsed(row.started_at as string) }}</span>

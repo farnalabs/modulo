@@ -2,7 +2,7 @@
   <div
     class="rounded-lg border px-4 py-3 flex items-center gap-2.5 text-sm"
     :class="stripClass"
-    role="status"
+    aria-live="polite"
     data-testid="runner-status-strip"
   >
     <span

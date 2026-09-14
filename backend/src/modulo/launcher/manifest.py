@@ -144,7 +144,7 @@ def _digest_of(path: Path, chunk: int = 1024 * 1024) -> str:
 def _parse_manifest_payload(payload: bytes) -> ReleaseManifest:
     try:
         body = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except ValueError as exc:
         raise ManifestSecurityError(f"release manifest is not valid JSON: {exc}") from exc
     if not isinstance(body, dict):
         raise ManifestSecurityError("release manifest must be a JSON object")

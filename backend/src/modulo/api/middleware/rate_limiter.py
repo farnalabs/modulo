@@ -464,7 +464,7 @@ async def shutdown_rate_limiters() -> None:
     Safe to call multiple times — subsequent calls are no-ops once
     the set is empty.
     """
-    for client in list(_redis_clients):
+    for client in _redis_clients:
         try:
             await client.aclose()
         except asyncio.CancelledError:
