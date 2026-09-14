@@ -571,7 +571,7 @@ def validate_node_retry_config(node: dict[str, Any], nid: str, result: Any) -> N
         result.error(exc.code, f"Node '{nid}': {exc}", node_id=nid)
 
 
-def validate_edge_retry_config(edge: dict[str, Any], nid: str, result: Any) -> None:
+def validate_edge_retry_config(edge: dict[str, Any], _nid: str, result: Any) -> None:
     """Emit a typed error when a transition edge's ``retry`` block is malformed."""
     source = edge.get("source", edge.get("source_node_id"))
     raw = edge.get("retry")

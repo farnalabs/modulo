@@ -29,6 +29,7 @@ vi.mock('../lib/api/client', () => ({
   },
 }))
 
+import { api } from '../lib/api/client'
 import CollectionDetailView from '../views/CollectionDetailView.vue'
 
 const router = createRouter({
@@ -120,5 +121,131 @@ describe('CollectionDetailView (FAR-760)', () => {
 
     expect(wrapper.find('[data-testid="collection-publish"]').exists()).toBe(true)
     expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+  })
+})
+
+describe('CollectionDetailView install action (FAR-826)', () => {
+  function makeInstall() {
+    return {
+      install_id: 'install-1',
+      collection_id: 'col-1',
+      collection_version: '1.0',
+      organisation_id: 'org-1',
+      status: 'installed',
+      community_sourced: false,
+      agents_granted: false,
+      resolved_manifest: null,
+      connector_checklist: null,
+      installed_entities: null,
+      runnable: true,
+      created_at: '2026-09-13T00:00:00Z',
+    }
+  }
+
+  function mockPublishedCollection(installItems: unknown[] = []) {
+    getMock.mockImplementation(async (path: string) => {
+      if (String(path).includes('/installs')) return { items: installItems }
+      return makeCollection({ status: 'published' })
+    })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getMock.mockImplementation(makeCollection)
+    postMock.mockResolvedValue({ status: 'published' })
+  })
+
+  it('does not offer the Install action for a draft collection', async () => {
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('[data-testid="collection-install"]').exists()).toBe(false)
+  })
+
+  it('offers the Install action for a published collection', async () => {
+    mockPublishedCollection()
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+    const button = wrapper.find('[data-testid="collection-install"]')
+    expect(button.exists()).toBe(true)
+    expect(button.attributes('aria-label') || button.text()).toBeTruthy()
+  })
+
+  it('POSTs to the install endpoint with the primitive id and refetches installs', async () => {
+    mockPublishedCollection([])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    // After install succeeds, the refetched installs list renders the record.
+    getMock.mockImplementation(async (path: string) => {
+      if (String(path).includes('/installs')) return { items: [makeInstall()] }
+      return makeCollection({ status: 'published' })
+    })
+
+    await wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(postMock).toHaveBeenCalledTimes(1)
+    const [installPath, installOpts] = postMock.mock.calls[0] as [string, { params: { path: { primitive_id: string } } }]
+    expect(installPath).toBe('/api/v1/libraries/collections/{primitive_id}/install')
+    expect(installOpts.params.path.primitive_id).toBe('col-1')
+
+    // Installs list was refetched and renders the new install.
+    const installsGetCalls = getMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/installs'))
+    expect(installsGetCalls.length).toBeGreaterThanOrEqual(2)
+    expect(wrapper.text()).toContain('v1.0')
+  })
+
+  it('disables the Install button while the request is in flight', async () => {
+    mockPublishedCollection([])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    let resolvePost: (value: { data: unknown; error: undefined }) => void = () => {}
+    vi.mocked(api.POST).mockImplementationOnce(
+      (() =>
+        new Promise<{ data: unknown; error: undefined }>((resolve) => {
+          resolvePost = resolve
+        })) as never,
+    )
+    const click = wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="collection-install"]').attributes('disabled')).toBeDefined()
+    resolvePost({ data: { status: 'installed' }, error: undefined })
+    await click
+    await flushPromises()
+  })
+
+  it('renders an install error via the alert region when the API rejects', async () => {
+    mockPublishedCollection([])
+    vi.mocked(api.POST).mockResolvedValueOnce({
+      data: undefined,
+      error: 'Forbidden',
+    } as never)
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="collection-install-error"][role="alert"]').exists()).toBe(true)
   })
 })

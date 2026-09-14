@@ -115,6 +115,10 @@ def _build_resume_executor(engine: AsyncEngine) -> PipelineExecutor:
 
 router = APIRouter(prefix="/api/v1", tags=["hitl"])
 
+# Repeated log/decorator keys (S1192).
+_CODE_HITL_CLAIM_GATE = "hitl.claim_gate"
+_PERM_HITL_LIST = "hitl.list"
+
 #: FAR-634: the audit event type emitted on EVERY human_only denial (REST +
 #: MCP) — imported from ``db.crud.hitl_gate_config`` (the shared cross-surface
 #: home) so the REST and MCP emitters cannot fork the audit stream on a rename.
@@ -477,7 +481,7 @@ async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
     "/runs/{run_id}/hitl/{gate_id}/claim",
     status_code=status.HTTP_200_OK,
 )
-@handle_db_errors("hitl.claim_gate")
+@handle_db_errors(_CODE_HITL_CLAIM_GATE)
 async def claim_gate(
     run_id: uuid.UUID,
     gate_id: str,
@@ -561,13 +565,13 @@ async def claim_gate(
                 allowed_from=frozenset({"awaiting_human"}),
             )
     except ProgrammingError as exc:
-        logger.exception("hitl.claim_gate")
+        logger.exception(_CODE_HITL_CLAIM_GATE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception("hitl.claim_gate")
+        logger.exception(_CODE_HITL_CLAIM_GATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1010,7 +1014,7 @@ async def submit_manual_output(
 async def list_run_pending_gates(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("hitl.list"),
+    principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
 ) -> PendingGatesResponse:
     """List all pending (undecided) HITL gates for a specific run."""
     try:
@@ -1121,7 +1125,7 @@ async def list_run_pending_gates(
 @handle_db_errors("hitl.list_org_pending_gates")
 async def list_org_pending_gates(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("hitl.list"),
+    principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
 ) -> PendingGatesResponse:
     """List pending HITL gates across the organisation.
 
@@ -1213,7 +1217,7 @@ async def list_org_gates(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("hitl.list"),
+    principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
 ) -> GateListResponse:
     """Paginated org-wide gate listing including DECIDED gates (FAR-692).
 

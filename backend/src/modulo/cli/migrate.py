@@ -653,7 +653,7 @@ def verify_export(ctx: click.Context, org_id: str, input_path: Path) -> None:
     asyncio.run(_async_verify_export(ctx, _parse_uuid(org_id, _ORG_ID_ARG_LABEL), input_path))
 
 
-async def _async_verify_export(_ctx: click.Context, org_id: uuid.UUID, input_path: Path) -> None:
+async def _async_verify_export(_ctx: click.Context, _org_id: uuid.UUID, input_path: Path) -> None:
     try:
         meta, records = await _read_jsonl(input_path)
     except asyncio.CancelledError:

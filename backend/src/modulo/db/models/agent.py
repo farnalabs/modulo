@@ -18,6 +18,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
 
+# Repeated column type (S1192): JSON with PostgreSQL JSONB variant.
+_JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
+
 
 class Agent(OrgScoped):
     __tablename__ = "agents"
@@ -62,24 +65,14 @@ class Agent(OrgScoped):
     output_schema_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     output_schema_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
     prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
-    prompt_version_history: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
-    )
+    prompt_version_history: Mapped[list[dict[str, Any]]] = mapped_column(_JSONB_COL, nullable=False, default=list)
     model_backend_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=True, index=True
     )
-    connector_type_refs: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
-    )
-    required_environment_capabilities: Mapped[list[str]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
-    )
-    evals: Mapped[list[dict[str, Any]] | None] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=True, default=None
-    )
-    retry_policy: Mapped[dict[str, Any]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
-    )
+    connector_type_refs: Mapped[list[dict[str, Any]]] = mapped_column(_JSONB_COL, nullable=False, default=list)
+    required_environment_capabilities: Mapped[list[str]] = mapped_column(_JSONB_COL, nullable=False, default=list)
+    evals: Mapped[list[dict[str, Any]] | None] = mapped_column(_JSONB_COL, nullable=True, default=None)
+    retry_policy: Mapped[dict[str, Any]] = mapped_column(_JSONB_COL, nullable=False, default=dict)
     max_input_length: Mapped[int | None] = mapped_column(Integer)
     token_budget: Mapped[int | None] = mapped_column(Integer)
     library_id: Mapped[uuid.UUID | None] = mapped_column(

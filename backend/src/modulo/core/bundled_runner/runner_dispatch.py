@@ -1059,7 +1059,7 @@ async def run_bundled_runner_node(
             state=state,
             run_id=run_id,
             org_id=org_id,
-            attempt_key=attempt_key,
+            _attempt_key=attempt_key,
             dispatch_marker_set=dispatch_marker_set,
         )
 
@@ -1144,7 +1144,7 @@ async def _teardown_and_clear(
     state: dict[str, Any],
     run_id: str,
     org_id: str,
-    attempt_key: str | None,
+    _attempt_key: str | None,
     dispatch_marker_set: bool,
 ) -> None:
     """Best-effort workspace destroy + client close + fenced marker clear."""

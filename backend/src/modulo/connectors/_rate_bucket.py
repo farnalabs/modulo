@@ -205,10 +205,10 @@ class RedisTokenBucket:
     def _key(self, key: str) -> str:
         return f"{self._key_prefix}{key}"
 
-    async def consume(self, key: str, tokens: float = 1.0, now: float | None = None) -> bool:
+    async def consume(self, key: str, tokens: float = 1.0, _now: float | None = None) -> bool:
         """Consume ``tokens`` from the shared bucket at ``key``; False when low.
 
-        ``now`` is retained for backward compatibility with callers and as a
+        ``_now`` is retained for backward compatibility with callers and as a
         historical test seam, but it is deliberately NOT forwarded to the Redis
         script: the production Lua reads the refill base from
         ``redis.call('TIME')`` server-side, so worker clock skew never corrupts a

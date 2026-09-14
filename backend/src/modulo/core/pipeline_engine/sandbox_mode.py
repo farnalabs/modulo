@@ -22,6 +22,7 @@ from typing import Any
 import jinja2
 
 _SANDBOX_MODES = frozenset({"llm", "script"})
+_SANDBOX_DEFAULT_MODE = "llm"
 _SANDBOX_EGRESS_POLICIES = frozenset({"default", "deny_all", "selected"})
 _SANDBOX_EGRESS_ALLOWLIST_KEYS = frozenset({"host", "port"})
 # FAR-212 PR B: git-credential scope surface. ``scoped`` = the provisioned git
@@ -232,7 +233,7 @@ def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, d
       - ``mode="script"``: missing/empty script_command
     """
     node_id = node_def.get("id")
-    mode = node_def.get("mode", "llm")
+    mode = node_def.get("mode", _SANDBOX_DEFAULT_MODE)
     if mode not in _SANDBOX_MODES:
         raise ValueError(f"sandbox_agent node '{node_id}' has invalid mode {mode!r} — expected 'llm' or 'script'")
     commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
@@ -289,7 +290,7 @@ def validate_sandbox_agent_command_jinja(node_def: dict[str, Any]) -> str | None
     at run time.
     """
     node_id = node_def.get("id")
-    if node_def.get("mode", "llm") != "llm":
+    if node_def.get("mode", _SANDBOX_DEFAULT_MODE) != _SANDBOX_DEFAULT_MODE:
         return None
     agent_commands = node_def.get("agent_commands")
     if not agent_commands:
