@@ -314,7 +314,7 @@ const pipelineOptions = computed(() => pipelines.value.map(p => ({ value: p.id, 
 // new status can never render a raw i18n key in the dropdown.
 const statusOptions = computed(() => AVAILABLE_STATUSES.map(s => ({
   value: s,
-  label: STATUS_LABEL_KEY[s] ? t(STATUS_LABEL_KEY[s]) : s.replace(/_/g, ' '),
+  label: STATUS_LABEL_KEY[s] ? t(STATUS_LABEL_KEY[s]) : s.replaceAll('_', ' '),
 })))
 
 const terminalCandidates = computed(() => candidates.value.filter(c => isTerminalStatus(c.status.toLowerCase())))
@@ -334,7 +334,7 @@ const displayTerminalBytes = computed(() =>
 function toIso(value: string): string | null {
   if (!value) return null
   const d = new Date(value)
-  return isNaN(d.getTime()) ? null : d.toISOString()
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
 }
 
 function buildQuery(): Record<string, unknown> {

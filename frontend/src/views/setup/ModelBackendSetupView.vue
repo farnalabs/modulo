@@ -93,6 +93,6 @@ const { loading, error, mutate: submit } = useMutation(async () => {
 function parseFragmentToken(hash: string): string | null {
   if (!hash || hash.length < 2) return null
   const t = new URLSearchParams(hash.slice(1)).get('token')
-  return t ? t : null
+  return t ?? null
 }
 </script>

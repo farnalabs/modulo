@@ -115,8 +115,8 @@ const searchItems = computed<SearchItem[]>(() => {
   const rawItems = getNavGroups().flatMap((g) => g.items)
   for (const extra of extras) {
     if (seen.has(extra.path)) continue
-    const navItem = rawItems.find((i) => i.to === extra.path)
-    if (navItem && !visiblePaths.has(extra.path)) continue
+    const hasNavItem = rawItems.some((i) => i.to === extra.path)
+    if (hasNavItem && !visiblePaths.has(extra.path)) continue
     seen.add(extra.path)
     items.push(extra)
   }

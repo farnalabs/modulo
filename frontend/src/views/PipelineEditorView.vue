@@ -1457,7 +1457,7 @@ const retryPolicyOptions = [
   { value: 'failure', labelKey: 'views.PipelineEditorView.retry_policy_failure' },
   { value: 'eval_failed', labelKey: 'views.PipelineEditorView.retry_policy_eval_failed' },
 ]
-const retryPolicyEventValues = retryPolicyOptions.map((o) => o.value)
+const retryPolicyEventValues = new Set(retryPolicyOptions.map((o) => o.value))
 
 interface RetryPolicy {
   on?: string[]
@@ -1506,7 +1506,7 @@ function syncRetryPolicyFromPipeline() {
     } else if (Array.isArray(stored.on)) {
       retryPolicyMode.value = 'specific'
       retryPolicyEvents.value = (stored.on as unknown[]).filter((e): e is string =>
-        retryPolicyEventValues.includes(e as string),
+        retryPolicyEventValues.has(e as string),
       )
     } else {
       retryPolicyMode.value = 'specific'
@@ -1759,7 +1759,8 @@ function findLegacyHitlDescriptionIssues(nodes: any[], edges: any[]): LegacyHitl
     if (!hitlConfigDescriptionTooShort(config)) continue
     const source = shortId(String(edge.source_node_id ?? edge.source ?? '?'))
     const target = shortId(String(edge.target_node_id ?? edge.target ?? '?'))
-    issues.push({ key: `edge:${edge.id ?? `${source}->${target}`}`, kind: 'edge', label: `${source} → ${target}` })
+    const fallbackKey = `${source}->${target}`
+    issues.push({ key: `edge:${edge.id ?? fallbackKey}`, kind: 'edge', label: `${source} → ${target}` })
   }
   return issues
 }
