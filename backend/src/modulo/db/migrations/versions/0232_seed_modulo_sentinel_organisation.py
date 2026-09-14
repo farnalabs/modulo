@@ -1,7 +1,7 @@
 """Seed the Modulo sentinel organisation backing built-in library primitives.
 
-Revision ID: 0230_seed_modulo_sentinel_organisation
-Revises: 0229_add_workspace_inputs_count
+Revision ID: 0232_seed_modulo_sentinel_organisation
+Revises: 0231_token_families_reuse_replay_count
 Create Date: 2026-09-14
 
 Collection install (FAR-826) persists the shipped in-code registry collection
@@ -42,8 +42,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0230_seed_modulo_sentinel_organisation"
-down_revision: str | None = "0229_add_workspace_inputs_count"
+revision: str = "0232_seed_modulo_sentinel_organisation"
+down_revision: str | None = "0231_token_families_reuse_replay_count"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

@@ -339,7 +339,7 @@ async def _persist_collection_row(
         if org_row is None:
             raise CollectionInstallError(
                 "The Modulo sentinel organisation is missing from the database. "
-                "It is created by migration 0230_seed_modulo_sentinel_organisation — "
+                "It is created by migration 0232_seed_modulo_sentinel_organisation — "
                 "run `alembic upgrade head` and retry the install."
             )
         existing = (
