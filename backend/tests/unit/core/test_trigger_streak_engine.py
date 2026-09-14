@@ -336,9 +336,9 @@ class TestMigrationBackfillGrace:
         # and 0230_token_families_refresh_grace chains on top of 0229_add_workspace_inputs_count,
         # and 0231_token_families_reuse_replay_count chains on top of 0230_token_families_refresh_grace,
         # and FAR-826's 0232_seed_modulo_sentinel_organisation chains on top of 0231_token_families_reuse_replay_count,
-        # and FAR-801's 0233_workspace_input_drift_and_audit chains on top of 0232_seed_modulo_sentinel_organisation,
+        # and FAR-801's 0238_workspace_input_drift_and_audit chains on top of 0237_fix_token_family_org_nullable,
         # so it is now the single linear head of the chain.
-        assert heads == ["0233_workspace_input_drift_and_audit"], f"expected a single head, got {heads}"
+        assert heads == ["0238_workspace_input_drift_and_audit"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
