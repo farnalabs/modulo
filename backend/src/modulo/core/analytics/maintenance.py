@@ -299,8 +299,11 @@ async def backfill_facts(session: Any, day: date) -> int:
     # FAR-801: count of managed workspace inputs from the audit row.
     # The audit row's outputs_json carries {"workspace_inputs": [...]} —
     # json_array_length gives the count. NULL when no audit row exists.
+    # Cast to JSON because -> on jsonb returns jsonb, but json_array_length
+    # expects json (matching the existing graph_nodes_json pattern above).
+    _workspace_inputs_json = sa.cast(RunNodeOutput.outputs_json.op("->")("workspace_inputs"), sa.JSON)
     _workspace_inputs_count_subq = (
-        sa.select(sa.func.json_array_length(RunNodeOutput.outputs_json.op("->")("workspace_inputs")))
+        sa.select(sa.func.json_array_length(_workspace_inputs_json))
         .where(
             RunNodeOutput.run_id == Run.id,
             RunNodeOutput.node_id == AUDIT_NODE_ID,

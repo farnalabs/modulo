@@ -5557,8 +5557,8 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
     Returns ``{"scanned": N, "corrected": M}``.
     """
     from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+    from modulo.db.crud.run_node_outputs import read_audit_row_outputs_json
     from modulo.db.models.run import TERMINAL_STATUSES, Run
-    from modulo.db.models.run_node_outputs import RunNodeOutput
 
     scanned = 0
     corrected = 0
@@ -5578,15 +5578,12 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
             ).all()
             scanned = len(rows)
             for run_id, _org_id in rows:
-                audit_row = (
-                    await session.execute(
-                        sa.select(RunNodeOutput.outputs_json).where(
-                            RunNodeOutput.run_id == run_id,
-                            RunNodeOutput.node_id == AUDIT_NODE_ID,
-                        )
-                    )
-                ).scalar_one_or_none()
-                if not isinstance(audit_row, dict):
+                audit_row = await read_audit_row_outputs_json(
+                    session,
+                    run_id=run_id,
+                    node_id=AUDIT_NODE_ID,
+                )
+                if audit_row is None:
                     continue
                 audit_list = audit_row.get("workspace_inputs", [])
                 if not audit_list:
