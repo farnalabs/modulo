@@ -1977,3 +1977,473 @@ def test_resume_and_stop_registry_branches(client: TestClient) -> None:
         assert resp.status_code == 200, resp.text
     assert registry.publish_resume.await_count == 2
     registry.set_ui_command_results.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: _get_registry, _check_nogo edge cases,
+# stream_chat ProgrammingError, stop_session registry branch,
+# rename/delete/get/list/append DB error 501 paths
+# ---------------------------------------------------------------------------
+
+
+def test_get_registry_returns_none_when_no_redis_url() -> None:
+    with patch("modulo.api.routes.remy.get_settings") as settings_cls:
+        settings_cls.return_value = MagicMock(redis_url="")
+        remy_routes._redis_registry = None
+        result = remy_routes._get_registry()
+    assert result is None
+    remy_routes._redis_registry = None
+
+
+def test_check_nogo_write_tool_with_nogo_selector() -> None:
+    assert remy_routes._check_nogo("fill", {"selector": "#delete-org"}, "/pipelines") is True
+
+
+def test_check_nogo_non_write_tool_not_affected_by_nogo_selector() -> None:
+    assert remy_routes._check_nogo("extract", {"selector": "#delete-org"}, "/pipelines") is False
+
+
+def test_stream_chat_programming_error_returns_501(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    programming_error = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=programming_error,
+    ):
+        resp = client.post(
+            f"/api/v1/remy/sessions/{chat_session.id}/stream",
+            json={"content": "hi", "provider": "openai", "model": "gpt-4o"},
+        )
+    assert resp.status_code == 501
+
+
+def test_stop_session_registry_branch(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
+    registry = MagicMock()
+    registry.set_ui_command_results = AsyncMock()
+    registry.publish_ui_results = AsyncMock()
+    registry.publish_resume = AsyncMock()
+    with (
+        patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.remy._get_registry", return_value=registry),
+    ):
+        resp = client.post(f"/api/v1/remy/sessions/{chat_session.id}/stop")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "stopped"
+    registry.publish_resume.assert_awaited_once()
+
+
+def test_resume_session_registry_branch(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
+    registry = MagicMock()
+    registry.publish_resume = AsyncMock()
+    with (
+        patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.remy._get_registry", return_value=registry),
+    ):
+        resp = client.post(f"/api/v1/remy/sessions/{chat_session.id}/resume")
+    assert resp.status_code == 200
+    registry.publish_resume.assert_awaited_once_with(str(chat_session.id))
+
+
+def test_delete_session_programming_error_returns_501(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.delete(f"/api/v1/remy/sessions/{chat_session.id}")
+    assert resp.status_code == 501
+
+
+def test_get_session_programming_error_returns_501(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.get(f"/api/v1/remy/sessions/{chat_session.id}")
+    assert resp.status_code == 501
+
+
+def test_rename_session_programming_error_returns_501(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.patch(f"/api/v1/remy/sessions/{chat_session.id}", json={"name": "X"})
+    assert resp.status_code == 501
+
+
+def test_list_messages_programming_error_returns_501(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.get(f"/api/v1/remy/sessions/{chat_session.id}/messages")
+    assert resp.status_code == 501
+
+
+def test_append_message_programming_error_returns_501(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.post(
+            f"/api/v1/remy/sessions/{chat_session.id}/messages",
+            json={"role": "user", "content": "hi"},
+        )
+    assert resp.status_code == 501
+
+
+def test_reset_permissions_programming_error_returns_501(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.post(f"/api/v1/remy/sessions/{chat_session.id}/reset-permissions")
+    assert resp.status_code == 501
+
+
+def test_resume_programming_error_returns_501(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.post(f"/api/v1/remy/sessions/{chat_session.id}/resume")
+    assert resp.status_code == 501
+
+
+def test_stop_programming_error_returns_501(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.post(f"/api/v1/remy/sessions/{chat_session.id}/stop")
+    assert resp.status_code == 501
+
+
+def test_undo_programming_error_returns_501(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with (
+        patch(
+            "modulo.api.routes.remy.set_rls_org",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "modulo.api.routes.remy.set_rls_user_context",
+            new_callable=AsyncMock,
+        ),
+    ):
+        # Make the execute() inside the try block raise ProgrammingError
+        programming_error = ProgrammingError("stmt", {}, Exception("missing table"))
+        client.mock_session.execute = AsyncMock(side_effect=programming_error)  # type: ignore[attr-defined]
+        resp = client.post(f"/api/v1/remy/sessions/{chat_session.id}/undo")
+    assert resp.status_code == 501
+
+
+def test_append_message_unexpected_error_returns_500(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.post(
+            f"/api/v1/remy/sessions/{chat_session.id}/messages",
+            json={"role": "user", "content": "hi"},
+        )
+    assert resp.status_code == 500
+
+
+def test_create_session_programming_error_returns_501(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.post(
+            "/api/v1/remy/sessions",
+            json={"provider": "openai", "model": "gpt-4o", "context_window_tokens": 200000},
+        )
+    assert resp.status_code == 501
+
+
+def test_create_session_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.post(
+            "/api/v1/remy/sessions",
+            json={"provider": "openai", "model": "gpt-4o", "context_window_tokens": 200000},
+        )
+    assert resp.status_code == 500
+
+
+def test_resolve_tool_permission_full_auto_nogo_returns_disabled() -> None:
+    from modulo.core.remy.config_service import RemyConfig
+
+    config = RemyConfig(permission_mode="full_auto", auto_execute_threshold=0.8)
+    perm = remy_routes._resolve_tool_permission(config, "navigate", {"path": "/admin/billing"}, "/admin/billing")
+    assert perm == "disabled"
+
+
+def test_resolve_tool_permission_full_auto_allowlist_outside_returns_disabled() -> None:
+    from modulo.core.remy.config_service import RemyConfig
+
+    config = RemyConfig(permission_mode="full_auto", allowed_page_patterns=["/reports"])
+    perm = remy_routes._resolve_tool_permission(config, "navigate", {"path": "/admin"}, "/admin")
+    assert perm == "disabled"
+
+
+def test_resolve_tool_permission_standard_mode_press_requires_approval() -> None:
+    from modulo.core.remy.config_service import RemyConfig
+
+    config = RemyConfig(permission_mode="standard")
+    perm = remy_routes._resolve_tool_permission(config, "press", {}, "/page")
+    assert perm == "requires_approval"
+
+
+def test_accumulate_tool_call_chunk_new_index() -> None:
+    buffers: dict[int, dict[str, Any]] = {}
+    chunk = {"index": 0, "id": "t1", "name": "click", "args": '{"s": 1}'}
+    remy_routes._accumulate_one_tool_call(chunk, buffers)
+    assert buffers[0]["id"] == "t1"
+    assert buffers[0]["args"] == '{"s": 1}'
+
+
+def test_accumulate_tool_call_chunk_appends_args() -> None:
+    buffers: dict[int, dict[str, Any]] = {0: {"id": "t1", "name": "click", "args": "a"}}
+    chunk = {"index": 0, "id": None, "name": None, "args": "b"}
+    remy_routes._accumulate_one_tool_call(chunk, buffers)
+    assert buffers[0]["args"] == "ab"
+
+
+def test_message_to_langchain_tool_result_non_string_call_id() -> None:
+    msg = _msg("tool_result", "ok", tool_results_json={"tool_call_id": 123})
+    result = remy_routes._message_to_langchain(msg)
+    assert isinstance(result, ToolMessage)
+    assert not result.tool_call_id
+
+
+def test_tool_result_content_without_result_or_error() -> None:
+    assert remy_routes._tool_result_content({}) == json.dumps("")
+
+
+def test_await_permission_decision_timeout_returns_empty() -> None:
+    sid = str(uuid.uuid4())
+    preset_event = asyncio.Event()
+    # event never set → timeout
+
+    async def _scenario() -> list[dict[str, Any]]:
+        with (
+            patch("modulo.api.routes.remy.asyncio.Event", return_value=preset_event),
+            patch("modulo.api.routes.remy.asyncio.wait_for", side_effect=TimeoutError),
+        ):
+            return await remy_routes._await_permission_decision(
+                None, sid, "req-timeout", [{"id": "t", "name": "n", "args": {}}], "/"
+            )
+
+    approved = asyncio.run(_scenario())
+    assert not approved
+
+
+def test_wait_for_ui_command_results_timeout_returns_empty() -> None:
+    sid = str(uuid.uuid4())
+
+    async def _scenario() -> list[dict[str, Any]]:
+        with patch("modulo.api.routes.remy.asyncio.wait_for", side_effect=TimeoutError):
+            return await remy_routes._wait_for_ui_command_results(None, sid, asyncio.Event())
+
+    results = asyncio.run(_scenario())
+    assert results == []
+
+
+def test_stream_event_generator_http_exception_from_init() -> None:
+    fake_db = AsyncMock()
+    req = remy_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
+
+    async def _scenario() -> list[str]:
+        with (
+            patch("modulo.api.routes.remy.AsyncSession", return_value=fake_db),
+            patch(
+                "modulo.api.routes.remy._initialise_stream",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(status_code=400, detail="bad request"),
+            ),
+        ):
+            events: list[str] = []
+            gen = remy_routes._stream_event_generator(
+                _make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock()
+            )
+            async for event in gen:
+                events.append(event)
+            return events
+
+    events = asyncio.run(_scenario())
+    assert "bad request" in events[0]
+
+
+def test_stream_event_generator_programming_error() -> None:
+    fake_db = AsyncMock()
+    req = remy_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
+    programming_error = ProgrammingError("SELECT 1", {}, Exception("missing table"))
+
+    async def _scenario() -> list[str]:
+        with (
+            patch("modulo.api.routes.remy.AsyncSession", return_value=fake_db),
+            patch(
+                "modulo.api.routes.remy._initialise_stream",
+                new_callable=AsyncMock,
+                side_effect=programming_error,
+            ),
+        ):
+            events: list[str] = []
+            gen = remy_routes._stream_event_generator(
+                _make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock()
+            )
+            async for event in gen:
+                events.append(event)
+            return events
+
+    events = asyncio.run(_scenario())
+    assert "not available" in events[0]
+
+
+def test_stream_event_generator_backend_none_emits_error() -> None:
+    fake_db = AsyncMock()
+    req = remy_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
+    init = remy_routes._StreamInit(backend=None, parent_msg_id=uuid.uuid4(), messages=[])
+
+    async def _scenario() -> list[str]:
+        with (
+            patch("modulo.api.routes.remy.AsyncSession", return_value=fake_db),
+            patch("modulo.api.routes.remy._initialise_stream", new_callable=AsyncMock, return_value=init),
+        ):
+            events: list[str] = []
+            gen = remy_routes._stream_event_generator(
+                _make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock()
+            )
+            async for event in gen:
+                events.append(event)
+            return events
+
+    events = asyncio.run(_scenario())
+    assert "error" in events[0]
+
+
+def test_call_mcp_tool_retries_on_502_then_succeeds() -> None:
+    client_cm = AsyncMock()
+    resp_502 = MagicMock()
+    resp_502.status_code = 502
+    http_error = httpx.HTTPStatusError("bad gateway", request=MagicMock(), response=resp_502)
+    resp_ok = MagicMock()
+    resp_ok.status_code = 200
+    resp_ok.json.return_value = {"ok": True}
+    client_cm.__aenter__.return_value.post = AsyncMock(side_effect=[http_error, resp_ok])
+    with (
+        patch("modulo.api.routes.remy.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        patch("modulo.api.routes.remy.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        result = asyncio.run(remy_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
+    assert result == {"ok": True}
+
+
+def test_call_mcp_tool_exhausts_retries_on_503() -> None:
+    client_cm = AsyncMock()
+    resp_503 = MagicMock()
+    resp_503.status_code = 503
+    http_error = httpx.HTTPStatusError("service unavailable", request=MagicMock(), response=resp_503)
+    client_cm.__aenter__.return_value.post = AsyncMock(side_effect=http_error)
+    with (
+        patch("modulo.api.routes.remy.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        patch("modulo.api.routes.remy.asyncio.sleep", new_callable=AsyncMock),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        asyncio.run(remy_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
+    assert exc_info.value.status_code == 502
+
+
+def test_call_mcp_tool_request_error_retries_then_fails() -> None:
+    client_cm = AsyncMock()
+    client_cm.__aenter__.return_value.post = AsyncMock(side_effect=httpx.RequestError("connection refused"))
+    with (
+        patch("modulo.api.routes.remy.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        patch("modulo.api.routes.remy.asyncio.sleep", new_callable=AsyncMock),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        asyncio.run(remy_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
+    assert exc_info.value.status_code == 502
+
+
+def test_call_mcp_tool_non_retriable_400_raises_immediately() -> None:
+    client_cm = AsyncMock()
+    resp_400 = MagicMock()
+    resp_400.status_code = 400
+    http_error = httpx.HTTPStatusError("bad request", request=MagicMock(), response=resp_400)
+    client_cm.__aenter__.return_value.post = AsyncMock(side_effect=http_error)
+    with (
+        patch("modulo.api.routes.remy.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        asyncio.run(remy_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
+
+
+def test_auto_name_stream_session_ten_message_empty_first_msg() -> None:
+    ctx_db = _make_mock_session()
+    count_result = MagicMock()
+    count_result.scalar.return_value = 10
+    first_msg_result = MagicMock()
+    first_msg_result.scalar.return_value = ""
+    ctx_db.execute = AsyncMock(side_effect=[count_result, first_msg_result])
+    chat_session = MagicMock()
+    chat_session.name = None
+    req = remy_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
+    asyncio.run(remy_routes._auto_name_stream_session(ctx_db, uuid.uuid4(), req, chat_session))
+    assert ctx_db.execute.await_count == 2
+
+
+def test_persist_assistant_and_tool_messages() -> None:
+    ctx = _ctx_with_id_assigning_flush()
+    tool_calls = [{"id": "t1", "name": "click", "args": {}}]
+    tool_results = [{"tool_call_id": "t1", "tool_name": "click", "success": True, "result": {"ok": 1}}]
+    msg_id = asyncio.run(
+        remy_routes._persist_assistant_and_tool_messages(ctx, "response", tool_calls, tool_results, None)
+    )
+    assert uuid.UUID(msg_id)
+
+
+def test_run_mcp_tool_calls_with_key_empty_calls() -> None:
+    req = remy_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o", mcp_api_key="k")
+    events = _collect(remy_routes._run_mcp_tool_calls([], req, "http://base"))
+    assert events == []

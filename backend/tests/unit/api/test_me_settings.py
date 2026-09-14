@@ -8,10 +8,11 @@ success (the input echoed back unchanged, no 404) is the test's delta.
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -97,3 +98,93 @@ def test_put_settings_missing_account_returns_404(client: TestClient) -> None:
     client.mock_session.get = AsyncMock(return_value=None)  # type: ignore[attr-defined]
     resp = client.put(_ENDPOINT, json={"theme": "dark"})
     assert resp.status_code == 404
+
+
+# ── GET /me/settings ────────────────────────────────────────────────
+
+
+class TestGetUserSettings:
+    def test_returns_preferences(self, client: TestClient) -> None:
+        account = MagicMock()
+        account.preferences = {"theme": "dark", "locale": "en-GB"}
+        with patch("modulo.api.routes.me.get_account_by_id", return_value=account):
+            resp = client.get(_ENDPOINT)
+        assert resp.status_code == 200
+        assert resp.json() == {"theme": "dark", "locale": "en-GB"}
+
+    def test_absent_preferences_returns_defaults(self, client: TestClient) -> None:
+        account = MagicMock()
+        account.preferences = {}
+        with patch("modulo.api.routes.me.get_account_by_id", return_value=account):
+            resp = client.get(_ENDPOINT)
+        assert resp.status_code == 200
+        assert resp.json() == {"theme": None, "locale": None}
+
+    def test_missing_account_returns_404(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.me.get_account_by_id", return_value=None):
+            resp = client.get(_ENDPOINT)
+        assert resp.status_code == 404
+
+    def test_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.me.get_account_by_id",
+            side_effect=ProgrammingError("stmt", "params", Exception("orig")),
+        ):
+            resp = client.get(_ENDPOINT)
+        assert resp.status_code == 501
+
+    def test_needs_auth(self) -> None:
+        app.dependency_overrides[get_settings] = _make_settings
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        try:
+            c = TestClient(app)
+            resp = c.get(_ENDPOINT)
+            assert resp.status_code in (401, 403)
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ── PUT /me/settings with no body (req=None path) ──────────────────
+
+
+class TestUpdateUserSettingsNoBody:
+    def test_no_body_returns_current_settings(self, client: TestClient) -> None:
+        account = MagicMock()
+        account.preferences = {"theme": "light"}
+        with patch("modulo.api.routes.me.get_account_by_id", return_value=account):
+            resp = client.put(_ENDPOINT)
+        assert resp.status_code == 200
+        assert resp.json() == {"theme": "light", "locale": None}
+
+    def test_no_body_missing_account_returns_404(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.me.get_account_by_id", return_value=None):
+            resp = client.put(_ENDPOINT)
+        assert resp.status_code == 404
+
+    def test_no_body_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.me.get_account_by_id",
+            side_effect=ProgrammingError("stmt", "params", Exception("orig")),
+        ):
+            resp = client.put(_ENDPOINT)
+        assert resp.status_code == 501
+
+    def test_with_body_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.me.update_account_preferences",
+            side_effect=ProgrammingError("stmt", "params", Exception("orig")),
+        ):
+            resp = client.put(_ENDPOINT, json={"theme": "dark"})
+        assert resp.status_code == 501
+
+    def test_with_body_account_not_found_returns_404(self, client: TestClient) -> None:
+        from modulo.db.crud.account import AccountNotFoundError
+
+        with patch(
+            "modulo.api.routes.me.update_account_preferences",
+            side_effect=AccountNotFoundError(),
+        ):
+            resp = client.put(_ENDPOINT, json={"theme": "dark"})
+        assert resp.status_code == 404

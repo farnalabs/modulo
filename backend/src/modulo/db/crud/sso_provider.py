@@ -43,7 +43,7 @@ def _slugify_provider_id(name: str) -> str:
     return slug[:58]
 
 
-async def _unique_provider_id(session: AsyncSession, base: str, org_id: uuid.UUID) -> str:
+async def _unique_provider_id(session: AsyncSession, base: str, _org_id: uuid.UUID) -> str:
     """Compute a globally-free provider_id slug.
 
     Scans every ``provider_id`` visible to ``session`` and returns ``base``,
@@ -51,7 +51,7 @@ async def _unique_provider_id(session: AsyncSession, base: str, org_id: uuid.UUI
     ``modulo_system`` role (BYPASSRLS) the scan is instance-global (all orgs),
     matching the GLOBAL partial unique index (migration 0151, FAR-464 option a);
     when it is the app session (RLS-scoped) the scan is limited to the org(s)
-    the session can see. ``org_id`` is retained in the signature for call-site
+    the session can see. ``_org_id`` is retained in the signature for call-site
     clarity; the scan itself is RLS-aware so it is correct either way.
     """
     existing = {

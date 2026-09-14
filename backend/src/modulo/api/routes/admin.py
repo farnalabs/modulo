@@ -3622,7 +3622,7 @@ class UpdateSandboxConcurrencyRequest(BaseModel):
 
 
 async def _run_admin_rls_txn(
-    session: AsyncSession,
+    _session: AsyncSession,
     current_user: TenantPrincipal,
     body: Callable[[], Awaitable[Any]],
     *,

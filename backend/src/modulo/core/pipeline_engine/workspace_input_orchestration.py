@@ -42,6 +42,14 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Error code constants (S1192)
+# ---------------------------------------------------------------------------
+
+_CODE_INPUT_RESOLUTION_FAILED = "sandbox.input_resolution_failed"
+_CODE_INPUT_CREDENTIAL_FAILED = "sandbox.input_credential_failed"
+
+
+# ---------------------------------------------------------------------------
 # Result types
 # ---------------------------------------------------------------------------
 
@@ -81,7 +89,7 @@ class ProvisioningError(Exception):
     """
 
     message: str
-    error_code: str = "sandbox.input_resolution_failed"
+    error_code: str = _CODE_INPUT_RESOLUTION_FAILED
     retryable: bool = False
 
 
@@ -225,7 +233,7 @@ async def _derive_url_from_connector(
         raise ProvisioningError(
             f"connector instance {connector_instance_id} not found — "
             "cannot derive clone URL for connector-backed workspace input",
-            error_code="sandbox.input_credential_failed",
+            error_code=_CODE_INPUT_CREDENTIAL_FAILED,
             retryable=False,
         )
 
@@ -243,7 +251,7 @@ async def _derive_url_from_connector(
             raise ProvisioningError(
                 f"connector instance {connector_instance_id} (github) has no "
                 "'repo' (owner/repo) in its config — cannot derive a clone URL",
-                error_code="sandbox.input_resolution_failed",
+                error_code=_CODE_INPUT_RESOLUTION_FAILED,
                 retryable=False,
             )
         base_url = str(config.get("base_url") or "https://api.github.com").strip()
@@ -254,7 +262,7 @@ async def _derive_url_from_connector(
         f"connector type {ci.connector_type_id!r} does not support URL "
         "derivation for workspace inputs — provide an explicit url or "
         "use a connector type with a known clone URL derivation",
-        error_code="sandbox.input_resolution_failed",
+        error_code=_CODE_INPUT_RESOLUTION_FAILED,
         retryable=False,
     )
 
@@ -319,14 +327,14 @@ async def resolve_managed_inputs_host_side(
             if connector_id_raw is None:
                 raise ProvisioningError(
                     f"workspace_input dest={dest!r} has no url and no connector_instance_id",
-                    error_code="sandbox.input_resolution_failed",
+                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
                     retryable=False,
                 )
             if session_factory is None:
                 raise ProvisioningError(
                     f"workspace_input dest={dest!r} has no url but a connector_instance_id "
                     "requires a session_factory to derive the clone URL",
-                    error_code="sandbox.input_resolution_failed",
+                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
                     retryable=False,
                 )
 
@@ -342,18 +350,18 @@ async def resolve_managed_inputs_host_side(
                 if _is_transient_error(exc):
                     raise ProvisioningError(
                         f"workspace_input dest={dest!r}: transient error deriving URL from connector: {exc}",
-                        error_code="sandbox.input_resolution_failed",
+                        error_code=_CODE_INPUT_RESOLUTION_FAILED,
                         retryable=True,
                     ) from exc
                 raise ProvisioningError(
                     f"workspace_input dest={dest!r}: unexpected error deriving URL from connector: {exc}",
-                    error_code="sandbox.input_resolution_failed",
+                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
                     retryable=False,
                 ) from exc
             if not url:
                 raise ProvisioningError(
                     f"workspace_input dest={dest!r}: connector {connector_id_raw} did not provide a clone URL",
-                    error_code="sandbox.input_resolution_failed",
+                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
                     retryable=False,
                 )
 
@@ -374,19 +382,19 @@ async def resolve_managed_inputs_host_side(
             except RefResolutionError as exc:
                 raise ProvisioningError(
                     f"workspace_input dest={dest!r}: ref resolution failed: {exc}",
-                    error_code="sandbox.input_resolution_failed",
+                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
                     retryable=False,
                 ) from exc
             except Exception as exc:
                 if _is_transient_error(exc):
                     raise ProvisioningError(
                         f"workspace_input dest={dest!r}: transient network error during ref resolution: {exc}",
-                        error_code="sandbox.input_resolution_failed",
+                        error_code=_CODE_INPUT_RESOLUTION_FAILED,
                         retryable=True,
                     ) from exc
                 raise ProvisioningError(
                     f"workspace_input dest={dest!r}: unexpected error during ref resolution: {exc}",
-                    error_code="sandbox.input_resolution_failed",
+                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
                     retryable=False,
                 ) from exc
 
@@ -409,19 +417,19 @@ async def resolve_managed_inputs_host_side(
             except CredentialResolutionError as exc:
                 raise ProvisioningError(
                     f"workspace_input dest={dest!r}: credential resolution failed: {exc}",
-                    error_code="sandbox.input_credential_failed",
+                    error_code=_CODE_INPUT_CREDENTIAL_FAILED,
                     retryable=False,
                 ) from exc
             except Exception as exc:
                 if _is_transient_error(exc):
                     raise ProvisioningError(
                         f"workspace_input dest={dest!r}: transient error during credential resolution: {exc}",
-                        error_code="sandbox.input_credential_failed",
+                        error_code=_CODE_INPUT_CREDENTIAL_FAILED,
                         retryable=True,
                     ) from exc
                 raise ProvisioningError(
                     f"workspace_input dest={dest!r}: unexpected error during credential resolution: {exc}",
-                    error_code="sandbox.input_credential_failed",
+                    error_code=_CODE_INPUT_CREDENTIAL_FAILED,
                     retryable=False,
                 ) from exc
 
@@ -507,7 +515,7 @@ async def provision_workspace_inputs_in_sandbox(
             except Exception as exc:
                 raise ProvisioningError(
                     f"workspace_input dest={inp.dest!r}: credential setup failed in sandbox: {exc}",
-                    error_code="sandbox.input_credential_failed",
+                    error_code=_CODE_INPUT_CREDENTIAL_FAILED,
                     retryable=False,
                 ) from exc
 

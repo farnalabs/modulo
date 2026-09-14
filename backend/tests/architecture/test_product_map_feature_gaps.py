@@ -491,7 +491,6 @@ _ORPHANED_BDD_FEATURES = frozenset(
         "backend/tests/bdd/features/connectors/sharepoint.feature",
         "backend/tests/bdd/features/connectors/swappable_binding.feature",
         "backend/tests/bdd/features/connectors/teamcity_connector.feature",
-        "backend/tests/bdd/features/licensing/feature_flag_inspection.feature",
         "backend/tests/bdd/features/pipelines/pipeline_config_validation.feature",
         "backend/tests/bdd/features/pipelines/validation.feature",
         "backend/tests/bdd/features/rate_limiting/rate_limiting.feature",

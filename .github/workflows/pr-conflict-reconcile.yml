@@ -49,12 +49,13 @@ jobs:
           # the limit (or page) if modulo's open-PR count approaches this bound.
           gh pr list --state open --limit 200 \
             --json number,headRefName,mergeable,isDraft,labels \
-            > /tmp/open_prs.json 2>/dev/null
+            > /tmp/open_prs.json 2>/tmp/gh_pr_list_stderr.txt
 
           # Validate the API call succeeded (fail open loudly, FAR-528)
           if [ ! -s /tmp/open_prs.json ]; then
-            echo "::warning::Failed to fetch open PRs from GitHub API (empty response). Reconciler cannot run this cycle."
-            echo "api_failed=true" >> "$GITHUB_OUTPUT"
+            ERR=$(cat /tmp/gh_pr_list_stderr.txt 2>/dev/null | head -c 500)
+            echo "::warning::Failed to fetch open PRs from GitHub API (empty response). Reconciler cannot run this cycle.${ERR:+$'\n'}gh pr list stderr: $ERR"
+            echo "api_failed=true" >> "${GITHUB_OUTPUT:-/dev/null}"
             exit 0
           fi
 
@@ -82,7 +83,7 @@ jobs:
 
           echo "dispatch=$DISPATCH_COUNT"
           echo "notify=$NOTIFY_COUNT"
-          echo "api_failed=false" >> "$GITHUB_OUTPUT"
+          echo "api_failed=false" >> "${GITHUB_OUTPUT:-/dev/null}"
 
           # Write to temp files for downstream steps
           echo "$DISPATCH" > /tmp/dispatch_prs.json
@@ -193,8 +194,8 @@ jobs:
             fi
           done
 
-          echo "dispatched=$DISPATCHED" >> "$GITHUB_OUTPUT"
-          echo "skipped=$SKIPPED" >> "$GITHUB_OUTPUT"
+          echo "dispatched=$DISPATCHED" >> "${GITHUB_OUTPUT:-/dev/null}"
+          echo "skipped=$SKIPPED" >> "${GITHUB_OUTPUT:-/dev/null}"
 
       - name: Surface manual-delivery conflicts
         if: steps.detect.outputs.api_failed == 'false'

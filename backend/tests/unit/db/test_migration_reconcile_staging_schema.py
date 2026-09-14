@@ -55,9 +55,8 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and 0224_agents_add_indexes chains off 0223,
 # and 0225_agents_constraints_rls chains off 0224,
 # and 0226_agents_json_to_jsonb chains off 0225,
-# and 0227_env_profiles_initialisation_strategy_check chains off 0226,
-# and 0228_journey_dismissal chains off 0227 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0228_journey_dismissal"
+# and 0227_env_profiles_initialisation_strategy_check chains off 0226_agents_json_to_jsonb as the chain head.
+_CHAIN_HEAD_MIGRATION = "0227_env_profiles_initialisation_strategy_check"
 
 
 def _source(name: str) -> str:

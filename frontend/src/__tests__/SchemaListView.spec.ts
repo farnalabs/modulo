@@ -311,6 +311,24 @@ describe('SchemaListView', () => {
     expect(wrapper.text()).toContain('Failed to load folders')
   })
 
+  it('sorts the mobile folder select options alphabetically when API returns unsorted folders', async () => {
+    getMock.mockResolvedValue([
+      { id: 'f3', organisation_id: 'org-1', name: 'Zeta', parent_id: null, sort_order: 2 },
+      { id: 'f1', organisation_id: 'org-1', name: 'alpha', parent_id: null, sort_order: 0 },
+      { id: 'f2', organisation_id: 'org-1', name: 'Beta', parent_id: null, sort_order: 1 },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const select = wrapper.find('[data-testid="schema-list-mobile-folder-select"]')
+    expect(select.exists()).toBe(true)
+    // PrimeVue Select renders options in its props, not as native <option> elements
+    const selectComponent = select.findComponent({ name: 'Select' })
+    const options = selectComponent.props('options') as Array<{ value: string; label: string }>
+    expect(options.map(o => o.label)).toEqual(['All Schemas', 'alpha', 'Beta', 'Zeta'])
+  })
+
   it('opens the schema editor via keyboard (Enter / Space) for a11y (FAR-821)', async () => {
     mockPush.mockClear()
     const wrapper = mountView()

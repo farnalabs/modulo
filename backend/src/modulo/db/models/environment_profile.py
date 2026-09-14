@@ -13,11 +13,22 @@ from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 # derive from this constant — never hardcode the list elsewhere.
 PROVIDER_TYPES: Final[frozenset[str]] = frozenset({"local_docker", "e2b", "local", "runner_docker"})
 
+# Single source of truth for the initialisation_strategy vocabulary (FAR-802).
+# The model CHECK below and the migration 0227 CHECK constraint derive from
+# these values — never hardcode the list elsewhere.
+INITIALISATION_STRATEGIES: Final[frozenset[str]] = frozenset({"git_clone", "blank", "worktree", "managed_inputs"})
+
 
 def _provider_type_check_sql() -> str:
     """Build the CHECK SQL text from PROVIDER_TYPES (sorted for determinism)."""
     ordered = ", ".join(f"'{value}'" for value in sorted(PROVIDER_TYPES))
     return f"provider_type IN ({ordered})"
+
+
+def _initialisation_strategy_check_sql() -> str:
+    """Build the CHECK SQL text from INITIALISATION_STRATEGIES (sorted)."""
+    ordered = ", ".join(f"'{value}'" for value in sorted(INITIALISATION_STRATEGIES))
+    return f"initialisation_strategy IN ({ordered})"
 
 
 class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
@@ -35,6 +46,10 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
         CheckConstraint(
             "network_policy IN ('none', 'outbound', 'selected')",
             name="ck_env_profiles_network_policy",
+        ),
+        CheckConstraint(
+            _initialisation_strategy_check_sql(),
+            name="ck_env_profiles_initialisation_strategy",
         ),
     )
 

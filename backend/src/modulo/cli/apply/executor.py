@@ -38,6 +38,10 @@ PAGE_SIZE = 100
 _SECRETREF_BLOCK_REASON = "secretref resolution not supported yet (server-side resolution lands in a later slice)"
 _CONFLICT_HINT = "name already exists; rerun to apply as update"
 
+# Repeated API paths (S1192).
+_PATH_MODEL_BACKENDS = "/model-backends"
+_PATH_SCHEMAS = "/schemas"
+
 
 def _entity_reports(config: ApplyConfig) -> dict[str, list[tuple[str, Any]]]:
     """kind -> [(name, entity-object)] preserving declaration order.
@@ -257,16 +261,16 @@ class ApplyExecutor:
         EXCLUDED from the maps — name-based upsert cannot pick a row) and
         duplicate live trigger composite keys as ``duplicate_trigger_keys``.
         """
-        schemas_list = self._get_paginated("/schemas")
+        schemas_list = self._get_paginated(_PATH_SCHEMAS)
         try:
-            backends_list = self._get_paginated("/model-backends", params={"include_in_dev": "true"})
+            backends_list = self._get_paginated(_PATH_MODEL_BACKENDS, params={"include_in_dev": "true"})
         except ApplyHttpError as exc:
             if exc.status_code != 403:
                 raise
             _log.warning(
                 "apply.fetch_backends_in_dev_forbidden: falling back to default listing (missing in_dev entities)"
             )
-            backends_list = self._get_paginated("/model-backends")
+            backends_list = self._get_paginated(_PATH_MODEL_BACKENDS)
         schemas = {item["name"]: item for item in schemas_list}
         backends = {item["name"]: item for item in backends_list}
         desired_with_versions = {e.name for e in config.entities.schemas if e.versions}
@@ -416,7 +420,7 @@ class ApplyExecutor:
                     assert isinstance(entity, SchemaEntity)
                     if status == "created":
                         response = self._post(
-                            "/schemas",
+                            _PATH_SCHEMAS,
                             {
                                 "name": entity.name,
                                 "description": entity.description,
@@ -494,7 +498,7 @@ class ApplyExecutor:
                     assert isinstance(entity, ModelBackendEntity)
                     if status == "created":
                         response = self._post(
-                            "/model-backends",
+                            _PATH_MODEL_BACKENDS,
                             {
                                 "name": entity.name,
                                 "display_name": entity.display_name,

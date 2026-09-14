@@ -59,8 +59,8 @@ DEMO_ORGS: list[DemoOrgSpec] = []
 _COMMUNITY_LICENSE_YEARS = 10
 
 
-def _community_license_key(slug: str, private_key_hex: str, org_id: str) -> str:
-    """Sign a community-tier license key for *slug* bound to *org_id*."""
+def _community_license_key(private_key_hex: str, org_id: str) -> str:
+    """Sign a community-tier license key bound to *org_id*."""
     expires_at = (datetime.now(UTC) + timedelta(days=365 * _COMMUNITY_LICENSE_YEARS)).isoformat()
     payload: dict[str, Any] = {
         "tier": "community",
@@ -191,7 +191,7 @@ def _demo_org_license_key(
             return existing_key  # still valid for this tier — keep it
     if tier == "team":
         return generate_team_license(org_name=slug, org_id=org_id, private_key_hex=private_key)
-    return _community_license_key(slug, private_key, org_id)
+    return _community_license_key(private_key, org_id)
 
 
 def _demo_org_settings(org: Organisation, *, license_key: str, tier: str, full: bool) -> dict[str, Any]:

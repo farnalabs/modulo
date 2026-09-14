@@ -1009,23 +1009,24 @@ class TestInstallCollectionService:
             mock_collection.manifest_pins = [{"slug": "my-schema", "version": "1.0"}]
             mock_session.get = AsyncMock(return_value=mock_collection)
 
-            pin = MagicMock()
-            pin.id = uuid.uuid4()
-            pin.name = "my-schema"
-            pin.primitive_type = "schema"
-            pin.content_json = {}
-            pin_result = MagicMock()
-            pin_result.scalar_one_or_none = MagicMock(return_value=pin)
-
             existing = MagicMock()
             existing.install_id = uuid.uuid4()
             existing_result = MagicMock()
             existing_result.scalar_one_or_none = MagicMock(return_value=existing)
 
-            # Call 1 resolves the manifest pin; call 2 finds the existing install.
-            mock_session.execute = AsyncMock(side_effect=[pin_result, existing_result])
+            # Every execute call (RLS context, registry persistence,
+            # existing-install check) sees an already-installed row.
+            mock_session.execute = AsyncMock(return_value=existing_result)
 
-            await install_collection(mock_session, _ORG_ID, _USER_ID, uuid.uuid4())
+            pin_stub = MagicMock()
+            pin_stub.primitive_type = "schema"
+            pin_stub.content_json = {}
+            with patch(
+                "modulo.core.library_service.install._resolve_pin",
+                new_callable=AsyncMock,
+                return_value=pin_stub,
+            ):
+                await install_collection(mock_session, _ORG_ID, _USER_ID, uuid.uuid4())
 
         with pytest.raises(CollectionInstallError, match="already installed"):
             asyncio.run(run())
