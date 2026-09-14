@@ -1010,7 +1010,7 @@ async def _audit_and_alert_skipped_guardrails(
             await alert_unexpected_guardrail_skip(org_id, run_id, skip)
 
 
-async def _derive_guardrail_summary(
+def _derive_guardrail_summary(
     *,
     org_id: uuid.UUID,
     run_id: uuid.UUID,
@@ -1221,7 +1221,7 @@ async def _run_guardrail_gate(
     # guardrails into ``errored``). TELEMETRY: best-effort fail-open — a
     # summary-derivation failure must never break run creation (the
     # enforcement already happened); it degrades to no summary + a log.
-    summary_json = await _derive_guardrail_summary(
+    summary_json = _derive_guardrail_summary(
         org_id=org_id,
         run_id=run_id,
         guardrail_defs=guardrail_defs,

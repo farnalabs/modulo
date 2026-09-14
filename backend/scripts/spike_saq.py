@@ -546,7 +546,7 @@ async def check12_sweeper(redis: aioredis.Redis, q: RedisQueue) -> None:
     )
 
 
-async def check_upstash_maxmemory() -> None:
+def check_upstash_maxmemory() -> None:
     """Record the Upstash maxmemory policy for the demo instance (read-only)."""
     record(
         "Upstash maxmemory-policy",
@@ -581,7 +581,7 @@ async def main() -> None:
         await check10_worker_heartbeat_ttl(redis, q)
         await check11_cron_unique(redis, q)
         await check12_sweeper(redis, q)
-        await check_upstash_maxmemory()
+        check_upstash_maxmemory()
     finally:
         await redis.aclose()
 

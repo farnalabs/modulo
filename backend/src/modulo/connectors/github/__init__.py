@@ -466,7 +466,7 @@ class GitHubConnector(ConnectorBase):
     async def _resolve_commit_sha(self, owner_repo: str, ref: str, resource: str) -> str:
         """Resolve a ref (branch/tag/SHA) to a commit SHA via the commits API."""
         commit_r = await self._call_api("GET", f"/repos/{owner_repo}/commits/{ref}")
-        commit_body = await self._parse_json_object(commit_r)
+        commit_body = self._parse_json_object(commit_r)
         commit_sha = commit_body.get("sha")
         if not isinstance(commit_sha, str) or not commit_sha:
             raise ValueError(f"GitHub {resource} could not resolve ref {ref!r} to a commit SHA")
@@ -481,7 +481,7 @@ class GitHubConnector(ConnectorBase):
         ``ValueError`` instead of surfacing a raw decode error.
         """
         r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
-        info = await self._parse_json_object(r)
+        info = self._parse_json_object(r)
         content = info.get("content")
         if not isinstance(content, str):
             raise ValueError(f"GitHub commit write: could not read content of {path!r}")
@@ -501,7 +501,7 @@ class GitHubConnector(ConnectorBase):
             f"/repos/{owner_repo}/git/blobs",
             json={"content": content, "encoding": "utf-8"},
         )
-        blob = await self._parse_json_object(r)
+        blob = self._parse_json_object(r)
         blob_sha = blob.get("sha")
         if not isinstance(blob_sha, str) or not blob_sha:
             raise ValueError("GitHub commit write: blob creation did not return a sha")
@@ -514,7 +514,7 @@ class GitHubConnector(ConnectorBase):
             f"/repos/{owner_repo}/git/trees",
             json={"base_tree": base_sha, "tree": entries},
         )
-        tree = await self._parse_json_object(r)
+        tree = self._parse_json_object(r)
         tree_sha = tree.get("sha")
         if not isinstance(tree_sha, str) or not tree_sha:
             raise ValueError("GitHub commit write: tree creation did not return a sha")
@@ -527,7 +527,7 @@ class GitHubConnector(ConnectorBase):
             f"/repos/{owner_repo}/git/commits",
             json={"message": message, "tree": tree_sha, "parents": [parent_sha]},
         )
-        commit = await self._parse_json_object(r)
+        commit = self._parse_json_object(r)
         commit_sha = commit.get("sha")
         if not isinstance(commit_sha, str) or not commit_sha:
             raise ValueError("GitHub commit write: commit creation did not return a sha")
@@ -737,7 +737,7 @@ class GitHubConnector(ConnectorBase):
         """Compute the exponential backoff delay for a retry attempt (capped)."""
         return backoff_delay(attempt)
 
-    async def _parse_json(self, response: httpx.Response) -> Any:
+    def _parse_json(self, response: httpx.Response) -> Any:
         """Parse JSON response, wrapping decode errors as a typed API error."""
         try:
             return response.json()
@@ -747,8 +747,8 @@ class GitHubConnector(ConnectorBase):
                 error_code="invalid_response",
             ) from exc
 
-    async def _parse_json_object(self, response: httpx.Response) -> dict[str, Any]:
-        return cast("dict[str, Any]", await self._parse_json(response))
+    def _parse_json_object(self, response: httpx.Response) -> dict[str, Any]:
+        return cast("dict[str, Any]", self._parse_json(response))
 
     @staticmethod
     def _parse_scopes_from_headers(response: httpx.Response) -> set[str]:
@@ -845,7 +845,7 @@ class GitHubConnector(ConnectorBase):
             return health_check_failure(self._redactor.redact_exc(exc))
 
         try:
-            user_login = (await self._parse_json(r)).get("login", "")
+            user_login = (self._parse_json(r)).get("login", "")
         except ValueError as exc:
             return health_check_failure(self._redactor.redact_exc(exc))
 
@@ -911,7 +911,7 @@ class GitHubConnector(ConnectorBase):
                 f"/repos/{repo}/pulls/{pr_number}",
                 json={"state": "closed"},
             )
-            await self._parse_json_object(r)
+            self._parse_json_object(r)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -987,7 +987,7 @@ class GitHubConnector(ConnectorBase):
 
     async def _query_repos(self, q: ConnectorQuery) -> ConnectorResult:
         r = await self._call_api("GET", "/user/repos", params={"per_page": q.limit})
-        data: list[dict[str, Any]] = await self._parse_json(r)
+        data: list[dict[str, Any]] = self._parse_json(r)
         return self._paginated_result(data, r)
 
     async def _query_file(self, q: ConnectorQuery) -> ConnectorResult:
@@ -995,7 +995,7 @@ class GitHubConnector(ConnectorBase):
         path = _validate_path(self._require_filter(q.filters, "path", "file"), "file")
         ref = q.filters.get("ref", "main")
         r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
-        info = await self._parse_json_object(r)
+        info = self._parse_json_object(r)
         _decode_read_content(info)
         return self._result([info], r)
 
@@ -1012,7 +1012,7 @@ class GitHubConnector(ConnectorBase):
             f"/repos/{owner_repo}/git/trees/{tree_sha}",
             params=tree_params,
         )
-        body = await self._parse_json_object(tree_r)
+        body = self._parse_json_object(tree_r)
         entries: list[dict[str, Any]] = cast("list[dict[str, Any]]", body.get("tree", []))
         if path_filter is not None:
             path_prefix = path_filter.rstrip("/") + "/"
@@ -1028,7 +1028,7 @@ class GitHubConnector(ConnectorBase):
         if "direction" in q.filters:
             params["direction"] = q.filters["direction"]
         r = await self._call_api("GET", f"/repos/{owner_repo}/pulls", params=params)
-        prs: list[dict[str, Any]] = await self._parse_json(r)
+        prs: list[dict[str, Any]] = self._parse_json(r)
         return self._paginated_result(prs, r)
 
     async def _query_pr_commits(self, q: ConnectorQuery) -> ConnectorResult:
@@ -1039,7 +1039,7 @@ class GitHubConnector(ConnectorBase):
             f"/repos/{owner_repo}/pulls/{pull_number}/commits",
             params={"per_page": q.limit},
         )
-        commits: list[dict[str, Any]] = await self._parse_json(r)
+        commits: list[dict[str, Any]] = self._parse_json(r)
         return self._result(commits, r, total=len(commits))
 
     async def _query_pr_files(self, q: ConnectorQuery) -> ConnectorResult:
@@ -1050,7 +1050,7 @@ class GitHubConnector(ConnectorBase):
             f"/repos/{owner_repo}/pulls/{pull_number}/files",
             params={"per_page": q.limit},
         )
-        files: list[dict[str, Any]] = await self._parse_json(r)
+        files: list[dict[str, Any]] = self._parse_json(r)
         return self._result(files, r, total=len(files))
 
     async def _query_issues(self, q: ConnectorQuery) -> ConnectorResult:
@@ -1060,19 +1060,19 @@ class GitHubConnector(ConnectorBase):
             if key in q.filters:
                 params[key] = q.filters[key]
         r = await self._call_api("GET", f"/repos/{owner_repo}/issues", params=params)
-        issues: list[dict[str, Any]] = await self._parse_json(r)
+        issues: list[dict[str, Any]] = self._parse_json(r)
         return self._paginated_result(issues, r)
 
     async def _query_issue(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "issue")
         issue_number = self._require_filter(q.filters, "issue_number", "issue")
         r = await self._call_api("GET", f"/repos/{owner_repo}/issues/{issue_number}")
-        return self._result([await self._parse_json(r)], r)
+        return self._result([self._parse_json(r)], r)
 
     async def _query_labels(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "labels")
         r = await self._call_api("GET", f"/repos/{owner_repo}/labels", params={"per_page": q.limit})
-        labels: list[dict[str, Any]] = await self._parse_json(r)
+        labels: list[dict[str, Any]] = self._parse_json(r)
         return self._paginated_result(labels, r)
 
     async def _query_milestones(self, q: ConnectorQuery) -> ConnectorResult:
@@ -1085,7 +1085,7 @@ class GitHubConnector(ConnectorBase):
         if "direction" in q.filters:
             params["direction"] = q.filters["direction"]
         r = await self._call_api("GET", f"/repos/{owner_repo}/milestones", params=params)
-        milestones: list[dict[str, Any]] = await self._parse_json(r)
+        milestones: list[dict[str, Any]] = self._parse_json(r)
         return self._paginated_result(milestones, r)
 
     async def _query_issue_comments(self, q: ConnectorQuery) -> ConnectorResult:
@@ -1096,7 +1096,7 @@ class GitHubConnector(ConnectorBase):
             f"/repos/{owner_repo}/issues/{issue_number}/comments",
             params={"per_page": q.limit},
         )
-        comments: list[dict[str, Any]] = await self._parse_json(r)
+        comments: list[dict[str, Any]] = self._parse_json(r)
         return self._paginated_result(comments, r)
 
     async def _query_issue_events(self, q: ConnectorQuery) -> ConnectorResult:
@@ -1107,13 +1107,13 @@ class GitHubConnector(ConnectorBase):
             f"/repos/{owner_repo}/issues/{issue_number}/events",
             params={"per_page": q.limit},
         )
-        events: list[dict[str, Any]] = await self._parse_json(r)
+        events: list[dict[str, Any]] = self._parse_json(r)
         return self._paginated_result(events, r)
 
     async def _query_assignees(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "assignees")
         r = await self._call_api("GET", f"/repos/{owner_repo}/assignees", params={"per_page": q.limit})
-        assignees: list[dict[str, Any]] = await self._parse_json(r)
+        assignees: list[dict[str, Any]] = self._parse_json(r)
         return self._paginated_result(assignees, r)
 
     async def _query_timeline(self, q: ConnectorQuery) -> ConnectorResult:
@@ -1124,7 +1124,7 @@ class GitHubConnector(ConnectorBase):
             f"/repos/{owner_repo}/issues/{issue_number}/timeline",
             params={"per_page": q.limit},
         )
-        timeline: list[dict[str, Any]] = await self._parse_json(r)
+        timeline: list[dict[str, Any]] = self._parse_json(r)
         return self._paginated_result(timeline, r)
 
     async def _query_pr_diff(self, q: ConnectorQuery) -> ConnectorResult:
@@ -1144,14 +1144,14 @@ class GitHubConnector(ConnectorBase):
             if key in q.filters:
                 params[key] = q.filters[key]
         r = await self._call_api("GET", "/search/issues", params=params)
-        body = await self._parse_json_object(r)
+        body = self._parse_json_object(r)
         items = cast("list[dict[str, Any]]", body.get("items", []))
         links = _parse_link_header(r)
         return self._result(items, r, total=_search_total(body), next_cursor=links.get("next"))
 
     async def _query_rate_limit(self, _q: ConnectorQuery) -> ConnectorResult:
         r = await self._call_api("GET", "/rate_limit")
-        body = await self._parse_json_object(r)
+        body = self._parse_json_object(r)
         resources = cast("dict[str, Any]", body.get("resources", {}))
         return self._result([resources], r, total=1)
 
@@ -1200,7 +1200,7 @@ class GitHubConnector(ConnectorBase):
             json=body,
             headers=headers,
         )
-        return await self._parse_json_object(r)
+        return self._parse_json_object(r)
 
     @redacting
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
@@ -1306,7 +1306,7 @@ class GitHubConnector(ConnectorBase):
         tree_sha = await self._create_tree(owner_repo, base_sha, tree_entries)
         commit_sha = await self._create_commit(owner_repo, message, tree_sha, base_sha)
         ref_response = await self._update_ref(owner_repo, ref, commit_sha)
-        return await self._parse_json_object(ref_response)
+        return self._parse_json_object(ref_response)
 
     async def _build_tree_entries(
         self,
@@ -1356,7 +1356,7 @@ class GitHubConnector(ConnectorBase):
         if "sha" in payload.data:
             body["sha"] = payload.data["sha"]
         r = await self._call_api("PUT", f"/repos/{owner_repo}/contents/{path}", json=body)
-        return await self._parse_json_object(r)
+        return self._parse_json_object(r)
 
     async def _write_issue(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "issue")
@@ -1366,7 +1366,7 @@ class GitHubConnector(ConnectorBase):
             ("body", "labels", "assignees", "milestone"),
         )
         r = await self._call_api("POST", f"/repos/{owner_repo}/issues", json=issue_body)
-        return await self._parse_json_object(r)
+        return self._parse_json_object(r)
 
     async def _write_issue_update(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "issue_update")
@@ -1376,7 +1376,7 @@ class GitHubConnector(ConnectorBase):
             if key in payload.data:
                 update_body[key] = payload.data[key]
         r = await self._call_api("PATCH", f"/repos/{owner_repo}/issues/{issue_number}", json=update_body)
-        return await self._parse_json_object(r)
+        return self._parse_json_object(r)
 
     async def _write_issue_comment(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "issue_comment")
@@ -1416,13 +1416,13 @@ class GitHubConnector(ConnectorBase):
         owner_repo = self._require_write_filter(payload.data, "repo", "label")
         label_body = self._write_body(payload.data, {"name": "label", "color": "label"}, ("description",))
         r = await self._call_api("POST", f"/repos/{owner_repo}/labels", json=label_body)
-        return await self._parse_json_object(r)
+        return self._parse_json_object(r)
 
     async def _write_milestone(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "milestone")
         milestone_body = self._write_body(payload.data, {"title": "milestone"}, ("description", "due_on"))
         r = await self._call_api("POST", f"/repos/{owner_repo}/milestones", json=milestone_body)
-        return await self._parse_json_object(r)
+        return self._parse_json_object(r)
 
     async def _write_pr(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "pr")
@@ -1432,7 +1432,7 @@ class GitHubConnector(ConnectorBase):
             ("body", "draft", "maintainer_can_modify"),
         )
         r = await self._call_api("POST", f"/repos/{owner_repo}/pulls", json=pr_body)
-        return await self._parse_json_object(r)
+        return self._parse_json_object(r)
 
     async def _write_pr_review(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "pr_review")
@@ -1473,7 +1473,7 @@ class GitHubConnector(ConnectorBase):
             if key in payload.data:
                 update[key] = payload.data[key]
         r = await self._call_api("PATCH", f"/repos/{owner_repo}/pulls/{pull_number}", json=update)
-        return await self._parse_json_object(r)
+        return self._parse_json_object(r)
 
     async def _write_pr_merge(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "pr_merge")
@@ -1483,7 +1483,7 @@ class GitHubConnector(ConnectorBase):
             if key in payload.data:
                 merge_body[key] = payload.data[key]
         r = await self._call_api("PUT", f"/repos/{owner_repo}/pulls/{pull_number}/merge", json=merge_body)
-        return await self._parse_json_object(r)
+        return self._parse_json_object(r)
 
     async def _write_pr_review_request(self, payload: ConnectorPayload) -> dict[str, Any]:
         owner_repo = self._require_write_filter(payload.data, "repo", "pr_review_request")

@@ -144,7 +144,7 @@ class SlackConnector(ConnectorBase):
             return SlackAuthError(detail)
         return SlackNetworkError(detail)
 
-    async def _parse_json(self, response: httpx.Response) -> Any:
+    def _parse_json(self, response: httpx.Response) -> Any:
         try:
             return response.json()
         except json.JSONDecodeError as exc:
@@ -152,7 +152,7 @@ class SlackConnector(ConnectorBase):
 
     async def verify_scopes(self) -> dict[str, Any]:
         r = await self._call_api("GET", "/auth.test")
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         if not body.get("ok"):
             raise SlackAuthError(f"Token validation failed: {body.get('error', 'unknown')}")
         return cast("dict[str, Any]", body)
@@ -163,7 +163,7 @@ class SlackConnector(ConnectorBase):
             "/conversations.list",
             params={"limit": 1, "types": "public_channel,private_channel"},
         )
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "conversations.list")
         return bool(body.get("channels"))
 
@@ -171,7 +171,7 @@ class SlackConnector(ConnectorBase):
     async def health_check(self) -> HealthResult:
         try:
             r = await self._call_api("GET", "/api.test", timeout=10)
-            body = await self._parse_json(r)
+            body = self._parse_json(r)
             if not body.get("ok"):
                 return HealthResult(ok=False, detail=self._redactor.redact(body.get("error", "unknown")))
             try:
@@ -260,7 +260,7 @@ class SlackConnector(ConnectorBase):
         if q.cursor:
             params["cursor"] = q.cursor
         r = await self._call_api("GET", "/conversations.list", params=params)
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "conversations.list")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
@@ -282,7 +282,7 @@ class SlackConnector(ConnectorBase):
         if q.cursor:
             params["cursor"] = q.cursor
         r = await self._call_api("GET", "/conversations.history", params=params)
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "conversations.history")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
@@ -295,7 +295,7 @@ class SlackConnector(ConnectorBase):
         if q.cursor:
             params["cursor"] = q.cursor
         r = await self._call_api("GET", "/users.list", params=params)
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "users.list")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
@@ -309,7 +309,7 @@ class SlackConnector(ConnectorBase):
         channel = data["channel"]
         body_data = {k: v for k, v in data.items() if k != "channel"}
         r = await self._call_api("POST", "/chat.postMessage", json={"channel": channel, **body_data})
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "chat.postMessage")
         return body
 
@@ -318,7 +318,7 @@ class SlackConnector(ConnectorBase):
             raise ValueError("Slack channel_info query requires 'channel' filter")
         channel = q.filters["channel"]
         r = await self._call_api("GET", "/conversations.info", params={"channel": channel})
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "conversations.info")
         return ConnectorResult(records=[body.get("channel", {})])
 
@@ -330,7 +330,7 @@ class SlackConnector(ConnectorBase):
         if q.cursor:
             params["cursor"] = q.cursor
         r = await self._call_api("GET", "/conversations.members", params=params)
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "conversations.members")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
@@ -353,7 +353,7 @@ class SlackConnector(ConnectorBase):
         if q.cursor:
             params["cursor"] = q.cursor
         r = await self._call_api("GET", "/conversations.replies", params=params)
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "conversations.replies")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
@@ -374,7 +374,7 @@ class SlackConnector(ConnectorBase):
             "/chat.postMessage",
             json={"channel": channel, "thread_ts": thread_ts, **body_data},
         )
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "chat.postMessage (thread)")
         return body
 
@@ -383,7 +383,7 @@ class SlackConnector(ConnectorBase):
             raise ValueError("Slack user_presence query requires 'user' filter")
         user = q.filters["user"]
         r = await self._call_api("GET", "/users.getPresence", params={"user": user})
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "users.getPresence")
         return ConnectorResult(records=[{"user": user, **{k: v for k, v in body.items() if k != "ok"}}])
 
@@ -395,7 +395,7 @@ class SlackConnector(ConnectorBase):
         if q.filters.get("include_labels"):
             params["include_labels"] = q.filters["include_labels"]
         r = await self._call_api("GET", "/users.profile.get", params=params)
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "users.profile.get")
         return ConnectorResult(records=[{"user": user, **{k: v for k, v in body.items() if k != "ok"}}])
 
@@ -404,7 +404,7 @@ class SlackConnector(ConnectorBase):
             raise ValueError("Slack user_lookup query requires 'email' filter")
         email = q.filters["email"]
         r = await self._call_api("GET", "/users.lookupByEmail", params={"email": email})
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "users.lookupByEmail")
         return ConnectorResult(records=[body.get("user", {})])
 
@@ -421,7 +421,7 @@ class SlackConnector(ConnectorBase):
             "/chat.postEphemeral",
             json={"channel": channel, "user": user, **body_data},
         )
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "chat.postEphemeral")
         return body
 
@@ -438,7 +438,7 @@ class SlackConnector(ConnectorBase):
             "/chat.update",
             json={"channel": channel, "ts": ts, **body_data},
         )
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "chat.update")
         return body
 
@@ -455,7 +455,7 @@ class SlackConnector(ConnectorBase):
             "/chat.delete",
             json={"channel": channel, "ts": ts, **body_data},
         )
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "chat.delete")
         return body
 
@@ -472,7 +472,7 @@ class SlackConnector(ConnectorBase):
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"Slack message_search cursor must be a numeric page, got {q.cursor!r}") from exc
         r = await self._call_api("GET", "/search.messages", params=params)
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "search.messages")
         search = body.get("messages") or {}
         paging = search.get("paging") or {}
@@ -491,7 +491,7 @@ class SlackConnector(ConnectorBase):
         if q.cursor:
             params["cursor"] = q.cursor
         r = await self._call_api("GET", "/chat.scheduledMessages.list", params=params)
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         _check_slack_ok(body, "chat.scheduledMessages.list")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
@@ -511,7 +511,7 @@ class SlackConnector(ConnectorBase):
             "/chat.deleteScheduledMessage",
             json={"channel": channel, "scheduled_message_id": scheduled_message_id},
         )
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "chat.deleteScheduledMessage")
         return body
 
@@ -528,7 +528,7 @@ class SlackConnector(ConnectorBase):
             "/chat.scheduleMessage",
             json={"channel": channel, "post_at": post_at, **body_data},
         )
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "chat.scheduleMessage")
         return body
 
@@ -550,7 +550,7 @@ class SlackConnector(ConnectorBase):
             files = {"file": (filename, raw, "application/octet-stream")}
         form_data = {k: v for k, v in data.items() if k not in ("filename", "content", "file")}
         r = await self._call_api("POST", "/files.upload", files=files, data=form_data)
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "files.upload")
         return body
 
@@ -560,7 +560,7 @@ class SlackConnector(ConnectorBase):
         channel = data["channel"]
         body_data = {k: v for k, v in data.items() if k != "channel"}
         r = await self._call_api("POST", "/conversations.join", json={"channel": channel, **body_data})
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "conversations.join")
         return body
 
@@ -569,7 +569,7 @@ class SlackConnector(ConnectorBase):
             raise ValueError("Missing 'channel' in channel_leave payload")
         channel = data["channel"]
         r = await self._call_api("POST", "/conversations.leave", json={"channel": channel})
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "conversations.leave")
         return body
 
@@ -578,7 +578,7 @@ class SlackConnector(ConnectorBase):
             raise ValueError("Missing 'channel' in channel_archive payload")
         channel = data["channel"]
         r = await self._call_api("POST", "/conversations.archive", json={"channel": channel})
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "conversations.archive")
         return body
 
@@ -587,6 +587,6 @@ class SlackConnector(ConnectorBase):
             raise ValueError("Missing 'channel' in channel_unarchive payload")
         channel = data["channel"]
         r = await self._call_api("POST", "/conversations.unarchive", json={"channel": channel})
-        body: dict[str, Any] = await self._parse_json(r)
+        body: dict[str, Any] = self._parse_json(r)
         _check_slack_ok(body, "conversations.unarchive")
         return body
