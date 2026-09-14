@@ -1,8 +1,8 @@
 """Unit tests for the changed-lines coverage gate (scripts/run_coverage_gate.py).
 
-Tests the pure decision logic of the ``evaluate`` function: skip cases
-(missing report, no changed coverable lines), pass, and fail.  The actual
-diff-cover invocation is mocked so the tests are fast and offline.
+Tests the pure decision logic of the ``evaluate`` function: fail-closed on
+missing reports, skip on no-changed-lines, pass/fail on threshold.  The
+actual diff-cover invocation is mocked so the tests are fast and offline.
 """
 
 from __future__ import annotations
@@ -27,14 +27,43 @@ _loader.exec_module(mod)
 
 
 # ---------------------------------------------------------------------------
-# Missing-report skip
+# Missing report — fail-closed (the default, CI behaviour)
 # ---------------------------------------------------------------------------
-def test_evaluate_missing_report_skips():
+def test_evaluate_missing_report_fails_closed():
     result = mod.evaluate(
         language="Python",
         report_path=None,
         compare_branch="origin/main",
         fail_under=90,
+    )
+    assert result.skipped is False
+    assert result.passed is False
+    assert result.actual_pct is None
+    assert "missing coverage report" in result.skip_reason.lower()
+
+
+def test_evaluate_nonexistent_report_file_fails_closed(tmp_path):
+    result = mod.evaluate(
+        language="JavaScript",
+        report_path=tmp_path / "nonexistent" / "lcov.info",
+        compare_branch="origin/main",
+        fail_under=90,
+    )
+    assert result.skipped is False
+    assert result.passed is False
+    assert "missing coverage report" in result.skip_reason.lower()
+
+
+# ---------------------------------------------------------------------------
+# Missing report — allow-missing (local convenience)
+# ---------------------------------------------------------------------------
+def test_evaluate_missing_report_allow_missing_skips():
+    result = mod.evaluate(
+        language="Python",
+        report_path=None,
+        compare_branch="origin/main",
+        fail_under=90,
+        allow_missing=True,
     )
     assert result.skipped is True
     assert result.passed is True
@@ -42,12 +71,13 @@ def test_evaluate_missing_report_skips():
     assert "no coverage report found" in result.skip_reason.lower()
 
 
-def test_evaluate_nonexistent_report_file_skips(tmp_path):
+def test_evaluate_nonexistent_report_allow_missing_skips(tmp_path):
     result = mod.evaluate(
         language="JavaScript",
         report_path=tmp_path / "nonexistent" / "lcov.info",
         compare_branch="origin/main",
         fail_under=90,
+        allow_missing=True,
     )
     assert result.skipped is True
     assert result.passed is True
@@ -55,7 +85,7 @@ def test_evaluate_nonexistent_report_file_skips(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# No changed coverable lines
+# No changed coverable lines — still skips
 # ---------------------------------------------------------------------------
 def test_evaluate_no_changed_lines_skips(tmp_path):
     fake_report = tmp_path / "coverage.xml"

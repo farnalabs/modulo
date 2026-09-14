@@ -10,17 +10,23 @@ ourselves in CI via this script.
 The script runs ``diff-cover`` against the backend Cobertura XML report and
 the frontend LCOV report *separately*, using ``--compare-branch`` to diff
 against the PR's base branch.  It prints a clear summary per language and
-exits non-zero only when a real threshold breach occurs.
+exits non-zero when a threshold is breached or a required report is missing.
 
-Skips gracefully (exit 0) when:
-- A report file is absent (e.g. backend-only PR has no LCOV).
-- There are no changed coverable lines (e.g. docs-only or test-only PRs
-  where diff-cover reports "No lines with coverage information in this diff").
+Gate semantics (fail-closed):
+- **Report file missing** → ERROR, exit 1.  A missing report means the
+  upstream job that produces it failed or its artifact download broke.
+  Fail-closed so a broken pipeline never silently disables the gate.
+  Use ``--allow-missing-reports`` for local runs where you may not have
+  every report.
+- **No changed coverable lines** → SKIP, exit 0.  This is the legitimate
+  test-only / docs-only case where diff-cover reports "No lines with
+  coverage information in this diff".
+- **Threshold breach** → FAIL, exit 1.
 
 Usage (local)::
 
     uv run --project backend python scripts/run_coverage_gate.py \\
-        --compare-branch origin/main
+        --compare-branch origin/main --allow-missing-reports
 
 Usage (CI)::
 
@@ -67,7 +73,9 @@ class GateResult:
             return f"[{self.language}] SKIPPED — {self.skip_reason}"
         if self.passed:
             return f"[{self.language}] PASS — {self.actual_pct:.1f}% >= {self.threshold}%"
-        return f"[{self.language}] FAIL — {self.actual_pct:.1f}% < {self.threshold}%"
+        if self.actual_pct is not None:
+            return f"[{self.language}] FAIL — {self.actual_pct:.1f}% < {self.threshold}%"
+        return f"[{self.language}] FAIL — {self.skip_reason}"
 
 
 def _run_diff_cover(
@@ -75,11 +83,22 @@ def _run_diff_cover(
     compare_branch: str,
     fail_under: int,
 ) -> tuple[int, str]:
-    """Run ``diff-cover`` and return (exit_code, combined_output)."""
+    """Run ``diff-cover`` and return (exit_code, combined_output).
+
+    Uses the ``diff-cover`` CLI entry point from the same venv as the current
+    Python (``sys.executable``'s sibling), not ``python -m diff_cover``
+    (diff-cover is a console_scripts package without ``__main__``).
+    """
+    # diff-cover is installed as a console_scripts entry point.  Locate it
+    # next to the current Python interpreter (inside the venv's Scripts/ or
+    # bin/ directory).
+    exe_dir = Path(sys.executable).parent
+    diff_cover_bin = exe_dir / "diff-cover"
+    if sys.platform == "win32":
+        diff_cover_bin = exe_dir / "diff-cover.exe"
+
     cmd = [
-        sys.executable,
-        "-m",
-        "diff_cover",
+        str(diff_cover_bin),
         str(report_path),
         f"--compare-branch={compare_branch}",
         f"--fail-under={fail_under}",
@@ -103,22 +122,38 @@ def evaluate(
     report_path: Path | None,
     compare_branch: str,
     fail_under: int,
+    *,
+    allow_missing: bool = False,
 ) -> GateResult:
-    """Evaluate one language's changed-lines coverage."""
-    # --- Missing report → skip ---
+    """Evaluate one language's changed-lines coverage.
+
+    When *allow_missing* is False (the CI default), a missing or unreadable
+    report is a gate failure — the upstream job or artifact download broke.
+    When True (local convenience), a missing report is a skip.
+    """
+    # --- Missing report ---
     if report_path is None or not report_path.exists():
+        if allow_missing:
+            return GateResult(
+                language=language,
+                skipped=True,
+                skip_reason=f"no coverage report found at {report_path} (allow-missing)",
+                passed=True,
+                actual_pct=None,
+                threshold=fail_under,
+            )
         return GateResult(
             language=language,
-            skipped=True,
-            skip_reason=f"no coverage report found at {report_path}",
-            passed=True,
+            skipped=False,
+            skip_reason=f"missing coverage report: {report_path}",
+            passed=False,
             actual_pct=None,
             threshold=fail_under,
         )
 
-    rc, output = _run_diff_cover(report_path, compare_branch, fail_under)
+    rc, output = _run_diff_cover(report_path.resolve(), compare_branch, fail_under)
 
-    # --- No changed coverable lines → skip ---
+    # --- No changed coverable lines → skip (legitimate test/docs-only PR) ---
     if _NO_CHANGED_LINES_RE.search(output):
         return GateResult(
             language=language,
@@ -145,15 +180,24 @@ def evaluate(
     elif rc != 0 and _THRESHOLD_NOT_MET_RE.search(output):
         passed = False
     elif rc != 0:
-        # Non-zero for a reason other than threshold — treat as failure
+        # Non-zero for a reason other than threshold — tool error or
+        # malformed report.  Capture the last non-empty line as the reason.
         passed = False
+        error_lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
+        reason = error_lines[-1] if error_lines else "diff-cover returned non-zero"
     else:
         passed = actual_pct is not None and actual_pct >= fail_under
+        reason = ""
+
+    if not passed and rc != 0 and not _THRESHOLD_NOT_MET_RE.search(output):
+        pass  # reason already set above
+    else:
+        reason = ""
 
     return GateResult(
         language=language,
         skipped=False,
-        skip_reason="",
+        skip_reason=reason,
         passed=passed,
         actual_pct=actual_pct,
         threshold=fail_under,
@@ -187,6 +231,12 @@ def main() -> int:
         default=None,
         help="Path to the frontend LCOV coverage report.",
     )
+    parser.add_argument(
+        "--allow-missing-reports",
+        action="store_true",
+        default=False,
+        help="Exit 0 when a report file is missing (for local use only; CI must NOT pass this).",
+    )
     args = parser.parse_args()
 
     # Resolve default report paths relative to the repo root
@@ -201,30 +251,45 @@ def main() -> int:
     results: list[GateResult] = []
 
     if python_report is not None:
-        results.append(evaluate("Python", python_report, args.compare_branch, args.fail_under))
-    else:
         results.append(
-            GateResult(
-                language="Python",
-                skipped=True,
-                skip_reason="no backend coverage report (coverage.xml) found",
-                passed=True,
-                actual_pct=None,
-                threshold=args.fail_under,
+            evaluate(
+                "Python",
+                python_report,
+                args.compare_branch,
+                args.fail_under,
+                allow_missing=args.allow_missing_reports,
+            )
+        )
+    else:
+        # No report path resolved at all (neither explicit nor default)
+        results.append(
+            evaluate(
+                "Python",
+                None,
+                args.compare_branch,
+                args.fail_under,
+                allow_missing=args.allow_missing_reports,
             )
         )
 
     if js_report is not None:
-        results.append(evaluate("JavaScript", js_report, args.compare_branch, args.fail_under))
+        results.append(
+            evaluate(
+                "JavaScript",
+                js_report,
+                args.compare_branch,
+                args.fail_under,
+                allow_missing=args.allow_missing_reports,
+            )
+        )
     else:
         results.append(
-            GateResult(
-                language="JavaScript",
-                skipped=True,
-                skip_reason="no frontend coverage report (lcov.info) found",
-                passed=True,
-                actual_pct=None,
-                threshold=args.fail_under,
+            evaluate(
+                "JavaScript",
+                None,
+                args.compare_branch,
+                args.fail_under,
+                allow_missing=args.allow_missing_reports,
             )
         )
 
@@ -242,7 +307,7 @@ def main() -> int:
         return 0
 
     if any_failed:
-        print("FAILED: one or more languages did not meet the coverage threshold.")
+        print("FAILED: one or more languages did not meet the coverage threshold or are missing reports.")
         return 1
 
     print("PASSED: all languages met the coverage threshold.")

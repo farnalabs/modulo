@@ -505,9 +505,9 @@ jobs:
         run: |
           uv sync --frozen
           uv run --no-build --no-sync python ../scripts/run_coverage_gate.py \
-            --compare-branch "origin/${{ github.base_ref }}" \
-            --python-report backend/coverage.xml \
-            --js-report frontend/coverage/lcov.info
+            --compare-branch "origin/${{ github.base_ref || 'main' }}" \
+            --python-report coverage.xml \
+            --js-report ../frontend/coverage/lcov.info
 
   schema-freshness:
     # Regenerates frontend/src/lib/api/schema.ts from the backend's OpenAPI and
