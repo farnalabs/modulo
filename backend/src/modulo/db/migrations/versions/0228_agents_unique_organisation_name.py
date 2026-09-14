@@ -71,9 +71,12 @@ def upgrade() -> None:
     # the ORM UniqueConstraint.  Runs inside the migration transaction (brief
     # ACCESS EXCLUSIVE lock + table scan); the duplicate pre-check above fails loud
     # if any legacy (organisation_id, name) duplicates exist.
-    op.execute(
-        text(f"ALTER TABLE {_TABLE} ADD CONSTRAINT IF NOT EXISTS {_CONSTRAINT_NAME} UNIQUE ({', '.join(_COLUMNS)})")
-    )
+    #
+    # NOTE: PostgreSQL does NOT support ``ADD CONSTRAINT IF NOT EXISTS`` (that clause
+    # only exists for ``CREATE INDEX`` / ``CREATE TABLE`` and ``DROP CONSTRAINT IF
+    # EXISTS``).  Alembic applies each revision exactly once, so the guard is
+    # unnecessary as well as invalid syntax.
+    op.execute(text(f"ALTER TABLE {_TABLE} ADD CONSTRAINT {_CONSTRAINT_NAME} UNIQUE ({', '.join(_COLUMNS)})"))
 
 
 def downgrade() -> None:
