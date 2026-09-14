@@ -503,7 +503,13 @@ jobs:
       - name: Run changed-lines coverage gate
         working-directory: backend
         run: |
-          uv sync --frozen --no-build
+          # Full sync (no `--no-build`): the dev environment pins `pytest-bdd`
+          # to a git archive and `ibm-cos-sdk` is sdist-only on PyPI, so both
+          # require a source build that `--no-build` forbids (the coverage-gate
+          # job then fails to provision the venv with exit 2). The gate only
+          # needs `diff-cover`, but a full sync is the smallest correct fix and
+          # matches how the passing `backend-test` job provisions its venv.
+          uv sync --frozen
           # Run the gate with the freshly-synced backend venv's Python directly
           # (rather than `uv run python <script>`), so no `uv run` setup-script
           # path is exercised and the script finds diff-cover next to this
