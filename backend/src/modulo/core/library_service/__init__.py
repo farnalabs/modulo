@@ -293,7 +293,13 @@ async def get_primitive(
         return result.scalar_one_or_none()
 
     try:
-        item = await _scoped_execute(session, org_id, _lookup)
+        # Default path: reuse get_library_primitive (RLS-scoped). Only use the
+        # inline lookup with an explicit organisation_id filter when one is
+        # supplied — needed on connections whose role bypasses RLS.
+        if organisation_id is None:
+            item = await _scoped_execute(session, org_id, lambda s: get_library_primitive(s, primitive_id))
+        else:
+            item = await _scoped_execute(session, org_id, _lookup)
     except ProgrammingError:
         logger.warning("get_primitive — DB not migrated or table missing for %s", primitive_id)
         return None
