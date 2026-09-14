@@ -119,8 +119,7 @@ def _collect_merge_parent_revisions(files: list[str]) -> tuple[set[str], dict[st
                     block += lines[i] + "\n"
                     if ")" in lines[i]:
                         break
-                for quoted in re.findall(r"\"([^\"]+)\"", block):
-                    merge_parent_revisions.add(quoted)
+                merge_parent_revisions.update(re.findall(r"\"([^\"]+)\"", block))
     return merge_parent_revisions, file_revisions
 
 

@@ -20,7 +20,7 @@ class Finding:
     """A single finding about the SDLC."""
 
     category: str
-    finding: str
+    description: str
     evidence: str
     confidence: str
     uncertainty: str = ""
@@ -131,7 +131,7 @@ def _find_planning_stage(data: _InferenceData) -> list[Finding]:
     return [
         Finding(
             category="stage",
-            finding="Planning stage detected: issues in backlog/todo statuses exist",
+            description="Planning stage detected: issues in backlog/todo statuses exist",
             evidence=f"{planning_count} issues in planning statuses",
             confidence="high",
             uncertainty="Status taxonomy varies by tool; mapped via common aliases",
@@ -146,7 +146,7 @@ def _find_code_review(data: _InferenceData) -> list[Finding]:
     return [
         Finding(
             category="stage",
-            finding="Code review stage detected: open pull/merge requests found",
+            description="Code review stage detected: open pull/merge requests found",
             evidence=f"{len(data.pull_requests)} open PRs/MRs across repos",
             confidence="high",
         )
@@ -161,7 +161,7 @@ def _find_development(data: _InferenceData) -> list[Finding]:
     return [
         Finding(
             category="stage",
-            finding="Development stage detected: source repositories found",
+            description="Development stage detected: source repositories found",
             evidence=f"{len(data.repo_names)} {repo_label} accessible",
             confidence="high",
         )
@@ -174,7 +174,7 @@ def _find_ci(data: _InferenceData) -> list[Finding]:
         return [
             Finding(
                 category="automation",
-                finding="CI/CD configuration detected in repository metadata",
+                description="CI/CD configuration detected in repository metadata",
                 evidence="Repository metadata references CI tooling (GitHub Actions, GitLab CI, Jenkins, CircleCI)",
                 confidence="medium",
                 uncertainty="Cannot verify CI is actively running; only config references were checked",
@@ -183,7 +183,7 @@ def _find_ci(data: _InferenceData) -> list[Finding]:
     return [
         Finding(
             category="automation",
-            finding="No CI/CD configuration detected in sampled repo metadata",
+            description="No CI/CD configuration detected in sampled repo metadata",
             evidence="Sampled repo metadata does not reference known CI tooling",
             confidence="low",
             uncertainty="CI config may exist in files not sampled; only repo metadata was scanned",
@@ -203,7 +203,9 @@ def _find_stale_prs(data: _InferenceData) -> list[Finding]:
         return [
             Finding(
                 category="bottleneck",
-                finding=f"Potential review bottleneck: {data.stale_pr_count} PRs/MRs open for >5 days without merge",
+                description=(
+                    f"Potential review bottleneck: {data.stale_pr_count} PRs/MRs open for >5 days without merge"
+                ),
                 evidence=evidence_detail,
                 confidence="medium",
                 uncertainty="Cannot determine if PRs are waiting for review "
@@ -213,7 +215,7 @@ def _find_stale_prs(data: _InferenceData) -> list[Finding]:
     return [
         Finding(
             category="bottleneck",
-            finding="No stale PRs detected — all sampled PRs/MRs are recent",
+            description="No stale PRs detected — all sampled PRs/MRs are recent",
             evidence=evidence_detail,
             confidence="low",
             uncertainty="Small sample may miss long-lived PRs on other branches or repos",
@@ -235,7 +237,7 @@ def _find_issue_lifecycle(data: _InferenceData) -> list[Finding]:
     return [
         Finding(
             category="transition",
-            finding=f"Issue lifecycle observed: {transitions}",
+            description=f"Issue lifecycle observed: {transitions}",
             evidence=f"Issue statuses found: {dict(status_counts)}",
             confidence="medium",
             uncertainty="Cannot infer transition order or speed from a single scan; "
@@ -260,7 +262,7 @@ def _find_overview(data: _InferenceData) -> list[Finding]:
         return [
             Finding(
                 category="overview",
-                finding=f"SDLC stages detected: {', '.join(stages_found)}",
+                description=f"SDLC stages detected: {', '.join(stages_found)}",
                 evidence=f"Out of 5 common stages (planning, development, "
                 f"code review, ci/cd, deployment), {len(stages_found)} "
                 f"{'was' if len(stages_found) == 1 else 'were'} detected",
@@ -273,7 +275,7 @@ def _find_overview(data: _InferenceData) -> list[Finding]:
     return [
         Finding(
             category="overview",
-            finding="No SDLC stages could be detected from connected tools",
+            description="No SDLC stages could be detected from connected tools",
             evidence="No connector produced stage-identifying records",
             confidence="low",
             uncertainty="Connectors may not be configured, or sampled data may not contain stage metadata",
