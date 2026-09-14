@@ -142,4 +142,35 @@ describe('AdminViewsView', () => {
     const postCall = fetchCalls.find((c: any[]) => c[1]?.method === 'POST' || !c[1]?.method)
     expect(postCall).toBeDefined()
   })
+
+  it('openEditForm serializes object and string filters into the form', async () => {
+    const wrapper = mount(AdminViewsView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' }, LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
+      },
+    })
+    await flush()
+    const vm = wrapper.vm as Record<string, any>
+    vm.openEditForm({
+      id: 'v-obj',
+      name: 'Object Filter View',
+      view_type: 'table',
+      filters: { status: 'active' },
+      columns: ['name'],
+      sort_by: 'created_at',
+      sort_order: 'desc',
+    } as any)
+    expect(vm.form.filters).toContain('status')
+    expect(vm.form.filters).toContain('active')
+    vm.openEditForm({
+      id: 'v-str',
+      name: 'String Filter View',
+      view_type: 'table',
+      filters: 'status=active',
+      columns: ['name'],
+      sort_by: 'created_at',
+      sort_order: 'desc',
+    } as any)
+    expect(vm.form.filters).toBe('status=active')
+  })
 })
