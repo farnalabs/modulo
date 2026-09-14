@@ -84,7 +84,7 @@ def validate_rate_fallback(rate_fallback: str | None) -> None:
 
 
 def _referenced_idents(formula: str) -> set[str]:
-    return set(_re.findall(r"[A-Za-z_][A-Za-z0-9_]*", formula))
+    return set(_re.findall(r"[A-Za-z_]\w*", formula, _re.ASCII))
 
 
 def validate_component_formula(

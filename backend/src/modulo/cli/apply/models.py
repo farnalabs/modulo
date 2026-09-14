@@ -37,7 +37,7 @@ def quantize_daily_spend_limit(value: float | None) -> float | None:
 
 
 # \Z (not $) so a trailing-newline variant ("${env:VAR}\n") fails to match.
-ENV_REF_PATTERN = re.compile(r"\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}\Z")
+ENV_REF_PATTERN = re.compile(r"\$\{env:([A-Za-z_]\w*)\}\Z", re.ASCII)
 SECRET_REF_PATTERN = re.compile(r"secretref://\S+\Z")
 
 

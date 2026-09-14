@@ -54,14 +54,14 @@ _TOKEN_RE = re.compile(
                                              #   unexpected_character, no silent juxtaposition)
     (?:
         (?P<number>\d+(?:\.\d+)?|\.\d+) |
-        (?P<ident>[A-Za-z_][A-Za-z0-9_]*) |
+        (?P<ident>[A-Za-z_]\w*) |
         (?P<op>[+\-*/]) |
         (?P<lparen>\() |
         (?P<rparen>\)) |
         (?P<bad>.)
     )
     """,
-    re.VERBOSE,
+    re.VERBOSE | re.ASCII,
 )
 
 

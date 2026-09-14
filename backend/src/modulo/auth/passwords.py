@@ -61,7 +61,7 @@ def password_entropy_bits(password: str) -> float:
         pool_size += 26
     if re.search(r"[A-Z]", password):
         pool_size += 26
-    if re.search(r"[0-9]", password):
+    if re.search(r"\d", password, re.ASCII):
         pool_size += 10
     if re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\/~`]', password):
         pool_size += 32
