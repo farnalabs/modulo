@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -358,3 +359,580 @@ class TestCompositeOperatorFloor:
             json={},
         )
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# DB error handlers (ProgrammingError → 501, SQLAlchemyError → 503,
+# generic → 500) for every endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestDBErrorHandlers:
+    """Cover the except-ProgrammingError / except-SQLAlchemyError / except-Exception
+    branches in every composite-templates endpoint."""
+
+    def test_list_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+        ):
+            resp = client.get("/api/v1/composite-templates")
+        assert resp.status_code == 501
+
+    def test_list_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("connection lost"),
+        ):
+            resp = client.get("/api/v1/composite-templates")
+        assert resp.status_code == 503
+
+    def test_list_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.get("/api/v1/composite-templates")
+        assert resp.status_code == 500
+
+    def test_create_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+        ):
+            resp = client.post(
+                "/api/v1/composite-templates",
+                json={"name": "X", "sub_pipeline_graph_json": {}, "parameter_ports_json": []},
+            )
+        assert resp.status_code == 501
+
+    def test_create_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.post(
+                "/api/v1/composite-templates",
+                json={"name": "X", "sub_pipeline_graph_json": {}, "parameter_ports_json": []},
+            )
+        assert resp.status_code == 503
+
+    def test_create_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.post(
+                "/api/v1/composite-templates",
+                json={"name": "X", "sub_pipeline_graph_json": {}, "parameter_ports_json": []},
+            )
+        assert resp.status_code == 500
+
+    def test_get_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+        ):
+            resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
+        assert resp.status_code == 501
+
+    def test_get_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
+        assert resp.status_code == 503
+
+    def test_get_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
+        assert resp.status_code == 500
+
+    def test_update_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+        ):
+            resp = client.patch(f"/api/v1/composite-templates/{_TEMPLATE_ID}", json={"name": "X"})
+        assert resp.status_code == 501
+
+    def test_update_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.patch(f"/api/v1/composite-templates/{_TEMPLATE_ID}", json={"name": "X"})
+        assert resp.status_code == 503
+
+    def test_update_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.patch(f"/api/v1/composite-templates/{_TEMPLATE_ID}", json={"name": "X"})
+        assert resp.status_code == 500
+
+    def test_delete_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+        ):
+            resp = client.delete(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
+        assert resp.status_code == 501
+
+    def test_delete_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.delete(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
+        assert resp.status_code == 503
+
+    def test_delete_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.delete(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
+        assert resp.status_code == 500
+
+    def test_restore_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+        ):
+            resp = client.post(f"/api/v1/composite-templates/{_TEMPLATE_ID}/restore")
+        assert resp.status_code == 501
+
+    def test_restore_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.post(f"/api/v1/composite-templates/{_TEMPLATE_ID}/restore")
+        assert resp.status_code == 503
+
+    def test_restore_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("kaboom"),
+        ):
+            resp = client.post(f"/api/v1/composite-templates/{_TEMPLATE_ID}/restore")
+        assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Editor GET / PUT endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestCompositeEditor:
+    """Cover the GET /{template_id}/editor and PUT /{template_id}/editor endpoints."""
+
+    def test_get_editor_returns_nodes_and_edges(self, client: TestClient) -> None:
+        graph = {"nodes": [{"id": "n1"}], "edges": [{"source": "n1", "target": "n2"}]}
+        template = _make_template(sub_pipeline_graph_json=graph)
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["nodes"] == [{"id": "n1"}]
+        assert len(body["edges"]) == 1
+
+    def test_get_editor_empty_graph(self, client: TestClient) -> None:
+        template = _make_template(sub_pipeline_graph_json={})
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor")
+        assert resp.status_code == 200
+        assert not resp.json()["nodes"]
+        assert not resp.json()["edges"]
+
+    def test_get_editor_not_found_returns_404(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/composite-templates/{uuid.uuid4()}/editor")
+        assert resp.status_code == 404
+
+    def test_get_editor_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+        ):
+            resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor")
+        assert resp.status_code == 501
+
+    def test_get_editor_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ):
+            resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor")
+        assert resp.status_code == 500
+
+    def test_put_editor_saves_nodes_and_edges(self, client: TestClient) -> None:
+        existing = _make_template(sub_pipeline_graph_json={"nodes": [], "edges": []})
+        updated = _make_template(sub_pipeline_graph_json={"nodes": [{"id": "n1"}], "edges": []})
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", side_effect=[existing, updated]),
+            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=updated),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.put(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
+                json={"nodes": [{"id": "n1"}], "edges": []},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["nodes"] == [{"id": "n1"}]
+
+    def test_put_editor_preserves_existing_graph_keys(self, client: TestClient) -> None:
+        existing = _make_template(sub_pipeline_graph_json={"nodes": [], "edges": [], "extra_field": "kept"})
+        updated = _make_template(sub_pipeline_graph_json={"nodes": [{"id": "n1"}], "edges": [], "extra_field": "kept"})
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", side_effect=[existing, updated]),
+            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=updated),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.put(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
+                json={"nodes": [{"id": "n1"}], "edges": []},
+            )
+        assert resp.status_code == 200
+
+    def test_put_editor_not_found_returns_404(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.put(
+                f"/api/v1/composite-templates/{uuid.uuid4()}/editor",
+                json={"nodes": [], "edges": []},
+            )
+        assert resp.status_code == 404
+
+    def test_put_editor_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+        ):
+            resp = client.put(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
+                json={"nodes": [], "edges": []},
+            )
+        assert resp.status_code == 501
+
+    def test_put_editor_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.put(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
+                json={"nodes": [], "edges": []},
+            )
+        assert resp.status_code == 503
+
+    def test_put_editor_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ):
+            resp = client.put(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
+                json={"nodes": [], "edges": []},
+            )
+        assert resp.status_code == 500
+
+    def test_put_editor_not_found_after_update_returns_404(self, client: TestClient) -> None:
+        """Second get_composite_template inside the PUT transaction returns None."""
+        existing = _make_template()
+        with (
+            patch(
+                "modulo.api.routes.composite_templates.get_composite_template",
+                side_effect=[existing, None],
+            ),
+            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=None),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.put(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
+                json={"nodes": [], "edges": []},
+            )
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Publish endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestPublishCompositeTemplate:
+    def test_publish_returns_200_with_version(self, client: TestClient) -> None:
+        template = _make_template(version="2.0.0")
+        with (
+            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish",
+                json={"version": "2.0.0"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["version"] == "2.0.0"
+        assert body["published"] is True
+
+    def test_publish_default_version(self, client: TestClient) -> None:
+        template = _make_template(version="1.0.0")
+        with (
+            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish",
+                json={},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["version"] == "1.0.0"
+
+    def test_publish_not_found_returns_404(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=None),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/composite-templates/{uuid.uuid4()}/publish",
+                json={},
+            )
+        assert resp.status_code == 404
+
+    def test_publish_invalid_version_pattern_returns_422(self, client: TestClient) -> None:
+        resp = client.post(
+            f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish",
+            json={"version": "not-a-version"},
+        )
+        assert resp.status_code == 422
+
+    def test_publish_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+        ):
+            resp = client.post(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish",
+                json={},
+            )
+        assert resp.status_code == 501
+
+    def test_publish_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.post(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish",
+                json={},
+            )
+        assert resp.status_code == 503
+
+    def test_publish_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ):
+            resp = client.post(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish",
+                json={},
+            )
+        assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# detect-params endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestDetectParams:
+    def test_detect_params_returns_ports_for_placeholders(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/composite-templates/detect-params",
+            json={
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "prompt_template": "You are {{parameter.role}}. Respond as {{parameter.tone}}.",
+                    }
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        ports = resp.json()["ports"]
+        names = {p["name"] for p in ports}
+        assert "role" in names
+        assert "tone" in names
+        for p in ports:
+            assert p["target_injection"]["node_id"] == "n1"
+
+    def test_detect_params_no_placeholders(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/composite-templates/detect-params",
+            json={"nodes": [{"id": "n1", "prompt_template": "No placeholders here"}]},
+        )
+        assert resp.status_code == 200
+        assert not resp.json()["ports"]
+
+    def test_detect_params_empty_nodes(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/composite-templates/detect-params",
+            json={"nodes": []},
+        )
+        assert resp.status_code == 200
+        assert not resp.json()["ports"]
+
+    def test_detect_params_deduplicates_across_nodes(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/composite-templates/detect-params",
+            json={
+                "nodes": [
+                    {"id": "n1", "prompt": "{{parameter.x}}"},
+                    {"id": "n2", "agent_prompt": "{{parameter.x}} {{parameter.y}}"},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        names = [p["name"] for p in resp.json()["ports"]]
+        assert names.count("x") == 1
+        assert "y" in names
+
+    def test_detect_params_non_string_field_ignored(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/composite-templates/detect-params",
+            json={"nodes": [{"id": "n1", "prompt_template": 123}]},
+        )
+        assert resp.status_code == 200
+        assert not resp.json()["ports"]
+
+    def test_detect_params_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.composite_templates._detect_parameter_ports",
+            side_effect=RuntimeError("boom"),
+        ):
+            resp = client.post(
+                "/api/v1/composite-templates/detect-params",
+                json={"nodes": []},
+            )
+        assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# _detect_parameter_ports — pure function unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestDetectParameterPorts:
+    def test_finds_placeholders_in_prompt_template(self) -> None:
+        from modulo.api.routes.composite_templates import _detect_parameter_ports
+
+        nodes = [{"id": "n1", "prompt_template": "Use {{parameter.style}} and {{parameter.tone}}"}]
+        ports = _detect_parameter_ports(nodes)
+        names = {p.name for p in ports}
+        assert names == {"style", "tone"}
+
+    def test_ignores_non_prompt_fields(self) -> None:
+        from modulo.api.routes.composite_templates import _detect_parameter_ports
+
+        nodes = [{"id": "n1", "name": "not a prompt {{parameter.x}}"}]
+        ports = _detect_parameter_ports(nodes)
+        assert not ports
+
+    def test_returns_empty_for_empty_nodes(self) -> None:
+        from modulo.api.routes.composite_templates import _detect_parameter_ports
+
+        assert not _detect_parameter_ports([])
+
+
+# ---------------------------------------------------------------------------
+# Update with parameter_ports_json
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateParameterPortsJson:
+    def test_update_with_parameter_ports_serializes_port_dicts(self, client: TestClient) -> None:
+        template = _make_template(
+            parameter_ports_json=[
+                {
+                    "id": "p1",
+                    "name": "x",
+                    "label": "X",
+                    "type": "string",
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "n1",
+                        "injection_point": "prompt_template",
+                    },
+                }
+            ]
+        )
+        with (
+            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template) as upd,
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}",
+                json={
+                    "parameter_ports_json": [
+                        {
+                            "id": "p1",
+                            "name": "x",
+                            "label": "X",
+                            "type": "string",
+                            "target_injection": {
+                                "mode": "prompt_replace",
+                                "node_id": "n1",
+                                "injection_point": "prompt_template",
+                            },
+                        }
+                    ]
+                },
+            )
+        assert resp.status_code == 200
+        call_kwargs = upd.call_args
+        updates = call_kwargs[0][2]
+        assert isinstance(updates["parameter_ports_json"], list)
