@@ -111,7 +111,7 @@ from modulo.core.node_output_split import node_return
 from modulo.db.crud.run import create_run, get_run
 from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.feedback_record import FeedbackRecord
-from modulo.utils.uuid import coerce_uuid
+from modulo.util.uuid import coerce_uuid
 
 logger = logging.getLogger(__name__)
 

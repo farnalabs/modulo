@@ -693,7 +693,7 @@ class LoopInterceptCallbackServer:
 
 
 def _coerce_uuid(value: Any) -> uuid.UUID | None:
-    from modulo.utils.uuid import coerce_uuid
+    from modulo.util.uuid import coerce_uuid
 
     return coerce_uuid(value)
 
