@@ -23,6 +23,7 @@ from modulo.core.node_output_split import (
     TELEMETRY_FIELDS,
     extend_node_type_map_from_edges,
     node_return,
+    node_stdout_artifact,
     node_telemetry,
     split_node_output,
 )
@@ -543,6 +544,53 @@ def test_node_telemetry_legacy_extracts_wallclock() -> None:
     telemetry = node_telemetry(None, outputs, "n1")
     assert telemetry is not None
     assert telemetry["wall_clock_time_ms"] == 3_600_000
+
+
+# ---------------------------------------------------------------------------
+# node_stdout_artifact -- FAR-811 full-stdout pointer accessor
+# ---------------------------------------------------------------------------
+
+
+def _stdout_pointer() -> dict[str, Any]:
+    return {
+        "rel_path": "00000000-0000-0000-0000-000000000001/run-1/n1/a.stdout.zst",
+        "size_bytes": 12345,
+        "sha256": "0" * 64,
+        "stream": "stdout",
+        "compression": "zstd",
+        "truncated": False,
+        "redacted": True,
+    }
+
+
+def test_node_stdout_artifact_pure_row_returns_stored_pointer_verbatim() -> None:
+    pointer = _stdout_pointer()
+    telemetry = {"n1": {"status": "completed", "stdout_artifact": pointer}}
+    assert node_stdout_artifact(telemetry, {}, "n1") is pointer
+
+
+def test_node_stdout_artifact_legacy_envelope_extracts_pointer() -> None:
+    # Legacy sandbox envelope: the pointer rides the inner ``output`` dict
+    # (``_persist_full_stdout_artifact`` writes it onto the inner telemetry).
+    pointer = _stdout_pointer()
+    inner = {"status": "completed", "stdout_artifact": pointer, "output_json": {"ok": 1}}
+    outputs = {"n1": {"artifacts": [{"node_id": "n1", "status": "completed", "output": inner}], "output": inner}}
+    assert node_stdout_artifact(None, outputs, "n1") == pointer
+
+
+def test_node_stdout_artifact_none_when_absent() -> None:
+    assert node_stdout_artifact({"n1": {"status": "completed"}}, {}, "n1") is None
+    assert node_stdout_artifact(None, {"n1": {"output": {"status": "completed"}}}, "n1") is None
+
+
+def test_node_stdout_artifact_ignores_non_dict_pointer() -> None:
+    # A stringly/None ``stdout_artifact`` value is never surfaced as a pointer.
+    assert node_stdout_artifact({"n1": {"stdout_artifact": "just-a-log-line"}}, {}, "n1") is None
+    assert node_stdout_artifact({"n1": {"stdout_artifact": None}}, {}, "n1") is None
+
+
+def test_node_stdout_artifact_missing_node_returns_none() -> None:
+    assert node_stdout_artifact({"other": {"stdout_artifact": _stdout_pointer()}}, {}, "n1") is None
 
 
 # ---------------------------------------------------------------------------

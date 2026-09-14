@@ -2993,6 +2993,7 @@ async def _get_run_output_impl(run_id: str, node_id: str) -> dict[str, Any]:
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("get_run_output")
     from modulo.api.routes.runs import _mask_output_value
+    from modulo.core.node_output_split import node_stdout_artifact
 
     org_id = _ctx_org_id_val()
     rid, rid_err = _parse_uuid_param(run_id, "run_id")
@@ -3023,6 +3024,8 @@ async def _get_run_output_impl(run_id: str, node_id: str) -> dict[str, Any]:
         "node_id": node_id,
         "output": masked,
         "masked_fields": masked_fields,
+        # FAR-811 pointer (dict) or None; the transcript body is never inlined.
+        "stdout_artifact": node_stdout_artifact(telemetry, outputs, node_id),
     }
 
 
