@@ -581,10 +581,7 @@ class TestAgentMintFlagHydration:
     _FLAG_KEY = "work_item_agent_minting_enabled"
 
     @pytest.fixture(autouse=True)
-    def _clear_flag_caches(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> Generator[None]:
+    def _clear_flag_caches(self) -> Generator[None]:
         import modulo.db.crud.run as run_mod
         from modulo.core.runtime_config import org_flags as org_flags_mod
 

@@ -989,7 +989,8 @@ class TestAgentMintFlagFinalize:
         refreshed = await _read_journey_by_kind(session, "github_pr", "123")
         assert refreshed is not None
         assert refreshed.provenance == "caller"
-        assert refreshed.first_seen_source is not None and refreshed.first_seen_source != "agent"
+        assert refreshed.first_seen_source is not None
+        assert refreshed.first_seen_source != "agent"
 
 
 class TestFinalizeCostWiring:
