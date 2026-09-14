@@ -5554,6 +5554,14 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
     runs row.  Bounded to 200 rows per tick (the sweep is idempotent —
     remaining rows are picked up on the next tick).
 
+    Every terminal run selected by the window receives a definitive value
+    (``True`` when any audit entry reports drift, otherwise ``False``),
+    including runs with no audit row or an empty workspace-inputs list.  That
+    guarantees the run drops out of the ``workspace_inputs_drift_detected IS
+    NULL`` set, so the bounded scan makes deterministic progress instead of
+    re-selecting the same no-audit rows every tick and starving later drift
+    corrections once they exceed the LIMIT 200 window.
+
     Returns ``{"scanned": N, "corrected": M}``.
     """
     from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
@@ -5589,12 +5597,28 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
                     node_id=AUDIT_NODE_ID,
                 )
                 if audit_row is None:
-                    # No audit row yet (it may be written after terminalization,
-                    # or the run had no managed workspace inputs). Leave the flag
-                    # NULL so the run is re-checked on a later tick.
+                    # Terminal run with no workspace-input audit row. The audit
+                    # record is written at FINAL_ATTEMPT_KEY during node
+                    # execution (node_runner), so a terminal run that has none
+                    # definitively has no managed workspace inputs and will
+                    # never receive one later. Write the definitive False
+                    # terminal value so the run drops out of the NULL-flag set;
+                    # otherwise the bounded scan re-selects it every tick and,
+                    # once such runs exceed the LIMIT 200 window, permanently
+                    # starves real drift corrections behind them (FAR-801 sweep
+                    # no-op — MAJOR review finding).
+                    await session.execute(
+                        sa.update(Run).where(Run.id == run_id).values(workspace_inputs_drift_detected=False)
+                    )
                     continue
                 audit_list = audit_row.get("workspace_inputs", [])
                 if not audit_list:
+                    # Audit record present but no resolved workspace inputs for
+                    # this run: definitive False — drop out of the NULL set so
+                    # the bounded scan keeps advancing.
+                    await session.execute(
+                        sa.update(Run).where(Run.id == run_id).values(workspace_inputs_drift_detected=False)
+                    )
                     continue
                 # Write the definitive flag (True when drift, else False) so a
                 # non-drift run drops out of the NULL-flag set and is never

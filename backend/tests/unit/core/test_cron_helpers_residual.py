@@ -157,6 +157,21 @@ def _factory_for(session: _MockSession) -> MagicMock:
     return MagicMock(return_value=session)
 
 
+def _compiled_update(stmt: Any) -> str:
+    """Compile an executed statement to a lowercased SQL string, or '' if it is
+    not an UPDATE. Used to assert the drift-flag value written by the sweep.
+    Spaces around ``=`` are collapsed so boolean literals (rendered as
+    ``=false`` / ``=true`` under literal_binds) match the assertions."""
+    try:
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    except Exception:
+        compiled = str(stmt)
+    lowered = compiled.lower().lstrip()
+    if not lowered.startswith("update"):
+        return ""
+    return lowered.replace(" = ", "=")
+
+
 def _redis() -> AsyncMock:
     return AsyncMock()
 
@@ -2453,10 +2468,12 @@ async def test_redispatch_marker_refresh_only_for_running_rows():
 async def test_sweep_workspace_input_drift_flags_corrects_skips_and_emits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Covers the new ``_sweep_workspace_input_drift_flags`` body: the bounded
+    """Covers the ``_sweep_workspace_input_drift_flags`` body: the bounded
     terminal-run SELECT, the per-run audit read, the drift/non-drift UPDATE,
-    the skip paths for a missing audit row and an empty workspace-inputs
-    list, and the scanned/corrected return."""
+    the definitive False terminal write for a missing audit row and an empty
+    workspace-inputs list (FAR-801 MAJOR review fix — these runs must no
+    longer be silently skipped and left NULL), and the scanned/corrected
+    return."""
     run_drift = uuid.uuid4()
     run_clean = uuid.uuid4()
     run_no_audit = uuid.uuid4()
@@ -2482,8 +2499,48 @@ async def test_sweep_workspace_input_drift_flags_corrects_skips_and_emits(
 
     result = await ch._sweep_workspace_input_drift_flags(_factory_for(session))
     assert result == {"scanned": 4, "corrected": 1}
-    # SELECT + 2 UPDATEs (no_audit and empty-list runs are skipped pre-update).
-    assert len(session.executed) == 3
+    # SELECT + 4 UPDATEs: drift (True), clean (False), no_audit (False),
+    # empty-list (False). The no_audit/empty runs previously hit a silent
+    # `continue` and were never written, which clogged the bounded scan.
+    assert len(session.executed) == 5
+
+    drift_updates = [_compiled_update(stmt) for stmt, _ in session.executed]
+    assert any("workspace_inputs_drift_detected=true" in u for u in drift_updates)
+    # Three definitive False writes (clean, no_audit, empty) — proves the
+    # no_audit/empty runs are now terminated instead of left NULL.
+    assert sum("workspace_inputs_drift_detected=false" in u for u in drift_updates) == 3
+
+
+async def test_sweep_workspace_input_drift_flags_terminates_no_audit_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-801 MAJOR review fix: a terminal run with no workspace-input audit
+    row must receive a definitive ``workspace_inputs_drift_detected = False``
+    write rather than a silent ``continue``. Otherwise, once such runs exceed
+    the LIMIT 200 scan window they permanently clog it and starve real drift
+    corrections behind them. The run must drop out of the NULL-flag set so the
+    bounded scan advances each tick."""
+    run_no_audit = uuid.uuid4()
+    select_result = _mock_result(all=[(run_no_audit, ORG)])
+    session = _MockSession([select_result])
+
+    # Terminal run with no audit row (definitively no managed workspace inputs).
+    async def _fake_read(session_arg: Any, *, run_id: uuid.UUID, node_id: str, attempt_key: str | None = None) -> Any:
+        return None
+
+    monkeypatch.setattr(
+        "modulo.db.crud.run_node_outputs.read_audit_row_outputs_json",
+        _fake_read,
+    )
+
+    result = await ch._sweep_workspace_input_drift_flags(_factory_for(session))
+    assert result == {"scanned": 1, "corrected": 0}
+    # SELECT + the definitive False UPDATE (was previously a silent `continue`
+    # that left the flag NULL forever).
+    assert len(session.executed) == 2
+    updates = [u for u in (_compiled_update(stmt) for stmt, _ in session.executed) if u]
+    assert len(updates) == 1
+    assert "workspace_inputs_drift_detected=false" in updates[0]
 
 
 async def test_sweep_workspace_input_drift_flags_swallows_read_error(
