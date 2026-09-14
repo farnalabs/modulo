@@ -1,6 +1,6 @@
 """Unit tests for make_sandbox_agent_fn command resolution.
 
-A sandbox_agent node MUST provide agent_command (or agent_commands);
+A sandbox_agent node MUST provide agent_commands;
 there is no default command, and a missing command is a hard error.
 """
 
@@ -71,13 +71,13 @@ def _make_sandbox_mock(*, log_content: str = "", output_json: str = '{"summary":
     return sandbox
 
 
-def test_missing_agent_command_raises_value_error():
-    """A sandbox_agent node without agent_command/agent_commands is a hard error."""
+def test_missing_agent_commands_raises_value_error():
+    """A sandbox_agent node without agent_commands is a hard error."""
     node_def = {
         "id": "n1",
         "agent_prompt": "Do the thing",
     }
-    with pytest.raises(ValueError, match="missing required 'agent_command'"):
+    with pytest.raises(ValueError, match="missing required 'agent_commands'"):
         make_sandbox_agent_fn(node_def)
 
 
@@ -85,7 +85,7 @@ def test_missing_agent_prompt_raises_value_error():
     """An empty/missing agent_prompt is a hard error — it would dispatch the agent with no instructions."""
     node_def = {
         "id": "n1",
-        "agent_command": _AGENT_COMMAND,
+        "agent_commands": [_AGENT_COMMAND],
     }
     with pytest.raises(ValueError, match="missing required 'agent_prompt'"):
         make_sandbox_agent_fn(node_def)
@@ -96,7 +96,7 @@ def test_whitespace_only_agent_prompt_raises_value_error():
     node_def = {
         "id": "n1",
         "agent_prompt": "   ",
-        "agent_command": _AGENT_COMMAND,
+        "agent_commands": [_AGENT_COMMAND],
     }
     with pytest.raises(ValueError, match="missing required 'agent_prompt'"):
         make_sandbox_agent_fn(node_def)
@@ -109,22 +109,22 @@ def test_missing_agent_commands_only_raises_value_error():
         "agent_prompt": "Do the thing",
         "agent_commands": [],
     }
-    with pytest.raises(ValueError, match="missing required 'agent_command'"):
+    with pytest.raises(ValueError, match="missing required 'agent_commands'"):
         make_sandbox_agent_fn(node_def)
 
 
-def test_with_agent_command_returns_callable():
-    """A node_def with agent_command resolves without raising and returns a callable."""
+def test_with_agent_commands_returns_callable():
+    """A node_def with agent_commands resolves without raising and returns a callable."""
     node_def = {
         "id": "n1",
         "agent_prompt": "Do the thing",
-        "agent_command": "opencode run --auto --format json < /home/user/prompt.md",
+        "agent_commands": ["opencode run --auto --format json < /home/user/prompt.md"],
     }
     fn = make_sandbox_agent_fn(node_def)
     assert callable(fn)
 
 
-def test_with_agent_commands_returns_callable():
+def test_with_agent_commands_list_returns_callable():
     """agent_commands list is joined and resolved without raising."""
     node_def = {
         "id": "n1",
@@ -210,7 +210,7 @@ async def test_sandbox_agent_success_output_includes_cost_estimate_usd():
     node_def = {
         "id": "n1",
         "agent_prompt": "Do the thing",
-        "agent_command": "opencode run --auto --format json < /home/user/prompt.md",
+        "agent_commands": ["opencode run --auto --format json < /home/user/prompt.md"],
     }
     fn = make_sandbox_agent_fn(node_def)
 
@@ -258,7 +258,7 @@ def _base_node_def(**overrides) -> dict:
     node_def = {
         "id": "n1",
         "agent_prompt": "Do the thing",
-        "agent_command": _AGENT_COMMAND,
+        "agent_commands": [_AGENT_COMMAND],
     }
     node_def.update(overrides)
     return node_def
@@ -1624,7 +1624,7 @@ async def test_fetch_sandbox_log_tail_returns_empty_for_invalid_id(monkeypatch):
 
 
 def _model_node_def(command: str, **overrides) -> dict:
-    node_def = _base_node_def(agent_command=command)
+    node_def = _base_node_def(agent_commands=[command])
     node_def.update(overrides)
     return node_def
 

@@ -8,7 +8,7 @@ from typing import Any, ClassVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,14 +98,7 @@ class AgentCreate(BaseModel):
     prompt_always_visible: bool = False
     required_environment_capabilities: list[str]
     template_id: str | None
-    agent_command: str | None = Field(default=None)
     agent_commands: list[str] | None = Field(default=None)
-
-    @model_validator(mode="after")
-    def validate_command_fields(self) -> "AgentCreate":
-        if self.agent_command is not None and self.agent_commands:
-            raise ValueError("Cannot specify both 'command' and 'commands' — use 'commands' as an array")
-        return self
 
 
 class AgentUpdate(BaseModel):
@@ -122,14 +115,7 @@ class AgentUpdate(BaseModel):
     prompt_always_visible: bool | None = None
     required_environment_capabilities: list[str]
     template_id: str | None
-    agent_command: str | None = None
     agent_commands: list[str] | None = Field(default=None)
-
-    @model_validator(mode="after")
-    def validate_command_fields(self) -> "AgentUpdate":
-        if self.agent_command is not None and self.agent_commands:
-            raise ValueError("Cannot specify both 'command' and 'commands' — use 'commands' as an array")
-        return self
 
 
 class AgentResponse(BaseModel):
@@ -154,7 +140,6 @@ class AgentResponse(BaseModel):
     prompt_always_visible: bool
     required_environment_capabilities: list[str]
     template_id: uuid.UUID | None
-    agent_command: str | None
     agent_commands: list[str] | None
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
@@ -362,7 +347,7 @@ async def create_agent_endpoint(
                 output_schema_id=req.output_schema_id,
                 output_schema_version=output_ver,
                 template_id=req.template_id,
-                agent_command=req.agent_command,
+                agent_commands=req.agent_commands,
                 prompt_template=req.prompt_template,
                 model_backend_id=req.model_backend_id,
                 is_executable=req.is_executable,

@@ -775,7 +775,7 @@ async def test_build_live_manifest_unreadable_surface_fails_closed(monkeypatch: 
 
 
 def _sandbox_node(**overrides: Any) -> dict[str, Any]:
-    node: dict[str, Any] = {"id": "node-1", "node_type": "sandbox_agent", "agent_prompt": "p", "agent_command": "c"}
+    node: dict[str, Any] = {"id": "node-1", "node_type": "sandbox_agent", "agent_prompt": "p", "agent_commands": ["c"]}
     node.update(overrides)
     return node
 
@@ -990,7 +990,7 @@ def _api_validated_sandbox_node() -> dict[str, Any]:
             "position": {"x": 10, "y": 20},
             "connector_binding": None,
             "agent_prompt": "Do the thing",
-            "agent_command": "opencode run --auto < /home/user/prompt.md",
+            "agent_commands": ["opencode run --auto < /home/user/prompt.md"],
             "template_id": "opencode",
             "egress_policy": "deny_all",
             # Smuggled keys — NOT PipelineGraphNode fields; extra="ignore" drops them.

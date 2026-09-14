@@ -1,7 +1,7 @@
 """Add UNIQUE(organisation_id, name) constraint on agents.
 
-Revision ID: 0228_agents_unique_organisation_name
-Revises: 0227_env_profiles_initialisation_strategy_check
+Revision ID: 0229_agents_unique_organisation_name
+Revises: 0228_drop_scalar_agent_command
 Create Date: 2026-09-14
 
 PR #458 (migrations 0223/0225) intended to enforce per-organisation agent-name
@@ -35,8 +35,8 @@ from __future__ import annotations
 from alembic import op
 from sqlalchemy import text
 
-revision: str = "0228_agents_unique_organisation_name"
-down_revision: str | None = "0227_env_profiles_initialisation_strategy_check"
+revision: str = "0229_agents_unique_organisation_name"
+down_revision: str | None = "0228_drop_scalar_agent_command"
 branch_labels: str | None = None
 depends_on: str | None = None
 

@@ -43,7 +43,7 @@ async def create_agent(
     max_input_length: int | None = None,
     library_id: uuid.UUID | None = None,
     template_id: str | None = None,
-    agent_command: str | None = None,
+    agent_commands: list[str] | None = None,
     prompt_always_visible: bool = False,
     required_environment_capabilities: list[str] | None = None,
 ) -> Agent:
@@ -67,7 +67,7 @@ async def create_agent(
         library_id=library_id,
         prompt_always_visible=prompt_always_visible,
         template_id=coerce_uuid(template_id),
-        agent_command=agent_command,
+        agent_commands=agent_commands,
         required_environment_capabilities=required_environment_capabilities or [],
     )
     session.add(agent)

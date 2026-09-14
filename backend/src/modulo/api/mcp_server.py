@@ -2254,9 +2254,9 @@ async def query_analytics_concurrency(
 @mcp.tool(
     name="get_pipeline_graph",
     description="Get the full graph (nodes + edges) of a pipeline by ID. "
-    "Returns nodes with their configuration (agent_prompt, agent_command, template_id, timeout_seconds, etc.) "
+    "Returns nodes with their configuration (agent_prompt, agent_commands, template_id, timeout_seconds, etc.) "
     "and edges with their source/target/type. "
-    "For pipelines that use sandbox_agent nodes, this is how you read the current agent_command before modifying it.",
+    "For pipelines that use sandbox_agent nodes, this is how you read the current agent_commands before modifying it.",
 )
 @_RETRY_DB
 async def get_pipeline_graph_tool(
@@ -6598,7 +6598,7 @@ async def create_agent(
     required_environment_capabilities: list[str] | None = None,
     is_executable: bool = True,
     template_id: str | None = None,
-    agent_command: str | None = None,
+    agent_commands: list[str] | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -6630,7 +6630,7 @@ async def create_agent(
                 description=description,
                 connector_type_refs=connector_type_refs or [],
                 template_id=template_id,
-                agent_command=agent_command,
+                agent_commands=agent_commands,
                 required_environment_capabilities=required_environment_capabilities,
             )
 
@@ -6750,7 +6750,7 @@ async def get_agent(agent_id: str) -> dict[str, Any]:
             "retry_policy": agent.retry_policy or {},
             "token_budget": agent.token_budget,
             "max_input_length": agent.max_input_length,
-            "agent_command": agent.agent_command,
+            "agent_commands": agent.agent_commands,
             "created_at": agent.created_at.isoformat() if agent.created_at else None,
             "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
         }
@@ -8395,7 +8395,7 @@ def _render_snapshot_node_line(n: dict[str, Any]) -> str:
     nid = n.get("id", "?")
     ntype = n.get("node_type", "?")
     agent_id = n.get("agent_id", "")
-    agent_cmd = n.get("agent_command", "(required)")
+    agent_cmd = n.get("agent_commands", ["(required)"])
     prompt_preview = (n.get("prompt_template", "") or "")[:80].replace("\n", " ")
     line = f"  - {nid} (type={ntype}, agent={agent_id}, command={agent_cmd})\n"
     if prompt_preview:
@@ -8407,16 +8407,16 @@ def _render_snapshot_node_details(nodes: list[dict[str, Any]]) -> str:
     """Render the full node JSON plus prompt/command previews."""
     result = ""
     for n in nodes:
-        safe = {k: v for k, v in n.items() if k not in ("agent_prompt", "agent_command")}
+        safe = {k: v for k, v in n.items() if k not in ("agent_prompt", "agent_commands")}
         result += json.dumps(safe, indent=2, default=str)[:2000] + "\n"
         ap = n.get("agent_prompt")
         if ap is None:
             ap = ""
         if ap:
             result += f"    agent_prompt: {ap[:200].replace(chr(10), ' ')}...\n"
-        ac = n.get("agent_command", "") or ""
+        ac = n.get("agent_commands", []) or []
         if ac:
-            result += f"    agent_command: {ac[:200].replace(chr(10), ' ')}...\n"
+            result += f"    agent_commands: {' && '.join(str(c) for c in ac)[:200].replace(chr(10), ' ')}...\n"
         cf = n.get("context_files", {}) or {}
         for cfp, cfc in cf.items():
             result += f"    context_file {cfp}: {len(str(cfc))} bytes\n"

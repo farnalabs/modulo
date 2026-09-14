@@ -1221,7 +1221,7 @@ def _sandbox_node(**overrides: Any) -> dict[str, Any]:
     node: dict[str, Any] = {
         "id": _UUID_A,
         "node_type": "sandbox_agent",
-        "agent_command": "opencode run --format json",
+        "agent_commands": ["opencode run --format json"],
         "agent_prompt": "Do the thing",
         "template_id": "opencode",
     }
@@ -1472,7 +1472,7 @@ async def test_sandbox_managed_inputs_git_clone_in_agent_command_is_error():
     graph = {
         "nodes": [
             _sandbox_node(
-                agent_command="git clone https://example.com/repo.git && do_stuff",
+                agent_commands=["git clone https://example.com/repo.git && do_stuff"],
                 workspace_inputs=[
                     {"dest": "/home/user/repo", "url": "https://github.com/org/repo.git", "ref": {"kind": "branch"}}
                 ],

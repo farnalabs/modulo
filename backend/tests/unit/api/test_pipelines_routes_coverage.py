@@ -467,7 +467,7 @@ def test_graph_node_validator_matrix() -> None:
             "node_type": "sandbox_agent",
             "template_id": "opencode",
             "agent_prompt": "Analyse the repo",
-            "agent_command": "run analysis",
+            "agent_commands": ["run analysis"],
             "env_vars": {"MODULO_SECRET": "x"},
         },
         "reserved prefix",
@@ -478,7 +478,7 @@ def test_graph_node_validator_matrix() -> None:
             "node_type": "sandbox_agent",
             "template_id": "opencode",
             "agent_prompt": "Analyse the repo",
-            "agent_command": "run analysis",
+            "agent_commands": ["run analysis"],
             "context_files": {"../rel": "/abs"},
         },
         "absolute path",
@@ -489,20 +489,21 @@ def test_graph_node_sandbox_command_exclusivity_and_missing_template() -> None:
     from modulo.api.routes.pipelines import PipelineGraphNode
 
     base = {"id": str(uuid.uuid4()), "position": {"x": 0.0, "y": 0.0}, "node_type": "sandbox_agent"}
-    with pytest.raises(ValidationError) as excinfo:
-        PipelineGraphNode.model_validate(
-            {
-                **base,
-                "template_id": "opencode",
-                "agent_prompt": "Analyse the repo",
-                "agent_command": "run.sh",
-                "agent_commands": ["a", "b"],
-            }
-        )
-    assert "agent_command" in str(excinfo.value)
+    # agent_commands with valid list should accept
+    node = PipelineGraphNode.model_validate(
+        {
+            **base,
+            "template_id": "opencode",
+            "agent_prompt": "Analyse the repo",
+            "agent_commands": ["a", "b"],
+        }
+    )
+    assert node.agent_commands == ["a", "b"]
 
     with pytest.raises(ValidationError) as excinfo:
-        PipelineGraphNode.model_validate({**base, "agent_prompt": "Analyse the repo", "agent_command": "run analysis"})
+        PipelineGraphNode.model_validate(
+            {**base, "agent_prompt": "Analyse the repo", "agent_commands": ["run analysis"]}
+        )
     assert "template_id" in str(excinfo.value)
 
 
@@ -635,12 +636,12 @@ def test_extract_agent_command_sync_updates_rejects_bad_shapes() -> None:
     agent_id = uuid.uuid4()
     nodes: list[object] = [
         "not-a-dict",
-        {"agent_id": agent_id, "agent_command": "cmd"},
-        {"agent_id": "not-a-uuid", "agent_command": "cmd"},
-        {"agent_id": agent_id, "agent_command": ""},
+        {"agent_id": agent_id, "agent_commands": ["cmd"]},
+        {"agent_id": "not-a-uuid", "agent_commands": ["cmd"]},
+        {"agent_id": agent_id, "agent_commands": [""]},
     ]
     updates = _extract_agent_command_sync_updates(nodes)  # type: ignore[arg-type]
-    assert updates == {agent_id: "cmd"}
+    assert updates == {agent_id: ["cmd"]}
 
 
 def test_endpoint_events_normalisation() -> None:
