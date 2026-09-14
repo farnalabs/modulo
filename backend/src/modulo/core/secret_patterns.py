@@ -108,7 +108,7 @@ SECRET_VALUE_PATTERNS: list[tuple[re.Pattern[str], Any]] = [
     ),
     # Standalone Bearer tokens in free text
     (
-        re.compile(r"(?i)(Bearer\s+)[^\n\"'}\s]+"),
+        re.compile(r"(?i)(Bearer\s+)[^\"'}\s]+"),
         lambda m: f"{m.group(1)}{SENSITIVE_VALUE_MASK}",
     ),
 ]

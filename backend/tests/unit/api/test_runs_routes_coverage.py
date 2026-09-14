@@ -29,6 +29,7 @@ from modulo.api.routes import runs as runs_module
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -1146,3 +1147,41 @@ def test_get_run_artifact_404_when_invalid_stream(client) -> None:
     with patch("modulo.core.artifacts.store.get_store", return_value=MagicMock()):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/bogus")
     assert resp.status_code == 404
+
+
+# ── FAR-811 synthetic `:full:<cap>` attempt-key stdout resolution ────────────
+
+
+def test_get_run_artifact_resolves_synthetic_full_attempt_key(client) -> None:
+    """A synthetic ``:full:<cap>`` attempt key has no RunNodeOutput row; the
+    FAR-811 fallback resolves stdout from the node telemetry and streams it."""
+    http, _session = client
+    # No row exists for the synthetic `:full:` key — the transcript lives only
+    # in the artifact store, addressed through the telemetry pointer.
+    _queue_execute(_session, [_result(scalar_one_or_none=None)])
+    store = MagicMock()
+    store.read_bytes = MagicMock(return_value=b"full stdout transcript")
+    blobs = RunBlobs(
+        outputs={},
+        telemetry={str(_RUN_ID): {"stdout_artifact": _artifact_pointer("stdout")}},
+        markers={},
+    )
+    with (
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch.object(runs_module, "read_run_blobs", new=AsyncMock(return_value=blobs)),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}:full:12345/artifacts/stdout")
+    assert resp.status_code == 200, resp.text
+    assert resp.content == b"full stdout transcript"
+
+
+def test_get_run_artifact_synthetic_full_attempt_stderr_404(client) -> None:
+    """A synthetic ``:full:<cap>`` key only resolves stdout; stderr on a
+    synthetic key (no row, no fallback) yields 404."""
+    http, _session = client
+    # No row for the synthetic `:full:` key, and stderr has no telemetry
+    # fallback in the route — so the download 404s.
+    _queue_execute(_session, [_result(scalar_one_or_none=None)])
+    with patch("modulo.core.artifacts.store.get_store", return_value=MagicMock()):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}:full:12345/artifacts/stderr")
+    assert resp.status_code == 404, resp.text

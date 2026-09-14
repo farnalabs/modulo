@@ -73,7 +73,7 @@ _DEMO_OUTPUT_TEXT = "Sample demo output — synthetic, no agent execution."
 # account INSERT binds include the demo user's bcrypt password_hash, so every
 # seed-failure log/print goes through _safe_exc_text — never the raw
 # exception text or repr.
-_PARAMETERS_SECTION_RE = re.compile(r"\[parameters:\s*.*?\]", re.DOTALL)
+_PARAMETERS_SECTION_RE = re.compile(r"\[parameters:\s*[^]]*\]", re.DOTALL)
 
 
 def _safe_exc_text(exc: BaseException) -> str:

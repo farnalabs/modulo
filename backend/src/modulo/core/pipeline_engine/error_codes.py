@@ -878,7 +878,7 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
     re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"://[^:\s@]+:[^@\s@]+@"),
+    re.compile(r"://[^:\s@]+:[^@\s]+@"),
     re.compile(r"secret_[A-Za-z0-9]{16,}"),
     re.compile(r"npm_[A-Za-z0-9]{20,}"),
     GITHUB_PAT_PATTERN,

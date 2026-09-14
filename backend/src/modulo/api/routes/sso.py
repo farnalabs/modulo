@@ -31,9 +31,10 @@ router = APIRouter(prefix="/api/v1/auth", tags=["sso"])
 
 
 def _frontend_url(settings: Settings) -> str:
-    """Derive the frontend base URL from CORS_ORIGINS (first origin)."""
-    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
-    return origins[0] if origins else "http://localhost:5173"
+    """Derive the frontend base URL (delegates to the shared resolver)."""
+    from modulo.api.frontend_url import resolve_frontend_url
+
+    return resolve_frontend_url(settings)
 
 
 def _redirect_to_frontend(tokens: dict[str, str], settings: Settings) -> RedirectResponse:

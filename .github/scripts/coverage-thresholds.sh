@@ -6,8 +6,8 @@ set -euo pipefail
 
 PARALLELISM="${1:-auto}"
 
-echo "::group::Running unit tests (overall coverage threshold: 80%)"
-uv run --no-sync pytest tests/unit/ -n "$PARALLELISM" --cov=src/modulo --cov-report=xml --cov-report=term-missing --cov-fail-under=80 -q
+echo "::group::Running unit tests (overall coverage threshold: 85%)"
+uv run --no-sync pytest tests/unit/ -n "$PARALLELISM" --cov=src/modulo --cov-report=xml --cov-report=term-missing --cov-fail-under=85 -q
 echo "::endgroup::"
 
 echo "::group::Per-module coverage checks"
