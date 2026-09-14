@@ -471,6 +471,7 @@ def _resolve_stdout_cap(
     node_def: dict[str, Any],
     *,
     org_ceiling: int | None = None,
+    pipeline_default: dict[str, Any] | None = None,
 ) -> int:
     """Resolve the effective stdout/stderr retention cap for a node (FAR-792).
 
@@ -486,6 +487,11 @@ def _resolve_stdout_cap(
     "no node can exceed the org ceiling" invariant as the E2B path. When
     ``None`` (the default, used by the pure-coercion tests) the node's own cap
     applies unchanged.
+
+    ``pipeline_default`` (FAR-811) is the pipeline-level default for stdout
+    retention.  When the node did NOT explicitly set stdout_retention_mode
+    (raw key absent from node_def), the pipeline default's mode/max_bytes are
+    inherited before the org ceiling clamp.  Node-explicit settings always win.
     """
     from modulo.core.pipeline_engine.node_runner import (
         _coerce_stdout_max_bytes,
@@ -495,9 +501,21 @@ def _resolve_stdout_cap(
         _resolve_stdout_cap as _resolve_shared_cap,
     )
 
+    # FAR-811: node > pipeline > org resolution.
+    _node_raw_mode = node_def.get("stdout_retention_mode")
+    if _node_raw_mode is not None:
+        mode = _coerce_stdout_retention_mode(_node_raw_mode)
+        max_bytes = _coerce_stdout_max_bytes(node_def.get("stdout_max_bytes"))
+    elif pipeline_default is not None:
+        mode = _coerce_stdout_retention_mode(pipeline_default.get("mode"))
+        max_bytes = _coerce_stdout_max_bytes(pipeline_default.get("max_bytes"))
+    else:
+        mode = "tail"
+        max_bytes = None
+
     return _resolve_shared_cap(
-        _coerce_stdout_retention_mode(node_def.get("stdout_retention_mode")),
-        _coerce_stdout_max_bytes(node_def.get("stdout_max_bytes")),
+        mode,
+        max_bytes,
         org_ceiling=org_ceiling,
     )
 
@@ -845,8 +863,9 @@ async def run_bundled_runner_node(
         # here too, so the "no node can exceed the org ceiling" invariant holds
         # on the Bundled Runner path exactly as on the E2B path.
         org_stdout_ceiling = await _read_org_stdout_retention_ceiling(config.session_factory)
-        stdout_cap_unclamped = _resolve_stdout_cap(node_def)
-        stdout_cap = _resolve_stdout_cap(node_def, org_ceiling=org_stdout_ceiling)
+        _pipeline_ret_cfg = getattr(config, "pipeline_stdout_retention_config", None)
+        stdout_cap_unclamped = _resolve_stdout_cap(node_def, pipeline_default=_pipeline_ret_cfg)
+        stdout_cap = _resolve_stdout_cap(node_def, org_ceiling=org_stdout_ceiling, pipeline_default=_pipeline_ret_cfg)
         if org_stdout_ceiling is not None and stdout_cap < stdout_cap_unclamped:
             _log.warning(
                 "sandbox_agent.runner.stdout_cap_clamped_by_org_ceiling",

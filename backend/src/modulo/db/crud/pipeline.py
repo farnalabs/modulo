@@ -385,6 +385,7 @@ class _CloneSourceSnapshot:
     graph_nodes_json: list[dict[str, Any]]
     default_autonomy_level: str
     stale_run_timeout_minutes: int
+    stdout_retention_config: dict[str, Any] | None
     edges: list[dict[str, Any]]
     snapshots: list[dict[str, Any]]
 
@@ -518,6 +519,7 @@ async def _clone_pipeline_config(
         graph_nodes_json=copy.deepcopy(snapshot.graph_nodes_json),
         default_autonomy_level=snapshot.default_autonomy_level,
         stale_run_timeout_minutes=snapshot.stale_run_timeout_minutes,
+        stdout_retention_config=copy.deepcopy(snapshot.stdout_retention_config),
     )
     session.add(cloned)
     await session.flush()
@@ -605,6 +607,7 @@ async def _clone_snapshots(
             default_autonomy_level=snap["default_autonomy_level"],
             config_json=copy.deepcopy(snap["config_json"]),
             run_context_defaults=copy.deepcopy(snap["run_context_defaults"]),
+            stdout_retention_config=copy.deepcopy(snap.get("stdout_retention_config")),
         )
         session.add(cloned_snap)
         await session.flush()
@@ -667,6 +670,7 @@ def _snapshot_to_dict(snap: PipelineSnapshot, pins: list[dict[str, Any]]) -> dic
         "default_autonomy_level": snap.default_autonomy_level,
         "config_json": copy.deepcopy(snap.config_json),
         "run_context_defaults": copy.deepcopy(snap.run_context_defaults),
+        "stdout_retention_config": copy.deepcopy(snap.stdout_retention_config),
         "pins": pins,
     }
 
@@ -794,6 +798,7 @@ async def _read_clone_source_snapshot(
                 graph_nodes_json=copy.deepcopy(list(source.graph_nodes_json or [])),
                 default_autonomy_level=str(source.default_autonomy_level or "manual_approval"),
                 stale_run_timeout_minutes=source.stale_run_timeout_minutes,
+                stdout_retention_config=copy.deepcopy(source.stdout_retention_config),
                 edges=edges,
                 snapshots=snapshots,
             )
