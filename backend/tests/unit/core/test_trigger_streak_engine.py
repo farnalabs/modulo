@@ -341,8 +341,9 @@ class TestMigrationBackfillGrace:
         # and 0236_add_organisations_constraints chains on top of 0235_promote_organisations_json_to_jsonb,
         # and 0237_fix_token_family_org_nullable chains on top of 0236_add_organisations_constraints,
         # and FAR-801's 0238_workspace_input_drift_and_audit chains on top of 0237_fix_token_family_org_nullable,
+        # and 0239_revert_organisations_audit_drift chains on top of 0238_workspace_input_drift_and_audit,
         # so it is now the single linear head of the chain.
-        assert heads == ["0238_workspace_input_drift_and_audit"], f"expected a single head, got {heads}"
+        assert heads == ["0239_revert_organisations_audit_drift"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
