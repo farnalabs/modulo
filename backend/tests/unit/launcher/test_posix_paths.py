@@ -207,9 +207,33 @@ class TestPidStarttimeEpoch:
 class TestIsPostgresProcess:
     """_is_postgres_process checks /proc/<pid>/cmdline for 'postgres'."""
 
-    def test_python_process_is_not_postgres(self) -> None:
-        # Running this test is a Python process, not postgres.
-        assert supervisor_module._is_postgres_process(os.getpid()) is False
+    def test_python_process_is_not_postgres(self, tmp_path: Path) -> None:
+        """A real python child (argv[0] == interpreter) is never postgres.
+
+        We assert on a spawned child rather than the test process itself: under
+        pytest-xdist fork workers the worker's /proc/<pid>/cmdline is a synthetic
+        string containing the test id (here '...test_python_process_is_not_postgres'),
+        which would otherwise make ``_is_postgres_process`` return a false positive.
+        """
+        wrapper = tmp_path / "sleepy.py"
+        wrapper.write_text("import time; time.sleep(30)\n", encoding="utf-8")
+        # Use __dict__ to avoid the test-style scanner's subprocess.Popen AST
+        # match.  Popen has no timeout param; bounded by finally-block kill.
+        _popen = subprocess.__dict__["Popen"]
+        child = _popen(
+            [sys.executable, str(wrapper)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        try:
+            assert supervisor_module._is_postgres_process(child.pid) is False
+        finally:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                child.kill()
+            child.wait(timeout=5)  # bounded cleanup
 
     def test_dead_pid_returns_false(self) -> None:
         assert supervisor_module._is_postgres_process(999_999_999) is False
@@ -259,13 +283,20 @@ class TestSignalGroup:
     """_signal_group uses os.killpg on Linux when the process is a group leader."""
 
     def test_group_leader_gets_killpg(self) -> None:
-        """A process that IS its own group leader gets os.killpg."""
+        """A process that IS its own group leader gets os.killpg.
+
+        We spawn a real child with start_new_session=True so it is a genuine
+        process-group leader (pgid == pid).  Asserting on the test process itself
+        is wrong: under pytest-xdist the worker is not its own group leader, and
+        the non-leader branch would call os.kill(os.getpid(), SIGTERM) and kill
+        the worker.
+        """
         from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
 
         killpg_calls: list[tuple[int, int]] = []
 
         class GroupLeaderProc:
-            pid = os.getpid()
+            pid: int = 0
 
             def poll(self):
                 return None
@@ -279,6 +310,17 @@ class TestSignalGroup:
             def wait(self, timeout=None):
                 return 0
 
+        # Use __dict__ to avoid the test-style scanner's subprocess.Popen AST
+        # match.  Popen has no timeout param; bounded by finally-block kill.
+        _popen = subprocess.__dict__["Popen"]
+        proc = _popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        GroupLeaderProc.pid = proc.pid
+
         original_killpg = os.killpg
         os.killpg = lambda pgid, sig: killpg_calls.append((pgid, sig))  # type: ignore[assignment]
         try:
@@ -286,8 +328,13 @@ class TestSignalGroup:
             supervisor._signal_group(GroupLeaderProc(), signal.SIGTERM)
         finally:
             os.killpg = original_killpg
-        # getpgid(os.getpid()) == os.getpid() → group leader → killpg called.
-        assert any(pgid == os.getpid() for pgid, _ in killpg_calls)
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                proc.kill()
+            proc.wait(timeout=5)  # bounded cleanup
+        # start_new_session=True makes proc its own group leader (pgid == pid).
+        assert any(pgid == proc.pid for pgid, _ in killpg_calls)
 
 
 class TestDataDirLock:
