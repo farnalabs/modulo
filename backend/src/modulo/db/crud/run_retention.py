@@ -94,6 +94,9 @@ from modulo.db.sqlstates import sqlstate_of
 
 _log = logging.getLogger(__name__)
 
+# Repeated column type (S1192): JSON with PostgreSQL JSONB variant.
+_JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
+
 # Default batch size for the purge loop (runs per SAVEPOINT) and the export page
 # size (runs fetched per page). Matches crud.run's 500 default.
 BATCH_SIZE_DEFAULT = 500
@@ -214,8 +217,8 @@ _CHECKPOINTS_AGG = Table(
     _CHECKPOINT_AGG_METADATA,
     Column("organisation_id", Uuid()),
     Column("thread_id", String(512)),
-    Column("checkpoint", JSON().with_variant(JSONB(), "postgresql")),
-    Column("metadata", JSON().with_variant(JSONB(), "postgresql")),
+    Column("checkpoint", _JSONB_COL),
+    Column("metadata", _JSONB_COL),
 )
 
 _CHECKPOINT_BLOBS_AGG = Table(
@@ -239,9 +242,9 @@ _RUN_NODE_OUTPUTS_AGG = Table(
     _CHECKPOINT_AGG_METADATA,
     Column("run_id", Uuid()),
     Column("node_id", String()),
-    Column("outputs_json", JSON().with_variant(JSONB(), "postgresql")),
-    Column("node_telemetry_json", JSON().with_variant(JSONB(), "postgresql")),
-    Column("raw_output_markers", JSON().with_variant(JSONB(), "postgresql")),
+    Column("outputs_json", _JSONB_COL),
+    Column("node_telemetry_json", _JSONB_COL),
+    Column("raw_output_markers", _JSONB_COL),
 )
 
 

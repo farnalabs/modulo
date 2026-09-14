@@ -76,6 +76,7 @@ class MCPConfigurationError(Exception):
 _SCOPE_SECRET_MANAGE = "secret.manage"  # nosec B105 — permission scope name, not a credential
 _SCOPE_CONNECTOR_LIST = "connector.list"  # nosec B105 — permission scope name, not a credential
 _SCOPE_PARAMETER_SCHEMA_LIST = "parameter_schema.list"  # nosec B105 — permission scope name, not a credential
+_SCOPE_HITL_LIST = "hitl.list"  # nosec B105 — permission scope name, not a credential
 
 _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "run.trigger",
@@ -86,9 +87,9 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "review_hitl:reject": "hitl.reject",
     "review_hitl:deliver_manual": "hitl.deliver_manual",
     "copy_library_primitive": "library.copy",
-    "list_pending_hitl": "hitl.list",
-    "list_hitl_gates": "hitl.list",
-    "get_hitl_gate": "hitl.list",
+    "list_pending_hitl": _SCOPE_HITL_LIST,
+    "list_hitl_gates": _SCOPE_HITL_LIST,
+    "get_hitl_gate": _SCOPE_HITL_LIST,
     "get_pipeline_gates": "pipeline.graph.read",
     "get_run_output": "run.output",
     "create_pipeline": "pipeline.create",
