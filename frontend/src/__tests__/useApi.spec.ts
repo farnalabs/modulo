@@ -210,6 +210,26 @@ describe('useApi 401 refresh flow', () => {
     expect(mockedClearAccessToken).not.toHaveBeenCalled()
   })
 
+  it('does not re-send a non-idempotent POST after a successful refresh', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(401, { detail: 'token expired' }))
+    mockedAttemptTokenRefresh.mockResolvedValue(true)
+
+    const api = useApi()
+    await expect(api.post('/api/v1/widgets', { name: 'x' })).rejects.toThrow(
+      'Session expired. Please log in again.',
+    )
+
+    expect(mockedAttemptTokenRefresh).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/widgets',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(mockedClearAccessToken).toHaveBeenCalledTimes(1)
+    expect(mockedExitToLogin).toHaveBeenCalledTimes(1)
+    expect(mockedRedirectToLogin).not.toHaveBeenCalled()
+  })
+
   it('calls exitToLogin (not redirectToLogin) when refresh fails with auto-login config set', async () => {
     window.__MODULO_CONFIG__ = { autoLogin: { username: 'demo', password: 'demo' } }
     fetchMock.mockResolvedValue(jsonResponse(401, { detail: 'token expired' }))

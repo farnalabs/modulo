@@ -71,7 +71,7 @@ type CallableMethod = (
   init?: Record<string, unknown>,
 ) => Promise<{ data?: unknown; error?: unknown; response?: Response | undefined }>
 
-function withAuth<M extends AnyClientMethod>(fn: M): M {
+function withAuth<M extends AnyClientMethod>(fn: M, retryable: boolean): M {
   const call = fn as unknown as CallableMethod
   const wrapped = (async (url: string, options?: Record<string, unknown>) => {
     const optionsRecord = (options ?? {}) as Record<string, unknown>
@@ -82,7 +82,7 @@ function withAuth<M extends AnyClientMethod>(fn: M): M {
     let resp = await call(url, { ...optionsRecord, headers })
     if (resp.response?.status === 401) {
       const refreshed = await attemptTokenRefresh()
-      if (refreshed) {
+      if (refreshed && retryable) {
         const newHeaders: Record<string, unknown> = {
           ...getAuthHeaders(),
           ...(optionsRecord.headers as Record<string, unknown> | undefined),
@@ -103,10 +103,12 @@ function withAuth<M extends AnyClientMethod>(fn: M): M {
   return wrapped
 }
 
-api.GET = withAuth(_origGet)
-api.POST = withAuth(_origPost)
-api.PUT = withAuth(_origPut)
-api.PATCH = withAuth(_origPatch)
-api.DELETE = withAuth(_origDelete)
+// Only GET is retried after a token refresh (FAR-819) — mutating requests may
+// have side effects server-side, so a duplicate send must never be re-issued.
+api.GET = withAuth(_origGet, true)
+api.POST = withAuth(_origPost, false)
+api.PUT = withAuth(_origPut, false)
+api.PATCH = withAuth(_origPatch, false)
+api.DELETE = withAuth(_origDelete, false)
 
 export type { paths, components } from './schema'
