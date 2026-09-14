@@ -533,6 +533,7 @@ async def run_bundled_runner_node(
     gate replaces all pre-gates for every tier.
     """
     from modulo.core.pipeline_engine.node_runner import (
+        _UNSET,
         SandboxNodeFailedError,
         ScriptBudgetKilledError,
         ScriptFailedError,
@@ -547,6 +548,7 @@ async def run_bundled_runner_node(
         _idempotency_gate_skipped_envelope,
         _is_sandbox_session_lost_echo,
         _marker_delivery_done_for_node,
+        _persist_full_stdout_artifact,
         _read_org_stdout_retention_ceiling,
         _read_run_raw_output_markers_for_gate,
         _redact_raw_output,
@@ -999,6 +1001,23 @@ async def run_bundled_runner_node(
                     "stderr_length": stderr_len,
                 },
             )
+
+        # FAR-811 parity with the E2B path: over-cap redacted stdout is retained
+        # IN FULL in the artifact store with an envelope pointer (stdout_artifact)
+        # instead of only the truncated head.  Best-effort: a store failure keeps
+        # today's inline (truncated) behaviour with no pointer key.  Redaction
+        # happened ABOVE (order unchanged) — the stored bytes are the redacted text.
+        _stdout_artifact: dict[str, Any] | None = None
+        if stdout_truncated:
+            _stdout_artifact = _persist_full_stdout_artifact(
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                node_cap=stdout_cap,
+                redacted_stdout=_redact_raw_output(agent_stdout_raw),
+            )
+
         cost = _compute_sandbox_cost(elapsed, output_json)
         status = "completed" if exit_code == 0 else "failed"
         result_summary = ""
@@ -1071,6 +1090,7 @@ async def run_bundled_runner_node(
                 stdout_length=stdout_len,
                 stderr_length=stderr_len,
                 stdout_truncated=stdout_truncated,
+                stdout_artifact=_stdout_artifact if _stdout_artifact is not None else _UNSET,
                 attempt_key=attempt_key,
                 agent_status=agent_status,
                 agent_outcome=agent_outcome,
