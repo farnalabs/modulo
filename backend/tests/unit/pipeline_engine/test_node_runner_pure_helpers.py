@@ -7,6 +7,7 @@ marker text normalisation, the delivery-sentinel matcher, and the HITL
 required-team-id normaliser.
 """
 
+import asyncio
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,6 +16,7 @@ import pytest
 
 from modulo.api.routes.pipelines import PipelineGraphNode
 from modulo.cli.apply.models import ApplyGraphNode
+from modulo.core.artifacts.store import LocalArtifactStore
 from modulo.core.cost_controller.breakdown.params import MAX_REPORTABLE_TOKEN_COUNT, REPORTED_TOKEN_CHAIN
 from modulo.core.pipeline_engine import node_runner as nr
 from modulo.core.pipeline_engine.node_runner import (
@@ -35,6 +37,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _marker_delivery_done_for_node,
     _normalize_marker_text,
     _normalize_required_team_id,
+    _persist_full_stdout_artifact,
     _read_org_stdout_retention_ceiling,
     _resolve_stdout_cap,
     _run_identity_strs,
@@ -740,6 +743,32 @@ class TestStdoutTruncatedEnvelopeKey:
         )
         assert "stdout_truncated" not in envelope["output"]
 
+    def test_stdout_artifact_pointer_is_opt_in_extra_key(self) -> None:
+        pointer = {
+            "rel_path": "org/run/node/key.stdout.zst",
+            "size_bytes": 600_000,
+            "sha256": "d1b2c3",
+            "stream": "stdout",
+            "compression": "zstd",
+            "truncated": False,
+            "redacted": True,
+        }
+        envelope = _build_sandbox_node_envelope(
+            node_id="n1",
+            output=self._output(stdout_truncated=True, stdout_length=600_000, stdout_artifact=pointer),
+        )
+        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
+            assert view["stdout_artifact"]["truncated"] is False
+            assert view["stdout_artifact"]["redacted"] is True
+            assert view["stdout_artifact"]["size_bytes"] == 600_000
+            assert view["stdout_artifact"]["sha256"] == "d1b2c3"
+            assert view["stdout_artifact"]["rel_path"].endswith(".zst")
+
+    def test_stdout_artifact_absent_when_inline(self) -> None:
+        envelope = _build_sandbox_node_envelope(node_id="n1", output=self._output())
+        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
+            assert "stdout_artifact" not in view
+
 
 # ---------------------------------------------------------------------------
 # FAR-792: per-node stdout retention must be reachable through REAL config paths
@@ -756,7 +785,7 @@ def _sandbox_node_kwargs(**overrides: Any) -> dict[str, Any]:
         "node_type": "sandbox_agent",
         "position": {"x": 0.0, "y": 0.0},
         "template_id": "opencode",
-        "agent_command": "echo hi",
+        "agent_commands": ["echo hi"],
         "agent_prompt": "Do the thing",
     }
     kwargs.update(overrides)
@@ -837,3 +866,99 @@ def test_saved_graph_defaults_to_tail():
     )
     assert config.stdout_retention_mode == "tail"
     assert config.stdout_max_bytes is None
+
+
+# ---------------------------------------------------------------------------
+# _persist_full_stdout_artifact (FAR-811)
+# ---------------------------------------------------------------------------
+
+
+class TestPersistFullStdoutArtifact:
+    """Coverage for the over-cap redacted-stdout artifact writer.
+
+    The success path is exercised end-to-end via the sandbox agent in
+    test_node_runner_sandbox; these unit tests pin the branch logic (opt-out
+    guards, store failure, empty pointer) that the happy-path test never hits.
+    """
+
+    def _kwargs(self, **overrides: Any) -> dict[str, Any]:
+        base = {
+            "org_id": "org-1",
+            "run_id": "run-1",
+            "node_id": "node-1",
+            "attempt_key": "attempt-1",
+            "node_cap": 2048,
+            "redacted_stdout": "x" * 4096,
+        }
+        base.update(overrides)
+        return base
+
+    def test_success_writes_artifact_and_returns_pointer(self, tmp_path: Any) -> None:
+        """Non-empty redacted stdout with a real local store is persisted in
+        full and surfaced as an envelope pointer (truncated: False, redacted: True)."""
+        import hashlib
+
+        store = LocalArtifactStore(tmp_path)
+        with patch("modulo.core.artifacts.store.get_store", return_value=store):
+            pointer = _persist_full_stdout_artifact(**self._kwargs())
+        assert pointer is not None
+        assert pointer["truncated"] is False
+        assert pointer["redacted"] is True
+        assert pointer["stream"] == "stdout"
+        assert pointer["compression"] == "zstd"
+        assert pointer["size_bytes"] == 4096
+        assert pointer["sha256"] == hashlib.sha256(b"x" * 4096).hexdigest()
+        assert pointer["rel_path"].endswith(".zst")
+        assert store.read_bytes(pointer) == b"x" * 4096
+
+    def test_opt_out_when_attempt_key_missing(self) -> None:
+        """No attempt key means nothing to key the overflow artifact on — the
+        function bails before touching the store (backwards-compatible no-op)."""
+        store = MagicMock()
+        with patch("modulo.core.artifacts.store.get_store", return_value=store):
+            assert _persist_full_stdout_artifact(**self._kwargs(attempt_key=None)) is None
+        store.append.assert_not_called()
+
+    def test_opt_out_when_redacted_stdout_empty(self) -> None:
+        """Empty redacted transcript has nothing to persist — bail before the
+        store round-trip (the store's append is itself a no-op on empty input,
+        but the guard keeps the contract explicit and cheap)."""
+        store = MagicMock()
+        with patch("modulo.core.artifacts.store.get_store", return_value=store):
+            assert _persist_full_stdout_artifact(**self._kwargs(redacted_stdout="")) is None
+        store.append.assert_not_called()
+
+    def test_store_failure_is_non_fatal(self, caplog: Any) -> None:
+        """A store write/append/finalize exception must NOT propagate — the
+        caller keeps today's inline (truncated) behaviour and a warning is logged."""
+        boom = RuntimeError("store unavailable")
+        store = MagicMock()
+        store.append.side_effect = boom
+        with (
+            patch("modulo.core.artifacts.store.get_store", return_value=store),
+            caplog.at_level("WARNING"),
+        ):
+            assert _persist_full_stdout_artifact(**self._kwargs()) is None
+        assert any("stdout_artifact_write_failed" in r.message for r in caplog.records)
+
+    def test_none_pointer_is_non_fatal(self) -> None:
+        """If the store finalises to no artifact (e.g. empty raw from a skipped
+        append), the function returns None rather than building a pointer from a
+        None ArtifactPointer."""
+        store = MagicMock()
+        store.append.return_value = None
+        store.finalize.return_value = None
+        with patch("modulo.core.artifacts.store.get_store", return_value=store):
+            assert _persist_full_stdout_artifact(**self._kwargs()) is None
+
+    def test_cancelled_error_propagates(self) -> None:
+        """A CancelledError is a control signal, not a store fault — it must
+        re-raise so the runtime can honour cancellation instead of swallowing it."""
+        with (
+            patch(
+                "modulo.core.artifacts.store.get_store",
+                side_effect=asyncio.CancelledError(),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            _persist_full_stdout_artifact(**self._kwargs())

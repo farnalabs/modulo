@@ -104,7 +104,6 @@ def _make_agent(*, prompt_template: str = "You are a helpful assistant.") -> Mag
     a.id = _AGENT_ID
     a.prompt_template = prompt_template
     a.template_id = None
-    a.agent_command = None
     return a
 
 

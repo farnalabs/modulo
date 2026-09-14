@@ -20,7 +20,7 @@ def _sandbox_node(**overrides: object) -> dict:
         "id": str(uuid.uuid4()),
         "node_type": "sandbox_agent",
         "agent_prompt": "Do the thing",
-        "agent_command": "opencode run",
+        "agent_commands": ["opencode run"],
         "template_id": "opencode",
     }
     node.update(overrides)
@@ -35,27 +35,28 @@ def test_valid_llm_node_passes():
 def test_valid_jinja_template_passes():
     """A renderable agent_command with {{ }} references passes the gate."""
     assert (
-        _validate_sandbox_nodes([_sandbox_node(agent_command="opencode run --model {{ input.model }} --auto")]) is None
+        _validate_sandbox_nodes([_sandbox_node(agent_commands=["opencode run --model {{ input.model }} --auto"])])
+        is None
     )
 
 
 def test_broken_jinja_rejected_at_save_time():
     """FAR-226: an invalid backslash in agent_command is rejected by the MCP save path."""
-    err = _validate_sandbox_nodes([_sandbox_node(agent_command="opencode --model {{ \\\\ }}")])
+    err = _validate_sandbox_nodes([_sandbox_node(agent_commands=["opencode --model {{ \\\\ }}"])])
     assert err is not None
     assert err["error"] == "validation_failed"
     assert err["field"] == "nodes"
-    assert "agent_command" in err["detail"]
+    assert "agent_commands" in err["detail"]
 
 
 def test_broken_jinja_rejected_in_agent_commands_list():
     """FAR-226: the joined agent_commands list form is validated too."""
-    node = _sandbox_node(agent_command=None)
+    node = _sandbox_node(agent_commands=[None])
     node["agent_commands"] = ["opencode run", "--model {{ \\\\ }}"]
     err = _validate_sandbox_nodes([node])
     assert err is not None
     assert err["error"] == "validation_failed"
-    assert "agent_command" in err["detail"]
+    assert "agent_commands" in err["detail"]
 
 
 def test_script_mode_not_jinja_checked():
@@ -72,7 +73,7 @@ def test_script_mode_not_jinja_checked():
 
 def test_non_sandbox_nodes_skipped():
     """Only sandbox_agent nodes are validated by the gate."""
-    agent = {"id": str(uuid.uuid4()), "node_type": "agent", "agent_command": "{{ \\\\ }}"}
+    agent = {"id": str(uuid.uuid4()), "node_type": "agent", "agent_commands": ["{{ \\\\ }}"]}
     assert _validate_sandbox_nodes([agent]) is None
 
 

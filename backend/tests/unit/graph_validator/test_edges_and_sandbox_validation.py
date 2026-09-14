@@ -111,7 +111,7 @@ def _sandbox_node(**overrides) -> dict:
         "id": str(uuid.uuid4()),
         "node_type": "sandbox_agent",
         "agent_prompt": "Do the thing",
-        "agent_command": "opencode run",
+        "agent_commands": ["opencode run"],
         "template_id": "opencode",
         "timeout_seconds": 600,
         "context_files": {"/workspace/input.txt": None},
@@ -123,7 +123,7 @@ def _sandbox_node(**overrides) -> dict:
 
 
 def _non_sandbox_node() -> dict:
-    return {"id": str(uuid.uuid4()), "node_type": "agent", "agent_command": ""}
+    return {"id": str(uuid.uuid4()), "node_type": "agent", "agent_commands": [""]}
 
 
 def test_sandbox_non_sandbox_node_skipped():
@@ -143,7 +143,7 @@ def test_sandbox_valid_config_no_issues():
 
 
 def test_sandbox_missing_command_errors():
-    graph = {"nodes": [_sandbox_node(agent_command="")], "edges": []}
+    graph = {"nodes": [_sandbox_node(agent_commands=[""])], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_MISSING_COMMAND" in _codes(result)
@@ -151,7 +151,7 @@ def test_sandbox_missing_command_errors():
 
 
 def test_sandbox_whitespace_command_errors():
-    graph = {"nodes": [_sandbox_node(agent_command="   ")], "edges": []}
+    graph = {"nodes": [_sandbox_node(agent_commands=["   "])], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_MISSING_COMMAND" in _codes(result)
@@ -297,7 +297,7 @@ def test_non_sandbox_node_timeout_over_cap_unaffected():
     """FAR-511: the E2B cap only applies to sandbox_agent nodes; an agent node
     with timeout_seconds=3600 must not be rejected by the sandbox check."""
     nid = str(uuid.uuid4())
-    graph = {"nodes": [{"id": nid, "node_type": "agent", "agent_command": "", "timeout_seconds": 3600}], "edges": []}
+    graph = {"nodes": [{"id": nid, "node_type": "agent", "agent_commands": [""], "timeout_seconds": 3600}], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" not in _codes(result)
@@ -442,7 +442,7 @@ def test_sandbox_output_schema_incomplete_warns():
 
 def test_sandbox_bad_jinja_errors():
     """FAR-226: an agent_command with invalid Jinja syntax is a hard save error."""
-    graph = {"nodes": [_sandbox_node(agent_command="opencode --model {{ \\\\ }}")], "edges": []}
+    graph = {"nodes": [_sandbox_node(agent_commands=["opencode --model {{ \\\\ }}"])], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_BAD_JINJA_TEMPLATE" in _codes(result)
@@ -451,18 +451,18 @@ def test_sandbox_bad_jinja_errors():
 
 def test_sandbox_bad_jinja_carries_node_id():
     """FAR-226: the SANDBOX_BAD_JINJA_TEMPLATE issue carries the offending node id."""
-    graph = {"nodes": [_sandbox_node(agent_command="opencode --model {{ \\\\ }}")], "edges": []}
+    graph = {"nodes": [_sandbox_node(agent_commands=["opencode --model {{ \\\\ }}"])], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     issue = next(i for i in result.issues if i.code == "SANDBOX_BAD_JINJA_TEMPLATE")
     assert issue.node_id == graph["nodes"][0]["id"]
-    assert "agent_command" in issue.message
+    assert "agent_commands" in issue.message
 
 
 def test_sandbox_valid_jinja_no_issue():
     """FAR-226: a renderable agent_command (with or without {{ }} templates) passes."""
     for cmd in ("opencode run", "opencode run --model {{ input.model }} --auto"):
-        graph = {"nodes": [_sandbox_node(agent_command=cmd)], "edges": []}
+        graph = {"nodes": [_sandbox_node(agent_commands=[cmd])], "edges": []}
         result = ValidationResult()
         GraphValidator._check_sandbox_agent_config(graph, result)
         assert "SANDBOX_BAD_JINJA_TEMPLATE" not in _codes(result)
@@ -489,7 +489,7 @@ def test_sandbox_multiple_issues_collected():
     graph = {
         "nodes": [
             _sandbox_node(
-                agent_command="",
+                agent_commands=[""],
                 template_id=None,
                 timeout_seconds=5,
                 context_files={"rel.txt": None},
@@ -520,7 +520,6 @@ def test_sandbox_heredoc_terminated_list_item_errors():
     """FAR-664: an agent_commands item whose final line is a bare heredoc
     terminator is rejected — the " && " join would corrupt the terminator."""
     node = _sandbox_node(
-        agent_command="",
         agent_commands=["python3 - <<'PY'\nprint('hi')\nPY", "opencode run"],
     )
     graph = {"nodes": [node], "edges": []}
@@ -538,7 +537,6 @@ def test_sandbox_heredoc_terminated_list_item_with_trailing_newline_errors():
     """FAR-664: terminator + trailing newline (line-leading '&&' after join)
     is also rejected — the final non-empty line is still the terminator."""
     node = _sandbox_node(
-        agent_command="",
         agent_commands=["python3 - <<PY\ndata\nPY\n", "opencode run"],
     )
     graph = {"nodes": [node], "edges": []}
@@ -551,7 +549,6 @@ def test_sandbox_heredoc_terminated_list_item_with_trailing_newline_errors():
 def test_sandbox_heredoc_clean_list_is_valid():
     """FAR-664: a multi-item list without terminator-final lines saves clean."""
     node = _sandbox_node(
-        agent_command="",
         agent_commands=["python3 - <<'PY'\nprint('hi')\nPY\nnext_step", "opencode run"],
     )
     graph = {"nodes": [node], "edges": []}
@@ -561,10 +558,10 @@ def test_sandbox_heredoc_clean_list_is_valid():
     assert result.is_valid
 
 
-def test_sandbox_heredoc_scalar_command_is_not_flagged():
-    """FAR-664: a scalar agent_command containing a heredoc is safe (no join
-    happens for a single command) and must not be rejected."""
-    node = _sandbox_node(agent_command="python3 - <<'PY'\nprint('hi')\nPY")
+def test_sandbox_heredoc_in_single_item_list_is_flagged():
+    """FAR-664: a single-item agent_commands list containing a heredoc is safe
+    (no join happens for a single command) and must not be rejected."""
+    node = _sandbox_node(agent_commands=["python3 - <<'PY'\nprint('hi')\nPY"])
     graph = {"nodes": [node], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
@@ -575,13 +572,24 @@ def test_sandbox_heredoc_indented_terminator_detected():
     """FAR-664: <<- allows indented terminators — a stripped final line that
     matches the delimiter is still rejected."""
     node = _sandbox_node(
-        agent_command="",
-        agent_commands=["python3 - <<-PY\n\tprint('hi')\n\tPY"],
+        agent_commands=["", "python3 - <<-PY\n\tprint('hi')\n\tPY"],
     )
     graph = {"nodes": [node], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM" in _codes(result)
+
+
+def test_sandbox_heredoc_scalar_command_is_not_flagged():
+    """A list item WITHOUT a heredoc terminator is not flagged — the scalar
+    concept is gone, but the invariant holds: only bare-terminator-final lines
+    are rejected."""
+    node = _sandbox_node(agent_commands=["echo hello world"])
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM" not in _codes(result)
+    assert result.is_valid
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +603,7 @@ async def test_validate_blocks_missing_sandbox_command():
     validator = GraphValidator()
     session = AsyncMock()
     snap = AsyncMock()
-    snap.graph_json = {"nodes": [_sandbox_node(agent_command="")], "edges": []}
+    snap.graph_json = {"nodes": [_sandbox_node(agent_commands=[""])], "edges": []}
     snap.schema_pins_json = []
     snap.connector_bindings_json = []
     snap.model_backend_pins_json = []

@@ -62,7 +62,7 @@ _log = logging.getLogger(__name__)
 # identifiers, BEFORE the script is built — fail-closed (ValueError) rather than
 # emitting a malformed or injectable helper.
 _HOSTNAME_RE = re.compile(r"[A-Za-z0-9.\-]+")
-_ENV_VAR_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_ENV_VAR_RE = re.compile(r"[A-Za-z_]\w*", re.ASCII)
 
 # The E2B sandbox runs the agent as the DEFAULT NON-ROOT user (node_runner
 # starts the agent command without a ``user`` override — see

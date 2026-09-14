@@ -43,7 +43,7 @@ def _sandbox_node_def(**overrides: Any) -> dict[str, Any]:
     node_def: dict[str, Any] = {
         "id": "n1",
         "agent_prompt": "Do the thing",
-        "agent_command": _SINGLE_LINE_COMMAND,
+        "agent_commands": [_SINGLE_LINE_COMMAND],
     }
     node_def.update(overrides)
     return node_def
@@ -113,7 +113,7 @@ async def test_bridge_handoff_command_file_holds_multiline_command_verbatim():
     the command file byte-for-byte and never appears inline in the dispatched
     command — only ``bash <file>`` does."""
     node_def = _sandbox_node_def(
-        agent_command=_MULTI_LINE_COMMAND,
+        agent_commands=[_MULTI_LINE_COMMAND],
         loop_intercept={"enabled": True, "latency_budget_ms": 100},
     )
     fn = make_sandbox_agent_fn(node_def)

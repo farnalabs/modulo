@@ -143,7 +143,7 @@ def _make_fence_env(
     node_def = {
         "id": "n1",
         "agent_prompt": "Do the thing",
-        "agent_command": _AGENT_COMMAND,
+        "agent_commands": [_AGENT_COMMAND],
         "timeout_seconds": 30,
     }
     node_fn = make_sandbox_agent_fn(node_def, session_factory=_factory)

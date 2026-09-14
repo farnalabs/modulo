@@ -206,9 +206,13 @@ class LifecycleMapTransitionItem(BaseModel):
     target_stage_id: str
     trigger_type: str | None = None
     description: str | None = None
+    condition_expression: str | None = None
+    estimated_frequency: str | None = None
+    trigger_link: str | None = None
 
 
 class LifecycleMapVersionMeta(BaseModel):
+    id: uuid.UUID
     version: int
     created_at: datetime
     created_by: str | None = None
@@ -444,6 +448,9 @@ def _build_detail(lm: Any) -> LifecycleMapDetailResponse:
             target_stage_id=e.get("target", ""),
             trigger_type=e.get("trigger_type"),
             description=e.get("description"),
+            condition_expression=e.get("condition_expression"),
+            estimated_frequency=e.get("estimated_frequency"),
+            trigger_link=e.get("trigger_link"),
         )
         for e in (content.get("edges") or [])
         if isinstance(e, dict)
@@ -460,7 +467,14 @@ def _build_detail(lm: Any) -> LifecycleMapDetailResponse:
         current_version=lm.version,
         stages=stages,
         transitions=transitions,
-        versions=[LifecycleMapVersionMeta(version=lm.version, created_at=lm.updated_at, created_by=_version_actor(lm))],
+        versions=[
+            LifecycleMapVersionMeta(
+                id=lm.id,
+                version=lm.version,
+                created_at=lm.updated_at,
+                created_by=_version_actor(lm),
+            )
+        ],
         content_json=content,
         archived_at=lm.archived_at,
         created_at=lm.created_at,

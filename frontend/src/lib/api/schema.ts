@@ -9175,8 +9175,6 @@ export interface components {
             required_environment_capabilities: string[];
             /** Template Id */
             template_id: string | null;
-            /** Agent Command */
-            agent_command?: string | null;
             /** Agent Commands */
             agent_commands?: string[] | null;
         };
@@ -9249,8 +9247,6 @@ export interface components {
             required_environment_capabilities: string[];
             /** Template Id */
             template_id: string | null;
-            /** Agent Command */
-            agent_command: string | null;
             /** Agent Commands */
             agent_commands: string[] | null;
             /**
@@ -9303,8 +9299,6 @@ export interface components {
             required_environment_capabilities: string[];
             /** Template Id */
             template_id: string | null;
-            /** Agent Command */
-            agent_command?: string | null;
             /** Agent Commands */
             agent_commands?: string[] | null;
         };
@@ -13194,6 +13188,12 @@ export interface components {
             trigger_type?: string | null;
             /** Description */
             description?: string | null;
+            /** Condition Expression */
+            condition_expression?: string | null;
+            /** Estimated Frequency */
+            estimated_frequency?: string | null;
+            /** Trigger Link */
+            trigger_link?: string | null;
         };
         /** LifecycleMapUpdate */
         LifecycleMapUpdate: {
@@ -13212,6 +13212,11 @@ export interface components {
         };
         /** LifecycleMapVersionMeta */
         LifecycleMapVersionMeta: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
             /** Version */
             version: number;
             /**
@@ -14410,8 +14415,6 @@ export interface components {
              * @enum {string}
              */
             mode: "llm" | "script";
-            /** Agent Command */
-            agent_command?: string | null;
             /** Agent Commands */
             agent_commands?: string[] | null;
             /**

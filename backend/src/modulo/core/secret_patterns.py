@@ -35,8 +35,8 @@ SECRET_VALUE_REDACT_CHAR_CAP = 5000
 
 # Raw compiled secret-format patterns shared with every other redaction site so
 # the github_pat_ / AWS key knowledge lives ONLY here.
-GITHUB_PAT_PATTERN = re.compile(r"github_pat_[0-9A-Za-z_]{50,}")
-AWS_ACCESS_KEY_PATTERN = re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}")
+GITHUB_PAT_PATTERN = re.compile(r"github_pat_\w{50,}", re.ASCII)
+AWS_ACCESS_KEY_PATTERN = re.compile(r"(?:AKIA|ASIA)[\dA-Z]{16}", re.ASCII)
 
 # Connection strings with inline credentials: scheme://user:PASSWORD@host.
 # The password group captures ``\S+`` (one whitespace-free token) so it never
