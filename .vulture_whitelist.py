@@ -137,6 +137,11 @@ __all__ = [
     #     prod call site yet) ---
     "eval_maturity_enabled",
     # --- CRUD functions referenced only by tests ---
+    # FAR-795: create-time refs read used by test_work_item_refs_slice2b.py;
+    # the node-runner injection site now reads the same semantics via the
+    # DAG-ancestor union (_validated_node_input_refs + collect_injected_refs),
+    # so vulture sees no prod call site.
+    "_node_input_work_item_refs",
     "delete_composite_template",
     "upsert_daily_run_count",
     "get_daily_run_counts",
