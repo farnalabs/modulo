@@ -103,11 +103,21 @@ def _run_diff_cover(
     if sys.platform == "win32":
         diff_cover_bin = exe_dir / "diff-cover.exe"
 
+    # Pass the caller-supplied compare branch and threshold as discrete
+    # argv elements rather than interpolating them into a single
+    # ``--flag=value`` string.  ``compare_branch`` originates from the
+    # ``--compare-branch`` CLI argument and is therefore attacker-influenced;
+    # concatenating it into an argument would let a crafted value inject
+    # additional ``diff-cover`` flags.  As separate elements the value can
+    # never be interpreted as an extra argument (subprocess runs without a
+    # shell).
     cmd = [
         str(diff_cover_bin),
         str(report_path),
-        f"--compare-branch={compare_branch}",
-        f"--fail-under={fail_under}",
+        "--compare-branch",
+        compare_branch,
+        "--fail-under",
+        str(fail_under),
     ]
     result = subprocess.run(
         cmd,
