@@ -12,9 +12,14 @@
 -- ============================================================================
 
 -- B1 deploy cutoff (S1192: single definition used by all gates below).
-WITH b1_cutoff AS (
-  SELECT '2026-09-10 11:25:42+00'::timestamptz AS cutoff
-)
+-- Materialised as a session-scoped temporary VIEW so every gate below can
+-- reference `b1_cutoff.cutoff` without re-declaring the literal four times.
+-- A bare CTE only attaches to the single statement that follows it, which left
+-- Gates 2/3a/3b referencing an undefined relation; a temp view is visible to
+-- every statement run in this psql session.
+DROP VIEW IF EXISTS b1_cutoff;
+CREATE TEMPORARY VIEW b1_cutoff AS
+  SELECT '2026-09-10 11:25:42+00'::timestamptz AS cutoff;
 
 -- ---------------------------------------------------------------------------
 -- Gate 1: zero dual_write_failed error_events since the B1 deploy cutoff.
