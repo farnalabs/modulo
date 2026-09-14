@@ -59,6 +59,26 @@ jobs:
       - name: Install backend deps
         working-directory: backend
         run: uv sync --frozen
+      - name: Assert fuzz test parametrizes multiple endpoints
+        working-directory: backend
+        shell: bash
+        # Guard against regressions where the schemathesis test stops being
+        # collected as a parametrized test (e.g. a @parametrize-decorated helper
+        # called directly, which only ever yields a single uncollected item and
+        # silently stops fuzzing). The fuzz test must enumerate one item per GET
+        # operation; fail loudly if <= 1 item is collected.
+        run: |
+          COUNT=$(uv run --no-build --no-sync pytest tests/integration/test_schemathesis.py --collect-only -q 2>/dev/null | grep -c "test_api_fuzz_get_endpoints\[")
+          echo "Collected $COUNT fuzz test item(s)"
+          if [ "$COUNT" -le 1 ]; then
+            echo "::error::Schemathesis fuzz test is not parametrizing endpoints (regression) — only $COUNT item collected"
+            exit 1
+          fi
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+          REDIS_URL: "redis://localhost:6379/0"
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+          SCHEMA_GROUP: "${{ matrix.group }}"
       - name: Schemathesis API fuzz testing
         working-directory: backend
         shell: bash
