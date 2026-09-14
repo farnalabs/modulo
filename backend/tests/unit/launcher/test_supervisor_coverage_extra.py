@@ -434,6 +434,7 @@ def test_terminate_locked_with_no_process() -> None:
     supervisor._children["pg"] = child
     # Should not raise when process is None
     supervisor._terminate_locked(child)
+    assert child.process is None
 
 
 # ---------------------------------------------------------------------------
@@ -494,10 +495,17 @@ def test_signal_group_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
 
     monkeypatch.setattr(supervisor_module.sys, "platform", "win32")
-    proc = FakeProc()
+    terminated: list[int] = []
+
+    class WinProc(FakeProc):
+        def terminate(self) -> None:
+            terminated.append(self.pid)
+
+    proc = WinProc()
     supervisor = Supervisor(SupervisorKnobs())
     supervisor._signal_group(proc, 15)
     # On Windows, should call terminate()
+    assert terminated == [proc.pid]
 
 
 def test_signal_group_non_group_leader() -> None:
@@ -1066,11 +1074,19 @@ def test_pause_at_active_gate(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_pause_at_inactive_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """When MODULO_TEST_PAUSE_AT doesn't match, _pause_at is a no-op."""
+    import io
+
     from modulo.launcher.supervisor import _PAUSE_ENV_VAR
 
     monkeypatch.setenv(_PAUSE_ENV_VAR, "some_other_gate")
     # Should not raise or block
-    supervisor_module._pause_at("supervisor_pre_teardown")
+    old_stderr = sys.stderr
+    sys.stderr = captured = io.StringIO()
+    try:
+        supervisor_module._pause_at("supervisor_pre_teardown")
+    finally:
+        sys.stderr = old_stderr
+    assert "PAUSED:" not in captured.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -1216,6 +1232,8 @@ def test_enforce_startup_deadline_no_spawned_at() -> None:
     child.spawned_at = None
     # Should return early without error
     supervisor._enforce_startup_deadline_locked(child, 100.0)
+    assert child.terminating_since is None
+    assert child.process is None
 
 
 def test_enforce_startup_deadline_within_timeout() -> None:
@@ -1257,6 +1275,7 @@ def test_enforce_startup_deadline_probe_process_none() -> None:
     child.process = None
     supervisor._enforce_startup_deadline_locked(child, 5.0)
     # Should not raise
+    assert child.terminating_since is None
 
 
 # ---------------------------------------------------------------------------
@@ -1612,12 +1631,18 @@ def test_teardown_child_first_signal_wait_succeeds() -> None:
 
 
 def test_tick_returns_immediately_when_degraded() -> None:
-    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
-    supervisor = Supervisor(SupervisorKnobs())
+    spawned: list[list[str]] = []
+    supervisor = Supervisor(
+        SupervisorKnobs(),
+        spawner=lambda argv, env: spawned.append(argv) or FakeProc(),
+    )
     supervisor._degraded_reason = "already degraded"
+    supervisor.add(ChildSpec(name="pg", argv_builder=lambda: ["pg"]))
     # Should not raise or process children
     supervisor.tick()
+    assert not spawned
 
 
 # ---------------------------------------------------------------------------

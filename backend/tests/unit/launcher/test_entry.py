@@ -1001,7 +1001,7 @@ def test_upgrade_context_provider_attaches_fields_inside_the_window(
 # ---------------------------------------------------------------------------
 
 
-def test_await_health_shutdown_requested(tmp_path: Path) -> None:
+def test_await_health_shutdown_requested() -> None:
     from modulo.launcher.entry import BootError, _await_health
 
     stop = threading.Event()
@@ -1015,7 +1015,7 @@ def test_await_health_shutdown_requested(tmp_path: Path) -> None:
         )
 
 
-def test_await_health_probe_error(tmp_path: Path) -> None:
+def test_await_health_probe_error() -> None:
     from modulo.launcher.entry import _await_health
 
     stop = threading.Event()
@@ -1035,9 +1035,10 @@ def test_await_health_probe_error(tmp_path: Path) -> None:
         clock=lambda: 0.0,
         sleep=lambda _: None,
     )
+    assert calls["n"] >= 2
 
 
-def test_await_health_timeout(tmp_path: Path) -> None:
+def test_await_health_timeout() -> None:
     from modulo.launcher.entry import BootError, _await_health
 
     stop = threading.Event()
@@ -1058,13 +1059,15 @@ def test_await_health_timeout(tmp_path: Path) -> None:
         )
 
 
-def test_await_health_propagates_probe_outcome_healthy(tmp_path: Path) -> None:
+def test_await_health_propagates_probe_outcome_healthy() -> None:
     from modulo.launcher.entry import _await_health
     from modulo.launcher.supervisor import ProbeOutcome
 
     stop = threading.Event()
+    calls = {"n": 0}
 
     def probe():
+        calls["n"] += 1
         return ProbeOutcome.HEALTHY
 
     _await_health(
@@ -1075,7 +1078,7 @@ def test_await_health_propagates_probe_outcome_healthy(tmp_path: Path) -> None:
         clock=lambda: 0.0,
         sleep=lambda _: None,
     )
-    # Should complete without error
+    assert calls["n"] >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -1083,7 +1086,7 @@ def test_await_health_propagates_probe_outcome_healthy(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_probe_command_oserror_returns_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_run_probe_command_oserror_returns_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     from modulo.launcher.supervisor import ProbeOutcome
@@ -1194,8 +1197,8 @@ def test_prepare_database_env_with_system_url() -> None:
 
 
 def test_prepare_database_env_missing_keys() -> None:
-    entry_module._prepare_database_env({})
-    # Should not raise
+    result = entry_module._prepare_database_env({})
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -1251,8 +1254,11 @@ def test_serve_watch_already_exiting() -> None:
     stop = threading.Event()
     force = threading.Event()
     stop.set()
-    entry_module._serve_watch(FakeServer(), stop, force)
+    server = FakeServer()
+    entry_module._serve_watch(server, stop, force)
     # Should return immediately since server.should_exit is already True
+    assert server.should_exit is True
+    assert force.is_set() is False
 
 
 def test_serve_watch_force_exit() -> None:
@@ -1337,14 +1343,25 @@ def test_await_health_all_healthy_immediately() -> None:
     from modulo.launcher.entry import _await_health
 
     stop = threading.Event()
+    calls = {"n": 0}
+
+    def pg():
+        calls["n"] += 1
+        return True
+
+    def redis():
+        calls["n"] += 1
+        return True
+
     _await_health(
-        {"pg": lambda: True, "redis": lambda: True},
+        {"pg": pg, "redis": redis},
         timeout=10.0,
         interval=0.1,
         stop=stop,
         clock=lambda: 0.0,
         sleep=lambda _: None,
     )
+    assert calls["n"] == 2
 
 
 def test_await_health_one_at_a_time() -> None:
@@ -1365,6 +1382,7 @@ def test_await_health_one_at_a_time() -> None:
         clock=lambda: float(calls["n"]) * 0.01,
         sleep=lambda _: None,
     )
+    assert calls["n"] >= 2
 
 
 # ---------------------------------------------------------------------------
@@ -1393,6 +1411,7 @@ def test_await_health_probe_unavailable_does_not_fail_boot() -> None:
         clock=lambda: float(calls["n"]) * 0.01,
         sleep=lambda _: None,
     )
+    assert calls["n"] >= 3
 
 
 # ---------------------------------------------------------------------------
@@ -1521,7 +1540,9 @@ def test_run_state_install_signal_handlers_on_windows(monkeypatch: pytest.Monkey
 
 def test_run_state_stop_monitor_with_no_stopper() -> None:
     state = entry_module._RunState()
+    assert state.monitor_stopper is None
     state.stop_monitor()  # Should not raise
+    assert state.monitor_stopper is None
 
 
 def test_run_state_stop_monitor_with_stopper() -> None:
