@@ -331,9 +331,8 @@ class TestMigrationBackfillGrace:
         # and 0225_agents_constraints_rls chains on top of 0224,
         # and 0226_agents_json_to_jsonb chains on top of 0225,
         # and 0228_drop_scalar_agent_command chains on top of 0227_env_profiles_initialisation_strategy_check,
-        # and 0229_agents_unique_organisation_name chains on top of 0228_drop_scalar_agent_command,
         # so it is now the single linear head of the chain.
-        assert heads == ["0229_agents_unique_organisation_name"], f"expected a single head, got {heads}"
+        assert heads == ["0228_drop_scalar_agent_command"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
