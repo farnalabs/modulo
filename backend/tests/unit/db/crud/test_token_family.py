@@ -122,7 +122,7 @@ class TestAdvanceSequenceTheftDetection:
         family = await _seed_family(session, account_id=_ACCOUNT_A, org_id=_ORG_A)
         await blacklist_family(session, family.family_id, _ACCOUNT_A)
 
-        new_sequence, theft_detected, grace_replay = await advance_sequence(
+        new_sequence, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             family.max_sequence,
@@ -133,13 +133,13 @@ class TestAdvanceSequenceTheftDetection:
         )
 
         assert theft_detected is True
-        assert grace_replay is False
+        assert stale_replay is False
         assert new_sequence == 0
 
     async def test_sequence_mismatch_ahead_of_max_blacklists(self, session: AsyncSession) -> None:
         family = await _seed_family(session, account_id=_ACCOUNT_A, org_id=_ORG_A)
 
-        _, theft_detected, grace_replay = await advance_sequence(
+        _, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             99,
@@ -150,7 +150,7 @@ class TestAdvanceSequenceTheftDetection:
         )
 
         assert theft_detected is True
-        assert grace_replay is False
+        assert stale_replay is False
         assert family.is_blacklisted is True
         assert family.blacklisted_at is not None
 
@@ -158,7 +158,7 @@ class TestAdvanceSequenceTheftDetection:
         family = await _seed_family(session, account_id=_ACCOUNT_A, org_id=_ORG_A)
         previous_sequence = family.max_sequence
 
-        new_sequence, theft_detected, grace_replay = await advance_sequence(
+        new_sequence, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             previous_sequence,
@@ -169,11 +169,11 @@ class TestAdvanceSequenceTheftDetection:
         )
 
         assert theft_detected is False
-        assert grace_replay is False
+        assert stale_replay is False
         assert new_sequence == previous_sequence + 1
 
     async def test_missing_family_returns_no_theft(self, session: AsyncSession) -> None:
-        new_sequence, theft_detected, grace_replay = await advance_sequence(
+        new_sequence, theft_detected, stale_replay = await advance_sequence(
             session,
             uuid.uuid4(),
             0,
@@ -183,7 +183,7 @@ class TestAdvanceSequenceTheftDetection:
             reuse_grace_max_per_window=_GRACE_MAX_PER_WINDOW,
         )
 
-        assert (new_sequence, theft_detected, grace_replay) == (0, False, False)
+        assert (new_sequence, theft_detected, stale_replay) == (0, False, False)
 
 
 class TestAdvanceSequenceReuseGraceWindow:
@@ -204,7 +204,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         await session.flush()
         return family
 
-    async def test_reuse_within_window_one_step_behind_is_benign(
+    async def test_reuse_within_window_one_step_behind_is_stale_replay(
         self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         now = datetime.now(UTC)
@@ -215,7 +215,7 @@ class TestAdvanceSequenceReuseGraceWindow:
             rotated_at=now - timedelta(seconds=5),
         )
 
-        new_sequence, theft_detected, grace_replay = await advance_sequence(
+        new_sequence, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             4,
@@ -226,12 +226,13 @@ class TestAdvanceSequenceReuseGraceWindow:
         )
 
         assert theft_detected is False
-        assert grace_replay is True
-        assert new_sequence == 6
+        assert stale_replay is True
+        assert new_sequence == 5
+        assert family.max_sequence == 5
         assert family.is_blacklisted is False
         assert family.reuse_replay_count == 1
 
-    async def test_reuse_two_steps_behind_within_tolerance_is_benign(
+    async def test_reuse_two_steps_behind_within_tolerance_is_stale_replay(
         self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         now = datetime.now(UTC)
@@ -242,7 +243,7 @@ class TestAdvanceSequenceReuseGraceWindow:
             rotated_at=now - timedelta(seconds=5),
         )
 
-        new_sequence, theft_detected, grace_replay = await advance_sequence(
+        new_sequence, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             3,
@@ -253,8 +254,9 @@ class TestAdvanceSequenceReuseGraceWindow:
         )
 
         assert theft_detected is False
-        assert grace_replay is True
-        assert new_sequence == 6
+        assert stale_replay is True
+        assert new_sequence == 5
+        assert family.max_sequence == 5
 
     async def test_reuse_beyond_steps_tolerance_blacklists(
         self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
@@ -267,7 +269,7 @@ class TestAdvanceSequenceReuseGraceWindow:
             rotated_at=now - timedelta(seconds=5),
         )
 
-        _, theft_detected, grace_replay = await advance_sequence(
+        _, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             1,
@@ -278,7 +280,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         )
 
         assert theft_detected is True
-        assert grace_replay is False
+        assert stale_replay is False
         assert family.is_blacklisted is True
 
     async def test_reuse_with_grace_disabled_blacklists(
@@ -292,7 +294,7 @@ class TestAdvanceSequenceReuseGraceWindow:
             rotated_at=now - timedelta(seconds=5),
         )
 
-        _, theft_detected, grace_replay = await advance_sequence(
+        _, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             4,
@@ -303,7 +305,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         )
 
         assert theft_detected is True
-        assert grace_replay is False
+        assert stale_replay is False
         assert family.is_blacklisted is True
 
     async def test_reuse_with_expired_window_blacklists(
@@ -317,7 +319,7 @@ class TestAdvanceSequenceReuseGraceWindow:
             rotated_at=now - timedelta(seconds=_GRACE_SECONDS + 10),
         )
 
-        _, theft_detected, grace_replay = await advance_sequence(
+        _, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             4,
@@ -328,7 +330,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         )
 
         assert theft_detected is True
-        assert grace_replay is False
+        assert stale_replay is False
         assert family.is_blacklisted is True
 
     async def test_reuse_with_never_rotated_family_blacklists(
@@ -339,7 +341,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         family = await _seed_family(session, account_id=_ACCOUNT_A, org_id=_ORG_A)
         family.max_sequence = 5
 
-        _, theft_detected, grace_replay = await advance_sequence(
+        _, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             4,
@@ -350,7 +352,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         )
 
         assert theft_detected is True
-        assert grace_replay is False
+        assert stale_replay is False
         assert family.is_blacklisted is True
 
     async def test_reuse_with_naive_rotated_at_normalises_window(
@@ -367,7 +369,7 @@ class TestAdvanceSequenceReuseGraceWindow:
             rotated_at=(now - timedelta(seconds=5)).replace(tzinfo=None),
         )
 
-        new_sequence, theft_detected, grace_replay = await advance_sequence(
+        new_sequence, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             4,
@@ -378,8 +380,9 @@ class TestAdvanceSequenceReuseGraceWindow:
         )
 
         assert theft_detected is False
-        assert grace_replay is True
-        assert new_sequence == 6
+        assert stale_replay is True
+        assert new_sequence == 5
+        assert family.max_sequence == 5
 
     async def test_reuse_exceeding_per_window_budget_blacklists(
         self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
@@ -394,7 +397,7 @@ class TestAdvanceSequenceReuseGraceWindow:
             reuse_replay_count=_GRACE_MAX_PER_WINDOW,
         )
 
-        _, theft_detected, grace_replay = await advance_sequence(
+        _, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             4,
@@ -405,7 +408,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         )
 
         assert theft_detected is True
-        assert grace_replay is False
+        assert stale_replay is False
         assert family.is_blacklisted is True
 
     async def test_reuse_starts_new_window_after_expiry_reset(
@@ -421,7 +424,7 @@ class TestAdvanceSequenceReuseGraceWindow:
             reuse_replay_count=_GRACE_MAX_PER_WINDOW,
         )
 
-        new_sequence, theft_detected, grace_replay = await advance_sequence(
+        new_sequence, theft_detected, stale_replay = await advance_sequence(
             session,
             family.family_id,
             4,
@@ -432,7 +435,8 @@ class TestAdvanceSequenceReuseGraceWindow:
         )
 
         assert theft_detected is False
-        assert grace_replay is True
-        assert new_sequence == 6
+        assert stale_replay is True
+        assert new_sequence == 5
+        assert family.max_sequence == 5
         assert family.reuse_replay_count == 1
         assert family.reuse_window_started_at is not None

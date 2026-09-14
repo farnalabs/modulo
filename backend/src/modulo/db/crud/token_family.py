@@ -62,14 +62,14 @@ async def advance_sequence(
     Uses SELECT FOR UPDATE to prevent concurrent advancement races. Only
     advances families owned by *account_id*.
 
-    FAR-819 reuse-interval semantics: presenting a stale (lower) family
+    FAR-819 stale-replay semantics: presenting a stale (lower) family
     sequence is normally a theft signal that blacklists the family. When the
     reuse grace window is enabled (``reuse_grace_seconds > 0``) a replay is
-    treated as a BENIGN retry/race instead of theft when ALL of these hold:
+    treated as a STALE RETRY instead of theft when ALL of these hold:
 
     * it is within ``reuse_grace_max_steps`` of the current sequence
       (0 < max_sequence - expected_sequence <= reuse_grace_max_steps; an
-      expected_sequence ahead of max is never benign);
+      expected_sequence ahead of max is never stale);
     * it arrives inside the live reuse window — ``rotated_at`` is set and
       ``now - rotated_at <= reuse_grace_seconds`` (the interval since the last
       rotation in which the superseded token stays acceptable);
@@ -77,18 +77,21 @@ async def advance_sequence(
       ``reuse_window_started_at``) has not already admitted
       ``reuse_grace_max_per_window`` replays.
 
-    A benign replay advances the sequence normally, stamps a fresh
-    ``rotated_at``, records the replay against the reuse window (starting a new
-    window and resetting the counter when the prior window is NULL or expired),
-    and returns ``(new_sequence, False, True)``.
+    A stale replay does NOT advance the sequence, does NOT touch
+    ``rotated_at``, and does NOT blacklist the family. It records the replay
+    against the reuse window (starting a new window and resetting the counter
+    when the prior window is NULL or expired), and returns the current
+    ``max_sequence`` unchanged as ``(max_sequence, False, True)``. The client
+    is expected to re-read the fresh token from shared localStorage and retry.
 
     Every other mismatch — grace disabled, steps-behind beyond tolerance,
     expected_sequence ahead of max, an expired or never-started reuse window,
     an exhausted window budget, or an already-blacklisted family — blacklists
     the family (theft) and returns ``(max_sequence, True, False)``.
 
-    Returns (new_sequence, theft_detected, grace_replay): ``grace_replay``
-    marks a reuse tolerated as benign and implies ``theft_detected is False``.
+    Returns (new_sequence, theft_detected, stale_replay): ``stale_replay``
+    marks a stale-but-plausible replay that returns a retryable signal and
+    implies ``theft_detected is False``. The caller must NOT mint new tokens.
     """
     result = await session.execute(
         select(TokenFamily)
@@ -121,8 +124,6 @@ async def advance_sequence(
                 await session.flush()
                 return family.max_sequence, True, False
             family.reuse_replay_count += 1
-            family.max_sequence += 1
-            family.rotated_at = now
             await session.flush()
             return family.max_sequence, False, True
 
@@ -160,9 +161,9 @@ def _is_benign_reuse(
     grace_seconds: int,
     grace_max_steps: int,
 ) -> bool:
-    """Decide whether a sequence mismatch is a tolerable reuse-interval replay.
+    """Decide whether a sequence mismatch is a stale-but-plausible replay.
 
-    Benign only when grace is enabled, the presented sequence trails the
+    Stale only when grace is enabled, the presented sequence trails the
     current one within the steps tolerance (never when it is ahead), and the
     reuse window since the last rotation is still live. The per-window replay
     budget is enforced by the caller after this passes.

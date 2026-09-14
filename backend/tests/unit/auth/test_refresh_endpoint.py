@@ -204,3 +204,22 @@ def test_refresh_active_system_admin_without_membership_succeeds(client: TestCli
     assert resp.status_code == 200
     advance.assert_awaited_once()
     assert not _blacklist_update_sqls(mock_session)
+
+
+def test_refresh_stale_replay_returns_409(client: TestClient, mock_session: AsyncMock) -> None:
+    """A stale-but-plausible refresh token returns 409 (retryable), does NOT
+    advance, and does NOT blacklist the family."""
+    # stale_replay=True (third element): server should NOT mint new tokens
+    advance = AsyncMock(return_value=(2, False, True))
+    resolve_role = AsyncMock(return_value="admin")
+    with (
+        _patch_account(_make_account(True)),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=resolve_role),
+        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+    ):
+        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _make_refresh_token(str(_ORG_ID))})
+    assert resp.status_code == 409, resp.text
+    assert "stale" in resp.json()["detail"].lower()
+    advance.assert_awaited_once()
+    # Must NOT blacklist on a stale replay
+    assert not _blacklist_update_sqls(mock_session)
