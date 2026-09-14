@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { api } from "../lib/api/client";
 import { withTimeout } from "../lib/asyncUtils";
 import { formatApiError } from "../lib/api/formatError";
-import { registerHandler } from "./syncRegistry";
+import { registerSyncHandlers, disposeSyncHandlers } from "./syncRegistry";
 import type { EventBusEvent } from "@/types/events";
 
 interface ApiResult<T> {
@@ -189,20 +189,10 @@ export const usePlanStore = defineStore("plan", () => {
     }
   }
 
-  unsubHandlers.push(registerHandler("team", handleSyncEvent));
-  unsubHandlers.push(registerHandler("license", handleSyncEvent));
-  unsubHandlers.push(registerHandler("plan", handleSyncEvent));
-
-  if (import.meta.hot) {
-    import.meta.hot.dispose(() => {
-      disposeHandlers();
-    });
-  }
+  registerSyncHandlers(unsubHandlers, syncingIds, ["team", "license", "plan"], handleSyncEvent);
 
   function disposeHandlers(): void {
-    for (const unsub of unsubHandlers) unsub();
-    unsubHandlers.length = 0;
-    syncingIds.value.clear();
+    disposeSyncHandlers(unsubHandlers, syncingIds);
   }
 
   const orgOverrides = ref<Record<string, boolean | null>>({});

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   attemptTokenRefresh,
   clearAccessToken,
+  clearAccessTokenForLogout,
   exitToLogin,
   getAccessToken,
   getAuthHeaders,
@@ -9,6 +10,7 @@ import {
   onAuthChange,
   redirectToLogin,
   setAccessToken,
+  setDemoSession,
   setRefreshToken,
 } from '../lib/api/auth'
 
@@ -65,6 +67,24 @@ describe('auth token lifecycle', () => {
 
     expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull()
+    expect(listener).toHaveBeenCalledWith(null)
+  })
+
+  it('clearAccessTokenForLogout removes both tokens and notifies without writing the demo tombstone', () => {
+    setAccessToken('abc')
+    setRefreshToken('ref')
+    // Simulate a demo session so we can assert the logout path does NOT mark it ended.
+    setDemoSession(true)
+    const listener = vi.fn()
+    onAuthChange(listener)
+    listener.mockClear()
+
+    clearAccessTokenForLogout()
+
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull()
+    expect(localStorage.getItem('modulo_demo_ended')).toBeNull()
+    expect(localStorage.getItem('modulo_demo_session')).toBeNull()
     expect(listener).toHaveBeenCalledWith(null)
   })
 

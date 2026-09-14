@@ -2,6 +2,14 @@ import { ref, readonly, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import type { PageContext } from '@/types/remy'
 
+function extractEntities(params: Record<string, string>): string[] {
+  const entities: string[] = []
+  if (params.id) entities.push(`run:${params.id}`)
+  if (params.teamId) entities.push(`team:${params.teamId}`)
+  if (params.pipelineId) entities.push(`pipeline:${params.pipelineId}`)
+  return entities
+}
+
 export function useRemyContext() {
   const route = useRoute()
   const pageContext = ref<PageContext>({
@@ -9,14 +17,6 @@ export function useRemyContext() {
     params: {},
     entities: [],
   })
-
-  function extractEntities(params: Record<string, string>): string[] {
-    const entities: string[] = []
-    if (params.id) entities.push(`run:${params.id}`)
-    if (params.teamId) entities.push(`team:${params.teamId}`)
-    if (params.pipelineId) entities.push(`pipeline:${params.pipelineId}`)
-    return entities
-  }
 
   watch(
     () => [route.name, route.params, route.path] as const,

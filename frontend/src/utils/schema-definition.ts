@@ -18,6 +18,11 @@ export function createField(key: number): SchemaField {
   }
 }
 
+function formatDefault(value: unknown): string {
+  if (value === undefined) return ''
+  return typeof value === 'object' ? JSON.stringify(value) : String(value)
+}
+
 export function coerceDefault(value: string, type: string): unknown {
   switch (type) {
     case 'number': {
@@ -49,7 +54,7 @@ export function parseDefinitionToFields(
       type: (prop.type as string | undefined) ?? 'string',
       required: Array.isArray(def.required) && def.required.includes(name),
       description: (prop.description as string | undefined) ?? '',
-      defaultValue: prop.default !== undefined ? String(prop.default) : '',
+      defaultValue: formatDefault(prop.default),
     })
   }
   return loadedFields

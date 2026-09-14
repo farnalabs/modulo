@@ -41,8 +41,8 @@ export function getErrorTracker(): ErrorTracker | null {
 }
 
 export class ErrorTracker {
-  private backends: MonitorBackendRegistry
-  private breadcrumbs: BreadcrumbCollector
+  private readonly backends: MonitorBackendRegistry
+  private readonly breadcrumbs: BreadcrumbCollector
   private unsubRouter: (() => void) | null = null
   private _user: { id: string; email?: string; name?: string } | null = null
   private _tags: Record<string, string> = {}

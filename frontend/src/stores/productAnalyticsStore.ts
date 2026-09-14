@@ -5,7 +5,7 @@ import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
 interface ConsentData {
-  level: 'off' | 'all' | string
+  level: 'off' | 'all'
   prompted: 'yes' | 'no' | 'dismissed' | null
   prompted_at: string | null
   level_changed_at: string | null

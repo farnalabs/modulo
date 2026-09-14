@@ -77,8 +77,8 @@ async function fetchSessionKey(): Promise<string | null> {
     if (!res.ok) return null
     const data: SessionKeyResponse = await res.json()
     return data.key
-  } catch (err) {
-    console.warn('[error-tracking] Failed to fetch session key:', err)
+  } catch (error_) {
+    console.warn('[error-tracking] Failed to fetch session key:', error_)
     return null
   }
 }
@@ -95,15 +95,15 @@ async function signPayload(payload: string, key: string): Promise<string> {
     )
     const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(payload))
     return bytesToHex(new Uint8Array(sig))
-  } catch (err) {
-    console.warn('[error-tracking] HMAC sign failed, falling back to SHA-256:', err)
+  } catch (error_) {
+    console.warn('[error-tracking] HMAC sign failed, falling back to SHA-256:', error_)
     try {
       const encoder = new TextEncoder()
       const data = encoder.encode(payload + key)
       const hash = await crypto.subtle.digest('SHA-256', data)
       return bytesToHex(new Uint8Array(hash))
-    } catch (err2) {
-      console.warn('[error-tracking] SHA-256 digest fallback also failed:', err2)
+    } catch (error_) {
+      console.warn('[error-tracking] SHA-256 digest fallback also failed:', error_)
       return ''
     }
   }
@@ -180,9 +180,9 @@ export async function flush(): Promise<void> {
       const messages = batch.map((b) => b.event.message).filter(Boolean)
       console.warn('[error-tracking] Dropping %d events due to %d response', batch.length, res.status, messages)
     }
-  } catch (err) {
+  } catch (error_) {
     if (gen !== _generation) return
-    console.warn('[error-tracking] Ingest fetch failed, queuing batch for retry:', err)
+    console.warn('[error-tracking] Ingest fetch failed, queuing batch for retry:', error_)
     reQueueWithBackoff(batch)
   }
 }
