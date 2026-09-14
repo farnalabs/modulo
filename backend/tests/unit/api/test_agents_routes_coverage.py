@@ -80,7 +80,6 @@ def _make_agent() -> MagicMock:
     a.max_input_length = None
     a.library_id = None
     a.template_id = None
-    a.agent_command = None
     a.agent_commands = None
     a.prompt_always_visible = False
     a.account_id = _USER_ID
@@ -190,18 +189,18 @@ def _assert_error_matrix(
 # ---------------------------------------------------------------------------
 
 
-def test_agent_create_rejects_command_and_commands(client: tuple[TestClient, AsyncMock]) -> None:
+def test_agent_create_rejects_invalid_commands_type(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
-    body = {**_AGENT_BODY, "agent_command": "run.sh", "agent_commands": ["a", "b"]}
+    body = {**_AGENT_BODY, "agent_commands": "not-a-list"}
 
     resp = http.post("/api/v1/agents", json=body)
 
     assert resp.status_code == 422, resp.text
 
 
-def test_agent_update_rejects_command_and_commands(client: tuple[TestClient, AsyncMock]) -> None:
+def test_agent_update_rejects_invalid_commands_type(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
-    body = {**_UPDATE_BODY, "agent_command": "run.sh", "agent_commands": ["a", "b"]}
+    body = {**_UPDATE_BODY, "agent_commands": "not-a-list"}
 
     resp = http.patch(f"/api/v1/agents/{_AGENT_ID}", json=body)
 

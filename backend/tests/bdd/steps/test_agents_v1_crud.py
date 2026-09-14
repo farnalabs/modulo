@@ -22,7 +22,6 @@ _AGENT_BODY: dict = {
     "model_backend_id": str(uuid.uuid4()),
     "required_environment_capabilities": [],
     "template_id": None,
-    "agent_command": None,
     "agent_commands": None,
 }
 
@@ -48,7 +47,6 @@ def _make_mock_agent(name: str = "test") -> MagicMock:
     a.library_id = None
     a.required_environment_capabilities = []
     a.template_id = None
-    a.agent_command = None
     a.agent_commands = None
     a.prompt_always_visible = False
     a.account_id = uuid.uuid4()

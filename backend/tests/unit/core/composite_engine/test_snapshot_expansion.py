@@ -54,7 +54,6 @@ def _agent_mock(agent_id: uuid.UUID) -> MagicMock:
     agent.token_budget = None
     agent.max_input_length = None
     agent.parameter_schema_id = None
-    agent.agent_command = None
     agent.agent_commands = None
     return agent
 

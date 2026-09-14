@@ -1,7 +1,7 @@
 """Add UNIQUE(organisation_id, name) constraint on agents.
 
-Revision ID: 0228_agents_unique_organisation_name
-Revises: 0227_env_profiles_initialisation_strategy_check
+Revision ID: 0229_agents_unique_organisation_name
+Revises: 0228_drop_scalar_agent_command
 Create Date: 2026-09-14
 
 PR #458 (migrations 0223/0225) intended to enforce per-organisation agent-name
@@ -15,6 +15,9 @@ This migration creates the constraint so the migrated schema matches the ORM
 metadata.  Per-tenant uniqueness is enforced by the model's
 ``UniqueConstraint("organisation_id", "name")`` and is consistent with the
 existing RLS tenant isolation on ``agents``.
+
+This revision chains on top of ``0228_drop_scalar_agent_command`` (FAR-828), so
+the migration tree remains a single linear head.
 
 Deploy-safety (PostgreSQL 16): a plain ``ALTER TABLE ... ADD CONSTRAINT ... UNIQUE``
 takes an ``ACCESS EXCLUSIVE`` lock and a full table scan, and hard-fails if any
@@ -38,8 +41,8 @@ from __future__ import annotations
 from alembic import op
 from sqlalchemy import text
 
-revision: str = "0228_agents_unique_organisation_name"
-down_revision: str | None = "0227_env_profiles_initialisation_strategy_check"
+revision: str = "0229_agents_unique_organisation_name"
+down_revision: str | None = "0228_drop_scalar_agent_command"
 branch_labels: str | None = None
 depends_on: str | None = None
 

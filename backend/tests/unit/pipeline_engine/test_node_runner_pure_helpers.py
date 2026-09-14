@@ -644,7 +644,7 @@ def _sandbox_node_kwargs(**overrides: Any) -> dict[str, Any]:
         "node_type": "sandbox_agent",
         "position": {"x": 0.0, "y": 0.0},
         "template_id": "opencode",
-        "agent_command": "echo hi",
+        "agent_commands": ["echo hi"],
         "agent_prompt": "Do the thing",
     }
     kwargs.update(overrides)

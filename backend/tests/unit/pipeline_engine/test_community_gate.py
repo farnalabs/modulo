@@ -86,7 +86,7 @@ def _sandbox_node_def(agent_id: uuid.UUID) -> dict[str, Any]:
         "id": "n1",
         "agent_id": str(agent_id),
         "agent_prompt": "Do the thing",
-        "agent_command": "echo hi",
+        "agent_commands": ["echo hi"],
     }
 
 

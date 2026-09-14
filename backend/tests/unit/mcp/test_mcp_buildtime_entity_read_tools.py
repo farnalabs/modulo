@@ -225,7 +225,6 @@ class TestGetAgent(AuthContext):
         agent.retry_policy = {"max_attempts": 2}
         agent.token_budget = 1000
         agent.max_input_length = None
-        agent.agent_command = None
         agent.created_at = NOW
         agent.updated_at = NOW
         mock_get.return_value = agent

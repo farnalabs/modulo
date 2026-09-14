@@ -48,7 +48,6 @@ def _make_mock_agent(name: str = "test", **kwargs) -> MagicMock:
     a.prompt_always_visible = False
     a.required_environment_capabilities = []
     a.template_id = None
-    a.agent_command = None
     a.agent_commands = None
     a.account_id = USER_ID
     a.created_at = datetime.now(UTC)

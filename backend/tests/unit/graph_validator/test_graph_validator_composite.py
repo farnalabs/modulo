@@ -59,7 +59,7 @@ async def test_valid_sub_graph_no_errors() -> None:
             {
                 "id": "d",
                 "node_type": "sandbox_agent",
-                "agent_command": "opencode run",
+                "agent_commands": ["opencode run"],
                 "template_id": "opencode",
             },
         ],
@@ -109,7 +109,7 @@ async def test_sandbox_sub_node_missing_command_is_error() -> None:
 
 async def test_sandbox_sub_node_missing_template_is_error() -> None:
     sub_graph = {
-        "nodes": [{"id": "a", "node_type": "sandbox_agent", "agent_command": "opencode run"}],
+        "nodes": [{"id": "a", "node_type": "sandbox_agent", "agent_commands": ["opencode run"]}],
         "edges": [],
     }
     result = await _run_for_sub_graph(sub_graph)

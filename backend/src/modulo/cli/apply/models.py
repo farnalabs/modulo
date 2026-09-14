@@ -267,7 +267,6 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     parameter_overrides: dict[str, Any] | None = None
     template_id: str | None = None
     mode: Literal["llm", "script"] = "llm"
-    agent_command: str | None = None
     agent_commands: list[str] | None = None
     commands_concatenation_string: str = " && "
     agent_prompt: str | None = None

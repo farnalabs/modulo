@@ -34,7 +34,7 @@ def _sandbox_node(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "id": "n1",
         "node_type": "sandbox_agent",
-        "agent_command": "opencode run",
+        "agent_commands": ["opencode run"],
         "agent_prompt": "do the thing",
     }
     base.update(overrides)
@@ -187,7 +187,7 @@ def test_api_validated_node_round_trip_write_and_git_certified():
             "node_type": "sandbox_agent",
             "position": {"x": 10, "y": 20},
             "agent_prompt": "Do the thing",
-            "agent_command": "opencode run --auto < /home/user/prompt.md",
+            "agent_commands": ["opencode run --auto < /home/user/prompt.md"],
             "template_id": "opencode",
             "egress_policy": "deny_all",
             "read_only": True,
