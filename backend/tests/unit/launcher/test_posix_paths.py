@@ -11,6 +11,7 @@ own seams; they do NOT merely assert that a mock was called.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -242,20 +243,23 @@ class TestIsPostgresProcess:
     def test_postgres_process_returns_true(self, tmp_path: Path) -> None:
         """Spawn a process whose argv[0] ends with 'postgres'.
 
-        The shim is a symlink to an inert binary (sleep) named 'postgres', so
-        the process is exec'd directly with argv[0] == .../postgres.  This
-        avoids the prior shebang-script trick, whose process image some
-        /bin/sh implementations replace in place when a script's sole command
-        is exec'd — discarding the 'postgres' argv component and making the
-        assertion flaky on runners whose dash does that.
+        We use a *symlink* named ``postgres`` pointing at a real binary (sleep)
+        rather than a shebang script: a shebang script makes argv[0] the
+        interpreter (e.g. /bin/sh) and only exposes the script path as argv[1],
+        whose presence/order varies by /bin/sh implementation.  A symlink is
+        followed by the kernel to the target binary, so the spawned process's
+        argv[0] ends with ``postgres`` deterministically.
+
+        We also poll ``_is_postgres_process`` for a short window instead of
+        reading /proc/<pid>/cmdline exactly once.  Immediately after Popen
+        returns the child may not have finished exec'ing yet, so a single read
+        can land in the fork→exec window where cmdline still reflects the parent
+        process (which is not postgres) — a race that is reliably hit on fast CI
+        runners and breaks the assertion.  Polling waits for the exec to settle.
         """
+        sleep_bin = shutil.which("sleep") or "/bin/sleep"
         wrapper = tmp_path / "postgres"
-        # `exec -a postgres` pins argv[0] to "postgres" so the match holds
-        # regardless of whether sh exec's the last command (replacing argv[0]
-        # with "sleep"). Without it, the shell's last-command exec optimization
-        # drops the "postgres" suffix and the detection flakes (FAR-835).
-        wrapper.write_text("#!/bin/sh\nexec -a postgres sleep 30\n", encoding="utf-8")
-        wrapper.chmod(0o755)
+        wrapper.symlink_to(sleep_bin)
         # Use __dict__ to avoid the test-style scanner's subprocess.Popen AST
         # match.  Popen has no timeout param; bounded by finally-block kill.
         _popen = subprocess.__dict__["Popen"]
@@ -266,17 +270,13 @@ class TestIsPostgresProcess:
             start_new_session=True,
         )
         try:
-            # Popen returns before the kernel finishes exec-ing the interpreter
-            # named by the script's shebang.  At that instant /proc/<pid>/cmdline
-            # is momentarily empty, so _is_postgres_process finds no part ending
-            # in 'postgres' and would report False.  Poll until the child's
-            # cmdline has been populated (i.e. exec completed) before asserting.
             result = False
-            for _ in range(100):
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
                 result = supervisor_module._is_postgres_process(proc.pid)
                 if result is True:
                     break
-                time.sleep(0.01)
+                time.sleep(0.02)
             assert result is True
         finally:
             try:

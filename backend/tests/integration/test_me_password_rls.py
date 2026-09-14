@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from modulo.api.routes.me import PasswordChangeRequest, change_password
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password
+from modulo.db.models.organisation import ORPHAN_ORG_ID
 
 pytestmark = pytest.mark.integration
 
@@ -123,15 +124,19 @@ async def test_change_password_blacklists_cross_org_token_families(
     """A password change must revoke EVERY token family of the account.
 
     The caller's current org is ``test_org``; one family is minted under a
-    DIFFERENT org and one under a NULL org. All three must be blacklisted — the
-    prior org-scoped behaviour left the cross-org / NULL families live, so a stale
-    refresh token from another org kept working after the credential change.
+    DIFFERENT org and one under the orphan-org sentinel (``ORPHAN_ORG_ID``).
+    All three must be blacklisted — the prior org-scoped behaviour left the
+    cross-org / orphan families live, so a stale refresh token from another org
+    kept working after the credential change. Note migration 0236 makes
+    ``token_families.organisation_id`` NOT NULL and backfills unresolved orgs to
+    the orphan sentinel, so a NULL-org family is no longer representable: the
+    orphan case uses ``ORPHAN_ORG_ID``.
     """
     other_org = await _create_org(db_engine, "Other org", f"other-{uuid.uuid4().hex[:8]}")
     account_id = await _create_account(db_engine, test_org)
     same_org_family = await _create_family(db_engine, account_id, test_org)
     other_org_family = await _create_family(db_engine, account_id, other_org)
-    null_org_family = await _create_family(db_engine, account_id, None)
+    orphan_org_family = await _create_family(db_engine, account_id, ORPHAN_ORG_ID)
 
     principal = TenantPrincipal(
         username="token-family-test",
@@ -149,7 +154,7 @@ async def test_change_password_blacklists_cross_org_token_families(
 
     assert await _is_blacklisted(db_engine, same_org_family) is True
     assert await _is_blacklisted(db_engine, other_org_family) is True
-    assert await _is_blacklisted(db_engine, null_org_family) is True
+    assert await _is_blacklisted(db_engine, orphan_org_family) is True
 
 
 async def test_change_password_blacklists_both_families_for_single_account(
