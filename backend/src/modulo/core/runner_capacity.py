@@ -611,10 +611,9 @@ async def mark_runner_dispatch_cleared_at_hitl(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning(
+        _log.exception(
             "runner.capacity.hitl_tombstone_failed",
             extra={"run_id": run_id, "org_id": str(org_id)},
-            exc_info=True,
         )
         return False
 
@@ -900,7 +899,7 @@ async def _acquire_sweep_dedup_lock(factory: Any, k1: int, k2: int) -> tuple[boo
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("runner.capacity.marker_sweep_lock_failed", exc_info=True)
+        _log.exception("runner.capacity.marker_sweep_lock_failed")
         return False, None
     try:
         for _ in range(_SWEEP_LOCK_POLL_ATTEMPTS):
@@ -916,7 +915,7 @@ async def _acquire_sweep_dedup_lock(factory: Any, k1: int, k2: int) -> tuple[boo
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("runner.capacity.marker_sweep_lock_failed", exc_info=True)
+        _log.exception("runner.capacity.marker_sweep_lock_failed")
     try:
         await lock_conn.close()
     except Exception:

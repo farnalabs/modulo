@@ -217,7 +217,6 @@ def _trim_checkpoint_channels(checkpoint: Checkpoint) -> None:
         root_messages = root.get("messages")
         if isinstance(root_messages, (list, tuple)) and len(root_messages) > _CHECKPOINT_MESSAGE_TRIM_TAIL:
             root["messages"] = root_messages[-_CHECKPOINT_MESSAGE_TRIM_TAIL:]
-    return
 
 
 class ModuloPostgresSaver(AsyncPostgresSaver):
