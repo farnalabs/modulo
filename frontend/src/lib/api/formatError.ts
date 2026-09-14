@@ -63,11 +63,17 @@ function truncateErrorText(str: string): string {
   return str.length > MAX_ERROR_LENGTH ? str.slice(0, MAX_ERROR_LENGTH) + '...' : str
 }
 
+function describeError(err: unknown): string {
+  if (typeof err === 'string') return err
+  if (err instanceof Error) return err.message
+  return 'Unknown error'
+}
+
 function stringifyErrorObject(obj: Record<string, unknown>, err: unknown): string {
   try {
     return truncateErrorText(JSON.stringify(obj))
   } catch {
-    return typeof err === 'string' ? err : (err instanceof Error ? err.message : 'Unknown error')
+    return describeError(err)
   }
 }
 

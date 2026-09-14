@@ -161,10 +161,7 @@ export function clearAccessToken(options?: { demoEnded?: boolean }): void {
  * the visitor can actually leave the demo and land on the normal login flow.
  */
 export function clearAccessTokenForLogout(): void {
-  localStorage.removeItem(TOKEN_KEY)
-  clearRefreshToken()
-  setDemoSession(false)
-  notifyListeners()
+  clearAccessToken({ demoEnded: false })
 }
 
 export function getAccessToken(): string | null {
