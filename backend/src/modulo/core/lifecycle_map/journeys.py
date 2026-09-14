@@ -18,10 +18,10 @@ import base64
 import json
 import uuid
 from datetime import UTC, datetime
+from typing import cast
 
-from sqlalchemy import ColumnElement, Select, and_, cast, or_, select
+from sqlalchemy import ColumnElement, Select, String, and_, bindparam, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.sql.elements import BinaryExpression
 
 from modulo.db.lifecycle_refs import canonicalise_kind, canonicalise_ref
 from modulo.db.models.journey import Journey
@@ -248,7 +248,7 @@ def _is_postgres(session: AsyncSession) -> bool:
     return getattr(bind.dialect, "name", "") == "postgresql"
 
 
-def _journey_refs_containment(journey: Journey) -> BinaryExpression[bool]:
+def _journey_refs_containment(journey: Journey) -> ColumnElement[bool]:
     """JSONB containment predicate for the journey's canonical (kind, ref).
 
     ``work_item_refs @> '[{"kind": K, "ref": R}]'::jsonb`` — the stored
@@ -257,13 +257,20 @@ def _journey_refs_containment(journey: Journey) -> BinaryExpression[bool]:
     ever persisted. The default jsonb GIN operator class on
     ``ix_runs_work_item_refs_gin`` (WHERE jsonb_array_length > 0) serves this
     operator; a containment-in-an-array implies a non-empty array, so the
-    partial predicate is implied. A parametrised CAST keeps the bound value a
-    proper JSONB literal (no string interpolation).
-    """
-    from sqlalchemy.dialects.postgresql import JSONB
+    partial predicate is implied.
 
+    The bound value is a JSON *string* bound as TEXT and cast to jsonb inside
+    SQL. Binding it as a JSONB-typed parameter makes asyncpg double-encode the
+    string into a jsonb scalar (``'"[{…}]"'``), so the containment match
+    silently returns nothing; a parametrised ``CAST(:t AS jsonb)`` with a
+    TEXT-typed bindparam keeps the on-wire value a plain JSON string that
+    Postgres parses into the intended jsonb array.
+    """
     template = json.dumps([{"kind": journey.kind, "ref": journey.ref}])
-    return Run.work_item_refs.op("@>")(cast(template, JSONB))
+    return cast(
+        ColumnElement[bool],
+        text("work_item_refs @> CAST(:t AS jsonb)").bindparams(bindparam("t", template, type_=String)),
+    )
 
 
 def _journey_runs_postgres_query(journey: Journey, *, limit: int) -> Select[tuple[Run]]:

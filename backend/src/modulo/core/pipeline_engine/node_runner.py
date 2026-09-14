@@ -1363,6 +1363,7 @@ async def _retain_raw_output_marker(
     index: int | str | None = None,
     payload: str | bytes | None = None,
     max_artifact_bytes: int = _MAX_ARTIFACT_LOG,
+    stdout_artifact: dict[str, Any] | None = None,
 ) -> None:
     """Single builder + persist for a raw-output retention marker (FAR-188).
 
@@ -1416,6 +1417,8 @@ async def _retain_raw_output_marker(
     }
     if _source_contains_delivery_sentinel(text, delivery_sentinel):
         marker["delivery_done"] = True
+    if stdout_artifact is not None:
+        marker["stdout_artifact"] = stdout_artifact
     await _persist_raw_output_marker(
         session_factory,
         run_id=run_id,
@@ -7608,6 +7611,56 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 _sdk_stdout = str(getattr(cmd_result, "stdout", "") or "")
                 if len(_sdk_stdout) > len(_stall_source):
                     _stall_source = _sdk_stdout
+            # FAR-811: when redacted stdout exceeds the retention cap, persist
+            # the full redacted transcript to the artifact store and attach the
+            # pointer to the stall marker — mirrors the success path's
+            # _persist_full_stdout_artifact call so downstream consumers can
+            # retrieve the full transcript instead of only the truncated tail.
+            # FAR-811: when the stall/timeout fires and stdout exceeds the
+            # retention cap, persist the full redacted transcript to the artifact
+            # store and attach the pointer to the stall marker — mirrors the
+            # success path's _persist_full_stdout_artifact call so downstream
+            # consumers can retrieve the full transcript instead of only the
+            # truncated tail.
+            #
+            # When cmd_result is None (stall/timeout), the drain window has
+            # already bounded _drained_chunks to _stdout_cap bytes, so
+            # agent_stdout_raw may appear under-cap even though the sandbox log
+            # is larger.  A fresh read of the log file detects the true size and
+            # feeds the artifact store with the full redacted content.
+            _stall_stdout_artifact: dict[str, Any] | None = None
+            _stall_full_stdout: str | None = None
+            if cmd_result is None:
+                try:
+                    _fresh_log = await asyncio.wait_for(
+                        sandbox.files.read(_SANDBOX_LOG_PATH, format="text"),
+                        timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                    )
+                    if isinstance(_fresh_log, str):
+                        _fresh_text = _fresh_log
+                    else:
+                        _fresh_text = bytes(_fresh_log).decode("utf-8", "replace")
+                    if len(_fresh_text) > _stdout_cap:
+                        _stall_full_stdout = _fresh_text
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.debug(
+                        "sandbox_agent.stall_fresh_log_read_failed",
+                        extra={"node_id": node_id},
+                    )
+            if stdout_truncated or _stall_full_stdout is not None:
+                _redacted_for_artifact = _redact_raw_output(
+                    _stall_full_stdout if _stall_full_stdout is not None else agent_stdout_raw
+                )
+                _stall_stdout_artifact = _persist_full_stdout_artifact(
+                    org_id=org_id,
+                    run_id=run_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    node_cap=_stdout_cap,
+                    redacted_stdout=_redacted_for_artifact,
+                )
             await _retain_raw_output_marker(
                 session_factory,
                 run_id=run_id,
@@ -7625,6 +7678,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 stderr_length=_stderr_len,
                 delivery_sentinel=delivery_sentinel,
                 max_artifact_bytes=_stdout_cap,
+                stdout_artifact=_stall_stdout_artifact,
             )
             if watchdog.budget_killed:
                 # FAR-296 Phase 3b-3: the platform-side resource-cap killer
@@ -8149,6 +8203,23 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             node_id=node_id,
             attempt_key=attempt_key,
         )
+        # FAR-811: emit the same stdout_artifact pointer on the exception path.
+        # The exception may fire before agent_stdout_raw is bound (e.g.
+        # provisioning failure), so the pointer is only written when pre-
+        # exception stdout was captured AND exceeded the cap.  ``locals()``
+        # guards the name lookup: when the exception fires before the drain
+        # populates agent_stdout_raw, ``_stdout_len`` is still 0 (pre-bound
+        # at function scope) and the guard short-circuits.
+        _exc_stdout_artifact: dict[str, Any] | None = None
+        if _stdout_len > _stdout_cap and "agent_stdout_raw" in locals():
+            _exc_stdout_artifact = _persist_full_stdout_artifact(
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                node_cap=_stdout_cap,
+                redacted_stdout=_redact_raw_output(agent_stdout_raw),
+            )
         return _build_sandbox_node_envelope(
             node_id=node_id,
             output=_SandboxNodeOutput(
@@ -8162,6 +8233,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 agent_stderr=_exc_stderr,
                 stdout_length=_stdout_len,
                 stderr_length=_stderr_len,
+                stdout_truncated=_stdout_len > _stdout_cap,
+                stdout_artifact=_exc_stdout_artifact if _exc_stdout_artifact is not None else _UNSET,
                 attempt_key=attempt_key,
                 error_type=_exc_type,
                 error_message=_exc_msg,

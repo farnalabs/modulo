@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.break_glass_deny import live_predicate, render_sql
+from modulo.db.models.organisation import ORPHAN_ORG_ID
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import CursorResult
@@ -27,7 +28,10 @@ async def get_or_create_family(
         family = TokenFamily(
             family_id=family_id,
             account_id=account_id,
-            organisation_id=org_id,
+            # Migration 0236 makes token_families.organisation_id NOT NULL and
+            # backfills NULLs to the orphan-organisation sentinel; resolve no org
+            # (system-admin logins) -> fall back to that sentinel rather than NULL.
+            organisation_id=org_id or ORPHAN_ORG_ID,
             max_sequence=0,
         )
         session.add(family)
@@ -36,10 +40,13 @@ async def get_or_create_family(
 
 
 async def create_family(session: AsyncSession, account_id: uuid.UUID, org_id: uuid.UUID | None) -> TokenFamily:
+    # Migration 0234 makes token_families.organisation_id NOT NULL and backfills
+    # NULLs to the orphan-organisation sentinel; system-admin logins resolve no
+    # org, so fall back to that sentinel rather than writing NULL.
     family = TokenFamily(
         family_id=uuid.uuid4(),
         account_id=account_id,
-        organisation_id=org_id,
+        organisation_id=org_id or ORPHAN_ORG_ID,
         max_sequence=0,
     )
     session.add(family)

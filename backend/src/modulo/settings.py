@@ -140,6 +140,13 @@ class Settings(BaseSettings):
     modulo_work_item_refs_cap: int = Field(100)
 
     modulo_public_url: str = Field("http://localhost:8000")
+    # Browser-facing frontend base URL for post-login redirects (SSO) and
+    # MCP OAuth authorize links.  In the standard self-host topology nginx
+    # serves the SPA and the API on one origin, so ``modulo_public_url`` is
+    # the correct frontend base by default; a split-origin deployment sets
+    # this.  Empty means "fall back to ``modulo_public_url``".
+    # CORS origins are for CORS, not for routing the browser after login.
+    modulo_frontend_url: str = Field("")
     modulo_license_key: str = Field("")
     # Ed25519 public key (hex) for license signature verification.
     # Defaults to dev/test key — set MODULO_LICENSE_PUBLIC_KEY in production.

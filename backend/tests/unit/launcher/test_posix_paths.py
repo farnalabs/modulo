@@ -11,9 +11,11 @@ own seams; they do NOT merely assert that a mock was called.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -239,21 +241,42 @@ class TestIsPostgresProcess:
         assert supervisor_module._is_postgres_process(999_999_999) is False
 
     def test_postgres_process_returns_true(self, tmp_path: Path) -> None:
-        """Spawn a process whose argv[0] ends with 'postgres'."""
+        """Spawn a process whose argv[0] ends with 'postgres'.
+
+        We use a *symlink* named ``postgres`` pointing at a real binary (sleep)
+        rather than a shebang script: a shebang script makes argv[0] the
+        interpreter (e.g. /bin/sh) and only exposes the script path as argv[1],
+        whose presence/order varies by /bin/sh implementation.  A symlink is
+        followed by the kernel to the target binary, so the spawned process's
+        argv[0] ends with ``postgres`` deterministically.
+
+        We also poll ``_is_postgres_process`` for a short window instead of
+        reading /proc/<pid>/cmdline exactly once.  Immediately after Popen
+        returns the child may not have finished exec'ing yet, so a single read
+        can land in the fork→exec window where cmdline still reflects the parent
+        process (which is not postgres) — a race that is reliably hit on fast CI
+        runners and breaks the assertion.  Polling waits for the exec to settle.
+        """
+        sleep_bin = shutil.which("sleep") or "/bin/sleep"
         wrapper = tmp_path / "postgres"
-        wrapper.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
-        wrapper.chmod(0o755)
+        wrapper.symlink_to(sleep_bin)
         # Use __dict__ to avoid the test-style scanner's subprocess.Popen AST
         # match.  Popen has no timeout param; bounded by finally-block kill.
         _popen = subprocess.__dict__["Popen"]
         proc = _popen(
-            [str(wrapper)],
+            [str(wrapper), "30"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
         try:
-            result = supervisor_module._is_postgres_process(proc.pid)
+            result = False
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                result = supervisor_module._is_postgres_process(proc.pid)
+                if result is True:
+                    break
+                time.sleep(0.02)
             assert result is True
         finally:
             try:

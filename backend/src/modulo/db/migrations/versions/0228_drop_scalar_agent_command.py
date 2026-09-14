@@ -31,7 +31,7 @@ def upgrade() -> None:
         SET agent_commands = to_jsonb(ARRAY[trim(both from agent_command)])
         WHERE agent_command IS NOT NULL
           AND trim(both from agent_command) <> ''
-          AND (agent_commands IS NULL OR agent_commands = '[]'::jsonb OR jsonb_array_length(agent_commands) = 0)
+          AND (agent_commands IS NULL OR jsonb_typeof(agent_commands) <> 'array' OR agent_commands = '[]'::jsonb OR jsonb_array_length(agent_commands) = 0)
         """
     )
     op.drop_column("agents", "agent_command")
@@ -51,7 +51,8 @@ def upgrade() -> None:
                          AND trim(both from elem->>'agent_command') <> ''
                          AND (elem->'agent_commands' IS NULL
                               OR elem->'agent_commands' = '[]'::jsonb
-                              OR jsonb_array_length(elem->'agent_commands') = 0)
+                              OR jsonb_typeof(elem->'agent_commands') <> 'array'
+                                 OR jsonb_array_length(elem->'agent_commands') = 0)
                     THEN elem - 'agent_command' || jsonb_build_object(
                         'agent_commands',
                         to_jsonb(ARRAY[trim(both from elem->>'agent_command')])
@@ -64,7 +65,7 @@ def upgrade() -> None:
             FROM jsonb_array_elements(graph_nodes_json::jsonb) AS elem
         )
         WHERE graph_nodes_json IS NOT NULL
-          AND jsonb_array_length(graph_nodes_json::jsonb) > 0
+          AND jsonb_typeof(graph_nodes_json::jsonb) = 'array' AND jsonb_array_length(graph_nodes_json::jsonb) > 0
           AND EXISTS (
               SELECT 1 FROM jsonb_array_elements(graph_nodes_json::jsonb) AS e
               WHERE e ? 'agent_command'
@@ -86,7 +87,8 @@ def upgrade() -> None:
                              AND trim(both from elem->>'agent_command') <> ''
                              AND (elem->'agent_commands' IS NULL
                                   OR elem->'agent_commands' = '[]'::jsonb
-                                  OR jsonb_array_length(elem->'agent_commands') = 0)
+                                  OR jsonb_typeof(elem->'agent_commands') <> 'array'
+                                 OR jsonb_array_length(elem->'agent_commands') = 0)
                         THEN elem - 'agent_command' || jsonb_build_object(
                             'agent_commands',
                             to_jsonb(ARRAY[trim(both from elem->>'agent_command')])
@@ -100,6 +102,7 @@ def upgrade() -> None:
             )
         )
         WHERE graph_json IS NOT NULL
+          AND jsonb_typeof(graph_json -> 'nodes') = 'array'
           AND graph_json -> 'nodes' IS NOT NULL
           AND EXISTS (
               SELECT 1 FROM jsonb_array_elements(graph_json -> 'nodes') AS e
@@ -122,7 +125,8 @@ def upgrade() -> None:
                              AND trim(both from elem->>'agent_command') <> ''
                              AND (elem->'agent_commands' IS NULL
                                   OR elem->'agent_commands' = '[]'::jsonb
-                                  OR jsonb_array_length(elem->'agent_commands') = 0)
+                                  OR jsonb_typeof(elem->'agent_commands') <> 'array'
+                                 OR jsonb_array_length(elem->'agent_commands') = 0)
                         THEN elem - 'agent_command' || jsonb_build_object(
                             'agent_commands',
                             to_jsonb(ARRAY[trim(both from elem->>'agent_command')])
@@ -136,6 +140,7 @@ def upgrade() -> None:
             )
         )
         WHERE sub_pipeline_graph_json IS NOT NULL
+          AND jsonb_typeof(sub_pipeline_graph_json -> 'nodes') = 'array'
           AND sub_pipeline_graph_json -> 'nodes' IS NOT NULL
           AND EXISTS (
               SELECT 1 FROM jsonb_array_elements(sub_pipeline_graph_json -> 'nodes') AS e

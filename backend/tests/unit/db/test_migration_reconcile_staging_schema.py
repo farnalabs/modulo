@@ -58,9 +58,17 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and 0227_env_profiles_initialisation_strategy_check chains off 0226_agents_json_to_jsonb,
 # and 0228_drop_scalar_agent_command chains off 0227_env_profiles_initialisation_strategy_check,
 # and FAR-802's 0229_add_workspace_inputs_count chains off 0228_drop_scalar_agent_command,
-# and 0232_journey_dismissal chains off 0231_token_families_reuse_replay_count,
-# and 0233_org_mint_budget_usage chains off 0232_journey_dismissal as the chain head.
-_CHAIN_HEAD_MIGRATION = "0233_org_mint_budget_usage"
+# and 0230_token_families_refresh_grace chains off 0229_add_workspace_inputs_count,
+# and 0231_token_families_reuse_replay_count chains off 0230_token_families_refresh_grace,
+# and 0232_seed_modulo_sentinel_organisation chains off 0231_token_families_reuse_replay_count,
+# and 0233_add_updated_at_audit_to_organisations chains off 0232_seed_modulo_sentinel_organisation,
+# and 0234_add_organisations_indexes chains off 0233_add_updated_at_audit_to_organisations,
+# and 0235_promote_organisations_json_to_jsonb chains off 0234_add_organisations_indexes,
+# and 0236_add_organisations_constraints chains off 0235_promote_organisations_json_to_jsonb,
+# and 0237_fix_token_family_org_nullable chains off 0236_add_organisations_constraints,
+# and 0238_journey_dismissal (FAR-795) chains off 0237_fix_token_family_org_nullable,
+# and 0239_org_mint_budget_usage (FAR-795) chains off 0238_journey_dismissal as the chain head.
+_CHAIN_HEAD_MIGRATION = "0239_org_mint_budget_usage"
 
 
 def _source(name: str) -> str:

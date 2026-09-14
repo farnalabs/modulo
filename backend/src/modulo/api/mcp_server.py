@@ -8840,9 +8840,10 @@ def _mcp_healthz(_request: Request) -> JSONResponse:
 
 
 def _frontend_url(settings: Any) -> str:
-    """Derive the SPA base URL from CORS_ORIGINS (first origin)."""
-    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
-    return origins[0] if origins else "http://localhost:5173"
+    """Derive the SPA base URL (delegates to the shared resolver)."""
+    from modulo.api.frontend_url import resolve_frontend_url
+
+    return resolve_frontend_url(settings)
 
 
 def _oauth_authorize_param_errors(params: Mapping[str, str]) -> JSONResponse | None:
