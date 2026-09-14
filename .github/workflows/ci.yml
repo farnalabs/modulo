@@ -512,17 +512,18 @@ jobs:
       - name: Run changed-lines coverage gate
         working-directory: backend
         run: |
-          # Full sync (no `--no-build`): the dev environment pins `pytest-bdd`
-          # to a git archive and `ibm-cos-sdk` is sdist-only on PyPI, so both
-          # require a source build that `--no-build` forbids (the coverage-gate
-          # job then fails to provision the venv with exit 2). The gate only
-          # needs `diff-cover`, but a full sync is the smallest correct fix and
-          # matches how the passing `backend-test` job provisions its venv.
-          uv sync --frozen  # NOSONAR S8541 — full sync is required (ibm-cos-sdk is sdist-only and pytest-bdd is a pinned git archive, both need a source build that --no-build forbids); --frozen locks exact revisions so the build is deterministic and trusted (no untrusted setup scripts execute)
-          # Run the gate with the freshly-synced backend venv's Python directly
-          # (rather than `uv run python <script>`), so no `uv run` setup-script
-          # path is exercised and the script finds diff-cover next to this
-          # interpreter.  The script validates its CLI args before subprocess.
+          # Provision an isolated venv with ONLY the gate's dependency
+          # (diff-cover) using `--no-build`, so no third-party setup scripts
+          # ever execute (resolves githubactions:S8541). A full `uv sync` would
+          # build the git-pinned pytest-bdd archive and the sdist-only
+          # ibm-cos-sdk, both of which trip S8541; diff-cover 10.5.1 and all of
+          # its dependencies are pure-Python wheels, so a build-free install is
+          # safe and far faster than syncing the whole project.
+          uv venv .venv
+          uv pip install --python .venv --no-build "diff-cover==10.5.1"
+          # Run the gate with the venv's Python directly so it finds diff-cover
+          # next to this interpreter. The script validates its CLI args before
+          # any subprocess.
           .venv/bin/python ../scripts/run_coverage_gate.py \
             --compare-branch "origin/${{ github.base_ref || 'main' }}" \
             --python-report coverage.xml \
