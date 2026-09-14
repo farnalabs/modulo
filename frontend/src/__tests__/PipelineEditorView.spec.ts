@@ -1873,3 +1873,667 @@ describe('PipelineEditorView — dialogs', () => {
     wrapper.unmount()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Coverage-boost tests: target the largest uncovered branches in
+// PipelineEditorView.vue (SonarCloud ~77% line coverage, 190 uncovered lines).
+// ---------------------------------------------------------------------------
+
+describe('PipelineEditorView — coverage: loading / error / edge cases', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useDataLoading.value = false
+    useApiFns.get.mockReset()
+    useApiFns.post.mockReset()
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    useApiFns.post.mockResolvedValue({})
+  })
+
+  it('displays a page error when the graph load fails via pageError ref', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    // Simulate a loadGraph error by setting pageError directly (the mocked
+    // useDataFetch never calls the real loaders, so we drive the ref directly).
+    vm.pageError = 'graph_unavailable'
+    await nextTick()
+    expect(wrapper.text()).toContain('graph_unavailable')
+    // The toolbar should not render while an error is shown
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('clears nodes and edges when loadGraph returns null data', async () => {
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: null, error: undefined })
+      }
+      if (url.includes('/api/v1/pipelines/{pipeline_id}')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    expect(vm.rawNodes).toEqual([])
+    expect(vm.rawEdges).toEqual([])
+    expect(vm.flowNodes).toEqual([])
+    expect(vm.flowEdges).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('displays a page error when loadPipeline fails via pageError ref', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    // Simulate a loadPipeline error by setting pageError directly
+    vm.pageError = 'pipeline_not_found'
+    await nextTick()
+    expect(wrapper.text()).toContain('pipeline_not_found')
+    expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('triggerRun shows save-graph error in the run dialog when saveGraph fails', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent', description: '' } }]
+    vm.rawNodes = [{ id: 'node-1', node_type: 'agent', label: 'Agent', description: '', position: { x: 0, y: 0 } }]
+    await nextTick()
+
+    await wrapper.find('[data-testid="pipeline-editor-run"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="pipeline-editor-run-prompt"]').setValue('go')
+    // make saveGraph fail
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('save_broken'))
+    await wrapper.find('[data-testid="pipeline-editor-run-submit"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // the run dialog should show the save failure, not close
+    expect(wrapper.find('[data-testid="pipeline-editor-run-prompt"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('save_broken')
+    wrapper.unmount()
+  })
+
+  it('triggerRun with empty prompt after confirm sends an empty input_payload', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent', description: '' } }]
+    vm.rawNodes = [{ id: 'node-1', node_type: 'agent', label: 'Agent', description: '', position: { x: 0, y: 0 } }]
+    await nextTick()
+
+    await wrapper.find('[data-testid="pipeline-editor-run"]').trigger('click')
+    await nextTick()
+    // first click: empty prompt warns
+    await wrapper.find('[data-testid="pipeline-editor-run-submit"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('No input provided')
+    // second click: proceeds with empty prompt
+    await wrapper.find('[data-testid="pipeline-editor-run-submit"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const post = vi.mocked(api.POST).mock.calls.find((c) => c[0] === '/api/v1/runs')
+    expect(post).toBeTruthy()
+    expect((post as unknown[] | undefined)![1]).toEqual(expect.objectContaining({
+      body: { pipeline_id: 'test-pipeline-id', input_payload: {} },
+    }))
+    wrapper.unmount()
+  })
+
+  it('addNode appends to both flowNodes and rawNodes with the selected node type', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = []
+    vm.flowNodes = []
+    await nextTick()
+
+    expect(vm.flowNodes.length).toBe(0)
+    // addNode defaults to the newNodeType which is 'agent'
+    vm.addNode()
+    await nextTick()
+    expect(vm.flowNodes.length).toBe(1)
+    expect(vm.rawNodes.length).toBe(1)
+    expect(vm.rawNodes[0].node_type).toBe('agent')
+    expect(vm.flowNodes[0].type).toBe('agent')
+    expect(vm.flowNodes[0].data.label).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('syncNodeToFlow propagates label and description changes to the flow node', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', label: 'Old Label', description: '', position: { x: 0, y: 0 } },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Old Label', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    vm.selectedNodeData.label = 'New Label'
+    vm.selectedNodeData.description = 'Updated desc'
+    vm.syncNodeToFlow()
+    await nextTick()
+
+    const fn = vm.flowNodes.find((n: any) => n.id === 'node-1')
+    expect(fn.data.label).toBe('New Label')
+    expect(fn.data.description).toBe('Updated desc')
+    wrapper.unmount()
+  })
+
+  it('onPaneClick resets all selections and scope state', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', label: 'Agent', description: '', position: { x: 0, y: 0 }, capability_scope: { allowed_tools: ['tool-a'] } },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+    expect(vm.selectedNodeData).toBeTruthy()
+    expect(vm.nodeCapabilityScope.allowed_tools).toEqual(['tool-a'])
+
+    vm.onPaneClick()
+    await nextTick()
+    expect(vm.selectedNodeData).toBeNull()
+    expect(vm.selectedEdgeData).toBeNull()
+    expect(vm.showSaveAsDropdown).toBe(false)
+    expect(vm.nodeCapabilityScope.allowed_connectors).toEqual([])
+    expect(vm.nodeCapabilityScope.allowed_tools).toEqual([])
+    expect(vm.nodeCapabilityScope.context_scope).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('convertBackendEdge applies loop style for loop edges and llm style for llm edges', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    const loopEdge = vm.convertBackendEdge({ id: 'e1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'loop', max_iterations: 3 }, 0)
+    expect(loopEdge.style.stroke).toBe('#3b82f6')
+    expect(loopEdge.style.strokeDasharray).toBe('5,5')
+    expect(loopEdge.animated).toBe(true)
+    expect(loopEdge.data.max_iterations).toBe(3)
+
+    const llmEdge = vm.convertBackendEdge({ id: 'e2', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'llm', routing_label: 'go' }, 1)
+    expect(llmEdge.style.stroke).toBe('#8b5cf6')
+    expect(llmEdge.data.routing_label).toBe('go')
+
+    const normalEdge = vm.convertBackendEdge({ id: 'e3', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal' }, 2)
+    expect(normalEdge.style.stroke).toBe('#888')
+    expect(normalEdge.animated).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('saveEdgeConfig with jmespath condition includes condition in the gate config', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } },
+      { id: 'node-2', node_type: 'manual', label: 'B', description: '', position: { x: 100, y: 0 } },
+    ]
+    vm.flowNodes = [
+      { id: 'node-1', type: 'agent', data: { label: 'A', description: '' } },
+      { id: 'node-2', type: 'manual', data: { label: 'B', description: '' } },
+    ]
+    vm.rawEdges = [{
+      id: 'edge-1', source_node_id: 'node-1', target_node_id: 'node-2',
+      edge_type: 'normal', condition_expression: null,
+      hitl_gate_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.' },
+    }]
+    vm.flowEdges = [{
+      id: 'edge-1', source: 'node-1', target: 'node-2',
+      data: { hitl_gate_config: { label: 'Gate' }, edge_type: 'normal' },
+    }]
+    vm.onEdgeClick({ edge: { id: 'edge-1' } })
+    await nextTick()
+
+    vm.edgeForm.condition_type = 'jmespath'
+    vm.edgeForm.condition = 'status == "approved"'
+    await vm.saveEdgeConfig()
+    await flushPromises()
+    await nextTick()
+
+    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const savedEdge = (patch[1] as any).body.edges[0]
+    expect(savedEdge.hitl_gate_config.condition).toBe('status == "approved"')
+    expect(savedEdge.hitl_gate_config.eval_condition).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('saveEdgeConfig with eval condition type builds eval_condition in gate config', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } },
+      { id: 'node-2', node_type: 'manual', label: 'B', description: '', position: { x: 100, y: 0 } },
+    ]
+    vm.flowNodes = [
+      { id: 'node-1', type: 'agent', data: { label: 'A', description: '' } },
+      { id: 'node-2', type: 'manual', data: { label: 'B', description: '' } },
+    ]
+    vm.rawEdges = [{
+      id: 'edge-1', source_node_id: 'node-1', target_node_id: 'node-2',
+      edge_type: 'normal', condition_expression: null,
+      hitl_gate_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.' },
+    }]
+    vm.flowEdges = [{
+      id: 'edge-1', source: 'node-1', target: 'node-2',
+      data: { hitl_gate_config: { label: 'Gate' }, edge_type: 'normal' },
+    }]
+    vm.onEdgeClick({ edge: { id: 'edge-1' } })
+    await nextTick()
+
+    vm.edgeForm.condition_type = 'eval'
+    vm.edgeForm.eval_name = 'quality_check'
+    vm.edgeForm.eval_threshold = 0.9
+    vm.edgeForm.eval_operator = 'gte'
+    await vm.saveEdgeConfig()
+    await flushPromises()
+    await nextTick()
+
+    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const savedEdge = (patch[1] as any).body.edges[0]
+    expect(savedEdge.hitl_gate_config.eval_condition).toEqual({
+      eval_name: 'quality_check',
+      threshold: 0.9,
+      operator: 'gte',
+    })
+    expect(savedEdge.hitl_gate_config.condition).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('saveEdgeConfig with condition_type none omits condition and eval_condition', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } },
+      { id: 'node-2', node_type: 'manual', label: 'B', description: '', position: { x: 100, y: 0 } },
+    ]
+    vm.flowNodes = [
+      { id: 'node-1', type: 'agent', data: { label: 'A', description: '' } },
+      { id: 'node-2', type: 'manual', data: { label: 'B', description: '' } },
+    ]
+    vm.rawEdges = [{
+      id: 'edge-1', source_node_id: 'node-1', target_node_id: 'node-2',
+      edge_type: 'normal', condition_expression: null,
+      hitl_gate_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.' },
+    }]
+    vm.flowEdges = [{
+      id: 'edge-1', source: 'node-1', target: 'node-2',
+      data: { hitl_gate_config: { label: 'Gate' }, edge_type: 'normal' },
+    }]
+    vm.onEdgeClick({ edge: { id: 'edge-1' } })
+    await nextTick()
+
+    vm.edgeForm.condition_type = 'none'
+    await vm.saveEdgeConfig()
+    await flushPromises()
+    await nextTick()
+
+    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const savedEdge = (patch[1] as any).body.edges[0]
+    expect(savedEdge.hitl_gate_config.condition).toBeUndefined()
+    expect(savedEdge.hitl_gate_config.eval_condition).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('retryPolicyError surfaces when granular mode has events but zero max retries', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    ;(wrapper.vm as any).pipeline = { retry_policy: { on: ['failure'], max_retries: 2 } }
+    ;(wrapper.vm as any).syncRetryPolicyFromPipeline()
+    await nextTick()
+    const vm = wrapper.vm as any
+
+    vm.retryPolicyMode = 'specific'
+    vm.retryPolicyEvents = ['failure']
+    vm.retryPolicyMaxRetries = 0
+    await vm.saveRetryPolicy()
+    await flushPromises()
+    await nextTick()
+
+    expect(vm.retryPolicyError).toBeTruthy()
+    // With zero max_retries and events selected, the error is about max retries
+    expect(vm.retryPolicyError).toContain('Max retries')
+    // should NOT have called the API
+    expect(vi.mocked(api.PATCH).mock.calls.filter((c) => (c[0] as string).includes('retry_policy') || ((c[1] as any).body?.retry_policy !== undefined)).length).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('nodeCommandFields returns null fields for sandbox_agent with all-empty commands', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    const result = vm.nodeCommandFields({
+      node_type: 'sandbox_agent',
+      agent_commands: ['  ', ''],
+      commands_concatenation_string: ' && ',
+    })
+    expect(result.agent_commands).toBeNull()
+    expect(result.commands_concatenation_string).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('nodeCommandFields returns empty object for non-sandbox nodes', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    const result = vm.nodeCommandFields({
+      node_type: 'agent',
+      agent_commands: ['cmd-a'],
+    })
+    expect(result).toEqual({})
+    wrapper.unmount()
+  })
+
+  it('saveGraph syncs parameter_set_id and overrides into the node payload', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', agent_id: 'agent-1', label: 'Agent', description: '', position: { x: 0, y: 0 } },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    vm.selectedNodeParamSetId = 'ps-1'
+    vm.selectedNodeOverrides = { temperature: 0.5 }
+    await vm.saveGraph()
+    await flushPromises()
+
+    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const savedNode = (patch[1] as any).body.nodes[0]
+    expect(savedNode.parameter_set_id).toBe('ps-1')
+    expect(savedNode.parameter_overrides).toEqual({ temperature: 0.5 })
+    wrapper.unmount()
+  })
+
+  it('saveGraph clears parameter_set_id when no set is selected', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', agent_id: 'agent-1', label: 'Agent', description: '', position: { x: 0, y: 0 }, parameter_set_id: 'old-set' },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    // deselect param set
+    vm.selectedNodeParamSetId = undefined
+    vm.selectedNodeOverrides = {}
+    await vm.saveGraph()
+    await flushPromises()
+
+    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const savedNode = (patch[1] as any).body.nodes[0]
+    expect(savedNode.parameter_set_id).toBeNull()
+    expect(savedNode.parameter_overrides).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('saveGraph includes edges with edge_type, max_iterations, and routing_label', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } },
+      { id: 'node-2', node_type: 'manual', label: 'B', description: '', position: { x: 100, y: 0 } },
+    ]
+    vm.flowNodes = [
+      { id: 'node-1', type: 'agent', data: { label: 'A', description: '' } },
+      { id: 'node-2', type: 'manual', data: { label: 'B', description: '' } },
+    ]
+    vm.rawEdges = [
+      { id: 'e1', source_node_id: 'node-1', target_node_id: 'node-2', edge_type: 'loop', max_iterations: 5, condition_expression: null, hitl_gate_config: null },
+      { id: 'e2', source_node_id: 'node-2', target_node_id: 'node-1', edge_type: 'llm', routing_label: 'retry', condition_expression: null, hitl_gate_config: null },
+    ]
+    await vm.saveGraph()
+    await flushPromises()
+
+    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    const savedEdges = (patch[1] as any).body.edges
+    const loopEdge = savedEdges.find((e: any) => e.id === 'e1')
+    expect(loopEdge.edge_type).toBe('loop')
+    expect(loopEdge.max_iterations).toBe(5)
+    const llmEdge = savedEdges.find((e: any) => e.id === 'e2')
+    expect(llmEdge.edge_type).toBe('llm')
+    expect(llmEdge.routing_label).toBe('retry')
+    wrapper.unmount()
+  })
+
+  it('retry policy Escape key closes the panel', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('saveAsNewParamSet returns early when no schema is found', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', agent_id: 'agent-no-schema', label: 'A', description: '', position: { x: 0, y: 0 } },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'A', description: '' } }]
+    vm.agents = [{ id: 'agent-no-schema', name: 'No Schema Agent' }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    // prompt is mocked to return null (user cancels)
+    vi.stubGlobal('prompt', vi.fn().mockReturnValue(null))
+    const callsBefore = vi.mocked(api.POST).mock.calls.length
+    await vm.saveAsNewParamSet()
+    vi.unstubAllGlobals()
+    expect(vi.mocked(api.POST).mock.calls.length).toBe(callsBefore)
+    wrapper.unmount()
+  })
+
+  it('onParamSetChange clears overrides when deselecting a set', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    vm.selectedNodeParamSetId = 'ps-1'
+    vm.selectedNodeOverrides = { temperature: 0.5 }
+    vm.onParamSetChange()
+    await nextTick()
+    // selecting a set populates overrides from the paramSets array
+    // but since paramSets is empty, overrides get spread from undefined
+    expect(vm.selectedNodeOverrides).toEqual({})
+
+    // now deselect
+    vm.selectedNodeParamSetId = undefined
+    vm.selectedNodeOverrides = { key: 'val' }
+    vm.onParamSetChange()
+    await nextTick()
+    expect(vm.selectedNodeOverrides).toEqual({})
+    wrapper.unmount()
+  })
+
+  it('loadLifecycleMaps filters to maps whose stages reference this pipeline', async () => {
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps/lm-1')) {
+        return Promise.resolve({
+          id: 'lm-1',
+          name: 'Checkout Flow',
+          stages: [{ pipeline_id: 'test-pipeline-id' }, { pipeline_id: 'other-pipeline' }],
+        })
+      }
+      if (url.includes('/lifecycle-maps/lm-2')) {
+        return Promise.resolve({
+          id: 'lm-2',
+          name: 'Unrelated Map',
+          stages: [{ pipeline_id: 'other-pipeline' }],
+        })
+      }
+      if (url.includes('/lifecycle-maps') && !url.includes('/lm-')) {
+        return Promise.resolve([{ id: 'lm-1' }, { id: 'lm-2' }])
+      }
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    // The mocked useDataFetch never calls the real loaders — invoke manually
+    await vm.loadLifecycleMaps()
+    await flushPromises()
+    await nextTick()
+    expect(vm.linkedLifecycleMaps).toEqual([
+      expect.objectContaining({ id: 'lm-1', name: 'Checkout Flow' }),
+    ])
+    expect(vm.linkedLifecycleMaps.find((m: any) => m.id === 'lm-2')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('handleDelete navigates to library after successful deletion', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const pushSpy = vi.spyOn(router, 'push')
+
+    await wrapper.find('[data-testid="pipeline-editor-delete"]').trigger('click')
+    await nextTick()
+    const confirm = Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete')!
+    confirm.click()
+    await flushPromises()
+    await nextTick()
+
+    expect(vi.mocked(api.DELETE)).toHaveBeenCalled()
+    expect(pushSpy).toHaveBeenCalledWith({ name: 'library' })
+    wrapper.unmount()
+  })
+
+  it('handleRename fails silently when name is empty or whitespace', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
+    await nextTick()
+
+    await wrapper.find('[data-testid="pipeline-editor-rename"]').trigger('click')
+    await nextTick()
+    const input = document.querySelector<HTMLInputElement>('#pipelineeditorview-field-1')!
+    input.value = '   '
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    const callsBefore = vi.mocked(api.PATCH).mock.calls.length
+    const confirm = Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Save')!
+    confirm.click()
+    await flushPromises()
+    await nextTick()
+    // no PATCH call because name is blank
+    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(callsBefore)
+    wrapper.unmount()
+  })
+
+  it('showSaveAsDropdown toggles open and closed', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'n1', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } }]
+    await nextTick()
+
+    expect(vm.showSaveAsDropdown).toBe(false)
+    await wrapper.find('[data-testid="pipeline-editor-save-as-template"]').trigger('click')
+    await nextTick()
+    expect(vm.showSaveAsDropdown).toBe(true)
+    // clicking again closes it
+    await wrapper.find('[data-testid="pipeline-editor-save-as-template"]').trigger('click')
+    await nextTick()
+    expect(vm.showSaveAsDropdown).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('convertBackendNode handles router and hitl node types', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    const routerNode = vm.convertBackendNode({ id: 'r1', node_type: 'router', label: 'Router', description: 'route', position: { x: 50, y: 50 } })
+    expect(routerNode.type).toBe('router')
+    expect(routerNode.data.label).toBe('Router')
+
+    const hitlNode = vm.convertBackendNode({ id: 'h1', node_type: 'hitl', label: 'HITL', description: 'gate', position: { x: 100, y: 100 } })
+    expect(hitlNode.type).toBe('hitl')
+    expect(hitlNode.data.label).toBe('HITL')
+
+    // fallback label when label is empty
+    const unlabeled = vm.convertBackendNode({ id: 'u1', node_type: 'agent', label: '', description: '', position: { x: 0, y: 0 } })
+    expect(unlabeled.data.label).toContain('u1')
+    wrapper.unmount()
+  })
+})
