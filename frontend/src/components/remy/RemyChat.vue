@@ -933,6 +933,9 @@ function renderMarkdown(text: string): string {
   background-color: hsl(0 72% 51% / 0.15);
   color: hsl(0 72% 72%);
 }
+.light .remy-nogo-badge {
+  color: hsl(0 72% 40%);
+}
 .remy-permission-actions {
   @apply flex items-center gap-2;
 }
@@ -1005,6 +1008,12 @@ function renderMarkdown(text: string): string {
 .tool-badge.failed {
   background-color: hsl(0 72% 51% / 0.15);
   color: hsl(0 72% 72%);
+}
+.light .tool-badge.success {
+  color: hsl(142 76% 30%);
+}
+.light .tool-badge.failed {
+  color: hsl(0 72% 40%);
 }
 .tool-chevron {
   @apply text-xs transition-transform duration-200;
