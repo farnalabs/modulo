@@ -88,8 +88,9 @@ _MIGRATION_PATH = (
 # and 0224_agents_add_indexes chained onto 0223,
 # and 0225_agents_constraints_rls chained onto 0224,
 # and 0226_agents_json_to_jsonb chained onto 0225,
-# and 0228_drop_scalar_agent_command chained onto 0227_env_profiles_initialisation_strategy_check as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0228_drop_scalar_agent_command"
+# and 0227_env_profiles_initialisation_strategy_check chained onto 0226,
+# and 0230_journey_dismissal chained onto 0228_drop_scalar_agent_command as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0230_journey_dismissal"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

@@ -19,8 +19,9 @@ into an FK breaks retention.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, Index, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -35,6 +36,17 @@ class Journey(OrgScoped):
         # its own meaning (compare-and-set terminal evidence) and is NOT indexed
         # here.
         Index("ix_journeys_org_provenance", "organisation_id", "provenance"),
+        # FAR-795 slice C: the active (never-dismissed) lookups served by the
+        # drift/listing join paths all filter ``dismissed_at IS NULL`` on top
+        # of the (org, kind, ref) key. A matching partial index lets those
+        # joins skip dismissed rows entirely.
+        Index(
+            "ix_journeys_active_org_kind_ref",
+            "organisation_id",
+            "kind",
+            "ref",
+            postgresql_where=text("dismissed_at IS NULL"),
+        ),
     )
 
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -66,3 +78,14 @@ class Journey(OrgScoped):
     provenance: Mapped[str] = mapped_column(String(30), nullable=False, server_default="derived")
     first_seen_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
     run_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    # FAR-795 slice C: operator dismissal (soft-delete). A dismissed journey
+    # stays as a tombstone: its canonical (org, kind, ref) key still occupies
+    # the unique constraint (so the upsert predicates can refuse to re-mint
+    # it), but every mint/advance conflict arm and every read path filters
+    # ``dismissed_at IS NULL``. There is NO automatic un-dismissal — a caller
+    # citation of a dismissed work item must not resurrect it; only the
+    # operator restore clears these columns.
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dismissed_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)

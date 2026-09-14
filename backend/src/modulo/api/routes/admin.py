@@ -20,6 +20,7 @@ import modulo.db.crud.account as account_crud
 from modulo.api.constants import (
     MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
     MSG_FEATURE_NOT_AVAILABLE,
+    MSG_NOT_FOUND,
     MSG_ORGANISATION_NOT_FOUND,
     MSG_RESOURCE_ALREADY_EXISTS,
     MSG_TEAM_NAME_ALREADY_EXISTS,
@@ -43,6 +44,7 @@ from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
+from modulo.core.lifecycle_map.journeys import dismiss_journey, restore_journey
 from modulo.core.runtime_config import (
     FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
     read_org_flag,
@@ -3959,6 +3961,105 @@ async def admin_update_run_concurrency(
         },
     )
     return RunConcurrencyResponse(run_concurrency_limit=req.run_concurrency_limit)
+
+
+# ── Journey dismissal (soft-delete) + operator restore (FAR-795 slice C) ────
+
+
+class JourneyDismissRequest(BaseModel):
+    kind: str = Field(min_length=1, max_length=64)
+    ref: str = Field(min_length=1, max_length=255)
+    reason: str | None = Field(default=None, max_length=1024)
+
+
+class JourneyRestoreRequest(BaseModel):
+    kind: str = Field(min_length=1, max_length=64)
+    ref: str = Field(min_length=1, max_length=255)
+
+
+class JourneyDismissRestoreResponse(BaseModel):
+    kind: str
+    ref: str
+    dismissed: bool
+
+
+@router.post("/org/journeys/dismiss", status_code=status.HTTP_200_OK)
+async def admin_dismiss_journey(
+    req: JourneyDismissRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> JourneyDismissRestoreResponse:
+    """Operator soft-dismiss (tombstone) a journey. Org-scoped, admin-gated."""
+    _current = current_user
+
+    async def _do_write() -> bool:
+        async with session.begin():
+            await set_rls_org(session, _current.organisation_id)
+            return await dismiss_journey(
+                session,
+                _current.organisation_id,
+                kind=req.kind,
+                ref=req.ref,
+                dismissed_by=_current.account_id,
+                reason=req.reason,
+            )
+
+    dismissed = await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_write,
+        detail_admin="Only admin users can dismiss journeys",
+    )
+    if not dismissed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
+    await _record_org_audit(
+        session,
+        current_user,
+        "org.journey_dismissed",
+        {"kind": req.kind, "ref": req.ref, "reason": req.reason},
+    )
+    return JourneyDismissRestoreResponse(kind=req.kind, ref=req.ref, dismissed=True)
+
+
+@router.post("/org/journeys/restore", status_code=status.HTTP_200_OK)
+async def admin_restore_journey(
+    req: JourneyRestoreRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> JourneyDismissRestoreResponse:
+    """Operator restore (un-dismiss) — the ONLY un-dismissal path (FAR-795).
+
+    A caller citation of a dismissed work item never un-dismisses it; an
+    operator restore clears the tombstone so the journey is mintable and
+    listed again.
+    """
+    _current = current_user
+
+    async def _do_write() -> bool:
+        async with session.begin():
+            await set_rls_org(session, _current.organisation_id)
+            return await restore_journey(
+                session,
+                _current.organisation_id,
+                kind=req.kind,
+                ref=req.ref,
+            )
+
+    restored = await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_write,
+        detail_admin="Only admin users can restore journeys",
+    )
+    if not restored:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
+    await _record_org_audit(
+        session,
+        current_user,
+        "org.journey_restored",
+        {"kind": req.kind, "ref": req.ref},
+    )
+    return JourneyDismissRestoreResponse(kind=req.kind, ref=req.ref, dismissed=False)
 
 
 @router.get("/runs/storage")
