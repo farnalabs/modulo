@@ -16,19 +16,20 @@ metadata.  Per-tenant uniqueness is enforced by the model's
 ``UniqueConstraint("organisation_id", "name")`` and is consistent with the
 existing RLS tenant isolation on ``agents``.
 
-Deploy-safety (PostgreSQL 16): a plain ``op.create_unique_constraint`` / ``ALTER
-TABLE ... ADD CONSTRAINT ... UNIQUE`` takes an ``ACCESS EXCLUSIVE`` lock and a full
-table scan, and hard-fails if any duplicate ``(organisation_id, name)`` rows
-already exist — a deploy-blocking failure mode.  Instead we build the unique
-index ONLINE with ``CREATE UNIQUE INDEX CONCURRENTLY`` (issued under AUTOCOMMIT
-isolation because ``CONCURRENTLY`` cannot run inside a transaction) so it takes
-only a ``SHARE UPDATE EXCLUSIVE`` lock and never blocks writers, then promote that
-index to a named ``UNIQUE`` constraint with a brief, non-scanning ``ALTER TABLE ...
-ADD CONSTRAINT ... UNIQUE USING INDEX``.  This is the PostgreSQL-16 equivalent of
-the ``NOT VALID`` + ``VALIDATE`` pattern used for CHECK/FK constraints in
-``0151_fix_constraints`` / ``0164_add_missing_foreign_keys`` — unique constraints
-cannot be marked ``NOT VALID`` before PostgreSQL 18.  A duplicate pre-check raises
-a loud, actionable error (rather than a bare unique-violation) if legacy duplicate
+Deploy-safety (PostgreSQL 16): a plain ``ALTER TABLE ... ADD CONSTRAINT ... UNIQUE``
+takes an ``ACCESS EXCLUSIVE`` lock and a full table scan, and hard-fails if any
+duplicate ``(organisation_id, name)`` rows already exist — a deploy-blocking failure
+mode.  Alembic wraps every revision in a single transaction
+(``Will assume transactional DDL``), so ``CREATE UNIQUE INDEX CONCURRENTLY`` is
+unavailable here (``CONCURRENTLY`` cannot run inside a transaction, and the
+AUTOCOMMIT isolation-level switch fails with ``This connection has already
+initialized a SQLAlchemy Transaction()``) — consistent with the pattern used for
+unique indexes in ``0197_runs_index_and_constraint_fixes`` / ``0154_`` /
+``0171_`` / ``0182_`` / ``0187_`` / ``0193_`` / ``0200_`` / ``0218_``.  We therefore
+build the unique index in-transaction with a plain ``CREATE UNIQUE INDEX``, then
+promote it to a named ``UNIQUE`` constraint with a brief, non-scanning ``ALTER
+TABLE ... ADD CONSTRAINT ... UNIQUE USING INDEX``.  A duplicate pre-check raises a
+loud, actionable error (rather than a bare unique-violation) if legacy duplicate
 rows are present.
 """
 
@@ -67,14 +68,10 @@ def upgrade() -> None:
         )
     )
 
-    # Build the unique index ONLINE (CONCURRENTLY) — AUTOCOMMIT isolation is
-    # required because CONCURRENTLY cannot run inside the migration transaction.
-    op.execute(
-        text(f"CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS {_CONSTRAINT_NAME} ON {_TABLE} ({', '.join(_COLUMNS)})"),
-        execution_options={"isolation_level": "AUTOCOMMIT"},
-    )
-    # Promote the online-built index to a named UNIQUE constraint matching the
-    # ORM UniqueConstraint name (brief, non-scanning ALTER).
+    # Build the unique index IN-TRANSACTION (plain CREATE UNIQUE INDEX — CONCURRENTLY
+    # is unavailable inside Alembic's transactional DDL). Then promote that index to
+    # a named UNIQUE constraint matching the ORM UniqueConstraint name.
+    op.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {_CONSTRAINT_NAME} ON {_TABLE} ({', '.join(_COLUMNS)})"))
     op.execute(text(f"ALTER TABLE {_TABLE} ADD CONSTRAINT {_CONSTRAINT_NAME} UNIQUE USING INDEX {_CONSTRAINT_NAME}"))
 
 
