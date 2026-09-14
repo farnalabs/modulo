@@ -903,6 +903,7 @@ class _Child:
     terminating_since: float | None = None
     probe_unavailable_logged: bool = False
     crash_times: deque[float] = field(default_factory=deque)
+    supervision_error_count: int = 0
 
 
 class Supervisor:
@@ -1025,11 +1026,17 @@ class Supervisor:
             for child in self._children.values():
                 try:
                     self._tick_child_locked(child)
+                    child.supervision_error_count = 0
                 except Exception:
                     # Unexpected supervision failure for this child: record
                     # it (traceback) in the crash ring — it may be the last
                     # known state persisted with a later degrade — then
                     # skip so the monitor survives for the other children.
+                    # A child whose supervision keeps failing every tick is
+                    # not transient: after `crash_cap` consecutive raises we
+                    # stop swallowing and re-raise so the monitor loop
+                    # degrades instead of spinning forever.
+                    child.supervision_error_count += 1
                     _log.exception("supervisor.tick_child_failed name=%s", child.spec.name)
                     self._crash_records.append(
                         CrashRecord(
@@ -1039,6 +1046,8 @@ class Supervisor:
                             backtrace=traceback.format_exc(),
                         )
                     )
+                    if child.supervision_error_count >= self.knobs.crash_cap:
+                        raise
                     continue
 
     def _tick_child_locked(self, child: _Child) -> None:
