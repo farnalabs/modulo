@@ -178,8 +178,6 @@ class _RetentionSession:
     def __init__(self, row: _FakeRunRow | None) -> None:
         self._row = row
         self.info: dict = {}
-        if row is not None and row.raw_output_markers is None:
-            row.raw_output_markers = {}
 
     async def __aenter__(self) -> Self:
         return self
@@ -213,6 +211,8 @@ class _RetentionSession:
                 values = item[1] if isinstance(item, tuple) else item
                 key = values.get("attempt_key") if isinstance(values, dict) else None
                 if key is not None and "raw_output_markers" in values:
+                    if self._row.raw_output_markers is None:
+                        self._row.raw_output_markers = {}
                     self._row.raw_output_markers[key] = values["raw_output_markers"]
             return _RetentionResult(self._row, statement="insert")
         if is_delete and table_name == "run_node_outputs" and self._row is not None:
@@ -224,7 +224,7 @@ class _RetentionSession:
             except Exception:  # pragma: no cover - the fake never blocks on compile drift
                 keep = None
             if keep is not None:
-                for stale in set(self._row.raw_output_markers) - keep:
+                for stale in set(self._row.raw_output_markers or {}) - keep:
                     self._row.raw_output_markers.pop(stale, None)
             return _RetentionResult(self._row, statement="delete")
         stmt_text = str(stmt)

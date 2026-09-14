@@ -4,12 +4,14 @@ Unit tier: no DB — the SQLAlchemy session is a contract-correct AsyncMock and
 the RemyContextSourceService is patched at its source module.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
@@ -380,3 +382,345 @@ def test_reset_org_context_sources_db_error_returns_503(client: TestClient) -> N
     _failing_executes(client.mock_session, SQLAlchemyError("boom"))  # type: ignore[attr-defined]
     resp = client.delete("/api/v1/admin/remy/context-sources")
     assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: error handlers, available-providers, skills edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_get_config_unexpected_error_returns_500(client: TestClient) -> None:
+    _failing_executes(client.mock_session, RuntimeError("kaboom"))  # type: ignore[attr-defined]
+    resp = client.get("/api/v1/admin/remy/config")
+    assert resp.status_code == 500
+
+
+def test_update_config_programming_error_returns_501(client: TestClient) -> None:
+    _failing_executes(  # type: ignore[attr-defined]
+        client.mock_session,
+        ProgrammingError("SELECT 1", {}, Exception("missing table")),
+    )
+    resp = client.put("/api/v1/admin/remy/config", json={"system_prompt": "X"})
+    assert resp.status_code == 501
+
+
+def test_update_config_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    _failing_executes(client.mock_session, SQLAlchemyError("connection lost"))  # type: ignore[attr-defined]
+    resp = client.put("/api/v1/admin/remy/config", json={"system_prompt": "X"})
+    assert resp.status_code == 503
+
+
+def test_update_config_unexpected_error_returns_500(client: TestClient) -> None:
+    _failing_executes(client.mock_session, RuntimeError("kaboom"))  # type: ignore[attr-defined]
+    resp = client.put("/api/v1/admin/remy/config", json={"system_prompt": "X"})
+    assert resp.status_code == 500
+
+
+def test_update_config_mixed_fields(client: TestClient) -> None:
+    _queue_executes(client.mock_session, _config_result(None))  # type: ignore[attr-defined]
+    resp = client.put(
+        "/api/v1/admin/remy/config",
+        json={
+            "system_prompt": "Be concise",
+            "additional_guidance": "Extra notes",
+            "default_provider": "openai",
+            "default_model": "gpt-4o",
+            "default_context_window": 128000,
+            "allowed_providers": ["openai"],
+            "allowed_models": ["gpt-4o"],
+            "access_list": {"user_ids": ["u1"], "team_ids": [], "org_roles": ["admin"]},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["system_prompt"] == "Be concise"
+    assert body["additional_guidance"] == "Extra notes"
+    assert body["default_provider"] == "openai"
+    assert body["default_context_window"] == 128000
+
+
+def test_list_org_skills_programming_error_returns_501(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.get("/api/v1/admin/remy/skills")
+    assert resp.status_code == 501
+
+
+def test_list_org_skills_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.get("/api/v1/admin/remy/skills")
+    assert resp.status_code == 500
+
+
+def test_create_org_skill_programming_error_returns_501(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.post("/api/v1/admin/remy/skills", json={"name": "X", "body": "b"})
+    assert resp.status_code == 501
+
+
+def test_create_org_skill_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.post("/api/v1/admin/remy/skills", json={"name": "X", "body": "b"})
+    assert resp.status_code == 500
+
+
+def test_update_org_skill_programming_error_returns_501(client: TestClient) -> None:
+    skill = _make_skill()
+    client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.put(f"/api/v1/admin/remy/skills/{skill.id}", json={"name": "X"})
+    assert resp.status_code == 501
+
+
+def test_update_org_skill_unexpected_error_returns_500(client: TestClient) -> None:
+    skill = _make_skill()
+    client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.put(f"/api/v1/admin/remy/skills/{skill.id}", json={"name": "X"})
+    assert resp.status_code == 500
+
+
+def test_update_org_skill_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    skill = _make_skill()
+    client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError("boom"),
+    ):
+        resp = client.put(f"/api/v1/admin/remy/skills/{skill.id}", json={"name": "X"})
+    assert resp.status_code == 503
+
+
+def test_delete_org_skill_programming_error_returns_501(client: TestClient) -> None:
+    skill = _make_skill()
+    client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
+    ):
+        resp = client.delete(f"/api/v1/admin/remy/skills/{skill.id}")
+    assert resp.status_code == 501
+
+
+def test_delete_org_skill_unexpected_error_returns_500(client: TestClient) -> None:
+    skill = _make_skill()
+    client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.delete(f"/api/v1/admin/remy/skills/{skill.id}")
+    assert resp.status_code == 500
+
+
+def test_delete_org_skill_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    skill = _make_skill()
+    client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError("boom"),
+    ):
+        resp = client.delete(f"/api/v1/admin/remy/skills/{skill.id}")
+    assert resp.status_code == 503
+
+
+def test_get_org_context_sources_programming_error_returns_501(client: TestClient) -> None:
+    service = MagicMock()
+    service.get_org_defaults = AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("missing table")))
+    with patch(
+        "modulo.core.remy.context_source_service.RemyContextSourceService",
+        return_value=service,
+    ):
+        resp = client.get("/api/v1/admin/remy/context-sources")
+    assert resp.status_code == 501
+
+
+def test_get_org_context_sources_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.get("/api/v1/admin/remy/context-sources")
+    assert resp.status_code == 500
+
+
+def test_set_org_context_source_programming_error_returns_501(client: TestClient) -> None:
+    service = MagicMock()
+    service.set_org_default = AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("missing table")))
+    with patch(
+        "modulo.core.remy.context_source_service.RemyContextSourceService",
+        return_value=service,
+    ):
+        resp = client.put(
+            "/api/v1/admin/remy/context-sources/page_context",
+            json={"source_mode": "tool"},
+        )
+    assert resp.status_code == 501
+
+
+def test_set_org_context_source_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.admin_remy.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.put(
+            "/api/v1/admin/remy/context-sources/page_context",
+            json={"source_mode": "tool"},
+        )
+    assert resp.status_code == 500
+
+
+def test_reset_org_context_sources_programming_error_returns_501(client: TestClient) -> None:
+    _failing_executes(  # type: ignore[attr-defined]
+        client.mock_session,
+        ProgrammingError("stmt", {}, Exception("missing table")),
+    )
+    resp = client.delete("/api/v1/admin/remy/context-sources")
+    assert resp.status_code == 501
+
+
+def test_reset_org_context_sources_unexpected_error_returns_500(client: TestClient) -> None:
+    _failing_executes(client.mock_session, RuntimeError("kaboom"))  # type: ignore[attr-defined]
+    resp = client.delete("/api/v1/admin/remy/context-sources")
+    assert resp.status_code == 500
+
+
+def test_available_providers_includes_label_lookup(client: TestClient) -> None:
+    """Verify the endpoint builds native/custom lists and looks up labels."""
+    resp = client.get("/api/v1/admin/remy/available-providers")
+    assert resp.status_code == 200
+    body = resp.json()
+    native_ids = {p["id"] for p in body["native"]}
+    # All SUPPORTED_PROVIDERS must appear in native
+    assert "anthropic" in native_ids
+    assert "openai" in native_ids
+    # Every native entry must have a non-empty label
+    for p in body["native"]:
+        assert p["label"]
+    for p in body["custom_types"]:
+        assert p["label"]
+
+
+def test_get_user_skills_returns_matching_skills() -> None:
+    from modulo.api.routes.admin_remy import get_user_skills
+
+    skill = _make_skill()
+    result = MagicMock()
+    result.scalars.return_value = iter([skill])
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=result)
+    skills = asyncio.run(get_user_skills(db, _USER_ID, _ORG_ID))
+    assert len(skills) == 1
+
+
+def test_get_user_skill_or_404_raises_on_missing() -> None:
+    from modulo.api.routes.admin_remy import get_user_skill_or_404
+
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=None)
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(get_user_skill_or_404(db, _USER_ID, uuid.uuid4()))
+    assert exc_info.value.status_code == 404
+
+
+def test_get_user_skill_or_404_raises_on_wrong_account() -> None:
+    from modulo.api.routes.admin_remy import get_user_skill_or_404
+
+    skill = _make_skill(account_id=uuid.uuid4())
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=skill)
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(get_user_skill_or_404(db, _USER_ID, skill.id))
+    assert exc_info.value.status_code == 404
+
+
+def test_get_config_non_dict_value_treated_as_empty(client: TestClient) -> None:
+    entry = MagicMock()
+    entry.value = "not-a-dict"
+    _queue_executes(client.mock_session, _config_result(entry))  # type: ignore[attr-defined]
+    resp = client.get("/api/v1/admin/remy/config")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["system_prompt"] is None
+    assert body["allowed_providers"] == ["anthropic", "openai", "gemini", "deepseek", "groq"]
+
+
+def test_update_config_non_dict_existing_value_treated_as_empty(client: TestClient) -> None:
+    entry = MagicMock()
+    entry.value = "not-a-dict"
+    _queue_executes(client.mock_session, _config_result(entry))  # type: ignore[attr-defined]
+    resp = client.put("/api/v1/admin/remy/config", json={"system_prompt": "New"})
+    assert resp.status_code == 200
+    assert resp.json()["system_prompt"] == "New"
+
+
+def test_get_org_context_sources_db_error_returns_503(client: TestClient) -> None:
+    service = MagicMock()
+    service.get_org_defaults = AsyncMock(side_effect=SQLAlchemyError("boom"))
+    with patch(
+        "modulo.core.remy.context_source_service.RemyContextSourceService",
+        return_value=service,
+    ):
+        resp = client.get("/api/v1/admin/remy/context-sources")
+    assert resp.status_code == 503
+
+
+def test_set_org_context_source_db_error_returns_503(client: TestClient) -> None:
+    service = MagicMock()
+    service.set_org_default = AsyncMock(side_effect=SQLAlchemyError("boom"))
+    with patch(
+        "modulo.core.remy.context_source_service.RemyContextSourceService",
+        return_value=service,
+    ):
+        resp = client.put(
+            "/api/v1/admin/remy/context-sources/page_context",
+            json={"source_mode": "tool"},
+        )
+    assert resp.status_code == 503
+
+
+def test_update_config_accepts_allowed_models(client: TestClient) -> None:
+    _queue_executes(client.mock_session, _config_result(None))  # type: ignore[attr-defined]
+    resp = client.put(
+        "/api/v1/admin/remy/config",
+        json={"allowed_models": ["gpt-4o", "claude-sonnet-4-20250514"]},
+    )
+    assert resp.status_code == 200
+    # allowed_models is stored in the config value but ClassVar on the response model
+    # so it won't appear in the JSON — verify the update succeeded with allowed_providers
+    _queue_executes(client.mock_session, _config_result(None))  # type: ignore[attr-defined]
+    resp2 = client.put(
+        "/api/v1/admin/remy/config",
+        json={"allowed_providers": ["openai"]},
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["allowed_providers"] == ["openai"]
