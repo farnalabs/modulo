@@ -795,6 +795,40 @@ def test_resolve_stdout_cap_coercion(patch_node_runner) -> None:
     )
 
 
+def test_resolve_stdout_cap_pipeline_default(patch_node_runner) -> None:
+    """FAR-811: pipeline default is applied when node didn't set mode."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    # Node didn't set mode -> pipeline default mode=full with max_bytes
+    cap = runner_dispatch._resolve_stdout_cap(
+        {},
+        pipeline_default={"mode": "full", "max_bytes": 4096},
+    )
+    assert cap == 4096
+
+    # Node didn't set mode -> pipeline default mode=tail
+    cap = runner_dispatch._resolve_stdout_cap(
+        {},
+        pipeline_default={"mode": "tail"},
+    )
+    assert cap == nrm._MAX_ARTIFACT_LOG
+
+    # Node explicitly set mode -> pipeline default ignored
+    cap = runner_dispatch._resolve_stdout_cap(
+        {"stdout_retention_mode": "full", "stdout_max_bytes": 2048},
+        pipeline_default={"mode": "tail"},
+    )
+    assert cap == 2048
+
+    # Pipeline default clamped by org ceiling
+    cap = runner_dispatch._resolve_stdout_cap(
+        {},
+        pipeline_default={"mode": "full", "max_bytes": 20_000_000},
+        org_ceiling=5_000_000,
+    )
+    assert cap == 5_000_000
+
+
 def test_combine_raw_outputs(patch_node_runner) -> None:
     assert _combine_raw_outputs("raw", "std") == "raw\nstd"
 

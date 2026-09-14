@@ -462,11 +462,28 @@ class PipelineCreate(TeamVisibilityMixin):
             "settings.saq_retry_delay plus queue wait."
         ),
     )
+    stdout_retention_config: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Pipeline-level default for sandbox stdout retention. "
+            'Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. '
+            "NULL = no pipeline override (inherit from org ceiling only). "
+            "When a sandbox node does not explicitly set its own stdout_retention_mode, "
+            "the pipeline default is inherited; node-explicit settings always win."
+        ),
+    )
 
     @field_validator("retry_policy")
     @classmethod
     def _validate_retry_policy_field(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
         return _validate_retry_policy(value)
+
+    @field_validator("stdout_retention_config", mode="before")
+    @classmethod
+    def _validate_stdout_retention_config(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        from modulo.core.stdout_retention import validate_stdout_retention_config
+
+        return validate_stdout_retention_config(v)
 
 
 class PipelineUpdate(TeamVisibilityMixin):
@@ -518,6 +535,14 @@ class PipelineUpdate(TeamVisibilityMixin):
         None,
         description="Replace the pipeline graph (nodes + edges). Creates a new snapshot.",
     )
+    stdout_retention_config: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Pipeline-level default for sandbox stdout retention. "
+            'Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. '
+            "Set to {} to clear (no pipeline override)."
+        ),
+    )
 
     @field_validator("retry_policy", mode="before")
     @classmethod
@@ -546,6 +571,13 @@ class PipelineUpdate(TeamVisibilityMixin):
             raise ValueError("lock_wait_timeout_seconds cannot be set to null. Use a value >= 30.")
         return v
 
+    @field_validator("stdout_retention_config", mode="before")
+    @classmethod
+    def _validate_stdout_retention_config(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        from modulo.core.stdout_retention import validate_stdout_retention_config
+
+        return validate_stdout_retention_config(v)
+
 
 class PipelineResponse(BaseModel):
     id: uuid.UUID
@@ -565,6 +597,7 @@ class PipelineResponse(BaseModel):
     stale_run_timeout_minutes: int = 30
     rate_limit_config: dict[str, Any] | None = None
     retry_policy: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"default": {}})
+    stdout_retention_config: dict[str, Any] | None = None
     snapshot_count: int = 0
     # Additive, backward-compatible: every response builder derives node_count
     # from the row's stored graph via _pipeline_response, so detail/create/
