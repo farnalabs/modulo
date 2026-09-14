@@ -99,8 +99,12 @@ def _load_prd_glossary(prd_path: Path) -> dict[str, str]:
 
     text = prd_path.read_text(encoding="utf-8")
 
-    # Find the ## 5. Core Concepts & Glossary section
-    m = re.search(r"## 5\. Core Concepts & Glossary\s*\n(.+?)\n## \d", text, re.DOTALL)
+    # Find the ## 5. Core Concepts & Glossary section.
+    # Tempered greedy token ((?:(?!\n## \d)[\s\S])*) replaces the lazy
+    # (.+?): it stops at the FIRST "\n## <digit>" heading (preserving the
+    # original lazy semantics) without a reluctant quantifier, which
+    # SonarCloud S6019 flags as "will only ever match 1 repetition".
+    m = re.search(r"## 5\. Core Concepts & Glossary\s*\n((?:(?!\n## \d)[\s\S])*)(?=\n## \d)", text)
     if not m:
         return dict(_GLOSSARY_TERMS)
 
