@@ -13212,6 +13212,11 @@ export interface components {
         };
         /** LifecycleMapVersionMeta */
         LifecycleMapVersionMeta: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
             /** Version */
             version: number;
             /**

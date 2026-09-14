@@ -396,14 +396,14 @@ const statusOptions = computed(() => [
 const mapId = computed(() => route.params.id as string)
 const selectedVersion = ref<number | null>(null)
 
-// FAR-829: persisted node positions (localStorage fallback — backend version
-// UUID is not available from the detail response, so updateVersion cannot be
-// called from the view.  Positions are keyed by map id + version number so a
-// version switch restores each arrangement independently.)
+// FAR-833: server-side node-position persistence. The server is the source of
+// truth; positions are persisted via updateVersion (PUT) on drag-end.
+// localStorage is kept ONLY as a fallback when the server write fails.
 const savedPositions = ref<Record<string, { x: number; y: number }>>({})
 const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 let saveTimeout: ReturnType<typeof setTimeout> | null = null
 let statusTimeout: ReturnType<typeof setTimeout> | null = null
+let saveAbortController: AbortController | null = null
 
 function localStorageKey(mapIdVal: string, version: number | null): string {
   return `lifecycle-map-positions:${mapIdVal}:${version ?? 'latest'}`
@@ -411,6 +411,22 @@ function localStorageKey(mapIdVal: string, version: number | null): string {
 
 function loadSavedPositions(): void {
   if (!mapId.value) return
+  // Positions come from the server (stages have x/y in the detail response).
+  // localStorage is only a fallback for when the server write failed earlier.
+  const mapStages = mapData.value?.stages ?? []
+  const serverPositions: Record<string, { x: number; y: number }> = {}
+  let hasServerPositions = false
+  for (const stage of mapStages) {
+    if (stage.x != null && stage.y != null) {
+      serverPositions[stage.id] = { x: stage.x, y: stage.y }
+      hasServerPositions = true
+    }
+  }
+  if (hasServerPositions) {
+    savedPositions.value = serverPositions
+    return
+  }
+  // Fallback: try localStorage when the server has no positions yet.
   try {
     const key = localStorageKey(mapId.value, selectedVersion.value)
     const raw = localStorage.getItem(key)
@@ -424,19 +440,71 @@ function loadSavedPositions(): void {
   }
 }
 
-function persistPositions(positions: Record<string, { x: number; y: number }>): void {
+async function persistPositions(positions: Record<string, { x: number; y: number }>): Promise<void> {
   if (statusTimeout) { clearTimeout(statusTimeout); statusTimeout = null }
   if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null }
-  saveTimeout = setTimeout(() => {
+  // Abort any in-flight save from a previous debounce cycle.
+  if (saveAbortController) { saveAbortController.abort(); saveAbortController = null }
+  saveTimeout = setTimeout(async () => {
+    // Abort any in-flight save from a previous debounce cycle.
+    if (saveAbortController) { saveAbortController.abort(); saveAbortController = null }
     saveStatus.value = 'saving'
-    try {
-      const key = localStorageKey(mapId.value, selectedVersion.value)
-      localStorage.setItem(key, JSON.stringify(positions))
-      saveStatus.value = 'saved'
-      statusTimeout = setTimeout(() => { saveStatus.value = 'idle' }, 2000)
-    } catch {
+    // Build the version-update payload: current stages with updated x/y, current edges.
+    const map = mapData.value
+    const versionId = map?.versions?.[0]?.id
+    if (!map || !mapId.value || !versionId) {
       saveStatus.value = 'error'
       statusTimeout = setTimeout(() => { saveStatus.value = 'idle' }, 3000)
+      return
+    }
+    const stages = (map.stages ?? []).map((s) => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      type: s.type,
+      pipeline_id: s.pipeline_id,
+      external_url: s.external_url,
+      owner: s.owner_badge,
+      graduated: s.graduated,
+      x: positions[s.id]?.x ?? s.x ?? null,
+      y: positions[s.id]?.y ?? s.y ?? null,
+    }))
+    const edges = (map.transitions ?? []).map((t) => ({
+      id: t.id,
+      source: t.source_stage_id,
+      target: t.target_stage_id,
+      trigger_type: t.trigger_type,
+      trigger_description: t.description,
+      condition: null,
+      estimated_frequency: null,
+    }))
+    const controller = new AbortController()
+    saveAbortController = controller
+    try {
+      await store.updateVersion(mapId.value, versionId, stages, edges)
+      if (!controller.signal.aborted) {
+        // Write to localStorage as a fallback cache.
+        try {
+          const key = localStorageKey(mapId.value, selectedVersion.value)
+          localStorage.setItem(key, JSON.stringify(positions))
+        } catch { /* quota exceeded — non-critical */ }
+        saveStatus.value = 'saved'
+        statusTimeout = setTimeout(() => { saveStatus.value = 'idle' }, 2000)
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        // Server write failed — persist to localStorage as fallback.
+        try {
+          const key = localStorageKey(mapId.value, selectedVersion.value)
+          localStorage.setItem(key, JSON.stringify(positions))
+          saveStatus.value = 'error'
+        } catch {
+          saveStatus.value = 'error'
+        }
+        statusTimeout = setTimeout(() => { saveStatus.value = 'idle' }, 3000)
+      }
+    } finally {
+      if (saveAbortController === controller) saveAbortController = null
     }
   }, 500)
 }
@@ -449,6 +517,7 @@ function handlePositionsChanged(positions: Record<string, { x: number; y: number
 onBeforeUnmount(() => {
   if (saveTimeout) clearTimeout(saveTimeout)
   if (statusTimeout) clearTimeout(statusTimeout)
+  if (saveAbortController) { saveAbortController.abort(); saveAbortController = null }
 })
 
 const mapData = computed(() => store.currentMap)

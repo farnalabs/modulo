@@ -33,6 +33,7 @@ export interface LifecycleMapTransition {
 }
 
 export interface LifecycleMapVersion {
+  id: string
   version: number
   created_at: string
   created_by: string | null

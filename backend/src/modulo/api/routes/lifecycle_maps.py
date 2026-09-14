@@ -209,6 +209,7 @@ class LifecycleMapTransitionItem(BaseModel):
 
 
 class LifecycleMapVersionMeta(BaseModel):
+    id: uuid.UUID
     version: int
     created_at: datetime
     created_by: str | None = None
@@ -460,7 +461,14 @@ def _build_detail(lm: Any) -> LifecycleMapDetailResponse:
         current_version=lm.version,
         stages=stages,
         transitions=transitions,
-        versions=[LifecycleMapVersionMeta(version=lm.version, created_at=lm.updated_at, created_by=_version_actor(lm))],
+        versions=[
+            LifecycleMapVersionMeta(
+                id=lm.id,
+                version=lm.version,
+                created_at=lm.updated_at,
+                created_by=_version_actor(lm),
+            )
+        ],
         content_json=content,
         archived_at=lm.archived_at,
         created_at=lm.created_at,

@@ -43,8 +43,8 @@ const mapDetail = {
   owner: null,
   owner_team_id: null,
   stages: [{ id: 'stage-1', name: 'Build', description: null, type: 'modulo', owner_badge: null, graduated: false, pipeline_id: null, external_url: null }],
-  transitions: [],
-  versions: [{ version: 1, created_at: '2026-01-01T00:00:00Z', created_by: null }],
+  transitions: [{ id: 'e1', source_stage_id: 'stage-1', target_stage_id: 'stage-1', trigger_type: 'auto', description: null }],
+  versions: [{ id: '00000000-0000-0000-0000-000000000001', version: 1, created_at: '2026-01-01T00:00:00Z', created_by: null }],
   current_version: 1,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
@@ -600,7 +600,7 @@ describe('LifecycleMapView journeys loading spinner (FAR-818)', () => {
   })
 })
 
-describe('LifecycleMapView node position persistence (FAR-829)', () => {
+describe('LifecycleMapView node position persistence (FAR-833)', () => {
   let localStorageStore: Record<string, string>
 
   beforeEach(() => {
@@ -612,8 +612,16 @@ describe('LifecycleMapView node position persistence (FAR-829)', () => {
     })
   })
 
-  it('loads saved positions from localStorage on mount', async () => {
-    localStorageStore['lifecycle-map-positions:map-1:1'] = JSON.stringify({ 'stage-1': { x: 500, y: 600 } })
+  it('loads positions from server response stages on mount', async () => {
+    const mapWithPositions = {
+      ...mapDetail,
+      stages: [{ ...mapDetail.stages[0], x: 500, y: 600 }],
+    }
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/journeys')) return Promise.resolve(okJson({ items: [] }))
+      return Promise.resolve(okJson(mapWithPositions))
+    })
+
     const wrapper = mountView()
     await flushPromises()
 
@@ -621,7 +629,7 @@ describe('LifecycleMapView node position persistence (FAR-829)', () => {
     expect(renderer.props('savedPositions')).toEqual({ 'stage-1': { x: 500, y: 600 } })
   })
 
-  it('passes empty savedPositions when nothing in localStorage', async () => {
+  it('passes empty savedPositions when server stages have no positions', async () => {
     const wrapper = mountView()
     await flushPromises()
 
@@ -629,8 +637,13 @@ describe('LifecycleMapView node position persistence (FAR-829)', () => {
     expect(renderer.props('savedPositions')).toEqual({})
   })
 
-  it('persists positions to localStorage when positions-changed fires', async () => {
+  it('calls updateVersion on drag-end with the updated stages', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/journeys')) return Promise.resolve(okJson({ items: [] }))
+      return Promise.resolve(okJson(mapDetail))
+    })
+
     const wrapper = mountView()
     await flushPromises()
 
@@ -638,12 +651,26 @@ describe('LifecycleMapView node position persistence (FAR-829)', () => {
     vm.handlePositionsChanged({ 'stage-1': { x: 123, y: 456 } })
     await vi.advanceTimersByTimeAsync(600)
 
-    expect(localStorageStore['lifecycle-map-positions:map-1:1']).toBe(JSON.stringify({ 'stage-1': { x: 123, y: 456 } }))
+    // The store's updateVersion should have been called.
+    const putCalls = fetchMock.mock.calls.filter((call: unknown[]) => {
+      const [url, init] = call
+      return String(url).includes('/versions/00000000-0000-0000-0000-000000000001') && (init as { method?: string })?.method === 'PUT'
+    })
+    expect(putCalls).toHaveLength(1)
+    const [, init] = putCalls[0]
+    const body = JSON.parse((init as { body: string }).body)
+    expect(body.stages[0].x).toBe(123)
+    expect(body.stages[0].y).toBe(456)
     vi.useRealTimers()
   })
 
-  it('shows saved indicator after successful persistence', async () => {
+  it('shows saved indicator after successful server write', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/journeys')) return Promise.resolve(okJson({ items: [] }))
+      return Promise.resolve(okJson(mapDetail))
+    })
+
     const wrapper = mountView()
     await flushPromises()
 
@@ -658,7 +685,7 @@ describe('LifecycleMapView node position persistence (FAR-829)', () => {
   })
 })
 
-describe('LifecycleMapView position persistence edge cases (FAR-829)', () => {
+describe('LifecycleMapView position persistence edge cases (FAR-833)', () => {
   let localStorageStore: Record<string, string>
 
   beforeEach(() => {
@@ -674,19 +701,15 @@ describe('LifecycleMapView position persistence edge cases (FAR-829)', () => {
     vi.useRealTimers()
   })
 
-  it('falls back to empty positions when stored JSON is corrupt', async () => {
-    localStorageStore['lifecycle-map-positions:map-1:1'] = 'not-json{'
-    const wrapper = mountView()
-    await flushPromises()
-
-    const renderer = wrapper.findComponent(LifecycleMapRenderer)
-    expect(renderer.props('savedPositions')).toEqual({})
-  })
-
-  it('surfaces an error status when the localStorage write throws', async () => {
+  it('surfaces an error status when the server write fails', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
-    const setItem = localStorage.setItem as unknown as ReturnType<typeof vi.fn>
-    setItem.mockImplementation(() => { throw new Error('quota exceeded') })
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/journeys')) return Promise.resolve(okJson({ items: [] }))
+      if (String(url).includes('/versions/')) {
+        return Promise.resolve({ ok: false, status: 500, statusText: 'Error', json: async () => ({ detail: 'server error' }) })
+      }
+      return Promise.resolve(okJson(mapDetail))
+    })
 
     const wrapper = mountView()
     await flushPromises()
@@ -700,37 +723,89 @@ describe('LifecycleMapView position persistence edge cases (FAR-829)', () => {
     expect(status.text()).toContain('failed')
   })
 
-  it('clears a pending save timer when a newer position change arrives', async () => {
+  it('falls back to localStorage when the server write fails', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/journeys')) return Promise.resolve(okJson({ items: [] }))
+      if (String(url).includes('/versions/')) {
+        return Promise.resolve({ ok: false, status: 500, statusText: 'Error', json: async () => ({ detail: 'server error' }) })
+      }
+      return Promise.resolve(okJson(mapDetail))
+    })
+
     const wrapper = mountView()
     await flushPromises()
 
     const vm = wrapper.vm as unknown as { handlePositionsChanged: (p: Record<string, { x: number; y: number }>) => void }
-    // First change schedules a 500ms debounce that sets statusTimeout on fire.
     vm.handlePositionsChanged({ 'stage-1': { x: 1, y: 2 } })
-    await vi.advanceTimersByTimeAsync(500)
-    // Second change arrives while statusTimeout is still pending: persistPositions
-    // must clear both the previous saveTimeout and statusTimeout before rescheduling.
-    vm.handlePositionsChanged({ 'stage-2': { x: 3, y: 4 } })
     await vi.advanceTimersByTimeAsync(600)
 
+    // Server write failed — positions should still be in localStorage as fallback.
     expect(localStorageStore['lifecycle-map-positions:map-1:1']).toBe(
-      JSON.stringify({ 'stage-2': { x: 3, y: 4 } }),
+      JSON.stringify({ 'stage-1': { x: 1, y: 2 } }),
     )
+  })
+
+  it('clears a pending save timer when a newer position change arrives', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const pendingPuts: Array<(value: Response) => void> = []
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/journeys')) return Promise.resolve(okJson({ items: [] }))
+      if (String(url).includes('/versions/')) {
+        return new Promise((resolve) => { pendingPuts.push((v) => resolve(v)) })
+      }
+      return Promise.resolve(okJson(mapDetail))
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { handlePositionsChanged: (p: Record<string, { x: number; y: number }>) => void }
+    // First change schedules a 500ms debounce.
+    vm.handlePositionsChanged({ 'stage-1': { x: 1, y: 2 } })
+    await vi.advanceTimersByTimeAsync(500)
+    // The first updateVersion is now in flight (pending promise). Second change
+    // aborts it and schedules a new debounce with updated positions.
+    vm.handlePositionsChanged({ 'stage-1': { x: 10, y: 20 } })
+    await vi.advanceTimersByTimeAsync(600)
+    // Resolve both pending PUTs so the test can complete cleanly.
+    for (const resolve of pendingPuts) {
+      resolve(okJson({ id: '00000000-0000-0000-0000-000000000001', version: 1, created_at: '2026-01-01T00:00:00Z', created_by: null }))
+    }
+
+    const putCalls = fetchMock.mock.calls.filter((call: unknown[]) => {
+      const [url, init] = call
+      return String(url).includes('/versions/') && (init as { method?: string })?.method === 'PUT'
+    })
+    // Both debounces fired. The second one carries the latest positions.
+    expect(putCalls).toHaveLength(2)
+    const [, init] = putCalls[1]
+    const body = JSON.parse((init as { body: string }).body)
+    expect(body.stages[0].x).toBe(10)
+    expect(body.stages[0].y).toBe(20)
   })
 
   it('clears pending timers on unmount before the debounce fires', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/journeys')) return Promise.resolve(okJson({ items: [] }))
+      return Promise.resolve(okJson(mapDetail))
+    })
+
     const wrapper = mountView()
     await flushPromises()
 
     const vm = wrapper.vm as unknown as { handlePositionsChanged: (p: Record<string, { x: number; y: number }>) => void }
     vm.handlePositionsChanged({ 'stage-1': { x: 1, y: 2 } })
-    // Unmount before the 500ms debounce fires: onBeforeUnmount must clear the
-    // pending save timer so the write never lands after the component is gone.
+    // Unmount before the 500ms debounce fires.
     wrapper.unmount()
     await vi.advanceTimersByTimeAsync(2000)
 
-    expect(localStorageStore['lifecycle-map-positions:map-1:1']).toBeUndefined()
+    // The PUT should never have been called because the debounce was cleared.
+    const putCalls = fetchMock.mock.calls.filter((call: unknown[]) => {
+      const [url, init] = call
+      return String(url).includes('/versions/') && (init as { method?: string })?.method === 'PUT'
+    })
+    expect(putCalls).toHaveLength(0)
   })
 })
