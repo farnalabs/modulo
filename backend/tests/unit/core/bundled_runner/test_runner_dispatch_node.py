@@ -5,16 +5,19 @@ gate skip, dispatch-marker denial, wall-clock budget overrun, output parse
 failures, schema-validation failure, delivery-sentinel retention, empty
 command guard) and the streaming/file IO helpers
 (:func:`_write_file_via_exec`, :func:`_read_file_via_exec`,
-:func:`_publish_stream_chunk`, :func:`_consume_stream`,
+ :func:`_publish_stream_chunk`, :func:`_consume_stream`,
 :func:`_resolve_stall_timeout`, :func:`_combine_raw_outputs`,
 :func:`_source_contains_sentinel`), plus the FAR-792 per-node stdout/stderr
-retention cap (:func:`_resolve_stdout_cap`).
+retention cap (:func:`_resolve_stdout_cap`), and the FAR-811
+stdout_artifact pointer persistence (over-cap writes to artifact store,
+under-cap stays inline).
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -66,6 +69,7 @@ class _FakeOutput:
     stdout_length: int = 0
     stderr_length: int = 0
     stdout_truncated: bool = False
+    stdout_artifact: object = None
     attempt_key: str | None = None
     agent_status: object = None
     agent_outcome: object = None
@@ -98,6 +102,7 @@ def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
         "_idempotency_gate_skipped_envelope": lambda node_id: {"status": "skipped", "node_id": node_id},
         "_is_sandbox_session_lost_echo": lambda out: False,
         "_marker_delivery_done_for_node": lambda *a, **k: False,
+        "_persist_full_stdout_artifact": lambda **kw: None,
         "_read_run_raw_output_markers_for_gate": AsyncMock(return_value=[]),
         "_read_org_stdout_retention_ceiling": AsyncMock(return_value=None),
         "_redact_raw_output": lambda s: s,
@@ -828,3 +833,71 @@ async def test_run_bundled_runner_fails_closed_on_workspace_inputs(patch_node_ru
     # SandboxNodeFailedError is monkeypatched to _FakeError by patch_node_runner.
     with pytest.raises(_FakeError, match="workspace inputs"):
         await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route())
+
+
+# ---------------------------------------------------------------------------
+# FAR-811: bundled-runner stdout_artifact parity (mirrors E2B tests)
+# ---------------------------------------------------------------------------
+
+
+async def test_over_cap_stdout_written_to_artifact_store_with_pointer(patch_node_runner, monkeypatch) -> None:
+    """Over-cap redacted stdout is retained IN FULL in the artifact store and
+    the envelope carries a stdout_artifact pointer (rel_path / size_bytes /
+    sha256, truncated: False, redacted: True) instead of only the truncated
+    head (FAR-811 parity with the E2B path)."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    cap = 2048
+    big_stdout = "x" * (cap + 1)
+    pointer = {
+        "rel_path": "org/run/node/key.stdout.zst",
+        "size_bytes": cap + 1,
+        "sha256": hashlib.sha256(big_stdout.encode()).hexdigest(),
+        "stream": "stdout",
+        "compression": "zstd",
+        "truncated": False,
+        "redacted": True,
+    }
+    monkeypatch.setattr(
+        nrm,
+        "_persist_full_stdout_artifact",
+        lambda **kw: pointer,
+        raising=False,
+    )
+    provider = _FakeProvider(stream_chunks=[("stdout", big_stdout)])
+    cfg = _config(
+        node_def={"capability_scope": {}, "stdout_retention_mode": "full", "stdout_max_bytes": cap},
+    )
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(provider))
+    output = out["output"]
+    assert output.stdout_artifact is not None
+    assert output.stdout_artifact["truncated"] is False
+    assert output.stdout_artifact["redacted"] is True
+    assert output.stdout_artifact["size_bytes"] == cap + 1
+    assert output.stdout_artifact["sha256"] == pointer["sha256"]
+    assert output.stdout_artifact["rel_path"].endswith(".zst")
+
+
+async def test_under_cap_stdout_stays_inline_no_artifact(patch_node_runner, monkeypatch) -> None:
+    """Under-cap stdout keeps today's inline behaviour: no stdout_artifact key
+    and no artifact written to the store (FAR-811 backwards compatibility)."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    cap = 8192
+    small_stdout = "x" * 2048
+    call_log: list[str] = []
+
+    def _spy(**kw: object) -> None:
+        call_log.append("called")
+
+    monkeypatch.setattr(nrm, "_persist_full_stdout_artifact", _spy, raising=False)
+    provider = _FakeProvider(stream_chunks=[("stdout", small_stdout)])
+    cfg = _config(
+        node_def={"capability_scope": {}, "stdout_retention_mode": "full", "stdout_max_bytes": cap},
+    )
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(provider))
+    output = out["output"]
+    # When under-cap, stdout_artifact stays at the _UNSET sentinel (omitted
+    # from the real envelope, defaulting to None in the FakeOutput).
+    assert output.stdout_artifact is nrm._UNSET
+    assert not call_log  # _persist_full_stdout_artifact was never invoked

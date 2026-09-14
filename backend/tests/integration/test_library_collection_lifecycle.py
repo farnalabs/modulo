@@ -16,13 +16,17 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.core.library_service._seed_data import MODULO_ORG_ID
 from modulo.core.library_service.grant import grant_collection_agents
-from modulo.core.library_service.install import install_collection
+from modulo.core.library_service.install import CollectionInstallError, install_collection
 from modulo.core.library_service.runnability import compute_runnable
 from modulo.core.library_service.uninstall import uninstall_collection
 from modulo.db.models.collection_install import CollectionInstall
+from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.organisation import Organisation
+from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 
@@ -678,3 +682,89 @@ async def test_install_shipped_github_pr_reviewer_collection(
     # Connector checklist: the resolved agent pins require the github connector
     checklist = install.connector_checklist or []
     assert any(c.get("connector_type_id") == "github" for c in checklist)
+
+
+# ---------------------------------------------------------------------------
+# Test 6: Shipped install persists ONLY the collection row, under the
+#         migration-seeded sentinel org (FAR-826 review findings 2 + 3)
+# ---------------------------------------------------------------------------
+
+
+async def test_shipped_install_persists_only_collection_row_under_sentinel_rls(
+    db_engine: AsyncEngine,
+    db_session: AsyncSession,
+    org: uuid.UUID,
+    user: uuid.UUID,
+    model_backend: uuid.UUID,
+    modulo_app_engine: AsyncEngine,
+) -> None:
+    """Install the shipped github-pr-reviewer collection and prove the new
+    persistence contract end-to-end against real RLS:
+
+    1. ONLY the collection row is persisted under the sentinel org (migration
+       0230 seeds it) — pin rows are never written, the in-code registry stays
+       the source of truth for pin content.
+    2. ``collection_install.collection_id`` points at the DB row that actually
+       exists (tuple-keyed upsert, not the registry id).
+    3. The sentinel Organisation row is readable by the REAL ``modulo_app``
+       role under the installing org's RLS context — the ``organisations``
+       table has no RLS, so the install-path sentinel lookup cannot be blocked
+       by tenancy.
+    4. The sentinel-owned collection row is readable by ``modulo_app`` ONLY
+       under the sentinel org's RLS context (library_primitives RLS is
+       org-scoped) — proving the install path's RLS-context switch is real.
+    5. A second install in the same org is refused ("already installed") and
+       does not duplicate the sentinel row.
+    """
+    from modulo.core.library_service._seed_data import _MODULO_PRIMITIVES
+
+    collection = next(p for p in _MODULO_PRIMITIVES if p.slug == "github-pr-reviewer")
+
+    install = await install_collection(db_session, org, user, collection.id)
+    await db_session.commit()
+
+    # 1 + 2: exactly one sentinel-owned library_primitives row — the collection.
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT id, organisation_id, source, slug, version FROM library_primitives WHERE organisation_id = :oid"
+            ),
+            {"oid": str(MODULO_ORG_ID)},
+        )
+        sentinel_rows = rows.all()
+    assert len(sentinel_rows) == 1
+    persisted = sentinel_rows[0]
+    assert persisted.source == "modulo"
+    assert persisted.slug == collection.slug
+    assert persisted.version == collection.version
+    assert install.collection_id == persisted.id
+
+    # 3: sentinel org readable by the app role under the TEST org's RLS context.
+    app_factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
+    async with app_factory() as app_session:
+        await app_session.execute(text("SELECT 1"))  # begin the RLS-scoped transaction
+        await set_rls_org(app_session, org)
+        sentinel_org = await app_session.get(Organisation, MODULO_ORG_ID)
+        assert sentinel_org is not None
+
+    # 4: sentinel-owned collection row visible to the app role ONLY under the
+    # sentinel org's RLS context.
+    async with app_factory() as app_session:
+        await app_session.execute(text("SELECT 1"))  # begin the RLS-scoped transaction
+        await set_rls_org(app_session, MODULO_ORG_ID)
+        row = await app_session.get(LibraryPrimitive, install.collection_id)
+        assert row is not None
+        assert row.slug == collection.slug
+
+    # 5: re-install is refused and does not duplicate the sentinel row.
+    try:
+        with pytest.raises(CollectionInstallError, match="already installed"):
+            await install_collection(db_session, org, user, collection.id)
+    finally:
+        await db_session.rollback()
+    async with db_engine.connect() as conn:
+        count = await conn.execute(
+            text("SELECT count(*) FROM library_primitives WHERE organisation_id = :oid"),
+            {"oid": str(MODULO_ORG_ID)},
+        )
+        assert count.scalar_one() == 1

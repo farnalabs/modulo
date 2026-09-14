@@ -14,6 +14,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -239,21 +240,39 @@ class TestIsPostgresProcess:
         assert supervisor_module._is_postgres_process(999_999_999) is False
 
     def test_postgres_process_returns_true(self, tmp_path: Path) -> None:
-        """Spawn a process whose argv[0] ends with 'postgres'."""
+        """Spawn a process whose argv[0] ends with 'postgres'.
+
+        The shim is a symlink to an inert binary (sleep) named 'postgres', so
+        the process is exec'd directly with argv[0] == .../postgres.  This
+        avoids the prior shebang-script trick, whose process image some
+        /bin/sh implementations replace in place when a script's sole command
+        is exec'd — discarding the 'postgres' argv component and making the
+        assertion flaky on runners whose dash does that.
+        """
         wrapper = tmp_path / "postgres"
-        wrapper.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
-        wrapper.chmod(0o755)
+        wrapper.symlink_to("/bin/sleep")
         # Use __dict__ to avoid the test-style scanner's subprocess.Popen AST
         # match.  Popen has no timeout param; bounded by finally-block kill.
         _popen = subprocess.__dict__["Popen"]
         proc = _popen(
-            [str(wrapper)],
+            [str(wrapper), "30"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
         try:
-            result = supervisor_module._is_postgres_process(proc.pid)
+            # Bounded retry: immediately after Popen there is a fork->exec window
+            # where /proc/<pid>/cmdline still shows the parent interpreter's argv
+            # before the symlinked 'postgres' image is exec'd in place, so an
+            # immediate read can return False.  Poll briefly until the process is
+            # recognised (or the window passes), then assert.
+            result = False
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if supervisor_module._is_postgres_process(proc.pid):
+                    result = True
+                    break
+                time.sleep(0.01)
             assert result is True
         finally:
             try:

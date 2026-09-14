@@ -1183,3 +1183,107 @@ async def test_guard_a_inert_when_multi_node():
 
     sandbox.commands.run.assert_awaited_once(), "multi-node -> guard A must not skip, sandbox is provisioned"
     assert result["output"]["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# FAR-811: stall/timeout path emits stdout_artifact pointer on the marker
+# ---------------------------------------------------------------------------
+
+
+async def test_stall_over_cap_stdout_emits_artifact_pointer_on_marker(tmp_path):
+    """FAR-811: when a stall fires and redacted stdout exceeds the retention cap,
+    the stall marker carries a ``stdout_artifact`` pointer (the full redacted
+    transcript was written to the artifact store)."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    cap = 2048
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    # Over-cap stdout: 4096 bytes > 2048 cap.
+    over_cap_stdout = "x" * 4096
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.TimeoutError)
+    handle.kill = AsyncMock()
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            raise OSError("no output.json")
+        return over_cap_stdout
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(over_cap_stdout)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
+    pointer = marker.get("stdout_artifact")
+    assert pointer is not None, "over-cap stall must attach stdout_artifact pointer"
+    assert pointer["truncated"] is False
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stdout"
+    assert pointer["size_bytes"] == 4096
+    assert pointer["compression"] == "zstd"
+    assert pointer["rel_path"].endswith(".zst")
+
+
+async def test_stall_under_cap_stdout_emits_no_artifact_pointer():
+    """FAR-811: when a stall fires but redacted stdout is under the retention cap,
+    the stall marker carries NO ``stdout_artifact`` key — inline retention only."""
+    cap = 8192
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    # Under-cap stdout: 2048 bytes < 8192 cap.
+    under_cap_stdout = "x" * 2048
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.TimeoutError)
+    handle.kill = AsyncMock()
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            raise OSError("no output.json")
+        return under_cap_stdout
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(under_cap_stdout)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
+    assert "stdout_artifact" not in marker, "under-cap stall must not emit stdout_artifact"

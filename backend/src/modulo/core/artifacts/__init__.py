@@ -6,11 +6,13 @@ in node output JSON.
 """
 
 from modulo.core.artifacts.store import ArtifactStore, LocalArtifactStore, get_store
+from modulo.core.artifacts.streaming import StreamingArtifactWriter
 from modulo.core.artifacts.writer import ArtifactWriter
 
 __all__ = [
     "ArtifactStore",
     "ArtifactWriter",
     "LocalArtifactStore",
+    "StreamingArtifactWriter",
     "get_store",
 ]
