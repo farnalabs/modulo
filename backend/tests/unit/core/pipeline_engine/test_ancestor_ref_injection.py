@@ -97,7 +97,8 @@ class TestRetryUnion:
         # The UNION is identical whichever way the attempts/keys were folded:
         # same members (deduped), just presented in each input's order.
         assert {(r["kind"], r["ref"]) for r in folded_forward} == {(r["kind"], r["ref"]) for r in folded_reversed}
-        assert len(folded_forward) == len(folded_reversed) == 2
+        assert len(folded_forward) == len(folded_reversed)
+        assert len(folded_forward) == 2
 
     def test_duplicate_refs_across_attempts_are_not_duplicated(self) -> None:
         refs = collect_injected_refs(
@@ -194,23 +195,17 @@ class TestCap:
     def test_zero_or_negative_cap_yields_empty(self) -> None:
         create_refs = [_ref("jira", "1", "caller")]
         completed: dict[str, list[dict[str, object]]] = {"a": [_ref("github_pr", "2", "agent")]}
-        assert (
-            collect_injected_refs(
-                run_create_time_refs=create_refs,
-                dag_ancestor_ids={"a"},
-                completed_node_outputs=completed,
-                cap=0,
-            )
-            == []
+        assert not collect_injected_refs(
+            run_create_time_refs=create_refs,
+            dag_ancestor_ids={"a"},
+            completed_node_outputs=completed,
+            cap=0,
         )
-        assert (
-            collect_injected_refs(
-                run_create_time_refs=create_refs,
-                dag_ancestor_ids={"a"},
-                completed_node_outputs=completed,
-                cap=-1,
-            )
-            == []
+        assert not collect_injected_refs(
+            run_create_time_refs=create_refs,
+            dag_ancestor_ids={"a"},
+            completed_node_outputs=completed,
+            cap=-1,
         )
 
 
