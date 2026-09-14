@@ -439,6 +439,54 @@ async def test_subscribe_resume_timeout_returns_false(registry: RemyRedisRegistr
     assert await registry.subscribe_resume("sess-1", timeout=0.01) is False
 
 
+def _blocking_pubsub(channel: str) -> MagicMock:
+    """A pubsub whose get_message blocks past any reasonable timeout.
+
+    Used to exercise the ``except TimeoutError`` branch reached when the
+    ``asyncio.timeout`` guard fires (the real Redis pubsub never delivers).
+    """
+
+    pubsub = MagicMock()
+    pubsub.subscribe = AsyncMock()
+    pubsub.unsubscribe = AsyncMock()
+    pubsub.aclose = AsyncMock()
+
+    async def _hangs(**_: Any) -> dict[str, Any] | None:
+        await asyncio.sleep(10)
+        return None
+
+    pubsub.get_message = AsyncMock(side_effect=_hangs)
+    return pubsub
+
+
+async def test_subscribe_permission_response_async_timeout_returns_none(
+    registry: RemyRedisRegistry, redis_client: MagicMock
+) -> None:
+    redis_client.pubsub.return_value = _blocking_pubsub("remy:channel:permission:req-1")
+    result = await registry.subscribe_permission_response("req-1", timeout=0.01)
+    assert result is None
+    redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
+    redis_client.pubsub.return_value.aclose.assert_awaited_once()
+
+
+async def test_subscribe_ui_results_async_timeout_returns_false(
+    registry: RemyRedisRegistry, redis_client: MagicMock
+) -> None:
+    redis_client.pubsub.return_value = _blocking_pubsub("remy:channel:ui_results:sess-1")
+    assert await registry.subscribe_ui_results("sess-1", timeout=0.01) is False
+    redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
+    redis_client.pubsub.return_value.aclose.assert_awaited_once()
+
+
+async def test_subscribe_resume_async_timeout_returns_false(
+    registry: RemyRedisRegistry, redis_client: MagicMock
+) -> None:
+    redis_client.pubsub.return_value = _blocking_pubsub("remy:channel:resume:sess-1")
+    assert await registry.subscribe_resume("sess-1", timeout=0.01) is False
+    redis_client.pubsub.return_value.unsubscribe.assert_awaited_once()
+    redis_client.pubsub.return_value.aclose.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # Cancellation safety
 # ---------------------------------------------------------------------------

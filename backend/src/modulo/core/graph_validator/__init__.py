@@ -2012,15 +2012,16 @@ class GraphValidator:
             if req_field not in out_properties
         )
 
-        for field_name in set(out_properties) & set(in_properties):
-            errors.extend(
-                self._check_schema_fields(
-                    out_properties[field_name],
-                    in_properties[field_name],
-                    f"{path}.{field_name}",
-                    depth + 1,
+        for field_name, out_val in out_properties.items():
+            if field_name in in_properties:
+                errors.extend(
+                    self._check_schema_fields(
+                        out_val,
+                        in_properties[field_name],
+                        f"{path}.{field_name}",
+                        depth + 1,
+                    )
                 )
-            )
         return errors
 
     def _check_array_items(

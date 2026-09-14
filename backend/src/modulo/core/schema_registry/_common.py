@@ -38,16 +38,6 @@ def parse_schema_from_response(response_text: str) -> dict[str, Any]:
 _MAX_RETRIES = 3
 
 
-async def _invoke_with_timeout(
-    backend: ModelBackendBase,
-    messages: list[BaseMessage],
-    *,
-    timeout: float,  # noqa: ASYNC109 — passed to asyncio.timeout(), not asyncio.wait_for()
-) -> BaseMessage:
-    async with asyncio.timeout(timeout):
-        return await backend.invoke(messages)
-
-
 def _extract_content(response: BaseMessage, *, context: str, error_cls: type[Exception]) -> str:
     try:
         content = response.content
@@ -78,13 +68,14 @@ async def invoke_and_parse(
     backend: ModelBackendBase,
     messages: list[BaseMessage],
     *,
-    timeout: float,  # noqa: ASYNC109 — passed to asyncio.timeout(), not asyncio.wait_for()
+    timeout: float,  # noqa: ASYNC109
     error_cls: type[Exception],
     context: str,
 ) -> dict[str, Any]:
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            response = await _invoke_with_timeout(backend, messages, timeout=timeout)
+            async with asyncio.timeout(timeout):
+                response = await backend.invoke(messages)
         except asyncio.CancelledError:
             raise
         except TimeoutError:
