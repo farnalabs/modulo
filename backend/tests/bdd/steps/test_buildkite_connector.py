@@ -48,7 +48,10 @@ def buildkite_connector_invalid(ctx: dict) -> None:
 @when("the connector checks health")
 def buildkite_health_check(ctx: dict) -> None:
     connector = ctx["connector"]
-    response = httpx.Response(200, json={"id": "test-user"}) if ctx["valid"] else httpx.Response(401, text="Unauthorized")
+    if ctx["valid"]:
+        response = httpx.Response(200, json={"id": "test-user"})
+    else:
+        response = httpx.Response(401, text="Unauthorized")
     with respx.mock:
         respx.get(f"{_BASE}/user").mock(return_value=response)
         ctx["health_result"] = asyncio.run(connector.health_check())
