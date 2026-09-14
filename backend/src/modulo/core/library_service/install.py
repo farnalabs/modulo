@@ -40,7 +40,12 @@ __all__ = ["install_collection"]
 logger = logging.getLogger(__name__)
 
 # Deterministic order in which a slug-only manifest pin is tried against the
-# library_service resolver's primitive-type namespaces (ADR 032 §4).
+# library_service resolver's primitive-type namespaces (ADR 032 §4). Manifest
+# pins reference primitives by slug alone, but slugs are unique only WITHIN a
+# primitive type — the same slug may exist as a schema AND an agent. A pin is
+# resolved by trying each namespace in this fixed order and taking the FIRST
+# type whose namespace contains the slug; a version mismatch on a hit fails
+# loudly rather than falling through to a later type.
 _PIN_TYPE_ORDER: tuple[str, ...] = ("schema", "agent", "workflow", "pipeline_template")
 
 # Sources whose primitives are visible to EVERY organisation via the
@@ -187,7 +192,7 @@ async def _resolve_collection(
     collection = await session.get(LibraryPrimitive, collection_id)
     if collection is not None and collection.organisation_id == org_id:
         return collection
-    resolved = await get_primitive(session, org_id, collection_id, organisation_id=org_id)
+    resolved = await get_primitive(session, org_id, collection_id, explicit_org_filter=org_id)
     if resolved is None:
         return None
     if resolved.organisation_id == org_id or resolved.source in _VISIBLE_EVERYWHERE_SOURCES:
@@ -209,7 +214,7 @@ async def _resolve_pin(
     version-mismatched primitive.
     """
     for primitive_type in _PIN_TYPE_ORDER:
-        prim = await get_primitive_by_slug(session, org_id, primitive_type, slug, organisation_id=org_id)
+        prim = await get_primitive_by_slug(session, org_id, primitive_type, slug, explicit_org_filter=org_id)
         if prim is None:
             continue
         if prim.deleted_at is not None:
@@ -271,38 +276,105 @@ def _clone_builtin(prim: LibraryPrimitive) -> LibraryPrimitive:
     )
 
 
-async def _persist_builtin_primitives(
+def _collection_content_differs(row: LibraryPrimitive, prim: LibraryPrimitive) -> bool:
+    """Compare the content-bearing columns of a persisted row against the registry."""
+    return (
+        row.content_json != prim.content_json
+        or row.manifest_pins != prim.manifest_pins
+        or row.checksum != prim.checksum
+    )
+
+
+def _resync_collection_row(row: LibraryPrimitive, prim: LibraryPrimitive) -> None:
+    """Copy the registry's content onto a persisted collection row (registry wins)."""
+    row.name = prim.name
+    row.description = prim.description
+    row.content_json = prim.content_json
+    row.manifest_pins = prim.manifest_pins
+    row.checksum = prim.checksum
+
+
+async def _persist_collection_row(
     session: AsyncSession,
     org_id: uuid.UUID,
-    prims: list[LibraryPrimitive],
-) -> None:
-    """Materialise registry primitives as DB rows under the modulo sentinel org.
+    collection: LibraryPrimitive,
+) -> uuid.UUID:
+    """Ensure the collection primitive has a ``library_primitives`` row for the install FK.
 
-    ``collection_install.collection_id`` carries an FK to
-    ``library_primitives``, so installing a collection that only exists in the
-    in-code registry must persist its rows first. Everything happens under the
-    sentinel org's RLS context (the installing org's RLS session may neither
-    read nor write sentinel rows), then the RLS context is restored to the
-    installing org. Rows that already exist (a previous install, the
-    marketplace sync, or migration seeding) are reused — idempotent.
+    ``collection_install.collection_id`` carries an FK to ``library_primitives``,
+    so installing a collection that only exists in the in-code registry must
+    persist its row first. ONLY the collection row is persisted — pin content is
+    read in-memory by ``_build_bundle_from_pins`` and is never written to disk,
+    so the DB can never drift from the registry for pins (ADR 032 §4: the
+    in-code registry is the single source of truth for modulo/community
+    primitives).
+
+    The upsert is idempotent on the unique tuple ``(organisation_id, source,
+    slug, version)`` (``uq_library_primitive_version``, WHERE deleted_at IS
+    NULL) — NOT on ``id``: a row created by a previous install, the marketplace
+    sync, or migration seeding may carry a different id for the same tuple, and
+    an id-keyed INSERT would collide with that constraint. When the existing
+    row's content differs from the registry (checksum/content compare) it is
+    re-synced — the registry always wins. A soft-deleted row holding the
+    registry id satisfies the FK on its own, so no insert is attempted (an
+    id-keyed INSERT there would violate the PK).
+
+    Everything happens under the sentinel org's RLS context (the installing
+    org's RLS session may neither read nor write sentinel rows), then the RLS
+    context is restored to the installing org. The sentinel ``Organisation``
+    row itself is created by migration 0228 — this function only reads it and
+    raises a clear, actionable error when it is absent.
+
+    Returns the id of the backing DB row; the caller MUST use it as
+    ``collection_install.collection_id`` so the FK targets the row that
+    actually exists on disk.
     """
-    if not prims:
-        return
+    if not _transient_primitives([collection]):
+        # Org-owned DB row — already persisted, nothing to do.
+        return collection.id
+
     await set_rls_org(session, MODULO_ORG_ID)
     try:
         org_row = await session.get(Organisation, MODULO_ORG_ID)
         if org_row is None:
-            session.add(Organisation(id=MODULO_ORG_ID, name="Modulo", slug="modulo"))
-        for prim in prims:
-            db_row = await session.get(LibraryPrimitive, prim.id)
-            if db_row is None:
-                session.add(_clone_builtin(prim))
+            raise CollectionInstallError(
+                "The Modulo sentinel organisation is missing from the database. "
+                "It is created by migration 0230_seed_modulo_sentinel_organisation — "
+                "run `alembic upgrade head` and retry the install."
+            )
+        existing = (
+            await session.execute(
+                select(LibraryPrimitive).where(
+                    LibraryPrimitive.organisation_id == MODULO_ORG_ID,
+                    LibraryPrimitive.source == collection.source,
+                    LibraryPrimitive.slug == collection.slug,
+                    LibraryPrimitive.version == collection.version,
+                    LibraryPrimitive.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if _collection_content_differs(existing, collection):
+                _resync_collection_row(existing, collection)
+                await session.flush()
+            return existing.id
+        # Tuple miss: a soft-deleted row may still hold the registry id (the
+        # partial-unique index ignores it). It satisfies the FK, so reuse it
+        # instead of colliding with the PK.
+        by_id = await session.get(LibraryPrimitive, collection.id)
+        if by_id is not None:
+            if by_id.deleted_at is None and _collection_content_differs(by_id, collection):
+                _resync_collection_row(by_id, collection)
+                await session.flush()
+            return by_id.id
+        session.add(_clone_builtin(collection))
         await session.flush()
+        return collection.id
     finally:
         await set_rls_org(session, org_id)
 
 
-async def _build_bundle_from_pins(
+def _build_bundle_from_pins(
     resolved_pins: list[LibraryPrimitive],
 ) -> dict[str, Any]:
     """Build a ``materialize_import``-compatible bundle from resolved primitives.
@@ -632,19 +704,23 @@ async def install_collection(
     if not resolved_pins:
         raise CollectionInstallError("Collection has no manifest pins to install")
 
-    # 2b. Persist registry primitives that have no DB row yet (built-in
-    # modulo/community items). ``collection_install.collection_id`` references
-    # ``library_primitives``, and future installs/uninstalls resolve through
-    # the DB first, so the shipped rows must exist on disk.
-    await _persist_builtin_primitives(session, org_id, _transient_primitives([collection, *resolved_pins]))
+    # 2b. Persist ONLY the collection row when it comes from the in-code
+    # registry (built-in modulo/community items). ``collection_install.collection_id``
+    # references ``library_primitives``, so that one row must exist on disk;
+    # pin rows are NEVER persisted — pin content is consumed in-memory by
+    # ``_build_bundle_from_pins`` and the registry stays the single source of
+    # truth. The returned id is the backing DB row's id and is used for the
+    # install FK below (it may differ from the registry id when a same-tuple
+    # row already existed under a different id).
+    collection_row_id = await _persist_collection_row(session, org_id, collection)
 
     # 3. Build the materialize_import bundle
-    bundle = await _build_bundle_from_pins(resolved_pins)
+    bundle = _build_bundle_from_pins(resolved_pins)
 
     # 4. Refuse if the collection is already installed in this organisation
     existing_stmt = select(CollectionInstall).where(
         CollectionInstall.organisation_id == org_id,
-        CollectionInstall.collection_id == collection_id,
+        CollectionInstall.collection_id == collection_row_id,
     )
     existing = (await session.execute(existing_stmt)).scalar_one_or_none()
     if existing is not None:
@@ -657,7 +733,7 @@ async def install_collection(
     # transaction rolls back the whole install on any later failure.
     install = CollectionInstall(
         install_id=install_id,
-        collection_id=collection_id,
+        collection_id=collection_row_id,
         collection_version=collection.version,
         organisation_id=org_id,
         status="installed",
