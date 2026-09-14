@@ -218,7 +218,7 @@ def _rebuild_httpx_request_error(exc: httpx.RequestError, message: str, secrets:
     """
     try:
         request = exc.request
-    except Exception:
+    except (RuntimeError, AttributeError):
         request = None
     request = _scrub_request(request, secrets)
     try:
@@ -236,7 +236,7 @@ def _rebuild_generic_error(exc: Exception, message: str) -> Exception:
     """
     try:
         return type(exc)(message)
-    except Exception:
+    except (TypeError, ValueError):
         if isinstance(exc, ValueError):
             return ValueError(message)
         if isinstance(exc, RuntimeError):

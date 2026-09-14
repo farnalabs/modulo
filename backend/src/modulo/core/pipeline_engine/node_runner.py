@@ -6250,7 +6250,7 @@ async def _finalize_artifact_writer(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning(
+        _log.exception(
             "sandbox_agent.artifact_finalize_failed",
             extra={"node_id": node_id, "run_id": run_id},
         )

@@ -841,6 +841,8 @@ async def zombie_watchdog(
         await asyncio.wait_for(first_progress.wait(), timeout=grace_seconds)
         return
     except TimeoutError:
+        # Expected: first_progress did not fire within the grace window.
+        # Stall handling follows below.
         pass
     except asyncio.CancelledError:
         raise

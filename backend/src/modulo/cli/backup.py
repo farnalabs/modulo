@@ -192,8 +192,8 @@ def _get_schema_versions() -> list[str]:
         cfg = Config(str(alembic_ini))
         script = ScriptDirectory.from_config(cfg)
         return sorted(script.get_heads())
-    except Exception as exc:
-        _log.warning("Failed to read schema versions: %s", exc)
+    except Exception:
+        _log.exception("Failed to read schema versions")
         return ["unknown"]
 
 
@@ -204,8 +204,8 @@ def _get_db_version(raw_url: str) -> str:
         with psycopg.connect(raw_url, connect_timeout=5) as conn:
             row = conn.execute("SELECT version()").fetchone()
             return row[0] if row else "unknown"
-    except Exception as exc:
-        _log.warning("Failed to read DB version: %s", exc)
+    except Exception:
+        _log.exception("Failed to read DB version")
         return "unknown"
 
 
