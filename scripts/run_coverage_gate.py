@@ -166,17 +166,19 @@ def _run_diff_cover(
     safe_report = _sanitize_path(str(report_path), "report path")
     # Every arg that reaches `cmd` is validated against a strict regex allow-list
     # in _validate_ref/_sanitize_path, which reject anything starting with '-' and
-    # return a regex-bounded copy, so the tainted (argv-derived) compare-branch can
-    # never reach a flag position; subprocess runs without a shell.
-    cmd = [  # NOSONAR - compare-branch is regex fullmatch-bounded and rejects values starting with '-' via _validate_ref, so only a safe branch ref can reach this list; subprocess has no shell
+    # return a regex-bounded copy, so the argv-derived compare-branch and report
+    # path can never reach a flag position; subprocess runs without a shell. The
+    # per-arg NOSONAR markers below sit on the exact lines Sonar flags the
+    # argv-derived (tainted) values, so the suppression is not request-scoped.
+    cmd = [
         str(diff_cover_bin),
-        safe_report,
+        safe_report,  # NOSONAR - report path regex fullmatch-bounded by _sanitize_path (rejects values starting with '-')
         "--compare-branch",
-        safe_compare_branch,
+        safe_compare_branch,  # NOSONAR - compare-branch regex fullmatch-bounded by _validate_ref (rejects values starting with '-')
         "--fail-under",
         str(fail_under),
     ]
-    result = subprocess.run(  # NOSONAR - see _validate_ref: compare-branch is regex-bounded and flag-rejecting before it enters cmd; subprocess has no shell
+    result = subprocess.run(  # NOSONAR - argv elements above are regex-bounded via _validate_ref/_sanitize_path; subprocess has no shell
         cmd,
         capture_output=True,
         text=True,

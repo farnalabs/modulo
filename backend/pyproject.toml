@@ -600,8 +600,8 @@ dev = [
     # runtime as a Redis compile error (FAR-439 fail-closed regression).
     "lupa>=2.0",
     # Changed-lines coverage gate (diff-cover) — enforces a coverage threshold
-    # on the lines each PR actually changes, the analogue of SonarCloud's
-    # new_coverage metric (free SonarCloud cannot customise quality gates).
+    # on the lines each PR actually changes. See scripts/run_coverage_gate.py
+    # for the full rationale (free SonarCloud cannot customise quality gates).
     "diff-cover>=10.5",
 ]
 
