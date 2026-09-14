@@ -876,6 +876,10 @@ class TestReconcileMetrics:
         assert fake_meter.counter("modulo_work_item_refs_agent_mint_suppressed_by_flag_total").calls == [
             {"value": 1, "attributes": None}
         ]
+        reconcile_mod._refs_event_sink("agent_mint_budget_exceeded", {"count": 4})
+        assert fake_meter.counter("modulo_work_item_refs_agent_mint_budget_exceeded_total").calls == [
+            {"value": 4, "attributes": None}
+        ]
 
     def test_ensure_early_return_when_handles_initialised(
         self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
@@ -885,8 +889,9 @@ class TestReconcileMetrics:
         reconcile_mod._ensure()
         # Only the first call builds the handles; the second returns early.
         # Six journey handles + the five FAR-794 work-item-refs counters
-        # + the two FAR-795 agent-mint counters + the slice-C dismissal counter.
-        assert len(fake_meter.counters) == 14
+        # + the two FAR-795 agent-mint counters + the slice-C dismissal counter
+        # + the FAR-795 per-org budget-exceeded counter.
+        assert len(fake_meter.counters) == 15
 
     def test_refs_cap_dropped_event_is_counted(self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         """The finalize / node-input cap-drop emissions land on the counter."""

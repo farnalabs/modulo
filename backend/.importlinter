@@ -130,6 +130,14 @@ ignore_imports =
     # exceptions above: db.crud.run exposes the terminal write, classify.py is
     # the pure decision function.
     modulo.db.crud.run -> modulo.core.pipeline_engine.classify
+    # FAR-795: the create-time journey hydration write consults the per-org
+    # agent-mint budget (consume_agent_mint_budget) before minting agent-sourced
+    # journey rows, so the budget cap is enforced at the create path too. The
+    # db layer only invokes the pure budget-check function in the same
+    # session/transaction as the mint; all budget-statement semantics live in
+    # core.runtime_config.mint_budget (same narrow cross-boundary category as the
+    # classify.py / audit_logger / composite_engine exceptions above).
+    modulo.db.crud.run -> modulo.core.runtime_config.mint_budget
     # FAR-583: the run_node_outputs store write raises DualWriteError
     # fail-closed out of the DB layer; the failure orchestration (terminalize
     # + the aggregated error event) lives entirely in core and may NOT be

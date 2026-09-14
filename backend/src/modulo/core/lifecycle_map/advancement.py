@@ -82,6 +82,7 @@ from typing import Any
 from sqlalchemy import DateTime, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.runtime_config.mint_budget import consume_agent_mint_budget
 from modulo.core.runtime_config.org_flags import FLAG_WORK_ITEM_AGENT_MINTING_ENABLED, is_org_flag_enabled
 from modulo.db.lifecycle_refs import (
     REFS_EVENT_DISMISSAL_SUPPRESSED,
@@ -633,6 +634,20 @@ async def upsert_ref_provenances(
                 # suppressed by the flag (flag OFF). An existing row's
                 # agent-cited write is a rank-0 no-op — not counted.
                 if include_agent:
+                    # FAR-795 budget cap: a fresh agent mint must clear the
+                    # per-org budget before it is written. consume_agent_mint_budget
+                    # is fail-open (errors/guard-outage allow), so only a genuine
+                    # within-window over-spend denies — and then the mint is
+                    # suppressed exactly like the flag-OFF path.
+                    from modulo.core.lifecycle_map.reconcile import (
+                        REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED,
+                    )
+
+                    budget_ok = await consume_agent_mint_budget(session, organisation_id, n=1)
+                    if not budget_ok:
+                        notify_refs_event(REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED, count=1)
+                        agent_suppressed += 1
+                        continue
                     agent_minted += 1
                 else:
                     agent_suppressed += 1

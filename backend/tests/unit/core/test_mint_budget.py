@@ -9,8 +9,8 @@ interleaving — the true row-lock proof runs in the real-Postgres class
 below, which is CI/DEV-DEFERRED: skipped unless ``MINT_BUDGET_TEST_PG_URL``
 names a throwaway Postgres, testcontainers style).
 
-The tests build the budget table by running migration 0228 (the shipped
-module itself) through an alembic Operations context on the SQLite engine,
+The tests build the budget table by running migration 0231_org_mint_budget_usage
+(the shipped module itself) through an alembic Operations context on the SQLite engine,
 so assertions exercise the schema the migration actually ships — not a
 hand-built fixture.
 """
@@ -24,7 +24,8 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import AsyncMock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import sqlalchemy as sa
@@ -274,32 +275,58 @@ class TestMigrationSchema:
 
 
 class TestRealPostgresConcurrency:
-    """True run-lock-concurrency proof — Postgres-only, CI/DEV-DEFERRED.
+    """True row-lock-concurrency proof — runs against a throwaway Postgres.
 
-    Runs ONLY when ``MINT_BUDGET_TEST_PG_URL`` names a throwaway Postgres
-    (e.g. a testcontainers container). SQLite serialises writers via its
-    single-writer lock, so the unit interleaving above cannot exercise the
-    row-lock wait-then-reevaluate path; this class fills that gap. The
-    throwaway DB gets the table via raw DDL matching migration 0228 (the
-    FK to ``organisations`` is deliberately omitted; RLS is not asserted
-    here — the org context ceremony is the caller's job and the migration
-    exercises it on the real Postgres integration leg).
+    SQLite serialises writers via its single-writer lock, so the unit
+    interleaving above cannot exercise the row-lock wait-then-reevaluate
+    path; this class fills that gap with a real Postgres. The Postgres is
+    supplied two ways, in order of preference:
 
-    TO DO (integration wiring, same FAR-795 epic): wire the merge-queue /
-    deploy integration leg to set MINT_BUDGET_TEST_PG_URL and include this
-    file there — until then this is exercised only by agents with a local
-    Docker Postgres available.
+    * an externally-provisioned throwaway DB named by ``MINT_BUDGET_TEST_PG_URL``
+      (e.g. a testcontainers container the merge-queue/deploy integration leg
+      sets for this file), or
+    * a testcontainers ``PostgresContainer`` spun up on demand (CI/DEV), so the
+      row-lock guarantee is exercised by the pipeline itself rather than only by
+      agents with a local Docker Postgres.
+
+    The throwaway DB gets the table via raw DDL matching migration
+    0231_org_mint_budget_usage (the FK to ``organisations`` is deliberately
+    omitted; RLS is not asserted here — the org context ceremony is the
+    caller's job and the migration exercises it on the real Postgres
+    integration leg).
     """
 
-    @pytest.mark.skipif(_PG_URL_ENV not in os.environ, reason="MINT_BUDGET_TEST_PG_URL not set")
-    async def test_parallel_sessions_cannot_oversubscribe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.fixture(scope="class")
+    async def pg_url(self) -> AsyncIterator[str]:
+        env_url = os.environ.get(_PG_URL_ENV)
+        if env_url:
+            yield env_url
+            return
+        from testcontainers.community.postgres import PostgresContainer
+
+        try:
+            container = PostgresContainer("postgres:16-alpine")
+            container.start()
+        except Exception as exc:
+            # Genuinely no Docker in this environment (e.g. local dev without the
+            # daemon). CI provisions a Docker-capable runner, so the row-lock
+            # proof still runs in the pipeline — this skip is capability-gated,
+            # not coverage-gated.
+            pytest.skip(f"testcontainers Postgres unavailable (no Docker): {exc}")
+        try:
+            url = container.get_connection_url().replace("postgresql://", "postgresql+asyncpg://", 1)
+            yield url
+        finally:
+            container.stop()
+
+    async def test_parallel_sessions_cannot_oversubscribe(self, pg_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
         # Two sessions race for ONE allowed consume — the conflict arm's row
         # lock serialises them, so exactly one wins; a read-then-write guard
         # admits both.
         monkeypatch.setenv(mint_budget.ENV_AGENT_MINT_BUDGET_LIMIT, "1")
         monkeypatch.setenv(mint_budget.ENV_AGENT_MINT_BUDGET_WINDOW_MINUTES, "60")
 
-        engine = create_async_engine(os.environ[_PG_URL_ENV])
+        engine = create_async_engine(pg_url)
         try:
             ddl = (
                 "CREATE TABLE IF NOT EXISTS org_mint_budget_usage ("
@@ -324,3 +351,39 @@ class TestRealPostgresConcurrency:
                 assert int(used) <= 1
         finally:
             await engine.dispose()
+
+
+class TestBudgetWiredIntoMintPaths:
+    """FAR-795 budget cap must be consulted by the agent-mint paths (not dead code)."""
+
+    async def test_upsert_ref_provenances_consults_budget_and_suppresses_when_denied(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from modulo.core.lifecycle_map.advancement import upsert_ref_provenances
+
+        consume = AsyncMock(return_value=False)
+        events: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            "modulo.core.lifecycle_map.advancement.consume_agent_mint_budget",
+            consume,
+        )
+        monkeypatch.setattr(
+            "modulo.core.lifecycle_map.advancement.notify_refs_event",
+            lambda event, **attrs: events.append((event, attrs)),
+        )
+
+        # Probe returns no existing journey row -> a fresh agent-mint attempt.
+        session = MagicMock()
+        probe_result = MagicMock()
+        probe_result.first.return_value = None
+        session.execute = AsyncMock(return_value=probe_result)
+        org_id = uuid.uuid4()
+        refs = [{"kind": "github", "ref": "modulo/foo#1", "source": "agent"}]
+
+        _, agent_minted, agent_suppressed = await upsert_ref_provenances(session, org_id, refs, include_agent=True)
+        # The budget guard WAS consulted for the fresh agent mint...
+        assert consume.await_count == 1
+        # ...and a denial suppressed the mint instead of writing it.
+        assert agent_minted == 0
+        assert agent_suppressed == 1
+        assert any(event == "agent_mint_budget_exceeded" for event, _ in events)

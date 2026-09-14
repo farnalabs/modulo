@@ -559,6 +559,10 @@ async def _agent_minting_enabled(session: AsyncSession, org_id: uuid.UUID) -> bo
 # ``modulo.core.lifecycle_map.reconcile``, whose sink keys on these strings).
 _REFS_EVENT_AGENT_MINTED = "agent_minted"
 _REFS_EVENT_AGENT_MINT_SUPPRESSED = "agent_mint_suppressed_by_flag"
+# FAR-795 budget cap: agent mints denied by the per-org budget (must match the
+# ``REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED`` sink key in
+# ``modulo.core.lifecycle_map.reconcile``).
+_REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED = "agent_mint_budget_exceeded"
 
 
 async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list[dict[str, Any]] | None) -> None:
@@ -623,6 +627,19 @@ async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list
                 agent_minted -= len(dropped)
                 if dropped:
                     notify_refs_event(REFS_EVENT_DISMISSAL_SUPPRESSED, count=len(dropped))
+            if agent_minted > 0:
+                # FAR-795 budget cap: fresh agent mints must clear the per-org
+                # budget before they are written. consume_agent_mint_budget is
+                # fail-open internally (errors / guard outage allow), so only a
+                # genuine within-window over-spend denies — and then the fresh
+                # agent mints are suppressed exactly like the flag-OFF path.
+                from modulo.core.runtime_config.mint_budget import consume_agent_mint_budget
+
+                budget_ok = await consume_agent_mint_budget(session, org_id, n=agent_minted)
+                if not budget_ok:
+                    notify_refs_event(_REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED, count=agent_minted)
+                    newly = []
+                    agent_minted = 0
             mintable = mintable + newly
         else:
             agent_suppressed = len(agent_entries)

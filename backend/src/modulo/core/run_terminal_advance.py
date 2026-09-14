@@ -67,9 +67,11 @@ async def advance_journeys_from_stored_refs(
             confirm_reported_refs,
         )
         from modulo.core.lifecycle_map.reconcile import (
+            record_refs_agent_mint_budget_exceeded,
             record_refs_agent_mint_suppressed_by_flag,
             record_refs_agent_minted,
         )
+        from modulo.core.runtime_config.mint_budget import consume_agent_mint_budget
 
         factory = async_sessionmaker(async_engine, expire_on_commit=False, autobegin=False)
         async with factory() as session, session.begin():
@@ -110,7 +112,21 @@ async def advance_journeys_from_stored_refs(
                 except Exception:
                     _log.warning("run_terminal_advance.agent_mint_probe_failed run=%s", run_id, exc_info=True)
                     confirmed = []
-                record_refs_agent_minted(len(canonical_agent) - len(confirmed))
+                fresh_agent_mints = len(canonical_agent) - len(confirmed)
+                if fresh_agent_mints > 0:
+                    # FAR-795 budget cap: agent mints must clear the per-org
+                    # budget before they are advanced. consume_agent_mint_budget
+                    # is fail-open (errors/guard-outage allow), so a genuine
+                    # within-window over-spend denies and the agent refs are
+                    # suppressed (not advanced) exactly like the flag-OFF path.
+                    budget_ok = await consume_agent_mint_budget(session, run.organisation_id, n=fresh_agent_mints)
+                    if not budget_ok:
+                        record_refs_agent_mint_budget_exceeded(fresh_agent_mints)
+                        # Drop the agent refs from the advance set so they are
+                        # neither minted nor advanced this run.
+                        refs = [e for e in refs if not (isinstance(e, dict) and e.get("source") == "agent")]
+                    else:
+                        record_refs_agent_minted(fresh_agent_mints)
             if not refs:
                 return
             await advance_journeys(

@@ -97,6 +97,7 @@ __all__ = [
     "record_journey_finalise_attempt",
     "record_journey_parse_failure",
     "record_journey_reconcile_drift",
+    "record_refs_agent_mint_budget_exceeded",
     "record_refs_by_source",
     "record_refs_cap_dropped",
     "record_refs_dismissal_suppressed",
@@ -137,6 +138,7 @@ _refs_malformed_total: Any = None
 _refs_cap_dropped_total: Any = None
 _refs_agent_minted_total: Any = None
 _refs_agent_mint_suppressed_total: Any = None
+_refs_agent_mint_budget_exceeded_total: Any = None
 _refs_dismissal_suppressed_total: Any = None
 
 # The cap-drop event name emitted by the finalize merge and the node-input
@@ -150,6 +152,10 @@ _REFS_EVENT_CAP_DROPPED = "refs_cap_dropped"
 # counters — the string pair is a deliberate layering mirror.
 REFS_EVENT_AGENT_MINTED = "agent_minted"
 REFS_EVENT_AGENT_MINT_SUPPRESSED = "agent_mint_suppressed_by_flag"
+# FAR-795: agent mints denied by the per-org budget cap (consume_agent_mint_budget
+# returned False). Mirrors the flag-suppressed event so the two suppression reasons
+# are independently observable.
+REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED = "agent_mint_budget_exceeded"
 
 
 def _get_meter() -> Any:
@@ -180,6 +186,7 @@ def _ensure() -> None:
         _refs_cap_dropped_total, \
         _refs_agent_minted_total, \
         _refs_agent_mint_suppressed_total, \
+        _refs_agent_mint_budget_exceeded_total, \
         _refs_dismissal_suppressed_total
     if _journey_advance_total is not None:
         return
@@ -249,6 +256,11 @@ def _ensure() -> None:
     _refs_agent_mint_suppressed_total = meter.create_counter(
         name="modulo_work_item_refs_agent_mint_suppressed_by_flag_total",
         description="Agent-sourced journey mints suppressed because the org flag was OFF (FAR-795)",
+        unit="1",
+    )
+    _refs_agent_mint_budget_exceeded_total = meter.create_counter(
+        name="modulo_work_item_refs_agent_mint_budget_exceeded_total",
+        description="Agent-sourced journey mints denied by the per-org agent-mint budget cap (FAR-795)",
         unit="1",
     )
     _refs_dismissal_suppressed_total = meter.create_counter(
@@ -367,6 +379,14 @@ def record_refs_agent_mint_suppressed_by_flag(count: int = 1) -> None:
         _refs_agent_mint_suppressed_total.add(count)
 
 
+def record_refs_agent_mint_budget_exceeded(count: int = 1) -> None:
+    """Record agent-sourced journey mints denied by the per-org budget cap (FAR-795)."""
+    if _refs_agent_mint_budget_exceeded_total is None:
+        _ensure()
+    if _refs_agent_mint_budget_exceeded_total is not None:
+        _refs_agent_mint_budget_exceeded_total.add(count)
+
+
 def record_refs_dismissal_suppressed(count: int = 1) -> None:
     """Record journey mint/advance attempts suppressed by an operator dismissal (FAR-795)."""
     if _refs_dismissal_suppressed_total is None:
@@ -402,6 +422,8 @@ def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
         record_refs_agent_minted(int(count) if count is not None else 1)
     elif event == REFS_EVENT_AGENT_MINT_SUPPRESSED:
         record_refs_agent_mint_suppressed_by_flag(int(count) if count is not None else 1)
+    elif event == REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED:
+        record_refs_agent_mint_budget_exceeded(int(count) if count is not None else 1)
     elif event == REFS_EVENT_DISMISSAL_SUPPRESSED:
         record_refs_dismissal_suppressed(int(count) if count is not None else 1)
 
