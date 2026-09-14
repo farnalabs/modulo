@@ -1,7 +1,7 @@
 """Add token-family refresh-reuse grace tracking columns.
 
-Revision ID: 0229_token_families_refresh_grace
-Revises: 0227_env_profiles_initialisation_strategy_check
+Revision ID: 0230_token_families_refresh_grace
+Revises: 0229_add_workspace_inputs_count
 Create Date: 2026-09-14
 
 Adds nullable, timezone-aware ``rotated_at`` and ``reuse_window_started_at``
@@ -15,8 +15,8 @@ the window (or beyond the per-window budget) still blacklists the family.
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0229_token_families_refresh_grace"
-down_revision = "0227_env_profiles_initialisation_strategy_check"
+revision = "0230_token_families_refresh_grace"
+down_revision = "0229_add_workspace_inputs_count"
 branch_labels = None
 depends_on = None
 
