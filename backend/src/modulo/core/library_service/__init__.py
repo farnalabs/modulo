@@ -274,29 +274,39 @@ async def get_primitive(
     org_id: uuid.UUID,
     primitive_id: uuid.UUID,
     *,
-    organisation_id: uuid.UUID | None = None,
+    explicit_org_filter: uuid.UUID | None = None,
 ) -> LibraryPrimitive | None:
     """Return a primitive visible to org_id, or None.
 
-    Checks the org-scoped DB first, then falls back to in-memory modulo primitives.
+    Resolver fallback ordering (ADR 032 §4 visibility — DB → registry →
+    community cache): the org-scoped ``library_primitives`` DB row wins, then
+    the in-code modulo registry, then the published community cache. The two
+    in-code sources are visible to EVERY organisation and carry no DB row in
+    the org's RLS slice, so callers must not assume a returned primitive is
+    DB-persisted.
+
     Supports being called within an existing transaction or starting its own.
-    When ``organisation_id`` is supplied the DB query carries an EXPLICIT org
-    filter in addition to the RLS context (needed on connections whose role
-    bypasses RLS, e.g. integration-test superusers).
+
+    RLS-bypass caveat: the positional ``org_id`` only sets the RLS context.
+    On a connection whose role bypasses RLS (integration-test superusers,
+    BYPASSRLS system sessions) the context alone constrains nothing, so pass
+    ``explicit_org_filter`` to add a hard ``WHERE organisation_id =`` clamp to
+    the DB query. On RLS-enforcing connections the clamp is redundant but
+    harmless; the in-code registry fallbacks are unaffected by either.
     """
 
     async def _lookup(s: AsyncSession) -> LibraryPrimitive | None:
         stmt = select(LibraryPrimitive).where(LibraryPrimitive.id == primitive_id)
-        if organisation_id is not None:
-            stmt = stmt.where(LibraryPrimitive.organisation_id == organisation_id)
+        if explicit_org_filter is not None:
+            stmt = stmt.where(LibraryPrimitive.organisation_id == explicit_org_filter)
         result = await s.execute(stmt)
         return result.scalar_one_or_none()
 
     try:
         # Default path: reuse get_library_primitive (RLS-scoped). Only use the
-        # inline lookup with an explicit organisation_id filter when one is
-        # supplied — needed on connections whose role bypasses RLS.
-        if organisation_id is None:
+        # inline lookup with an explicit org clamp when one is supplied —
+        # needed on connections whose role bypasses RLS.
+        if explicit_org_filter is None:
             item = await _scoped_execute(session, org_id, lambda s: get_library_primitive(s, primitive_id))
         else:
             item = await _scoped_execute(session, org_id, _lookup)
@@ -317,15 +327,25 @@ async def get_primitive_by_slug(
     primitive_type: str,
     slug: str,
     *,
-    organisation_id: uuid.UUID | None = None,
+    explicit_org_filter: uuid.UUID | None = None,
 ) -> LibraryPrimitive | None:
     """Return a primitive visible to org_id by type and slug, or None.
 
-    Checks the org-scoped DB first, then falls back to in-memory modulo primitives.
+    Resolver fallback ordering (ADR 032 §4 visibility — DB → registry →
+    community cache): the org-scoped ``library_primitives`` DB row wins, then
+    the in-code modulo registry, then the published community cache. The two
+    in-code sources are visible to EVERY organisation and carry no DB row in
+    the org's RLS slice, so callers must not assume a returned primitive is
+    DB-persisted.
+
     Supports being called within an existing transaction or starting its own.
-    When ``organisation_id`` is supplied the DB query carries an EXPLICIT org
-    filter in addition to the RLS context (needed on connections whose role
-    bypasses RLS, e.g. integration-test superusers).
+
+    RLS-bypass caveat: the positional ``org_id`` only sets the RLS context.
+    On a connection whose role bypasses RLS (integration-test superusers,
+    BYPASSRLS system sessions) the context alone constrains nothing, so pass
+    ``explicit_org_filter`` to add a hard ``WHERE organisation_id =`` clamp to
+    the DB query. On RLS-enforcing connections the clamp is redundant but
+    harmless; the in-code registry fallbacks are unaffected by either.
     """
 
     async def _lookup(s: AsyncSession) -> LibraryPrimitive | None:
@@ -333,8 +353,8 @@ async def get_primitive_by_slug(
             LibraryPrimitive.primitive_type == primitive_type,
             LibraryPrimitive.slug == slug,
         )
-        if organisation_id is not None:
-            stmt = stmt.where(LibraryPrimitive.organisation_id == organisation_id)
+        if explicit_org_filter is not None:
+            stmt = stmt.where(LibraryPrimitive.organisation_id == explicit_org_filter)
         result = await s.execute(stmt)
         return result.scalar_one_or_none()
 
