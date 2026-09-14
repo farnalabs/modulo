@@ -1,20 +1,36 @@
 """Unit tests for variant group CRUD — pure functions only (no DB)."""
 
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from modulo.db.crud.variant_group import (
+    _as_dict,
+    _coerce_snapshot_id,
+    _extract_agent_ids_from_graph,
     _merge_variant_payload,
+    _override_diff,
+    _prompt_pins,
     _resolve_prompt_template_override,
+    check_pipeline_run_quota,
     check_pipeline_run_quota_for_batch,
+    create_variant_group,
+    get_batch_compare,
     get_coverage_gaps,
     get_prompt_diffs,
+    get_variant_group,
+    has_pipeline_default_evals,
     increment_run_count,
+    list_variant_groups,
     pick_variant_weighted,
+    restore_variant_group,
     run_variant_batch,
     run_variant_weighted,
+    soft_delete_variant_group,
+    update_variant_group,
+    validate_batch_ownership,
 )
 from modulo.db.models.agent import Agent
 
@@ -1519,3 +1535,625 @@ class TestResolvePromptTemplateOverride:
         session = self._session(snapshot_exists=True, graph_json="not-a-dict")
         resolved = await _resolve_prompt_template_override(session, snapshot_id=snapshot_id, prompt_version="v3")
         assert resolved == {}
+
+    async def test_returns_empty_when_agent_not_found(self) -> None:
+        """An agent not found via get_agent is silently skipped."""
+        snapshot_id = uuid.uuid4()
+        session = self._session(
+            snapshot_exists=True,
+            graph_json={"nodes": [{"agent_id": str(uuid.uuid4())}]},
+        )
+        with patch(
+            "modulo.db.crud.variant_group.get_agent",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            resolved = await _resolve_prompt_template_override(session, snapshot_id=snapshot_id, prompt_version="v3")
+        assert resolved == {}
+
+    async def test_handles_non_dict_history_entries(self) -> None:
+        """Non-dict entries in prompt_version_history are skipped."""
+        snapshot_id = uuid.uuid4()
+        a = Agent(
+            id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            name="agent-a",
+            account_id=uuid.uuid4(),
+            prompt_template="current",
+            prompt_version_history=["not-a-dict", 42],
+        )
+        session = self._session(
+            snapshot_exists=True,
+            graph_json={"nodes": [{"agent_id": str(a.id)}]},
+        )
+        with patch(
+            "modulo.db.crud.variant_group.get_agent",
+            new_callable=AsyncMock,
+            return_value=a,
+        ):
+            resolved = await _resolve_prompt_template_override(session, snapshot_id=snapshot_id, prompt_version="v3")
+        assert resolved == {}
+
+
+# ---------------------------------------------------------------------------
+# create_variant_group
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestCreateVariantGroup:
+    async def test_creates_and_flushes(self) -> None:
+        session = AsyncMock()
+        variants = [{"name": "a", "snapshot_id": str(uuid.uuid4())}]
+        result = await create_variant_group(
+            session,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            name="test-group",
+            variants=variants,
+            description="desc",
+            selection_strategy="round_robin",
+            max_concurrent_runs=3,
+            degraded_evals=True,
+        )
+        assert result is not None
+        session.add.assert_called_once()
+        session.flush.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# get_variant_group
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestGetVariantGroup:
+    async def test_returns_none_when_not_found(self) -> None:
+        session = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result_mock)
+        assert await get_variant_group(session, uuid.uuid4()) is None
+
+    async def test_with_include_deleted(self) -> None:
+        session = AsyncMock()
+        mock_group = MagicMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
+        session.execute = AsyncMock(return_value=result_mock)
+        result = await get_variant_group(session, uuid.uuid4(), include_deleted=True)
+        assert result is mock_group
+
+
+# ---------------------------------------------------------------------------
+# list_variant_groups
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestListVariantGroups:
+    async def test_empty_result(self) -> None:
+        session = AsyncMock()
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+        items_result = MagicMock()
+        scalars_mock = MagicMock()
+        scalars_mock.__iter__.return_value = iter([])
+        items_result.scalars.return_value = scalars_mock
+        session.execute = AsyncMock(side_effect=[count_result, items_result])
+        items, total = await list_variant_groups(session, page=1, page_size=20)
+        assert items == []
+        assert total == 0
+
+    async def test_with_pipeline_id_filter(self) -> None:
+        session = AsyncMock()
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 1
+        items_result = MagicMock()
+        mock_group = MagicMock()
+        scalars_mock = MagicMock()
+        scalars_mock.__iter__.return_value = iter([mock_group])
+        items_result.scalars.return_value = scalars_mock
+        session.execute = AsyncMock(side_effect=[count_result, items_result])
+        items, total = await list_variant_groups(session, pipeline_id=uuid.uuid4(), page=1, page_size=10)
+        assert len(items) == 1
+        assert total == 1
+
+    async def test_programming_error_returns_empty(self) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=ProgrammingError("table missing", {}, None))
+        items, total = await list_variant_groups(session)
+        assert items == []
+        assert total == 0
+
+
+# ---------------------------------------------------------------------------
+# update_variant_group
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestUpdateVariantGroup:
+    async def test_returns_none_when_not_found(self) -> None:
+        session = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result_mock)
+        assert await update_variant_group(session, uuid.uuid4(), name="x") is None
+
+    async def test_updates_all_fields(self) -> None:
+        session = AsyncMock()
+        mock_group = MagicMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
+        session.execute = AsyncMock(return_value=result_mock)
+        result = await update_variant_group(
+            session,
+            uuid.uuid4(),
+            name="new-name",
+            description="new-desc",
+            variants=[{"name": "v"}],
+            selection_strategy="random",
+            max_concurrent_runs=10,
+            degraded_evals=True,
+        )
+        assert result is mock_group
+        assert mock_group.name == "new-name"
+        assert mock_group.description == "new-desc"
+        assert mock_group.variants == [{"name": "v"}]
+        assert mock_group.selection_strategy == "random"
+        assert mock_group.max_concurrent_runs == 10
+        assert mock_group.degraded_evals is True
+        session.flush.assert_awaited_once()
+
+    async def test_noop_when_no_fields(self) -> None:
+        session = AsyncMock()
+        mock_group = MagicMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
+        session.execute = AsyncMock(return_value=result_mock)
+        result = await update_variant_group(session, uuid.uuid4())
+        assert result is mock_group
+        session.flush.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# soft_delete_variant_group
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestSoftDeleteVariantGroup:
+    async def test_returns_false_when_not_found(self) -> None:
+        session = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result_mock)
+        assert await soft_delete_variant_group(session, uuid.uuid4()) is False
+
+    async def test_deletes_when_found(self) -> None:
+        session = AsyncMock()
+        mock_group = MagicMock()
+        mock_group.deleted_at = None
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
+        session.execute = AsyncMock(return_value=result_mock)
+        assert await soft_delete_variant_group(session, uuid.uuid4()) is True
+        assert mock_group.deleted_at is not None
+        session.flush.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# restore_variant_group
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestRestoreVariantGroup:
+    async def test_returns_none_when_not_found(self) -> None:
+        session = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result_mock)
+        assert await restore_variant_group(session, uuid.uuid4()) is None
+
+    async def test_returns_none_when_not_deleted(self) -> None:
+        session = AsyncMock()
+        mock_group = MagicMock()
+        mock_group.deleted_at = None
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
+        session.execute = AsyncMock(return_value=result_mock)
+        assert await restore_variant_group(session, uuid.uuid4()) is None
+
+    async def test_restores_deleted_group(self) -> None:
+        session = AsyncMock()
+        mock_group = MagicMock()
+        mock_group.deleted_at = datetime.now(UTC)
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
+        session.execute = AsyncMock(return_value=result_mock)
+        result = await restore_variant_group(session, uuid.uuid4())
+        assert result is mock_group
+        assert mock_group.deleted_at is None
+        session.flush.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# check_pipeline_run_quota
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestCheckPipelineRunQuota:
+    async def test_allows_when_under_quota(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        group.max_concurrent_runs = 5
+        with patch(
+            "modulo.db.crud.variant_group.count_active_runs_for_pipeline",
+            new_callable=AsyncMock,
+            return_value=3,
+        ):
+            assert await check_pipeline_run_quota(session, group) is True
+
+    async def test_rejects_when_at_quota(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        group.max_concurrent_runs = 5
+        with patch(
+            "modulo.db.crud.variant_group.count_active_runs_for_pipeline",
+            new_callable=AsyncMock,
+            return_value=5,
+        ):
+            assert await check_pipeline_run_quota(session, group) is False
+
+
+# ---------------------------------------------------------------------------
+# _coerce_snapshot_id
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceSnapshotId:
+    def test_none_returns_none(self) -> None:
+        assert _coerce_snapshot_id(None) is None
+
+    def test_uuid_passthrough(self) -> None:
+        uid = uuid.uuid4()
+        assert _coerce_snapshot_id(uid) == uid
+
+    def test_string_coerced_to_uuid(self) -> None:
+        uid = uuid.uuid4()
+        assert _coerce_snapshot_id(str(uid)) == uid
+
+    def test_invalid_string_returns_none(self) -> None:
+        # Non-UUID string raises ValueError
+        with pytest.raises(ValueError, match="badly formed"):
+            _coerce_snapshot_id("not-a-uuid")
+
+
+# ---------------------------------------------------------------------------
+# _extract_agent_ids_from_graph
+# ---------------------------------------------------------------------------
+
+
+class TestExtractAgentIdsFromGraph:
+    def test_extracts_valid_uuids(self) -> None:
+        uid1 = uuid.uuid4()
+        uid2 = uuid.uuid4()
+        graph = {
+            "nodes": [
+                {"agent_id": str(uid1)},
+                {"agent_id": str(uid2)},
+                {"agent_id": "not-a-uuid"},
+                {},
+                {"nested": True},
+            ]
+        }
+        result = _extract_agent_ids_from_graph(graph)
+        assert result == {uid1, uid2}
+
+    def test_empty_graph(self) -> None:
+        assert not _extract_agent_ids_from_graph({})
+
+    def test_none_nodes(self) -> None:
+        assert not _extract_agent_ids_from_graph({"nodes": None})
+
+
+# ---------------------------------------------------------------------------
+# _prompt_pins
+# ---------------------------------------------------------------------------
+
+
+class TestPromptPins:
+    def test_valid_pins(self) -> None:
+        snap = MagicMock()
+        snap.prompt_pins_json = [
+            {"agent_id": "a1", "prompt_version_hash": "h1"},
+            {"agent_id": "a2", "prompt_version_hash": "h2"},
+        ]
+        result = _prompt_pins(snap)
+        assert result == {"a1": "h1", "a2": "h2"}
+
+    def test_none_prompt_pins(self) -> None:
+        snap = MagicMock()
+        snap.prompt_pins_json = None
+        result = _prompt_pins(snap)
+        assert not result
+
+    def test_non_list_prompt_pins(self) -> None:
+        snap = MagicMock()
+        snap.prompt_pins_json = "not-a-list"
+        result = _prompt_pins(snap)
+        assert not result
+
+
+# ---------------------------------------------------------------------------
+# _as_dict / _override_diff
+# ---------------------------------------------------------------------------
+
+
+class TestAsDict:
+    def test_returns_dict_as_is(self) -> None:
+        d = {"a": 1}
+        assert _as_dict(d) is d
+
+    def test_non_dict_returns_empty(self) -> None:
+        assert not _as_dict(None)
+        assert not _as_dict("string")
+        assert not _as_dict(42)
+
+
+class TestOverrideDiff:
+    def test_added_removed_changed(self) -> None:
+        base = {"a": 1, "b": 2}
+        current = {"a": 1, "c": 3}
+        diff = _override_diff(base, current)
+        assert diff["added"] == {"c": 3}
+        assert diff["removed"] == {"b": 2}
+        assert not diff["changed"]
+
+    def test_changed_value(self) -> None:
+        diff = _override_diff({"a": 1}, {"a": 2})
+        assert diff["changed"] == {"a": 2}
+        assert not diff["added"]
+        assert not diff["removed"]
+
+
+# ---------------------------------------------------------------------------
+# validate_batch_ownership
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestValidateBatchOwnership:
+    async def test_returns_false_when_pipeline_not_found(self) -> None:
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=result)
+        assert (
+            await validate_batch_ownership(session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[])
+            is False
+        )
+
+    async def test_returns_true_with_no_snapshots(self) -> None:
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = uuid.uuid4()
+        session.execute = AsyncMock(return_value=result)
+        assert (
+            await validate_batch_ownership(session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[])
+            is True
+        )
+
+    async def test_returns_true_when_all_owned(self) -> None:
+        sid1, sid2 = uuid.uuid4(), uuid.uuid4()
+        session = AsyncMock()
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one_or_none.return_value = uuid.uuid4()
+        snap_result = MagicMock()
+        scalars_mock = MagicMock()
+        scalars_mock.__iter__ = MagicMock(return_value=iter([sid1, sid2]))
+        snap_result.scalars.return_value = scalars_mock
+        session.execute = AsyncMock(side_effect=[pipeline_result, snap_result])
+        assert (
+            await validate_batch_ownership(
+                session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[sid1, sid2]
+            )
+            is True
+        )
+
+    async def test_returns_false_when_not_all_owned(self) -> None:
+        sid1 = uuid.uuid4()
+        sid2 = uuid.uuid4()
+        session = AsyncMock()
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one_or_none.return_value = uuid.uuid4()
+        snap_result = MagicMock()
+        scalars_mock = MagicMock()
+        scalars_mock.__iter__ = MagicMock(return_value=iter([sid1]))  # sid2 missing
+        snap_result.scalars.return_value = scalars_mock
+        session.execute = AsyncMock(side_effect=[pipeline_result, snap_result])
+        assert (
+            await validate_batch_ownership(
+                session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[sid1, sid2]
+            )
+            is False
+        )
+
+
+# ---------------------------------------------------------------------------
+# has_pipeline_default_evals
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestHasPipelineDefaultEvals:
+    async def test_returns_true_when_evals_exist(self) -> None:
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = uuid.uuid4()
+        session.execute = AsyncMock(return_value=result)
+        assert await has_pipeline_default_evals(session, uuid.uuid4()) is True
+
+    async def test_returns_false_when_no_evals(self) -> None:
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=result)
+        assert await has_pipeline_default_evals(session, uuid.uuid4()) is False
+
+
+# ---------------------------------------------------------------------------
+# get_batch_compare
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestGetBatchCompare:
+    async def test_empty_runs_returns_empty(self) -> None:
+        session = AsyncMock()
+        with patch(
+            "modulo.db.crud.variant_group.get_batch_runs",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await get_batch_compare(session, org_id=uuid.uuid4(), batch_id=uuid.uuid4())
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# run_variant_weighted — prompt_version override path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestRunVariantWeightedPromptVersion:
+    async def test_prompt_version_resolved_to_template(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        agent_id = str(uuid.uuid4())
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = [
+            {
+                "name": "v3",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"prompt_version": "v3"},
+            }
+        ]
+        group.degraded_evals = False
+        group.max_concurrent_runs = 5
+
+        locked = MagicMock()
+        locked.id = group.id
+        locked.pipeline_id = group.pipeline_id
+        locked.variants = group.variants
+        locked.degraded_evals = False
+        locked.max_concurrent_runs = 5
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.db.crud.variant_group.pick_variant_weighted",
+                return_value=group.variants[0],
+            ),
+            patch(
+                "modulo.db.crud.variant_group.create_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ),
+            patch(
+                "modulo.db.crud.variant_group.increment_run_count",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "modulo.db.crud.variant_group._resolve_prompt_template_override",
+                new_callable=AsyncMock,
+                return_value={agent_id: "resolved template"},
+            ),
+        ):
+            result = await run_variant_weighted(session, org_id=org_id, group=group)
+
+        assert result is not None
+        overrides = result["frozen_snapshot"]["_run_overrides"]
+        assert overrides["prompt_version"] == "v3"
+        assert overrides["prompt_templates"] == {agent_id: "resolved template"}
+
+    async def test_prompt_version_unresolved_no_templates(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = [
+            {
+                "name": "v9",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"prompt_version": "v9"},
+            }
+        ]
+        group.degraded_evals = False
+        group.max_concurrent_runs = 5
+
+        locked = MagicMock()
+        locked.id = group.id
+        locked.pipeline_id = group.pipeline_id
+        locked.variants = group.variants
+        locked.degraded_evals = False
+        locked.max_concurrent_runs = 5
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.db.crud.variant_group.pick_variant_weighted",
+                return_value=group.variants[0],
+            ),
+            patch(
+                "modulo.db.crud.variant_group.create_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ),
+            patch(
+                "modulo.db.crud.variant_group.increment_run_count",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "modulo.db.crud.variant_group._resolve_prompt_template_override",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+        ):
+            result = await run_variant_weighted(session, org_id=org_id, group=group)
+
+        assert result is not None
+        overrides = result["frozen_snapshot"]["_run_overrides"]
+        assert overrides["prompt_version"] == "v9"
+        assert "prompt_templates" not in overrides
