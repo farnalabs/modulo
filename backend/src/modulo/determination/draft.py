@@ -75,7 +75,7 @@ def _git_provider(samples: list[ScanSample], resources: tuple[str, ...]) -> str:
 
 def _add_planning_stage(
     nodes: list[DraftNode],
-    edges: list[DraftEdge],
+    _edges: list[DraftEdge],
     automation_suggestions: list[dict[str, str]],
     stage_node_ids: list[str],
 ) -> None:

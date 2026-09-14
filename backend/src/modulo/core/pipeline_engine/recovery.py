@@ -223,7 +223,7 @@ async def _resolve_node_type(session: AsyncSession, run: Run, run_id: uuid.UUID,
     return node_def.get("node_type", "agent")
 
 
-def _require_node_not_completed(run: Run, run_id: uuid.UUID, node_id: str, blobs: Any) -> None:
+def _require_node_not_completed(_run: Run, run_id: uuid.UUID, node_id: str, blobs: Any) -> None:
     """Raise if the node already has a completed marker in either blob side.
 
     The node may hold a PURE return on its *outputs* side (a replay marker)

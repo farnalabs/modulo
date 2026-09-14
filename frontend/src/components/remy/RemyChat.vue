@@ -931,7 +931,10 @@ function renderMarkdown(text: string): string {
 .remy-nogo-badge {
   @apply text-[10px] font-semibold px-1.5 py-0.5 rounded;
   background-color: hsl(0 72% 51% / 0.15);
-  color: hsl(0 72% 51%);
+  color: hsl(0 72% 72%);
+}
+.light .remy-nogo-badge {
+  color: hsl(0 72% 40%);
 }
 .remy-permission-actions {
   @apply flex items-center gap-2;
@@ -1000,11 +1003,17 @@ function renderMarkdown(text: string): string {
 }
 .tool-badge.success {
   background-color: hsl(142 76% 36% / 0.15);
-  color: hsl(142 76% 36%);
+  color: hsl(142 76% 52%);
 }
 .tool-badge.failed {
   background-color: hsl(0 72% 51% / 0.15);
-  color: hsl(0 72% 51%);
+  color: hsl(0 72% 72%);
+}
+.light .tool-badge.success {
+  color: hsl(142 76% 26%);
+}
+.light .tool-badge.failed {
+  color: hsl(0 72% 40%);
 }
 .tool-chevron {
   @apply text-xs transition-transform duration-200;

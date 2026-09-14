@@ -398,6 +398,9 @@ _MAX_ARTIFACT_LOG = 512000
 # without specifying ``stdout_max_bytes``. The "tail" default keeps
 # ``_MAX_ARTIFACT_LOG`` (512KB).
 _FULL_MODE_DEFAULT_MAX_BYTES = 5_000_000
+# FAR-811: org-level hard ceiling key in ``system_config``.  When set, no
+# node's effective stdout/stderr retention cap may exceed it.
+_ORG_SANDBOX_STDOUT_RETENTION_MAX_BYTES = "sandbox_stdout_retention_max_bytes"
 _MAX_OTEL_LOG_ATTR = 32768
 _MAX_ERROR_MSG = 500
 
@@ -6345,9 +6348,24 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
 
     # FAR-792: effective stdout/stderr retention cap for this node. "tail"
     # (legacy default) keeps the 512KB bound; "full" honours stdout_max_bytes
-    # (or the 5MB default). The same cap drives the stored artifact slices,
-    # the retention markers and the watchdog drain window.
-    _stdout_cap = _resolve_stdout_cap(stdout_retention_mode, stdout_max_bytes)
+    # (or the 5MB default). FAR-811: the org-level ceiling
+    # (system_config.sandbox_stdout_retention_max_bytes) hard-clamps the node's
+    # cap so no node can request an unbounded cap. The same cap drives the
+    # stored artifact slices, the retention markers and the watchdog drain
+    # window.
+    org_stdout_ceiling = await _read_org_stdout_retention_ceiling(config.session_factory)
+    _stdout_cap_unclamped = _resolve_stdout_cap(stdout_retention_mode, stdout_max_bytes)
+    _stdout_cap = _resolve_stdout_cap(stdout_retention_mode, stdout_max_bytes, org_ceiling=org_stdout_ceiling)
+    if org_stdout_ceiling is not None and _stdout_cap < _stdout_cap_unclamped:
+        _log.warning(
+            "sandbox_agent.stdout_cap_clamped_by_org_ceiling",
+            extra={
+                "node_id": node_id,
+                "cap_without_ceiling": _stdout_cap_unclamped,
+                "org_ceiling": org_stdout_ceiling,
+                "effective_cap": _stdout_cap,
+            },
+        )
 
     from e2b import AsyncSandbox
     from e2b.exceptions import RateLimitException, SandboxException
@@ -8157,16 +8175,82 @@ def _coerce_stdout_max_bytes(raw: Any) -> int | None:
     return int(value)
 
 
-def _resolve_stdout_cap(stdout_retention_mode: str, stdout_max_bytes: int | None) -> int:
+def _coerce_org_stdout_ceiling(raw: Any) -> int | None:
+    """Coerce the org-level stdout retention ceiling (FAR-811) to a positive int or None.
+
+    Stricter than ``_coerce_stdout_max_bytes``: only genuine scalar DB values
+    (int/float/str) are accepted. Non-scalar values - including the
+    bare ``MagicMock`` results unit-test ``_FakeSession`` fakes return for
+    un-routed queries - reject to ``None``, so a mock artifact can never clamp
+    real nodes to a bogus 1-byte ceiling. ``bool``, non-positive, non-integral
+    and non-finite values are rejected too (a ceiling can only ever be a
+    positive whole byte count).
+    """
+    if raw is None or isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not value.is_integer() or value <= 0 or value == float("inf"):
+        return None
+    return int(value)
+
+
+def _resolve_stdout_cap(
+    stdout_retention_mode: str,
+    stdout_max_bytes: int | None,
+    org_ceiling: int | None = None,
+) -> int:
     """Resolve the effective stdout/stderr retention cap for a run (FAR-792).
 
     ``"tail"`` keeps the legacy bounded 512KB artifact cap
     (``_MAX_ARTIFACT_LOG``). ``"full"`` retains up to ``stdout_max_bytes`` when
     set, defaulting to ``_FULL_MODE_DEFAULT_MAX_BYTES`` when absent.
+
+    ``org_ceiling`` (FAR-811) is the org-level hard ceiling from
+    ``system_config.sandbox_stdout_retention_max_bytes``; the resolved cap is
+    clamped to it when set, so a node can never request an unbounded cap.
     """
     if stdout_retention_mode == "full":
-        return stdout_max_bytes if stdout_max_bytes is not None else _FULL_MODE_DEFAULT_MAX_BYTES
-    return _MAX_ARTIFACT_LOG
+        resolved = stdout_max_bytes if stdout_max_bytes is not None else _FULL_MODE_DEFAULT_MAX_BYTES
+    else:
+        resolved = _MAX_ARTIFACT_LOG
+    if org_ceiling is not None:
+        resolved = min(resolved, org_ceiling)
+    return resolved
+
+
+async def _read_org_stdout_retention_ceiling(
+    session_factory: Callable[..., Any] | None,
+) -> int | None:
+    """Read the org-level sandbox stdout retention ceiling (FAR-811).
+
+    Returns the integer ceiling stored under ``system_config`` key
+    ``sandbox_stdout_retention_max_bytes``, or ``None`` when unset.  A missing
+    ``session_factory`` or a failed read is a fail-open no-op (``None``) — the
+    node's own cap still applies and a transient system_config hiccup must never
+    block sandbox dispatch.
+    """
+    if session_factory is None:
+        return None
+    from modulo.core.cost_controller.system_config import read_system_config
+
+    try:
+        async with session_factory() as session, session.begin():
+            raw = await asyncio.wait_for(
+                read_system_config(session, _ORG_SANDBOX_STDOUT_RETENTION_MAX_BYTES),
+                timeout=_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.org_stdout_ceiling_read_failed",
+            extra={"key": _ORG_SANDBOX_STDOUT_RETENTION_MAX_BYTES},
+        )
+        return None
+    return _coerce_org_stdout_ceiling(raw)
 
 
 def _filter_watch_globs(raw: Any) -> list[str]:

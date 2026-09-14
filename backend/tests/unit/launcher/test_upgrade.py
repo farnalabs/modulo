@@ -13,6 +13,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -1183,3 +1185,1100 @@ def test_run_boot_failing_child_reports_clean_upgrade_error(tmp_path):
     failing.chmod(0o755)
     with pytest.raises(upgrade_module.UpgradeError, match="did not reach a healthy /healthz"):
         upgrade_module.run_boot([str(failing), "start"], api_port=1, timeout=1.0, poll_interval=0.05)
+
+
+# ---------------------------------------------------------------------------
+# Coverage-raising additions — pure-function / platform-independent branches
+# ---------------------------------------------------------------------------
+
+
+class TestDecredentialUrl:
+    def test_no_password_returns_original(self):
+        url = "postgresql://modulo@127.0.0.1:5432/modulo"
+        result, pwd = upgrade_module._decredential_url(url)
+        assert result == url
+        assert pwd is None
+
+    def test_with_password_strips_from_url(self):
+        url = "postgresql://modulo:secret123@127.0.0.1:5432/modulo"
+        result, pwd = upgrade_module._decredential_url(url)
+        assert "secret123" not in result
+        assert pwd == "secret123"
+        assert "modulo@" in result
+
+    def test_with_password_and_port(self):
+        url = "postgresql://modulo:p%40ss@127.0.0.1:15432/modulo"
+        result, pwd = upgrade_module._decredential_url(url)
+        assert pwd == "p@ss"
+        assert ":15432" in result
+
+    def test_no_username_with_password(self):
+        url = "postgresql://:secret@127.0.0.1:5432/modulo"
+        result, pwd = upgrade_module._decredential_url(url)
+        assert pwd == "secret"
+        assert "127.0.0.1" in result
+
+
+class TestStripBundlePrefix:
+    def test_bundle_v_prefix(self):
+        assert upgrade_module._strip_bundle_prefix("bundle-v1.2.0") == "1.2.0"
+
+    def test_v_prefix(self):
+        assert upgrade_module._strip_bundle_prefix("v1.2.0") == "1.2.0"
+
+    def test_bare_version(self):
+        assert upgrade_module._strip_bundle_prefix("1.2.0") == "1.2.0"
+
+
+class TestVersionSortKey:
+    def test_non_numeric_chunks(self):
+        result = upgrade_module._version_sort_key("abc.def.ghi")
+        assert result == (-1, -1, -1)
+
+    def test_partial_numeric(self):
+        result = upgrade_module._version_sort_key("1.beta.3")
+        assert result == (1, -1, 3)
+
+    def test_two_parts(self):
+        result = upgrade_module._version_sort_key("1.2")
+        assert result == (1, 2, 0)
+
+
+class TestWritePrivateJson:
+    def test_writes_fsynced_json(self, tmp_path):
+        path = tmp_path / "test.json"
+        payload = {"key": "value", "number": 42}
+        upgrade_module._write_private_json(path, payload)
+        assert path.exists()
+        import json
+
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        assert loaded == payload
+        if os.name == "posix":
+            assert (path.stat().st_mode & 0o777) == 0o600
+
+
+class TestHostArch:
+    def test_returns_amd64_for_x86_64(self):
+        with patch("platform.machine", return_value="x86_64"):
+            assert upgrade_module._host_arch() == "amd64"
+
+    def test_returns_arm64_for_aarch64(self):
+        with patch("platform.machine", return_value="aarch64"):
+            assert upgrade_module._host_arch() == "arm64"
+
+    def test_returns_arm64_for_arm64(self):
+        with patch("platform.machine", return_value="arm64"):
+            assert upgrade_module._host_arch() == "arm64"
+
+    def test_defaults_to_amd64(self):
+        with patch("platform.machine", return_value="unknown"):
+            assert upgrade_module._host_arch() == "amd64"
+
+
+class TestTempOwnerPid:
+    def test_no_match(self):
+        assert upgrade_module._temp_owner_pid("some-file") is None
+
+    def test_with_pid_suffix(self):
+        assert upgrade_module._temp_owner_pid(".current.new.12345") == 12345
+
+
+class TestDefaultInstallRoot:
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("MODULO_INSTALL_ROOT", "/custom/path")
+        assert upgrade_module.default_install_root() == Path("/custom/path")
+
+    def test_env_expands_user(self, monkeypatch):
+        monkeypatch.setenv("MODULO_INSTALL_ROOT", "~/my-modulo")
+        result = upgrade_module.default_install_root()
+        assert str(result).endswith("my-modulo")
+
+
+class TestResolvePgBinDir:
+    def test_explicit_bin_dir(self):
+        explicit = Path("/explicit/bin")
+        assert upgrade_module._resolve_pg_bin_dir(explicit) == explicit
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("MODULO_BUNDLED_BIN_DIR", "/env/bin")
+        assert upgrade_module._resolve_pg_bin_dir(None) == Path("/env/bin")
+
+    def test_default_prefix(self, monkeypatch):
+        monkeypatch.delenv("MODULO_BUNDLED_BIN_DIR", raising=False)
+        result = upgrade_module._resolve_pg_bin_dir(None)
+        assert result == Path(sys.prefix) / "bundled" / "bin"
+
+
+class TestWriteUpgradeMarker:
+    def test_writes_marker_with_snapshot(self, tmp_path):
+        snapshot = tmp_path / "snapshot-dir"
+        path = upgrade_module.write_upgrade_marker(
+            tmp_path,
+            previous_version="1.0.0",
+            version="1.1.0",
+            pre_upgrade_snapshot=snapshot,
+            upgraded_at=1234567890.0,
+        )
+        assert path.exists()
+        marker = json.loads(path.read_text(encoding="utf-8"))
+        assert marker["schema_version"] == upgrade_module.UPGRADE_MARKER_SCHEMA_VERSION
+        assert marker["previous_version"] == "1.0.0"
+        assert marker["target_version"] == "1.1.0"
+        assert marker["pre_upgrade_snapshot"] == str(snapshot)
+
+    def test_writes_marker_without_snapshot(self, tmp_path):
+        path = upgrade_module.write_upgrade_marker(
+            tmp_path,
+            previous_version="1.0.0",
+            version="1.1.0",
+            pre_upgrade_snapshot=None,
+            upgraded_at=1234567890.0,
+        )
+        marker = json.loads(path.read_text(encoding="utf-8"))
+        assert marker["pre_upgrade_snapshot"] is None
+
+
+class TestRestoreGuidance:
+    def test_no_snapshot(self, tmp_path):
+        result = upgrade_module.restore_guidance(
+            snapshot=None,
+            previous_version="1.0.0",
+            install_root=tmp_path,
+            data_dir=tmp_path / "data",
+        )
+        assert "NO automatic restore" in result
+        assert "ln -sfn versions/1.0.0" in result
+
+    def test_with_snapshot(self, tmp_path):
+        snapshot = tmp_path / "snapshot"
+        result = upgrade_module.restore_guidance(
+            snapshot=snapshot,
+            previous_version="1.0.0",
+            install_root=tmp_path,
+            data_dir=tmp_path / "data",
+        )
+        assert str(snapshot) in result
+        assert "modulo restore" in result
+
+    def test_with_prior_link_target(self, tmp_path):
+        result = upgrade_module.restore_guidance(
+            snapshot=None,
+            previous_version="1.1.0",
+            install_root=tmp_path,
+            data_dir=tmp_path / "data",
+            prior_link_target="1.0.0",
+        )
+        assert "ln -sfn versions/1.0.0" in result
+        assert "1.1.0" not in result.split("ln -sfn")[1]
+
+
+class TestAssertNotHeldWindows:
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows branch only")
+    def test_windows_refuses_with_holder(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        lock_path = data_dir.parent / (data_dir.name + ".lock")
+        lock_path.write_text(json.dumps({"pid": 12345, "mode": "serve", "acquired_at": 0.0}), encoding="utf-8")
+        with pytest.raises(UpgradeError, match=r"TODO\(P3\)"):
+            upgrade_module.assert_not_held(data_dir)
+
+
+class TestAtomicSymlinkSwapWindows:
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows branch only")
+    def test_windows_raises(self):
+        with pytest.raises(UpgradeError, match="POSIX-only"):
+            upgrade_module.atomic_symlink_swap(Path("/fake/link"), "target")
+
+
+class TestCheckPgMajor:
+    def test_empty_version_refuses(self, tmp_path):
+        with pytest.raises(UpgradeError, match="no USABLE postgres version"):
+            upgrade_module._check_pg_major({"postgres": ""}, tmp_path)
+
+    def test_invalid_version_refuses(self, tmp_path):
+        with pytest.raises(UpgradeError, match="no USABLE postgres version"):
+            upgrade_module._check_pg_major({"postgres": "not-a-version"}, tmp_path)
+
+    def test_no_pg_version_file_refuses(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        pgdata = data_dir / "pgdata"
+        pgdata.mkdir()
+        with pytest.raises(UpgradeError, match="no initialised bundled cluster"):
+            upgrade_module._check_pg_major({"postgres": "16.1"}, data_dir)
+
+    def test_major_mismatch_refuses(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        pgdata = data_dir / "pgdata"
+        pgdata.mkdir()
+        (pgdata / "PG_VERSION").write_text("16\n", encoding="utf-8")
+        with pytest.raises(UpgradeError, match="major mismatch"):
+            upgrade_module._check_pg_major({"postgres": "17.0"}, data_dir)
+
+    def test_major_match_passes(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        pgdata = data_dir / "pgdata"
+        pgdata.mkdir()
+        (pgdata / "PG_VERSION").write_text("16\n", encoding="utf-8")
+        assert upgrade_module._check_pg_major({"postgres": "16.10"}, data_dir) is None
+
+    def test_pg_version_read_error(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        pgdata = data_dir / "pgdata"
+        pgdata.mkdir()
+        version_file = pgdata / "PG_VERSION"
+        version_file.write_text("16\n", encoding="utf-8")
+        with (
+            patch.object(Path, "read_text", side_effect=OSError("permission denied")),
+            pytest.raises(UpgradeError, match="cannot read"),
+        ):
+            upgrade_module._check_pg_major({"postgres": "16.1"}, data_dir)
+
+
+class TestCheckNoDowngradeExtended:
+    def test_unknown_to_target_refuses(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _: {"abc123"})
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        snapshot_dir = tmp_path / "snap"
+        snapshot_dir.mkdir()
+        (snapshot_dir / "backup-info.json").write_text(
+            json.dumps({"schema_versions": ["abc123", "future_head"]}), encoding="utf-8"
+        )
+        with pytest.raises(UpgradeError, match="DOWNGRADE"):
+            upgrade_module.check_no_downgrade(["unknown"], snapshot_dir, bundle_dir)
+
+    def test_matching_heads_passes(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _: {"abc123"})
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        assert upgrade_module.check_no_downgrade(["abc123"], None, bundle_dir) is None
+
+    def test_empty_db_heads_with_snapshot_fallback(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _: {"abc123"})
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        snapshot_dir = tmp_path / "snap"
+        snapshot_dir.mkdir()
+        (snapshot_dir / "backup-info.json").write_text(json.dumps({"schema_versions": ["abc123"]}), encoding="utf-8")
+        assert upgrade_module.check_no_downgrade([], snapshot_dir, bundle_dir) is None
+
+
+class TestSnapshotSchemaVersions:
+    def test_no_file_returns_empty(self, tmp_path):
+        result = upgrade_module._snapshot_schema_versions(tmp_path / "nonexistent")
+        assert result == []
+
+    def test_bad_json_raises(self, tmp_path):
+        snap_dir = tmp_path / "snap"
+        snap_dir.mkdir()
+        (snap_dir / "backup-info.json").write_text("not-json", encoding="utf-8")
+        with pytest.raises(UpgradeError, match="cannot read"):
+            upgrade_module._snapshot_schema_versions(snap_dir)
+
+    def test_non_list_versions_returns_empty(self, tmp_path):
+        snap_dir = tmp_path / "snap"
+        snap_dir.mkdir()
+        (snap_dir / "backup-info.json").write_text(json.dumps({"schema_versions": "not-a-list"}), encoding="utf-8")
+        assert not upgrade_module._snapshot_schema_versions(snap_dir)
+
+    def test_valid_versions(self, tmp_path):
+        snap_dir = tmp_path / "snap"
+        snap_dir.mkdir()
+        (snap_dir / "backup-info.json").write_text(
+            json.dumps({"schema_versions": ["head1", "head2"]}), encoding="utf-8"
+        )
+        assert upgrade_module._snapshot_schema_versions(snap_dir) == ["head1", "head2"]
+
+
+class TestPriorPgBin:
+    def test_missing_raises(self, tmp_path):
+        version_dir = tmp_path / "version"
+        version_dir.mkdir()
+        with pytest.raises(UpgradeError, match="no pg/ binaries"):
+            upgrade_module._prior_pg_bin(version_dir)
+
+    def test_existing_returns_path(self, tmp_path):
+        version_dir = tmp_path / "version"
+        pg_bin = version_dir / "pg" / "bin"
+        pg_bin.mkdir(parents=True)
+        assert upgrade_module._prior_pg_bin(version_dir) == pg_bin
+
+
+class TestBundledBootArgv:
+    def test_missing_launcher_raises(self, tmp_path):
+        install_root = tmp_path / "install"
+        version_dir = install_root / "versions" / "1.0.0"
+        version_dir.mkdir(parents=True)
+        (install_root / "current").symlink_to("versions/1.0.0") if os.name == "posix" else None
+        with pytest.raises(UpgradeError, match="no launcher hook"):
+            upgrade_module._bundled_boot_argv(install_root, "1.0.0", tmp_path / "data")
+
+
+class TestQuantifiedDiskPreflight:
+    def test_sufficient_disk_passes(self, tmp_path):
+        tarball = tmp_path / "bundle.tar.gz"
+        tarball.write_bytes(b"x" * 100)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        pgdata = data_dir / "pgdata"
+        pgdata.mkdir()
+        (pgdata / "file.bin").write_bytes(b"y" * 50)
+        assert upgrade_module._quantified_disk_preflight(tarball, data_dir) is None
+
+    def test_insufficient_disk_refuses(self, tmp_path):
+        tarball = tmp_path / "bundle.tar.gz"
+        tarball.write_bytes(b"x" * 100)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        pgdata = data_dir / "pgdata"
+        pgdata.mkdir()
+        with (
+            patch.object(upgrade_module.shutil, "disk_usage", return_value=type("DU", (), {"free": 0})()),
+            pytest.raises(UpgradeError, match="Insufficient disk"),
+        ):
+            upgrade_module._quantified_disk_preflight(tarball, data_dir)
+
+    def test_pgdata_measure_error_refuses(self, tmp_path):
+        tarball = tmp_path / "bundle.tar.gz"
+        tarball.write_bytes(b"x" * 100)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        pgdata = data_dir / "pgdata"
+        pgdata.mkdir()
+        with (
+            patch.object(Path, "rglob", side_effect=OSError("denied")),
+            pytest.raises(UpgradeError, match="cannot measure"),
+        ):
+            upgrade_module._quantified_disk_preflight(tarball, data_dir)
+
+
+class TestMoveIntoPlace:
+    def test_replaces_existing_version(self, tmp_path):
+        install_root = tmp_path / "install"
+        versions = install_root / "versions"
+        versions.mkdir(parents=True)
+        old_dir = versions / "1.0.0"
+        old_dir.mkdir()
+        (old_dir / "old.txt").write_text("old", encoding="utf-8")
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        (bundle_dir / "new.txt").write_text("new", encoding="utf-8")
+        target, prior = upgrade_module._move_into_place(bundle_dir, install_root, "1.0.0")
+        assert target.is_dir()
+        assert (target / "new.txt").read_text(encoding="utf-8") == "new"
+        assert prior is not None
+        assert ".prev-" in prior.name
+
+    def test_fresh_install(self, tmp_path):
+        install_root = tmp_path / "install"
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        (bundle_dir / "file.txt").write_text("data", encoding="utf-8")
+        target, prior = upgrade_module._move_into_place(bundle_dir, install_root, "1.0.0")
+        assert target.is_dir()
+        assert (target / "file.txt").read_text(encoding="utf-8") == "data"
+        assert prior is None
+
+
+class TestResolveCurrentTarget:
+    def test_no_symlink_raises(self, tmp_path):
+        install_root = tmp_path / "install"
+        install_root.mkdir()
+        with pytest.raises(UpgradeError, match="no native install"):
+            upgrade_module._resolve_current_target(install_root)
+
+    def test_resolves_to_non_dir_raises(self, tmp_path):
+        install_root = tmp_path / "install"
+        install_root.mkdir()
+        file_target = install_root / "versions" / "1.0.0.txt"
+        file_target.parent.mkdir(parents=True)
+        file_target.write_text("not a dir", encoding="utf-8")
+        current = install_root / "current"
+        if os.name == "posix":
+            current.symlink_to(str(file_target))
+            with pytest.raises(UpgradeError, match="non-directory"):
+                upgrade_module._resolve_current_target(install_root)
+
+
+class TestAssertUpgradePlatform:
+    def test_windows_raises(self):
+        if sys.platform != "win32":
+            pytest.skip("Windows test only")
+        with pytest.raises(UpgradeError, match="Windows"):
+            upgrade_module.assert_upgrade_platform()
+
+
+class TestAlembicHeads:
+    def test_missing_ini_returns_unknown(self, monkeypatch):
+        original_exists = Path.exists
+
+        def _patched_exists(self):
+            if "alembic.ini" in str(self):
+                return False
+            return original_exists(self)
+
+        monkeypatch.setattr(Path, "exists", _patched_exists)
+        result = upgrade_module._alembic_heads()
+        assert result == ["unknown"]
+
+    def test_exception_returns_unknown(self):
+        with patch("alembic.config.Config", side_effect=RuntimeError("boom")):
+            result = upgrade_module._alembic_heads()
+            assert result == ["unknown"]
+
+
+class TestRunDumpTimeout:
+    def test_timeout_raises_upgrade_error(self, tmp_path):
+        dump_path = tmp_path / "dump.sql"
+
+        def _timeout_run(*args, **kwargs):
+            raise upgrade_module.subprocess.TimeoutExpired(cmd="pg_dump", timeout=1800)
+
+        with (
+            patch("modulo.launcher.upgrade.subprocess.run", side_effect=_timeout_run),
+            pytest.raises(UpgradeError, match="timed out"),
+        ):
+            upgrade_module._run_dump(["pg_dump"], dump_path)
+
+
+class TestMainErrorPath:
+    def test_returns_1_on_error(self, tmp_path, capsys):
+        with pytest.raises(UpgradeError):
+            upgrade_module.pre_upgrade_dump(tmp_path)
+        code = upgrade_module.main(["--data-dir", str(tmp_path)])
+        assert code == 1
+        captured = capsys.readouterr()
+        assert "ERROR" in captured.err
+
+
+class TestSweepUpgradeCaches:
+    def test_nonexistent_dir(self, tmp_path):
+        result = upgrade_module.sweep_upgrade_caches(tmp_path / "nonexistent")
+        assert result == []
+
+    def test_sweeps_staging_entries(self, tmp_path):
+        (tmp_path / ".staging-abc").mkdir()
+        (tmp_path / "versions").mkdir()
+        (tmp_path / "current").touch()
+        pruned = upgrade_module.sweep_upgrade_caches(tmp_path)
+        assert ".staging-abc" in pruned
+        assert not (tmp_path / ".staging-abc").exists()
+        assert (tmp_path / "versions").is_dir()
+
+    def test_sweeps_downloads_entries(self, tmp_path):
+        (tmp_path / ".downloads-xyz").mkdir()
+        pruned = upgrade_module.sweep_upgrade_caches(tmp_path)
+        assert ".downloads-xyz" in pruned
+
+    def test_sweeps_current_new_entries(self, tmp_path):
+        (tmp_path / ".current.new.99999").touch()
+        pruned = upgrade_module.sweep_upgrade_caches(tmp_path)
+        assert ".current.new.99999" in pruned
+
+
+class TestSweepSymlinkTemps:
+    def test_removes_stale_temps(self, tmp_path):
+        link = tmp_path / "current"
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        link.symlink_to("versions/1.0.0")
+        stale = tmp_path / ".current.new.99999"
+        stale.touch()
+        upgrade_module.sweep_symlink_temps(link)
+        assert not stale.exists()
+
+
+class TestRestoreGuidanceExtended:
+    def test_prior_link_target_overrides(self, tmp_path):
+        result = upgrade_module.restore_guidance(
+            snapshot=None,
+            previous_version="1.1.0",
+            install_root=tmp_path,
+            data_dir=tmp_path / "data",
+            prior_link_target="1.0.0",
+        )
+        assert "ln -sfn versions/1.0.0" in result
+
+
+class TestPruneVersionsExtended:
+    def test_with_current_symlink(self, tmp_path):
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        install_root = tmp_path
+        versions = install_root / "versions"
+        versions.mkdir()
+        for name in ("1.0.0", "1.1.0", "1.2.0", "1.3.0"):
+            (versions / name).mkdir()
+        current = install_root / "current"
+        current.symlink_to("versions/1.3.0")
+        ref = versions / "1.3.0"
+        pruned = upgrade_module.prune_versions(install_root, current_target=ref)
+        assert "1.0.0" in pruned
+        assert (versions / "1.3.0").is_dir()
+
+    def test_no_version_dirs(self, tmp_path):
+        install_root = tmp_path
+        (install_root / "versions").mkdir()
+        pruned = upgrade_module.prune_versions(install_root, current_target=tmp_path / "nonexistent")
+        assert pruned == []
+
+
+class TestRepairCurrentSymlinkExtended:
+    def test_no_versions_dir(self, tmp_path):
+        install_root = tmp_path
+        (install_root / "install").mkdir()
+        result = upgrade_module.repair_current_symlink(install_root / "install")
+        assert result is None
+
+    def test_empty_versions_dir(self, tmp_path):
+        install_root = tmp_path
+        (install_root / "versions").mkdir()
+        result = upgrade_module.repair_current_symlink(install_root)
+        assert result is None
+
+    def test_no_repair_needed(self, tmp_path):
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        install_root = tmp_path
+        versions = install_root / "versions"
+        versions.mkdir()
+        (versions / "1.0.0").mkdir()
+        current = install_root / "current"
+        current.symlink_to("versions/1.0.0")
+        result = upgrade_module.repair_current_symlink(install_root)
+        assert result is None
+
+
+class TestBundleAlembicRevisions:
+    def test_no_migrations_dir(self, tmp_path):
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        result = upgrade_module._bundle_alembic_revisions(bundle_dir)
+        assert result == set()
+
+    def test_exception_returns_empty(self, tmp_path):
+        bundle_dir = tmp_path / "bundle"
+        migrations_dir = bundle_dir / "backend" / "src" / "modulo" / "db" / "migrations"
+        migrations_dir.mkdir(parents=True)
+        with patch("alembic.config.Config", side_effect=RuntimeError("boom")):
+            result = upgrade_module._bundle_alembic_revisions(bundle_dir)
+            assert result == set()
+
+
+class TestCheckNoDowngradeExtended2:
+    def test_all_unknown_refuses(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _: {"abc"})
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        with pytest.raises(UpgradeError, match="cannot verify"):
+            upgrade_module.check_no_downgrade(["unknown", "unknown"], None, bundle_dir)
+
+
+class TestPerformUpgradeFromFilePath:
+    def test_from_file_missing_manifest_refuses(self, tmp_path, monkeypatch, patched_trust_store):
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        monkeypatch.setattr(upgrade_module, "assert_upgrade_platform", lambda: None)
+        monkeypatch.setattr(upgrade_module, "stop_running_stack", lambda d, **kw: None)
+        monkeypatch.setattr(upgrade_module, "no_live_process_inside", lambda r: None)
+        data_dir = tmp_path / "data"
+        install_root = tmp_path / "install"
+        _upgrade_seed_data_dir(data_dir)
+        _upgrade_seed_install_root(install_root)
+        fake_tarball = tmp_path / "modulo-1.0.0-linux-amd64.tar.gz"
+        fake_tarball.write_bytes(b"fake")
+        with pytest.raises(UpgradeError, match="from-file requires"):
+            upgrade_module.perform_upgrade(
+                data_dir,
+                install_root=install_root,
+                from_file=fake_tarball,
+                boot=lambda boot_argv, *, api_port: 0,
+            )
+
+    def test_from_file_missing_file_refuses(self, tmp_path, monkeypatch, patched_trust_store):
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        monkeypatch.setattr(upgrade_module, "assert_upgrade_platform", lambda: None)
+        data_dir = tmp_path / "data"
+        install_root = tmp_path / "install"
+        _upgrade_seed_data_dir(data_dir)
+        _upgrade_seed_install_root(install_root)
+        with pytest.raises(UpgradeError, match="no such file"):
+            upgrade_module.perform_upgrade(
+                data_dir,
+                install_root=install_root,
+                from_file=tmp_path / "nonexistent.tar.gz",
+                boot=lambda boot_argv, *, api_port: 0,
+            )
+
+
+class TestPreUpgradeDumpExtended:
+    def test_secrets_file_error_refuses(self, tmp_path, monkeypatch):
+        _allow_windows_secrets(monkeypatch)
+        data_dir = _seed_data_dir(tmp_path)
+        (data_dir / "secrets.json").write_text("corrupt", encoding="utf-8")
+        with pytest.raises(UpgradeError, match="cannot be READ"):
+            upgrade_module.pre_upgrade_dump(data_dir)
+
+    def test_state_load_error_refuses(self, tmp_path, monkeypatch):
+        _allow_windows_secrets(monkeypatch)
+        data_dir = _seed_data_dir(tmp_path)
+        state_path = data_dir / "state.json"
+        state_path.write_text(json.dumps({"payload": {}, "mac": "bad"}), encoding="utf-8")
+        with pytest.raises(UpgradeError, match="cannot be verified"):
+            upgrade_module.pre_upgrade_dump(data_dir)
+
+
+class TestPidAlive:
+    def test_nonexistent_pid(self):
+        if os.name != "posix":
+            pytest.skip("POSIX /proc only")
+        assert upgrade_module._pid_alive(999999999) is False
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage-raising tests for remaining uncovered paths
+# ---------------------------------------------------------------------------
+
+
+class TestRunBootHealthy:
+    def test_healthy_boot_succeeds(self, tmp_path):
+        """Mock Popen + urllib to simulate a healthy /healthz response."""
+        launcher = tmp_path / "launcher"
+        launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        if os.name == "posix":
+            launcher.chmod(0o755)
+
+        mock_process = MagicMock()
+        mock_process.poll.return_value = None
+        mock_process.pid = 99999
+        mock_process.returncode = 0
+
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = b'{"status": "ok"}'
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        stderr_file = MagicMock()
+        stderr_file.read.return_value = b""
+        stderr_file.seek = MagicMock()
+        stderr_file.close = MagicMock()
+
+        with (
+            patch("modulo.launcher.upgrade.subprocess.Popen", return_value=mock_process),
+            patch("modulo.launcher.upgrade.tempfile.TemporaryFile", return_value=stderr_file),
+            patch("modulo.launcher.upgrade.urllib.request.urlopen", return_value=mock_response),
+            patch("modulo.launcher.upgrade._terminate_boot_process_group"),
+            patch("modulo.launcher.upgrade.time.sleep"),
+            patch("modulo.launcher.upgrade.time.monotonic", side_effect=[0.0, 0.1, 0.2]),
+        ):
+            result = upgrade_module.run_boot(
+                [str(launcher), "start"],
+                api_port=8000,
+                timeout=5.0,
+                poll_interval=0.01,
+            )
+        assert result == 0
+
+    def test_unhealthy_boot_raises(self, tmp_path):
+        """Boot child exits without healthy /healthz -> UpgradeError."""
+        launcher = tmp_path / "launcher"
+        launcher.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        if os.name == "posix":
+            launcher.chmod(0o755)
+
+        mock_process = MagicMock()
+        mock_process.poll.return_value = 1
+        mock_process.pid = 99999
+        mock_process.returncode = 1
+
+        stderr_file = MagicMock()
+        stderr_file.read.return_value = b"error output"
+        stderr_file.seek = MagicMock()
+        stderr_file.close = MagicMock()
+
+        with (
+            patch("modulo.launcher.upgrade.subprocess.Popen", return_value=mock_process),
+            patch("modulo.launcher.upgrade.tempfile.TemporaryFile", return_value=stderr_file),
+            patch("modulo.launcher.upgrade._terminate_boot_process_group"),
+            patch("modulo.launcher.upgrade.time.sleep"),
+            patch("modulo.launcher.upgrade.time.monotonic", side_effect=[0.0, 10.0]),
+            pytest.raises(UpgradeError, match="did not reach a healthy /healthz"),
+        ):
+            upgrade_module.run_boot(
+                [str(launcher), "start"],
+                api_port=8000,
+                timeout=5.0,
+                poll_interval=0.01,
+            )
+
+    def test_non_ok_status_body_skips(self, tmp_path):
+        """A 200 with non-ok status body is not healthy."""
+        launcher = tmp_path / "launcher"
+        launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        if os.name == "posix":
+            launcher.chmod(0o755)
+
+        mock_process = MagicMock()
+        mock_process.poll.return_value = None
+        mock_process.pid = 99999
+        mock_process.returncode = 0
+
+        bad_response = MagicMock()
+        bad_response.status = 200
+        bad_response.read.return_value = b'{"status": "starting"}'
+        bad_response.__enter__ = lambda s: s
+        bad_response.__exit__ = MagicMock(return_value=False)
+
+        stderr_file = MagicMock()
+        stderr_file.read.return_value = b""
+        stderr_file.seek = MagicMock()
+        stderr_file.close = MagicMock()
+
+        with (
+            patch("modulo.launcher.upgrade.subprocess.Popen", return_value=mock_process),
+            patch("modulo.launcher.upgrade.tempfile.TemporaryFile", return_value=stderr_file),
+            patch("modulo.launcher.upgrade.urllib.request.urlopen", return_value=bad_response),
+            patch("modulo.launcher.upgrade._terminate_boot_process_group"),
+            patch("modulo.launcher.upgrade.time.sleep"),
+            patch("modulo.launcher.upgrade.time.monotonic", side_effect=[0.0, 0.1, 10.0]),
+            pytest.raises(UpgradeError, match="did not reach a healthy /healthz"),
+        ):
+            upgrade_module.run_boot(
+                [str(launcher), "start"],
+                api_port=8000,
+                timeout=5.0,
+                poll_interval=0.01,
+            )
+
+
+class TestTerminateBootProcessGroup:
+    def test_already_dead_returns(self):
+        mock_process = MagicMock()
+        mock_process.poll.return_value = 0
+        upgrade_module._terminate_boot_process_group(mock_process)
+        mock_process.terminate.assert_not_called()
+
+    def test_living_process_gets_sigterm_then_sigkill(self):
+        mock_process = MagicMock()
+        mock_process.poll.side_effect = [None, None]
+        mock_process.pid = 12345
+        mock_process.wait.side_effect = [None, None, subprocess.TimeoutExpired("pg", 10)]
+
+        with (
+            patch.object(upgrade_module.os, "getpgid", return_value=12345, create=True),
+            patch.object(upgrade_module.os, "killpg", create=True) as mock_killpg,
+            patch.object(upgrade_module.sys, "platform", "linux"),
+        ):
+            upgrade_module._terminate_boot_process_group(mock_process)
+        mock_killpg.assert_any_call(12345, upgrade_module.signal.SIGTERM)
+
+    def test_windows_terminate_path(self):
+        mock_process = MagicMock()
+        mock_process.poll.side_effect = [None, None]
+        mock_process.pid = 12345
+        mock_process.wait.side_effect = [None, subprocess.TimeoutExpired("pg", 10)]
+
+        with patch.object(upgrade_module.sys, "platform", "win32"):
+            upgrade_module._terminate_boot_process_group(mock_process)
+        mock_process.terminate.assert_called()
+
+    def test_process_lookup_error_on_killpg(self):
+        mock_process = MagicMock()
+        mock_process.poll.side_effect = [None, None]
+        mock_process.pid = 12345
+        mock_process.wait.side_effect = [subprocess.TimeoutExpired("pg", 10), None]
+
+        with (
+            patch.object(upgrade_module.os, "getpgid", side_effect=ProcessLookupError, create=True),
+            patch.object(upgrade_module.os, "killpg", side_effect=ProcessLookupError, create=True),
+            patch.object(upgrade_module.sys, "platform", "linux"),
+        ):
+            assert upgrade_module._terminate_boot_process_group(mock_process) is None
+
+    def test_with_custom_fetch(self, tmp_path):
+        fetched_urls = []
+
+        def _fake_fetch(url, target):
+            fetched_urls.append(url)
+            target.write_text("data", encoding="utf-8")
+
+        with patch.object(upgrade_module, "_host_arch", return_value="amd64"):
+            result = upgrade_module.fetch_release_assets(
+                "1.0.0",
+                tmp_path,
+                fetch=_fake_fetch,
+            )
+        assert result.version == "1.0.0"
+        assert len(fetched_urls) == 3
+        assert any("modulo-1.0.0-linux-amd64.tar.gz" in u for u in fetched_urls)
+
+
+class TestExtractAndVerifyBundle:
+    def test_missing_sha256sums_raises(self, tmp_path):
+        import tarfile as tarfile_mod
+
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        (bundle_dir / "somefile.txt").write_text("data", encoding="utf-8")
+        tarball = tmp_path / "test.tar.gz"
+        with tarfile_mod.open(tarball, "w:gz") as archive:
+            archive.add(str(bundle_dir), arcname="bundle-root")
+        staging = tmp_path / "staging"
+        with pytest.raises(UpgradeError, match="SHA256SUMS missing"):
+            upgrade_module.extract_and_verify_bundle(tarball, staging)
+
+    def test_corrupt_tarball_raises(self, tmp_path):
+        tarball = tmp_path / "corrupt.tar.gz"
+        tarball.write_bytes(b"not a tarball")
+        staging = tmp_path / "staging"
+        with pytest.raises(UpgradeError, match="could not extract"):
+            upgrade_module.extract_and_verify_bundle(tarball, staging)
+
+    def test_multiple_top_level_dirs_raises(self, tmp_path):
+        import tarfile as tarfile_mod
+
+        tarball = tmp_path / "multi.tar.gz"
+        with tarfile_mod.open(tarball, "w:gz") as archive:
+            for name in ("dir1", "dir2"):
+                d = tmp_path / name
+                d.mkdir()
+                (d / "file.txt").write_text("x", encoding="utf-8")
+                archive.add(str(d), arcname=name)
+        staging = tmp_path / "staging"
+        with pytest.raises(UpgradeError, match="unexpected archive layout"):
+            upgrade_module.extract_and_verify_bundle(tarball, staging)
+
+    def test_malformed_sha256sums_line_raises(self, tmp_path):
+        import tarfile as tarfile_mod
+
+        bundle_dir = tmp_path / "bundle-root"
+        bundle_dir.mkdir()
+        (bundle_dir / "SHA256SUMS").write_text("short  file.txt\n", encoding="utf-8")
+        (bundle_dir / "file.txt").write_text("data", encoding="utf-8")
+        tarball = tmp_path / "test.tar.gz"
+        with tarfile_mod.open(tarball, "w:gz") as archive:
+            archive.add(str(bundle_dir), arcname="bundle-root")
+        staging = tmp_path / "staging"
+        with pytest.raises(UpgradeError, match="malformed SHA256SUMS"):
+            upgrade_module.extract_and_verify_bundle(tarball, staging)
+
+    def test_missing_listed_file_raises(self, tmp_path):
+        import tarfile as tarfile_mod
+
+        bundle_dir = tmp_path / "bundle-root"
+        bundle_dir.mkdir()
+        fake_hash = "a" * 64
+        (bundle_dir / "SHA256SUMS").write_text(f"{fake_hash}  missing.txt\n", encoding="utf-8")
+        tarball = tmp_path / "test.tar.gz"
+        with tarfile_mod.open(tarball, "w:gz") as archive:
+            archive.add(str(bundle_dir), arcname="bundle-root")
+        staging = tmp_path / "staging"
+        with pytest.raises(UpgradeError, match="is missing"):
+            upgrade_module.extract_and_verify_bundle(tarball, staging)
+
+
+class TestVerifyExtractedBundleArtifacts:
+    def test_calls_verify_artifacts(self, tmp_path):
+        from modulo.launcher.manifest import ReleaseManifest
+
+        manifest = ReleaseManifest(
+            release="bundle-v1.0.0",
+            platform="linux-amd64",
+            generated_at="2026-09-01T00:00:00Z",
+            components={},
+            artifact_checksums={"bundle.tar.gz": ("abc", "1.0.0"), "pg/bin/postgres": ("def", "1.0.0")},
+        )
+
+        with patch.object(upgrade_module.manifest_module, "verify_artifacts") as mock_verify:
+            upgrade_module._verify_extracted_bundle_artifacts(tmp_path, manifest, "bundle.tar.gz")
+        mock_verify.assert_called_once()
+        called_manifest = mock_verify.call_args[0][1]
+        assert "pg/bin/postgres" in called_manifest.artifact_checksums
+        assert "bundle.tar.gz" not in called_manifest.artifact_checksums
+
+    def test_manifest_error_wrapped(self, tmp_path):
+        from modulo.launcher.manifest import ReleaseManifest
+
+        manifest = ReleaseManifest(
+            release="bundle-v1.0.0",
+            platform="linux-amd64",
+            generated_at="2026-09-01T00:00:00Z",
+            components={},
+            artifact_checksums={},
+        )
+
+        with (
+            patch.object(
+                upgrade_module.manifest_module,
+                "verify_artifacts",
+                side_effect=upgrade_module.manifest_module.ManifestSecurityError("bad"),
+            ),
+            pytest.raises(UpgradeError, match="bundle-side manifest verification FAILED"),
+        ):
+            upgrade_module._verify_extracted_bundle_artifacts(tmp_path, manifest, "tarball")
+
+
+class TestStopRunningStack:
+    def test_no_unit_file_calls_request_stop(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        called = {"stop": False}
+
+        def _fake_stop(d, **kw):
+            called["stop"] = True
+
+        unit_file = tmp_path / "no.unit"
+
+        with (
+            patch("modulo.launcher.service.default_unit_path", return_value=unit_file),
+            patch("modulo.launcher.service.UNIT_FILENAME", "test.service"),
+            patch("modulo.launcher.supervisor.request_stop", side_effect=_fake_stop),
+            patch("modulo.launcher.supervisor._read_lock_holder", return_value=None),
+        ):
+            upgrade_module.stop_running_stack(data_dir)
+        assert called["stop"]
+
+    def test_unit_stop_timeout_falls_through(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        unit_file = tmp_path / "test.service"
+        unit_file.write_text("[Unit]\n", encoding="utf-8")
+
+        def _fake_subprocess_run(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="systemctl", timeout=30)
+
+        with (
+            patch("modulo.launcher.service.default_unit_path", return_value=unit_file),
+            patch("modulo.launcher.service.UNIT_FILENAME", "test.service"),
+            patch("modulo.launcher.upgrade.subprocess.run", side_effect=_fake_subprocess_run),
+            patch("modulo.launcher.supervisor.request_stop"),
+            patch("modulo.launcher.supervisor._read_lock_holder", return_value=None),
+        ):
+            upgrade_module.stop_running_stack(data_dir, unit_file=unit_file)
+
+
+class TestRestartUnitBestEffort:
+    def test_no_unit_file_returns_silently(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: tmp_path / "no.unit")
+        assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+
+    def test_unit_restart_success(self, tmp_path, monkeypatch):
+        unit_file = tmp_path / "test.service"
+        unit_file.write_text("[Unit]\n", encoding="utf-8")
+        monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: unit_file)
+        monkeypatch.setattr("modulo.launcher.service.UNIT_FILENAME", "test.service")
+
+        mock_result = MagicMock(returncode=0)
+        with patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result):
+            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+
+    def test_unit_restart_failure_logs_error(self, tmp_path, monkeypatch):
+        unit_file = tmp_path / "test.service"
+        unit_file.write_text("[Unit]\n", encoding="utf-8")
+        monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: unit_file)
+        monkeypatch.setattr("modulo.launcher.service.UNIT_FILENAME", "test.service")
+
+        mock_result = MagicMock(returncode=1, stderr=b"failed")
+        with patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result):
+            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+
+    def test_import_error_caught(self, tmp_path):
+        with patch("builtins.__import__", side_effect=ImportError("no service module")):
+            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+
+
+class TestApiPortOf:
+    def test_reads_port(self, tmp_path):
+        data_dir = _seed_data_dir(tmp_path)
+        port = upgrade_module._api_port_of(data_dir)
+        assert port == 18000
+
+
+class TestResolveCurrentTargetExtended:
+    def test_dangling_repaired(self, tmp_path):
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        install_root = tmp_path / "install"
+        install_root.mkdir()
+        versions = install_root / "versions"
+        versions.mkdir()
+        (versions / "1.0.0").mkdir()
+        current = install_root / "current"
+        current.symlink_to("versions/0.9.9")
+        result = upgrade_module._resolve_current_target(install_root)
+        assert result.name == "1.0.0"
+
+    def test_dangling_unrepairable_raises(self, tmp_path):
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        install_root = tmp_path / "install"
+        install_root.mkdir()
+        versions = install_root / "versions"
+        versions.mkdir()
+        current = install_root / "current"
+        current.symlink_to("versions/nonexistent")
+        with pytest.raises(UpgradeError, match="DANGLING"):
+            upgrade_module._resolve_current_target(install_root)
+
+    def test_symlink_to_file_raises(self, tmp_path):
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        install_root = tmp_path / "install"
+        install_root.mkdir()
+        versions = install_root / "versions"
+        versions.mkdir()
+        target_file = versions / "1.0.0.txt"
+        target_file.write_text("not a dir", encoding="utf-8")
+        current = install_root / "current"
+        current.symlink_to("versions/1.0.0.txt")
+        with pytest.raises(UpgradeError, match="non-directory"):
+            upgrade_module._resolve_current_target(install_root)
+
+
+class TestPerformUpgradeHappyPath:
+    def test_full_upgrade(self, tmp_path, monkeypatch, patched_trust_store):
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        monkeypatch.setattr(upgrade_module, "assert_upgrade_platform", lambda: None)
+        monkeypatch.setattr(upgrade_module, "stop_running_stack", lambda d, **kw: None)
+        monkeypatch.setattr(upgrade_module, "no_live_process_inside", lambda r: None)
+        monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _: {"3ab2c1d"})
+
+        data_dir = tmp_path / "data"
+        install_root = tmp_path / "install"
+        _upgrade_seed_data_dir(data_dir)
+        _upgrade_seed_install_root(install_root)
+        staging = tmp_path / "releases"
+        staging.mkdir()
+        release_fixture = _upgrade_release_fixture(staging)
+
+        def _dump(data_dir, *, bin_dir=None):
+            return _upgrade_dump_seam(data_dir)(data_dir)
+
+        monkeypatch.setattr(upgrade_module, "pre_upgrade_dump", _dump)
+
+        boot_record = []
+        default_timeout = upgrade_module._DEFAULT_BOOT_TIMEOUT
+        default_poll = upgrade_module._BOOT_POLL_INTERVAL
+
+        def _boot(boot_argv, *, api_port, timeout=default_timeout, poll_interval=default_poll):
+            boot_record.append((boot_argv, api_port))
+            return 0
+
+        result = upgrade_module.perform_upgrade(
+            data_dir,
+            install_root=install_root,
+            target_version="bundle-v1.2.0",
+            fetch=_upgrade_fetch_seam(release_fixture),
+            boot=_boot,
+        )
+        assert result.previous_version == "1.1.0"
+        assert result.version == "1.2.0"
+        assert len(boot_record) == 1

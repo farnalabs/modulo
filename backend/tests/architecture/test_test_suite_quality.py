@@ -843,6 +843,7 @@ of a bare "assert not violations", mirroring the sibling architecture tests.
 import ast
 import functools
 import operator
+import os
 import re
 from fractions import Fraction
 from pathlib import Path
@@ -899,7 +900,41 @@ def _is_mark_decorator(dec: ast.AST) -> bool:
     return "mark" in parts
 
 
+_MODULO_TEST_STYLE_SCOPE_VAR = "MODULO_TEST_STYLE_SCOPE"
+
+
+@functools.cache
+def _resolve_scope_paths() -> frozenset[Path] | None:
+    """Resolve ``MODULO_TEST_STYLE_SCOPE`` once and cache.
+
+    Returns a frozenset of resolved ``Path`` objects when the variable is set
+    and non-empty, or ``None`` when it is unset / empty (meaning full scan).
+    Invalid or non-existent entries are silently dropped.
+    """
+    raw = os.environ.get(_MODULO_TEST_STYLE_SCOPE_VAR, "")
+    if not raw or not raw.strip():
+        return None
+    resolved: set[Path] = set()
+    for raw_spec in raw.split(os.pathsep):
+        cleaned = raw_spec.strip()
+        if not cleaned:
+            continue
+        p = Path(cleaned).resolve()
+        if p.exists() and p.suffix == ".py":
+            resolved.add(p)
+    return frozenset(resolved)
+
+
 def _iter_test_modules():
+    scope = _resolve_scope_paths()
+    if scope is not None:
+        # Scoped mode: yield only files that are in the scope set.
+        for path in sorted(TESTS.rglob("*.py")):
+            if any(part in EXCLUDED_PACKAGES for part in path.parts):
+                continue
+            if path.resolve() in scope:
+                yield path
+        return
     for path in sorted(TESTS.rglob("*.py")):
         if any(part in EXCLUDED_PACKAGES for part in path.parts):
             continue
@@ -914,6 +949,18 @@ def _parse(path: Path):
         return None
 
 
+@functools.cache
+def _all_nodes(tree: ast.AST) -> tuple[ast.AST, ...]:
+    """Materialise ``_all_nodes(tree)`` once and reuse it.
+
+    ``ast.walk`` is a generator, so every call re-traverses the tree. The
+    scanner walks each parsed module once per lens (~179 lenses), which made
+    traversal the dominant cost of the suite. Materialising the traversal once
+    per module (and caching it) replaces ~179 traversals with one.
+    """
+    return tuple(ast.walk(tree))
+
+
 def test_no_always_pass_or_fail_assertions():
     """Assertions against a literal that can never fail (or can never pass)
     are dead code — they report a test as green regardless of behavior. This
@@ -924,7 +971,7 @@ def test_no_always_pass_or_fail_assertions():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Assert):
                 continue
             test = node.test
@@ -1008,7 +1055,7 @@ def test_no_literal_constant_comparisons():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Assert):
                 continue
             for sub in ast.walk(node.test):
@@ -1045,7 +1092,7 @@ def test_literal_comparison_lens_flags_constant_outcomes():
     ]
     for source in positive_sources:
         tree = ast.parse(source)
-        assert_node = next(n for n in ast.walk(tree) if isinstance(n, ast.Assert))
+        assert_node = next(n for n in _all_nodes(tree) if isinstance(n, ast.Assert))
         flagged = any(
             isinstance(sub, ast.Compare) and _fold_literal_comparison(sub) is not None
             for sub in ast.walk(assert_node.test)
@@ -1065,7 +1112,7 @@ def test_literal_comparison_lens_flags_constant_outcomes():
     ]
     for source in negative_sources:
         tree = ast.parse(source)
-        assert_node = next(n for n in ast.walk(tree) if isinstance(n, ast.Assert))
+        assert_node = next(n for n in _all_nodes(tree) if isinstance(n, ast.Assert))
         flagged = any(
             isinstance(sub, ast.Compare) and _fold_literal_comparison(sub) is not None
             for sub in ast.walk(assert_node.test)
@@ -1081,7 +1128,7 @@ def test_no_none_equality_comparison():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Compare) or len(node.ops) != 1:
                 continue
             op = node.ops[0]
@@ -1123,7 +1170,7 @@ def test_no_test_redefinition_in_same_scope():
         for name, lines in module_seen.items():
             if len(lines) > 1:
                 violations.append(f"  {rel}  <module> {name} redefined: {lines}")
-        for cls in ast.walk(tree):
+        for cls in _all_nodes(tree):
             if not isinstance(cls, ast.ClassDef):
                 continue
             class_seen = {}
@@ -1149,7 +1196,7 @@ def test_no_asyncio_run_inside_async_test():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for fn in ast.walk(tree):
+        for fn in _all_nodes(tree):
             if not isinstance(fn, ast.AsyncFunctionDef):
                 continue
             for node in ast.walk(fn):
@@ -1179,7 +1226,7 @@ def test_no_assert_under_swallowing_except():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+        parents = {child: parent for parent in _all_nodes(tree) for child in ast.iter_child_nodes(parent)}
 
         def _reports_failure(handler):
             def _scan(nodes):
@@ -1204,7 +1251,7 @@ def test_no_assert_under_swallowing_except():
                 return True
             return isinstance(handler.type, ast.Name) and handler.type.id in ("Exception", "BaseException")
 
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Assert):
                 continue
             current = node
@@ -1231,14 +1278,14 @@ def test_no_skip_without_reason():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
             name = _callable_name(func)
             if name in ("skip", "skipped") and not node.args and not node.keywords:
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  pytest.skip() without reason")
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                 continue
             for dec in node.decorator_list:
@@ -1266,7 +1313,7 @@ def test_no_bare_except():
             continue
         violations.extend(
             f"  {path.relative_to(TESTS)}:{node.lineno}  bare 'except:'"
-            for node in ast.walk(tree)
+            for node in _all_nodes(tree)
             if isinstance(node, ast.ExceptHandler) and node.type is None
         )
     assert not violations, (
@@ -1283,7 +1330,7 @@ def test_no_debugger_remnants():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "breakpoint":
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  breakpoint()")
             if isinstance(node, ast.Import) and any(a.name in ("pdb", "ipdb", "pudb") for a in node.names):
@@ -1312,7 +1359,7 @@ def test_no_deprecated_utcnow():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if isinstance(node, ast.Attribute) and node.attr in ("utcnow", "utcfromtimestamp"):
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  datetime.{node.attr}()")
             if (
@@ -1357,7 +1404,7 @@ def test_no_naive_datetime_now():
                 )
             )
 
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
@@ -1384,7 +1431,7 @@ def test_no_boolean_literal_equality():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Compare):
                 continue
             if len(node.ops) != 1:
@@ -1414,7 +1461,7 @@ def test_no_stray_print_in_test_code():
             continue
         violations.extend(
             f"  {path.relative_to(TESTS)}:{node.lineno}  print(...)"
-            for node in ast.walk(tree)
+            for node in _all_nodes(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print"
         )
     assert not violations, (
@@ -1437,7 +1484,7 @@ def test_no_dead_fixtures():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if isinstance(node, ast.Name):
                 used_names[node.id] = used_names.get(node.id, 0) + 1
             elif isinstance(node, ast.Attribute):
@@ -1459,7 +1506,7 @@ def test_no_dead_fixtures():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if not any(_decorator_name(d) == "fixture" for d in node.decorator_list):
@@ -1493,7 +1540,7 @@ def test_no_len_equals_zero_assertions():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Compare) or len(node.ops) != 1:
                 continue
             op = node.ops[0]
@@ -1536,7 +1583,7 @@ def test_no_len_gt_zero_assertions():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Assert):
                 continue
             test = node.test
@@ -1585,7 +1632,7 @@ def test_no_empty_container_literal_equality():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Assert):
                 continue
             test = node.test
@@ -1636,7 +1683,7 @@ def test_no_empty_string_equality():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Assert):
                 continue
             test = node.test
@@ -1681,7 +1728,7 @@ def _empty_tuple_comparisons(tree: ast.AST) -> list[tuple[int, str]]:
     """Return ``(lineno, detail)`` pairs for every ``assert`` that compares a
     value against an empty tuple literal with ``==``/``!=``."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -1794,7 +1841,7 @@ def _empty_bytes_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
     def _is_empty_bytes(node: ast.AST) -> bool:
         return isinstance(node, ast.Constant) and isinstance(node.value, bytes) and node.value == b""
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -1946,7 +1993,7 @@ def _empty_builtin_call_comparisons(tree: ast.AST) -> list[tuple[int, str]]:
     (``list()``/``dict()``/``set()``/``tuple()``/``bytes()``/``bytearray()``/
     ``frozenset()``) with ``==``/``!=``."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -2058,7 +2105,7 @@ def test_no_precision_fragile_float_equality():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Compare):
                 continue
             for left, op, right in zip([node.left, *node.comparators[:-1]], node.ops, node.comparators, strict=True):
@@ -2139,7 +2186,7 @@ def test_no_tautological_len_bounds():
             ast.Eq: ast.Eq,
             ast.NotEq: ast.NotEq,
         }
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Compare) or len(node.ops) != 1:
                 continue
             op = type(node.ops[0])
@@ -2192,7 +2239,7 @@ def test_no_manual_raises_pattern():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.Try):
                 continue
             raises_assert = any(
@@ -2226,7 +2273,7 @@ def test_no_assert_inside_except():
         tree = _parse(path)
         if tree is None:
             continue
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, ast.ExceptHandler):
                 continue
             violations.extend(
@@ -2252,7 +2299,7 @@ def _assert_inside_finally(tree: ast.AST) -> list[ast.Assert]:
     over the one being propagated), discarding the traceback that explains why
     the code under test broke."""
     found: list[ast.Assert] = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Try) or not node.finalbody:
             continue
         for stmt in node.finalbody:
@@ -2435,7 +2482,7 @@ def test_no_noop_test_functions():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for node in ast.walk(tree):
+        for node in _all_nodes(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if any(_decorator_name(d) == "fixture" for d in node.decorator_list):
@@ -2544,7 +2591,7 @@ def _self_comparison_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
     """Return ``(lineno, detail)`` pairs for every assertion that compares an
     operand with a syntactically identical copy of itself."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Compare) or len(node.ops) != 1:
             continue
         if not isinstance(node.ops[0], _SELF_COMPARISON_OPS):
@@ -2673,7 +2720,7 @@ def _identity_literal_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
     """Return ``(lineno, detail)`` pairs for every ``is``/``is not`` comparison
     whose operand is a mutable container literal (list/dict/set)."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Compare) or len(node.ops) != 1:
             continue
         op = node.ops[0]
@@ -2782,7 +2829,7 @@ def _redundant_called_assertions(tree: ast.AST) -> list[tuple[int, str]]:
     ``<mock>.assert_awaited()`` — that is immediately followed by an
     introspection access on the same mock."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for i, stmt in enumerate(node.body[:-1]):
@@ -2901,7 +2948,7 @@ def _empty_container_membership_tautologies(tree: ast.AST) -> list[tuple[int, st
     cannot be known statically.
     """
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -3086,7 +3133,7 @@ def _mock_membership_probe_violations(tree: ast.AST) -> list[tuple[int, str]]:
     Only assertions are covered — an ``in`` probe used as a branch condition is
     a different (control-flow) statement."""
     found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         for sub in ast.walk(node.test):
@@ -3192,7 +3239,7 @@ def _parametrize_argvalue_lists(tree: ast.AST) -> list[tuple[int, list[ast.expr]
     ``len(elts)`` (``== 0``, ``== 1``, ...) or from the elements themselves
     (duplicate detection), so a new lens never re-copies the decorator walk."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
         for dec in node.decorator_list:
@@ -3355,7 +3402,7 @@ def _unbounded_sync_subprocess_violations(tree: ast.AST) -> list[tuple[int, str]
     as unbounded as an omitted keyword — ``None`` is the default meaning "wait
     forever" — so an explicit ``None`` literal is still flagged."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Call):
             continue
         f = node.func
@@ -3383,7 +3430,7 @@ def _compound_boolean_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
     these" idiom (error-message vocabularies, optional API fields) and cannot
     be split into independent asserts without changing semantics."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -3429,12 +3476,12 @@ def _unbounded_async_subprocess_violations(tree: ast.AST) -> list[tuple[int, str
     ``asyncio.wait_for(...)`` with a timeout. ``proc.communicate()`` blocks
     until the child exits; without a bound the test hangs the event loop."""
     parent: dict[ast.AST, ast.AST] = {}
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         for child in ast.iter_child_nodes(node):
             parent[child] = node
 
     found = []
-    for fn in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+    for fn in (n for n in _all_nodes(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
         proc_vars = {
             target.id
             for node in ast.walk(fn)
@@ -3556,7 +3603,7 @@ def _unbounded_thread_join_violations(tree: ast.AST) -> list[tuple[int, str]]:
     omitted keyword (``None`` is the default meaning "wait forever"), so an
     explicit ``None`` literal is still flagged."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         if node.func.attr != "join":
@@ -3660,7 +3707,7 @@ def _unbounded_async_wait_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 return True
         return False
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         if node.func.attr not in ("wait_for", "wait"):
@@ -3802,7 +3849,7 @@ def _redundant_bool_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
     """Return ``(lineno, detail)`` pairs for every ``assert bool(x)`` /
     ``assert not bool(x)`` where the ``bool()`` wrapper is redundant."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -3886,7 +3933,7 @@ def _negated_comparison_assert_violations(tree: ast.AST) -> list[tuple[int, str]
     intentional "none of these hold" idiom and the mirrored form is a
     different expression."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -3995,7 +4042,7 @@ def _async_test_without_async_behavior_violations(tree: ast.AST) -> list[tuple[i
     """Return ``(lineno, detail)`` pairs for every ``async def test_*`` whose
     body contains no async construct at all (including async comprehensions)."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.AsyncFunctionDef):
             continue
         if any(_decorator_name(d) == "fixture" for d in node.decorator_list):
@@ -4091,7 +4138,7 @@ def _async_fixture_without_async_behavior_violations(tree: ast.AST) -> list[tupl
     """Return ``(lineno, detail)`` pairs for every ``async def`` fixture whose
     body contains no async construct at all (including async comprehensions)."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.AsyncFunctionDef):
             continue
         if not any(_decorator_name(d) == "fixture" for d in node.decorator_list):
@@ -4177,7 +4224,7 @@ def _compound_isinstance_assert_violations(tree: ast.AST) -> list[tuple[int, str
     and isinstance(b, U)`` whose ``and`` operands are all ``isinstance()``
     calls."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -4275,7 +4322,7 @@ def _unused_parametrize_arg_violations(tree: ast.AST) -> list[tuple[int, str]]:
     body is the definitive use check.
     """
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for dec in node.decorator_list:
@@ -4404,7 +4451,7 @@ def _unused_builtin_fixture_param_violations(tree: ast.AST) -> list[tuple[int, s
     believing the test controls that capability.
     """
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         params = {a.arg for a in node.args.args if a.arg in _UNUSED_BUILTIN_FIXTURE_PARAMS}
@@ -4506,7 +4553,7 @@ def _split_once_with_call_assertions(tree: ast.AST) -> list[tuple[int, str]]:
     are considered, so unrelated assertions between the two halves are not
     flagged."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for i, stmt in enumerate(node.body[:-1]):
@@ -4637,7 +4684,7 @@ def _async_decorator_on_sync_function_violations(tree: ast.AST) -> list[tuple[in
     flagged.
     """
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.FunctionDef):
             continue
         for dec in node.decorator_list:
@@ -4735,7 +4782,7 @@ def _equality_chain_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
     each failure names the pair that broke.
     """
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -5149,7 +5196,7 @@ def _constant_condition_skip_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 )
             )
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             for dec in node.decorator_list:
                 _report(dec, "@", node.lineno)
@@ -5271,7 +5318,7 @@ def _broad_exception_catch_violations(tree: ast.AST) -> list[tuple[int, str]]:
     def _report(lineno: int, detail: str) -> None:
         found.append((lineno, detail))
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Call):
             continue
         f = node.func
@@ -5306,7 +5353,7 @@ def _broad_exception_catch_violations(tree: ast.AST) -> list[tuple[int, str]]:
                     )
                     break
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
         for dec in node.decorator_list:
@@ -5430,7 +5477,7 @@ def _unentered_raises_context_violations(tree: ast.AST) -> list[tuple[int, str]]
     spellings — those never appear as a bare expression statement.
     """
     found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Expr):
             continue
         value = node.value
@@ -5564,7 +5611,7 @@ def _mock_constructor_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
             )
         )
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -5673,7 +5720,7 @@ def _mock_constructor_container_violations(tree: ast.AST) -> list[tuple[int, str
     implicated and the lens has no false positives from mocking assignments or
     ``patch`` bindings."""
     found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         # Hunt for a fresh-mock constructor nested anywhere inside a container
@@ -5828,7 +5875,7 @@ def _mock_assert_in_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
             )
         )
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         if _is_mock_assert_call(node.test):
@@ -5971,7 +6018,7 @@ def _fresh_mock_in_call_assertions(tree: ast.AST) -> list[tuple[int, str]]:
             )
         )
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         if node.func.attr not in _MOCK_CALL_VERIFY_METHODS:
@@ -6077,7 +6124,7 @@ def _complementary_boolean_assert_violations(tree: ast.AST) -> list[tuple[int, s
             and ast.dump(candidate.operand) == ast.dump(plain)
         )
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -6228,7 +6275,7 @@ def _constant_boolean_absorbent_assert_violations(tree: ast.AST) -> list[tuple[i
                 return value
         return None
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         negated = False
@@ -6365,7 +6412,7 @@ def _computed_wall_clock_sleep_violations(tree: ast.AST) -> list[tuple[int, str]
             return False
         return func.value.id in ("time", "asyncio")
 
-    for fn in ast.walk(tree):
+    for fn in _all_nodes(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if not fn.name.startswith("test_"):
@@ -6472,7 +6519,7 @@ def _any_equality_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
     the code under test.
     """
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         for sub in ast.walk(node.test):
@@ -6614,7 +6661,7 @@ def _container_literal_truthiness_violations(tree: ast.AST) -> list[tuple[int, s
     iterable.
     """
     found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -6859,7 +6906,7 @@ def _environ_mutation_violations(tree: ast.AST) -> list[tuple[int, str]]:
     environment configuration, not between-test leakage, and is deliberately
     left alone.
     """
-    functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    functions = [n for n in _all_nodes(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
     found: list[tuple[int, str]] = []
     seen: set[tuple[int, str]] = set()
 
@@ -6990,7 +7037,7 @@ def _random_seed_violations(tree: ast.AST) -> list[tuple[int, str]]:
     leakage. ``numpy.random.seed`` (a separate generator namespace) and reads
     like ``random.randrange``/``random.uniform`` are deliberately out of scope.
     """
-    functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    functions = [n for n in _all_nodes(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
     found: list[tuple[int, str]] = []
     seen: set[tuple[int, str]] = set()
 
@@ -7037,7 +7084,7 @@ def _unreachable_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
     ``try: return ... except: pass``) stays live and is left alone.
     """
     found: list[tuple[int, str]] = []
-    for fn in ast.walk(tree):
+    for fn in _all_nodes(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         ancestor = False
@@ -7142,7 +7189,7 @@ def _cwd_mutation_violations(tree: ast.AST) -> list[tuple[int, str]]:
     bootstrap that pins the process CWD once at import time is idempotent
     setup, not between-test leakage.
     """
-    functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    functions = [n for n in _all_nodes(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
     found: list[tuple[int, str]] = []
     seen: set[tuple[int, str]] = set()
 
@@ -7375,7 +7422,7 @@ def _dead_container_literal_assert_violations(tree: ast.AST) -> list[tuple[int, 
     boolean test (``assert [] and x``) that short-circuits on the literal is
     deliberately left to the compound-assertion lens to reason about."""
     found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -7506,7 +7553,7 @@ def _blocking_sleep_in_async_violations(tree: ast.AST) -> list[tuple[int, str]]:
     still flagged: the nested helper is awaited on the same loop, so its
     blocking sleep freezes that loop just like an inline call."""
     found: list[tuple[int, str]] = []
-    for fn in ast.walk(tree):
+    for fn in _all_nodes(tree):
         if not isinstance(fn, ast.AsyncFunctionDef):
             continue
         found.extend(
@@ -7720,7 +7767,7 @@ def _fresh_value_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
             )
         )
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -7856,7 +7903,7 @@ def _unconditional_body_skip_violations(tree: ast.AST) -> list[tuple[int, str]]:
     alone — only the direct, unconditional top-level statement is flagged.
     """
     found = []
-    for fn in ast.walk(tree):
+    for fn in _all_nodes(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if any(_decorator_name(d) == "fixture" for d in fn.decorator_list):
@@ -8025,7 +8072,7 @@ def _unconditional_skip_marker_violations(tree: ast.AST) -> list[tuple[int, str]
             )
         )
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if any(_decorator_name(d) == "fixture" for d in node.decorator_list):
                 continue
@@ -8174,7 +8221,7 @@ def _empty_raises_context_body_violations(tree: ast.AST) -> list[tuple[int, str]
         ]
         return not statements
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, (ast.With, ast.AsyncWith)) or not node.items:
             continue
         with_item = node.items[0].context_expr
@@ -8306,7 +8353,7 @@ def _selection_marker_on_fixture_violations(tree: ast.AST) -> list[tuple[int, st
                 return dec.attr
         return None
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         is_fixture = any(_decorator_name(dec) == "fixture" for dec in node.decorator_list)
@@ -8380,11 +8427,11 @@ def _bound_method_truthiness_violations(tree: ast.AST) -> list[tuple[int, str]]:
     alone; only a demonstrably-invocable method trips it."""
     called = {
         ast.dump(node.func)
-        for node in ast.walk(tree)
+        for node in _all_nodes(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
     }
     violations: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -8612,7 +8659,7 @@ def _cross_type_comparison_violations(tree: ast.AST) -> list[tuple[int, str]]:
     comparisons are other lenses' business.
     """
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         for sub in ast.walk(node.test):
@@ -8802,7 +8849,7 @@ def _empty_string_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
         if pair not in found:
             found.append(pair)
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         for sub in ast.walk(node.test):
@@ -8937,7 +8984,7 @@ def _nan_comparison_violations(tree: ast.AST) -> list[tuple[int, str]]:
     is deliberately not flagged; only a comparison whose expected operand is a
     NaN expression is a fixed-outcome dead assertion."""
     found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -9032,7 +9079,7 @@ def _single_element_isinstance_violations(tree: ast.AST) -> list[tuple[int, str]
     the same thing ``isinstance(x, T)`` would — most likely a copy-paste from a
     sibling call that really does pass several types."""
     found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != "isinstance":
             continue
         if len(node.args) != 2:
@@ -9201,7 +9248,7 @@ def _raises_body_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 for case in stmt.cases:
                     _collect_body_asserts(case.body, exc_repr)
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.With):
             continue
         raises_call = None
@@ -9304,7 +9351,7 @@ def _assert_in_finally_violations(tree: ast.AST) -> list[tuple[int, str]]:
             stmt.lineno,
             f"assert {ast.unparse(stmt.test)} in a finally: clause masks any in-flight exception",
         )
-        for node in ast.walk(tree)
+        for node in _all_nodes(tree)
         if isinstance(node, (ast.Try, ast.TryStar))
         for stmt in node.finalbody
         if isinstance(stmt, ast.Assert)
@@ -9401,7 +9448,7 @@ def _named_base_exception_violations(tree: ast.AST) -> list[tuple[int, str]]:
     ``except:`` (no type) is owned by that sibling lens and is left alone
     here."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.ExceptHandler) or node.type is None:
             continue
         if "BaseException" in _exception_names(node.type):
@@ -9503,7 +9550,7 @@ def _infinite_exit_less_loop_violations(tree: ast.AST) -> list[tuple[int, str]]:
     already guard. Dynamic conditions (names, calls, comparisons) are left
     alone: those can change through the code under test."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.While):
             continue
         test = node.test
@@ -9683,7 +9730,7 @@ def _random_draw_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
             )
         )
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -9812,7 +9859,7 @@ def _self_referential_membership_violations(tree: ast.AST) -> list[tuple[int, st
     is a different AST shape it provably misses."""
     found: list[tuple[int, str]] = []
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -9927,7 +9974,7 @@ def _duplicate_membership_literal_violations(tree: ast.AST) -> list[tuple[int, s
     produce distinct values on each evaluation."""
     found: list[tuple[int, str]] = []
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -10022,7 +10069,7 @@ def _redundant_boolean_operand_violations(tree: ast.AST) -> list[tuple[int, str]
     owned by the complementary-boolean lens, which this deliberately avoids."""
     found: list[tuple[int, str]] = []
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -10117,7 +10164,7 @@ def _point_collapsed_range_violations(tree: ast.AST) -> list[tuple[int, str]]:
     for two distinct bounds."""
     found: list[tuple[int, str]] = []
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -10209,7 +10256,7 @@ def _duplicate_dict_key_violations(tree: ast.AST) -> list[tuple[int, str]]:
     are left alone."""
     found: list[tuple[int, str]] = []
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Dict):
             continue
         seen: dict[str, int] = {}
@@ -10331,13 +10378,13 @@ def _unseeded_rng_violations(tree: ast.AST) -> list[tuple[int, str]]:
     seeded by definition and are left alone."""
     from_random_names = {
         alias.name
-        for node in ast.walk(tree)
+        for node in _all_nodes(tree)
         if isinstance(node, ast.ImportFrom) and node.module == "random"
         for alias in node.names
     }
     found: list[tuple[int, str]] = []
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
@@ -10497,7 +10544,7 @@ def _wall_clock_elapsed_violations(tree: ast.AST) -> list[tuple[int, str]]:
             return False
         return _wall_clock_read(operand.left) or _wall_clock_read(operand.right)
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -10603,7 +10650,7 @@ def _fresh_value_call_assertion_violations(tree: ast.AST) -> list[tuple[int, str
     deliberately left alone."""
     found: list[tuple[int, str]] = []
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         if node.func.attr not in _MOCK_CALL_VERIFY_METHODS:
@@ -10730,7 +10777,7 @@ def _empty_builtin_call_membership_violations(tree: ast.AST) -> list[tuple[int, 
     tautologies``). A literal other-side is owned by the literal-comparison
     lens, and a bare name is left alone exactly as in the sibling lenses."""
     found = []
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -10897,7 +10944,7 @@ def _fresh_value_container_assert_violations(tree: ast.AST) -> list[tuple[int, s
             return False
         return all(_is_non_deterministic_fresh_call(elt) for elt in expr.elts)
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -11053,7 +11100,7 @@ def _random_draw_call_assertion_violations(tree: ast.AST) -> list[tuple[int, str
     is a less direct shape and is deliberately left alone."""
     found: list[tuple[int, str]] = []
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         if node.func.attr not in _MOCK_CALL_VERIFY_METHODS:
@@ -11227,7 +11274,7 @@ def _iterator_object_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
     self-comparison lens's determinism-check territory."""
     found: list[tuple[int, str]] = []
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -11410,7 +11457,7 @@ def _type_equality_violations(tree: ast.AST) -> list[tuple[int, str]]:
             and not node.keywords
         )
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Compare) or len(node.ops) != 1:
             continue
         op = node.ops[0]
@@ -11549,7 +11596,7 @@ def _noop_typecheck_violations(tree: ast.AST) -> list[tuple[int, str]]:
     def _is_object_name(node: ast.AST) -> bool:
         return isinstance(node, ast.Name) and node.id == "object"
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
             continue
         if node.func.id not in ("isinstance", "issubclass"):
@@ -11705,7 +11752,7 @@ def _conditional_verdict_assert_violations(tree: ast.AST) -> list[tuple[int, str
     def _is_bool_constant(node: ast.AST) -> bool:
         return isinstance(node, ast.Constant) and isinstance(node.value, bool)
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -11832,7 +11879,7 @@ def _dict_keys_membership_violations(tree: ast.AST) -> list[tuple[int, str]]:
             and node.func.attr == "keys"
         )
 
-    for node in ast.walk(tree):
+    for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test

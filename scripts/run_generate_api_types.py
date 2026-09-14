@@ -40,7 +40,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = str(REPO_ROOT / "backend")
 FRONTEND_DIR = str(REPO_ROOT / "frontend")
-OUTPUT_FILE = str(REPO_ROOT / "frontend" / "src" / "lib" / "api" / "schema.ts")
+
+# Repeated filename (S1192).
+_SCHEMA_TS_FILENAME = "schema.ts"
+
+OUTPUT_FILE = str(REPO_ROOT / "frontend" / "src" / "lib" / "api" / _SCHEMA_TS_FILENAME)
 
 # MUST match the pin in .github/workflows/ci.yml (`pnpm dlx
 # openapi-typescript@7.13.0`) and frontend/package.json (^7.13.0).
@@ -85,7 +89,7 @@ def _generate_schema(tempdir: str) -> tuple[int, str]:
     """
     schema_path = str(Path(tempdir) / "openapi.json")
     db_path = str(Path(tempdir) / "gen-test.db")
-    out_path = str(Path(tempdir) / "schema.ts")
+    out_path = str(Path(tempdir) / _SCHEMA_TS_FILENAME)
 
     py_script = str(Path(tempdir) / "gen_openapi.py")
     py_content = (
@@ -135,7 +139,7 @@ def main() -> int:
     py_script = str(Path(tempdir) / "gen_openapi.py")
     schema_path = str(Path(tempdir) / "openapi.json")
     db_path = str(Path(tempdir) / "gen-test.db")
-    generated_path = str(Path(tempdir) / "schema.ts")
+    generated_path = str(Path(tempdir) / _SCHEMA_TS_FILENAME)
     try:
         rc, generated_path = _generate_schema(tempdir)
         if rc != 0:
