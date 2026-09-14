@@ -133,9 +133,17 @@ class _AsyncCtx:
         return False
 
 
+class _FakeScalarResult:
+    """Awaitable-compatible result proxy for the FAR-801 org-tenancy execute()."""
+
+    def scalar_one_or_none(self) -> str:
+        return "exists"
+
+
 def _fake_session_factory() -> Any:
     session = MagicMock()
     session.begin = MagicMock(return_value=_AsyncCtx(None))
+    session.execute = AsyncMock(return_value=_FakeScalarResult())
     return MagicMock(return_value=_AsyncCtx(session))
 
 
