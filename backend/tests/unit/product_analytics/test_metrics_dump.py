@@ -1041,8 +1041,7 @@ class TestGetOrCreateInstanceId:
 
 
 class TestBuildInstanceMetadata:
-    @pytest.mark.asyncio
-    async def test_metadata_shape(self) -> None:
+    def test_metadata_shape(self) -> None:
         factory = _FakeSessionFactory()
         with patch(
             "modulo.version.get_version",
