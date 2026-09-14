@@ -1712,14 +1712,14 @@ class TestPruneVersionsExtended:
         install_root = tmp_path
         versions = install_root / "versions"
         versions.mkdir()
-        for name in ("1.0.0", "1.1.0", "1.2.0"):
+        for name in ("1.0.0", "1.1.0", "1.2.0", "1.3.0"):
             (versions / name).mkdir()
         current = install_root / "current"
-        current.symlink_to("versions/1.2.0")
-        ref = versions / "1.2.0"
+        current.symlink_to("versions/1.3.0")
+        ref = versions / "1.3.0"
         pruned = upgrade_module.prune_versions(install_root, current_target=ref)
         assert "1.0.0" in pruned
-        assert (versions / "1.2.0").is_dir()
+        assert (versions / "1.3.0").is_dir()
 
     def test_no_version_dirs(self, tmp_path):
         install_root = tmp_path
