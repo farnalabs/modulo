@@ -62,6 +62,21 @@ _COVERAGE_LINE_RE = re.compile(r"Coverage:\s*(\d+(?:\.\d+)?)\s*%")
 _THRESHOLD_NOT_MET_RE = re.compile(r"Failure\. Coverage is below", re.IGNORECASE)
 
 
+def _validate_ref(value: str, name: str) -> str:
+    """Reject values that would be interpreted as CLI flags when passed as a
+    subprocess argument (defense against argument injection).
+
+    Mirrors the established guard in ``scripts/backup.py`` / ``scripts/restore.py``.
+    ``compare_branch`` originates from the ``--compare-branch`` CLI argument and is
+    therefore attacker-influenced; a crafted value such as ``--extra-flag`` passed
+    to ``diff-cover`` would be interpreted as an additional flag rather than a
+    branch name.  Refusing anything that starts with ``-`` closes that sink.
+    """
+    if not value or value.startswith("-"):
+        raise ValueError(f"invalid {name}: must be a non-empty value that does not start with '-'")
+    return value
+
+
 @dataclass(frozen=True)
 class GateResult:
     """Result of evaluating one language's coverage gate."""
@@ -91,6 +106,9 @@ def _run_diff_cover(
 ) -> tuple[int, str]:
     """Run ``diff-cover`` and return (exit_code, combined_output).
 
+    ``compare_branch`` is validated before it reaches ``subprocess`` so a
+    caller-supplied value can never be interpreted as an extra flag.
+
     Uses the ``diff-cover`` CLI entry point from the same venv as the current
     Python (``sys.executable``'s sibling), not ``python -m diff_cover``
     (diff-cover is a console_scripts package without ``__main__``).
@@ -110,12 +128,14 @@ def _run_diff_cover(
     # concatenating it into an argument would let a crafted value inject
     # additional ``diff-cover`` flags.  As separate elements the value can
     # never be interpreted as an extra argument (subprocess runs without a
-    # shell).
+    # shell), and ``_validate_ref`` rejects any value that could be read as a
+    # flag (one starting with ``-``) before it gets here.
+    safe_compare_branch = _validate_ref(compare_branch, "compare-branch")
     cmd = [
         str(diff_cover_bin),
         str(report_path),
         "--compare-branch",
-        compare_branch,
+        safe_compare_branch,
         "--fail-under",
         str(fail_under),
     ]
