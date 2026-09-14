@@ -29,7 +29,7 @@ Feature: JWT Security
     And the response contains a new refresh_token
     And the new tokens differ from the old pair
 
-  Scenario: Reusing a refresh token is detected as theft
+  Scenario: Reusing a refresh token beyond the reuse grace window is detected as theft
     Given I have a refresh token with sequence 0
     When I refresh my tokens once
     And I refresh my tokens again with the same refresh token

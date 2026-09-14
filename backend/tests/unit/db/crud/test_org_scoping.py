@@ -196,14 +196,30 @@ class TestTokenFamilyAccountScoping:
 
     async def test_advance_sequence_other_account_finds_nothing(self, session: AsyncSession) -> None:
         family = await _seed_family(session)
-        new_sequence, theft_detected = await advance_sequence(session, family.family_id, 0, _ACCOUNT_B)
-        assert (new_sequence, theft_detected) == (0, False)
+        new_sequence, theft_detected, grace_replay = await advance_sequence(
+            session,
+            family.family_id,
+            0,
+            _ACCOUNT_B,
+            reuse_grace_seconds=30,
+            reuse_grace_max_steps=3,
+            reuse_grace_max_per_window=8,
+        )
+        assert (new_sequence, theft_detected, grace_replay) == (0, False, False)
         assert family.max_sequence == 0
 
     async def test_advance_sequence_same_account_advances(self, session: AsyncSession) -> None:
         family = await _seed_family(session)
-        new_sequence, theft_detected = await advance_sequence(session, family.family_id, 0, _ACCOUNT_A)
-        assert (new_sequence, theft_detected) == (1, False)
+        new_sequence, theft_detected, grace_replay = await advance_sequence(
+            session,
+            family.family_id,
+            0,
+            _ACCOUNT_A,
+            reuse_grace_seconds=30,
+            reuse_grace_max_steps=3,
+            reuse_grace_max_per_window=8,
+        )
+        assert (new_sequence, theft_detected, grace_replay) == (1, False, False)
 
     async def test_blacklist_other_account_returns_false(self, session: AsyncSession) -> None:
         family = await _seed_family(session)

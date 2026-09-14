@@ -46,7 +46,12 @@ clients.
 - [x] Demo auto-login mints short-lived tokens (2h TTL, 4h hard cap) with no
       refresh token; all failures return 404 to hide the feature
 - [x] Token rotation validates refresh claims, detects token theft (reused sequence
-      numbers blacklist the family), and returns new access+refresh tokens
+      numbers blacklist the family), and returns new access+refresh tokens. A stale
+      sequence presented within the FAR-819 reuse grace window (inside
+      `REFRESH_REUSE_GRACE_SECONDS` of the last rotation, within the steps-behind
+      tolerance, and under the per-window replay budget) is treated as a benign
+      retry and the family advances normally; reuse beyond those bounds blacklists
+      the family as theft (`backend/src/modulo/db/crud/token_family.py`)
 - [x] Logout blacklists the token family so all tokens from that session are
       invalidated
 - [x] `/me` returns the authenticated user's profile with `must_change_password`

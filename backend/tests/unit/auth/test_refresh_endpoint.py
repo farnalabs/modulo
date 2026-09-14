@@ -118,7 +118,7 @@ def _patch_account(account: MagicMock | None):
 
 def test_refresh_success_for_active_account(client: TestClient, mock_session: AsyncMock) -> None:
     """An active account keeps refreshing normally; the family is untouched."""
-    advance = AsyncMock(return_value=(2, False))
+    advance = AsyncMock(return_value=(2, False, False))
     resolve_role = AsyncMock(return_value="admin")
     with (
         _patch_account(_make_account(True)),
@@ -139,7 +139,7 @@ def test_refresh_success_for_active_account(client: TestClient, mock_session: As
 def test_refresh_deactivated_account_denied_and_blacklisted(client: TestClient, mock_session: AsyncMock) -> None:
     """A deactivated account cannot refresh: 401, the presented family is
     blacklisted, and a subsequent attempt with the same family is denied too."""
-    advance = AsyncMock(return_value=(2, False))
+    advance = AsyncMock(return_value=(2, False, False))
     token = _make_refresh_token(str(_ORG_ID))
     with (
         _patch_account(_make_account(False)),
@@ -161,7 +161,7 @@ def test_refresh_deactivated_account_denied_and_blacklisted(client: TestClient, 
 
 def test_refresh_unknown_account_denied_and_blacklisted(client: TestClient, mock_session: AsyncMock) -> None:
     """A refresh token naming a non-existent account is denied and blacklisted."""
-    advance = AsyncMock(return_value=(2, False))
+    advance = AsyncMock(return_value=(2, False, False))
     with (
         _patch_account(None),
         patch("modulo.api.routes.auth.advance_sequence", new=advance),
@@ -177,7 +177,7 @@ def test_refresh_deactivated_system_admin_without_membership_denied(
 ) -> None:
     """System admins without memberships (empty org_id) skip the membership read
     but the account-active check still denies them when deactivated."""
-    advance = AsyncMock(return_value=(2, False))
+    advance = AsyncMock(return_value=(2, False, False))
     resolve_role = AsyncMock()
     with (
         _patch_account(_make_account(False)),
@@ -194,7 +194,7 @@ def test_refresh_deactivated_system_admin_without_membership_denied(
 def test_refresh_active_system_admin_without_membership_succeeds(client: TestClient, mock_session: AsyncMock) -> None:
     """An ACTIVE system admin without memberships still refreshes: the new check
     gates on account status, not on org membership presence."""
-    advance = AsyncMock(return_value=(2, False))
+    advance = AsyncMock(return_value=(2, False, False))
     with (
         _patch_account(_make_account(True)),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock()),
