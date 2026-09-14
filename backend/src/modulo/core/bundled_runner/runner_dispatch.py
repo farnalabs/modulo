@@ -467,7 +467,11 @@ def _resolve_stall_timeout(stall_timeout_override: Any) -> float:
         return float(_SANDBOX_IDLE_TIMEOUT)
 
 
-def _resolve_stdout_cap(node_def: dict[str, Any]) -> int:
+def _resolve_stdout_cap(
+    node_def: dict[str, Any],
+    *,
+    org_ceiling: int | None = None,
+) -> int:
     """Resolve the effective stdout/stderr retention cap for a node (FAR-792).
 
     Node-level free-form config (mirroring the E2B path): ``"tail"`` keeps the
@@ -475,6 +479,13 @@ def _resolve_stdout_cap(node_def: dict[str, Any]) -> int:
     ``stdout_max_bytes`` when set (defaulting to the 5MB fallback when absent).
     Coercion + resolution delegate to the shared node_runner helpers so this
     path can never drift from the E2B retention semantics.
+
+    ``org_ceiling`` (FAR-811) is the org-level hard ceiling from
+    ``system_config.sandbox_stdout_retention_max_bytes``; when set the resolved
+    cap is hard-clamped to it, so the Bundled Runner path enforces the same
+    "no node can exceed the org ceiling" invariant as the E2B path. When
+    ``None`` (the default, used by the pure-coercion tests) the node's own cap
+    applies unchanged.
     """
     from modulo.core.pipeline_engine.node_runner import (
         _coerce_stdout_max_bytes,
@@ -487,6 +498,7 @@ def _resolve_stdout_cap(node_def: dict[str, Any]) -> int:
     return _resolve_shared_cap(
         _coerce_stdout_retention_mode(node_def.get("stdout_retention_mode")),
         _coerce_stdout_max_bytes(node_def.get("stdout_max_bytes")),
+        org_ceiling=org_ceiling,
     )
 
 
@@ -535,6 +547,7 @@ async def run_bundled_runner_node(
         _idempotency_gate_skipped_envelope,
         _is_sandbox_session_lost_echo,
         _marker_delivery_done_for_node,
+        _read_org_stdout_retention_ceiling,
         _read_run_raw_output_markers_for_gate,
         _redact_raw_output,
         _retain_raw_output_marker,
@@ -823,10 +836,25 @@ async def run_bundled_runner_node(
         agent_stdout_raw = "".join(data for (stream_name, data) in collected if stream_name == "stdout")
         agent_stderr_raw = "".join(data for (stream_name, data) in collected if stream_name == "stderr")
         elapsed = time.monotonic() - start_time
-        # FAR-792: resolve the node's effective stdout/stderr retention cap
-        # early so both the envelope artifacts AND the raw-output retention
-        # markers honour it (E2B parity).
-        stdout_cap = _resolve_stdout_cap(node_def)
+        # FAR-792 + FAR-811: resolve the node's effective stdout/stderr retention
+        # cap early so both the envelope artifacts AND the raw-output retention
+        # markers honour it (E2B parity). The org-level hard ceiling
+        # (system_config.sandbox_stdout_retention_max_bytes) is read and applied
+        # here too, so the "no node can exceed the org ceiling" invariant holds
+        # on the Bundled Runner path exactly as on the E2B path.
+        org_stdout_ceiling = await _read_org_stdout_retention_ceiling(config.session_factory)
+        stdout_cap_unclamped = _resolve_stdout_cap(node_def)
+        stdout_cap = _resolve_stdout_cap(node_def, org_ceiling=org_stdout_ceiling)
+        if org_stdout_ceiling is not None and stdout_cap < stdout_cap_unclamped:
+            _log.warning(
+                "sandbox_agent.runner.stdout_cap_clamped_by_org_ceiling",
+                extra={
+                    "node_id": node_id,
+                    "cap_without_ceiling": stdout_cap_unclamped,
+                    "org_ceiling": org_stdout_ceiling,
+                    "effective_cap": stdout_cap,
+                },
+            )
 
         # Stream error / engine-proxy drop / no exit code: RETRYABLE — never
         # a fabricated zero-exit completion (D4 acceptance criteria).

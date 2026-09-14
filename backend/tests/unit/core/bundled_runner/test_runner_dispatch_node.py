@@ -99,6 +99,7 @@ def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
         "_is_sandbox_session_lost_echo": lambda out: False,
         "_marker_delivery_done_for_node": lambda *a, **k: False,
         "_read_run_raw_output_markers_for_gate": AsyncMock(return_value=[]),
+        "_read_org_stdout_retention_ceiling": AsyncMock(return_value=None),
         "_redact_raw_output": lambda s: s,
         "_retain_raw_output_marker": AsyncMock(),
         "_run_identity_strs": lambda state: (
@@ -551,6 +552,49 @@ async def test_run_full_retention_caps_raw_output_marker(patch_node_runner, monk
     with pytest.raises(_FakeError):
         await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
     assert retained.get("max_artifact_bytes") == 2048
+
+
+async def test_run_stdout_org_ceiling_clamps_cap(patch_node_runner, monkeypatch) -> None:
+    """FAR-811: the org-level hard ceiling (system_config.sandbox_stdout_retention_max_bytes)
+    is read and applied on the Bundled Runner path so the "no node can exceed the org
+    ceiling" invariant holds here exactly as on the E2B path. A node requesting full
+    retention at 2048 bytes is hard-clamped to the 1024-byte org ceiling."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    monkeypatch.setattr(
+        nrm,
+        "_read_org_stdout_retention_ceiling",
+        AsyncMock(return_value=1024),
+        raising=False,
+    )
+    cfg = _config(node_def={"capability_scope": {}, "stdout_retention_mode": "full", "stdout_max_bytes": 2048})
+    long_stdout = "x" * 4096
+    provider = _FakeProvider(stream_chunks=[("stdout", long_stdout)], stream_exit=0)
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(provider))
+    assert out["output"].agent_stdout == "x" * 1024
+    assert out["output"].stdout_length == len(long_stdout)
+    assert out["output"].stdout_truncated is True
+
+
+async def test_resolve_stdout_cap_applies_org_ceiling(patch_node_runner, monkeypatch) -> None:
+    """The pure helper passes the org ceiling through to the shared resolver."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    monkeypatch.setattr(
+        nrm,
+        "_read_org_stdout_retention_ceiling",
+        AsyncMock(return_value=1024),
+        raising=False,
+    )
+    assert (
+        runner_dispatch._resolve_stdout_cap(
+            {"stdout_retention_mode": "full", "stdout_max_bytes": 2048},
+            org_ceiling=1024,
+        )
+        == 1024
+    )
+    # No ceiling -> node's own cap applies unchanged.
+    assert runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full", "stdout_max_bytes": 2048}) == 2048
 
 
 async def test_run_stdout_full_retention_default_holds_whole_stream(patch_node_runner) -> None:
