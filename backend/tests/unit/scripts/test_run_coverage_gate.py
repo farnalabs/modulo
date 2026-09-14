@@ -339,3 +339,33 @@ def test_threshold_not_met_regex_matches():
 # ---------------------------------------------------------------------------
 def test_default_threshold_is_90():
     assert mod.COVERAGE_THRESHOLD == 90
+
+
+# ---------------------------------------------------------------------------
+# Input sanitisation (argument-injection hardening)
+# ---------------------------------------------------------------------------
+def test_validate_ref_accepts_plain_git_ref():
+    assert mod._validate_ref("origin/main", "compare-branch") == "origin/main"
+    assert mod._validate_ref("origin/feature/foo-bar", "compare-branch") == "origin/feature/foo-bar"
+
+
+def test_validate_ref_rejects_flag_injection():
+    # A value that could be read as an extra diff-cover flag must be refused.
+    import pytest
+
+    for bad in ["--fail-under=0", "-x", ""]:
+        with pytest.raises(ValueError, match="invalid"):
+            mod._validate_ref(bad, "compare-branch")
+
+
+def test_sanitize_path_accepts_report_paths():
+    assert mod._sanitize_path("coverage.xml", "report path") == "coverage.xml"
+    assert mod._sanitize_path("../frontend/coverage/lcov.info", "report path") == "../frontend/coverage/lcov.info"
+
+
+def test_sanitize_path_rejects_injection_payload():
+    import pytest
+
+    for bad in ["coverage.xml; rm -rf /", "$(curl evil)", "report --extra"]:
+        with pytest.raises(ValueError, match=r"invalid|disallowed"):
+            mod._sanitize_path(bad, "report path")

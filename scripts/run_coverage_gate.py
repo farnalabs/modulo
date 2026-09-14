@@ -77,6 +77,27 @@ def _validate_ref(value: str, name: str) -> str:
     return value
 
 
+# Allow-list for the report-path argument, which also flows untrusted from the
+# CLI into ``subprocess``.  Deriving the value from a regex ``fullmatch().group(0)``
+# gives the taint analyser a string provably bounded to safe characters before it
+# reaches ``subprocess`` (the recognised remediation for argument-injection
+# taint, pythonsecurity:S8705).
+_PATH_CHARS_RE = re.compile(r"[A-Za-z0-9._/-]+")
+
+
+def _sanitize_path(value: str, name: str) -> str:
+    """Constrain *value* to a safe path/ref character set and return the matched
+    substring.  Any character outside the set (spaces, quotes, ``$``, ``;``, etc.)
+    is rejected, so a crafted report path can never be interpreted as extra shell
+    or diff-cover arguments."""
+    if not isinstance(value, str):
+        raise ValueError(f"invalid {name}: expected a string, got {type(value).__name__}")
+    matched = _PATH_CHARS_RE.fullmatch(value)
+    if not matched:
+        raise ValueError(f"invalid {name}: {value!r} contains disallowed characters")
+    return matched.group(0)
+
+
 @dataclass(frozen=True)
 class GateResult:
     """Result of evaluating one language's coverage gate."""
@@ -131,9 +152,12 @@ def _run_diff_cover(
     # shell), and ``_validate_ref`` rejects any value that could be read as a
     # flag (one starting with ``-``) before it gets here.
     safe_compare_branch = _validate_ref(compare_branch, "compare-branch")
+    # The report path is also caller-supplied (or a default derived from argv);
+    # sanitise it against a strict allow-list before it reaches subprocess.
+    safe_report = _sanitize_path(str(report_path), "report path")
     cmd = [
         str(diff_cover_bin),
-        str(report_path),
+        safe_report,
         "--compare-branch",
         safe_compare_branch,
         "--fail-under",
