@@ -196,7 +196,7 @@
         </button>
         <span
           data-testid="hitl-review-page-indicator"
-          role="status"
+          aria-live="polite"
           class="text-sm text-muted-foreground"
         >
           {{ $t('views.SettingsHitlReviewView.page_indicator', { page, total: totalPages }) }}

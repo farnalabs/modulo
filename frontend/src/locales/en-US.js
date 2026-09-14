@@ -3156,6 +3156,9 @@ export default {
       "delete_confirm_title": "Delete lifecycle map",
       "delete_confirm_body": "This will delete \"{name}\". Existing runs are unaffected, but the map will no longer be available or listed.",
       "show_work_items": "Show work items",
+      "save_status_saving": "Saving positions…",
+      "save_status_saved": "Positions saved",
+      "save_status_failed": "Failed to save positions",
       "journey": {
         "detail_title": "Journey: {journey}",
         "close": "Close",

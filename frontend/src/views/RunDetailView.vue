@@ -52,7 +52,6 @@
         v-if="runLevelWarnings.length > 0"
         id="warnings"
         data-testid="run-detail-warnings-strip"
-        role="status"
         aria-live="polite"
         class="mb-4 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning"
       >

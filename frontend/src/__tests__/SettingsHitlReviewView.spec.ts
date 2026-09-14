@@ -770,7 +770,7 @@ describe('SettingsHitlReviewView', () => {
     await nextTick()
 
     // total (26) > page_size (25): the pager renders, page 1 of 2, Prev at
-    // the lower bound, Next enabled. The indicator is announced (role=status).
+    // the lower bound, Next enabled. The indicator is announced (aria-live).
     const prev = wrapper!.find('[data-testid="hitl-review-prev-page"]')
     const next = wrapper!.find('[data-testid="hitl-review-next-page"]')
     expect(prev.exists()).toBe(true)
@@ -779,7 +779,7 @@ describe('SettingsHitlReviewView', () => {
     expect(next.attributes('disabled')).toBeUndefined()
     expect(prev.attributes('aria-label')).toBeTruthy()
     expect(next.attributes('aria-label')).toBeTruthy()
-    expect(wrapper!.find('[data-testid="hitl-review-page-indicator"]').attributes('role')).toBe('status')
+    expect(wrapper!.find('[data-testid="hitl-review-page-indicator"]').attributes('aria-live')).toBe('polite')
     expect(wrapper!.text()).toContain('Page 1 of 2')
 
     const gatesCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length

@@ -25,15 +25,14 @@
       </span>
     </button>
     <Transition name="fade">
-      <div
+      <section
         v-show="!collapsed"
         :id="`sidebar-group-${id}`"
         class="sidebar-group-items"
-        role="region"
         :aria-label="labelKey ? $t(labelKey) : label"
       >
         <slot />
-      </div>
+      </section>
     </Transition>
   </div>
 </template>

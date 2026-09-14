@@ -155,6 +155,10 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > 2026-09-10 walk reconciled this registry's `routes:` lists with the manifest
 > after the FAR-591 D5 Runners-page rename and the FAR-760 library collections
 > ship (`test_graph_root_registry_routes_match_manifest` now guards the lists).
+> The 2026-09-13 walk wired `library/contribute.feature` into the executing BDD
+> suite (`steps/test_library_contributions.py`) and shrunk
+> `_ORPHANED_BDD_FEATURES` by one, closing `feat-library`'s contribution
+> BDD gap (`library.md`).
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

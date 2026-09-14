@@ -43,7 +43,7 @@
       <template v-else-if="store.results">
         <div
           v-if="store.factsStale"
-          role="status"
+          aria-live="polite"
           class="mb-4 flex items-start gap-2 rounded-lg border border-amber-300/60 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700/40 dark:bg-amber-950/40 dark:text-amber-200"
           data-testid="analytics-stale-notice"
         >

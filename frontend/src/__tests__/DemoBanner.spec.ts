@@ -11,12 +11,12 @@ describe('DemoBanner', () => {
     localStorage.clear()
   })
 
-  it('renders with role=status when the session is a demo session', () => {
+  it('renders with aria-live=polite when the session is a demo session', () => {
     setDemoSession(true)
     const wrapper = mount(DemoBanner)
     const banner = wrapper.find(bannerTestId)
     expect(banner.exists()).toBe(true)
-    expect(banner.attributes('role')).toBe('status')
+    expect(banner.attributes('aria-live')).toBe('polite')
   })
 
   it('renders nothing for a normal (non-demo) session', () => {

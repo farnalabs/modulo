@@ -40,7 +40,7 @@
           :data-testid="plainStringTruncated ? 'json-viewer-string-truncated' : undefined"
         >{{ expandedPlainString ? rawString : plainStringPreview }}</pre>
         <div v-if="plainStringTruncated" class="mt-2 flex items-center gap-2">
-          <span class="json-viewer-string-count" role="status">{{ t('components.JsonViewer.truncated_count', { count: formatCount(rawString.length) }) }}</span>
+          <span class="json-viewer-string-count" aria-live="polite">{{ t('components.JsonViewer.truncated_count', { count: formatCount(rawString.length) }) }}</span>
           <button
             v-if="!expandedPlainString"
             type="button"

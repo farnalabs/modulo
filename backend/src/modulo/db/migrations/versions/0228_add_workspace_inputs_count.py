@@ -1,7 +1,7 @@
 """Add workspace_inputs_count column to run_daily_facts.
 
-Revision ID: 0227_add_workspace_inputs_count
-Revises: 0226_agents_json_to_jsonb
+Revision ID: 0228_add_workspace_inputs_count
+Revises: 0227_env_profiles_initialisation_strategy_check
 Create Date: 2026-09-13
 
 Adds a nullable INTEGER column ``workspace_inputs_count`` to the
@@ -13,8 +13,8 @@ the INSERT/UPDATE would fail with UndefinedColumn on every write.
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0227_add_workspace_inputs_count"
-down_revision = "0226_agents_json_to_jsonb"
+revision = "0228_add_workspace_inputs_count"
+down_revision = "0227_env_profiles_initialisation_strategy_check"
 branch_labels = None
 depends_on = None
 

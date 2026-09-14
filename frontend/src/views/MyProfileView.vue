@@ -90,7 +90,7 @@
         </div>
 
         <p v-if="hitlSaveError" class="text-sm text-destructive" data-testid="my-profile-hitl-email-error">{{ hitlSaveError }}</p>
-        <p v-if="hitlSaveSuccess" class="text-sm text-success" role="status" aria-live="polite" data-testid="my-profile-hitl-email-success">{{ $t('views.MyProfileView.hitl_email_saved') }}</p>
+        <p v-if="hitlSaveSuccess" class="text-sm text-success" aria-live="polite" data-testid="my-profile-hitl-email-success">{{ $t('views.MyProfileView.hitl_email_saved') }}</p>
 
         <Button type="button" :disabled="hitlSaving" class="border border-primary/30 w-full sm:w-auto" data-testid="my-profile-hitl-email-save" @click="saveHitlEmailPrefs">
           {{ hitlSaving ? $t('common.saving') : $t('common.save') }}
