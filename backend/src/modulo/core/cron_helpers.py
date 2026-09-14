@@ -5231,7 +5231,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         try:
             async with asyncio.timeout(budget_seconds):
                 return await _dispatcher_reconcile_body(
-                    settings=settings,
+                    _settings=settings,
                     factory=factory,
                     queue_name=queue_name,
                     reenqueue_window=reenqueue_window,
@@ -5279,7 +5279,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
 
 async def _dispatcher_reconcile_body(
     *,
-    settings: Any,
+    _settings: Any,
     factory: async_sessionmaker[AsyncSession],
     queue_name: str,
     reenqueue_window: int,
