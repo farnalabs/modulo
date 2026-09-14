@@ -71,6 +71,14 @@ _SCOPED_ALLOWLIST: dict[tuple[str, str], str] = {
     ("db/crud/run.py", "_update_run_status_fenced"): (
         "_RunStatusUpdate payload fields (the blobs write API surface), not the ORM column"
     ),
+    ("api/routes/runs.py", "_do_get_workspace_inputs"): (
+        "RunNodeOutput.outputs_json (the new-table column), NOT the legacy runs "
+        "blob column that B1 cut — FAR-802 run-detail workspace-inputs surfacing"
+    ),
+    ("core/analytics/__init__.py", "_fact_workspace_inputs_count"): (
+        "RunNodeOutput.outputs_json (the new-table column), NOT the legacy runs "
+        "blob column that B1 cut — FAR-802 workspace_inputs_count daily fact"
+    ),
 }
 
 # Raw-text allowlist — whole files whose string constants may carry the
