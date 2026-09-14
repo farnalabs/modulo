@@ -6893,6 +6893,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     _run_uuid = _uuid.UUID(run_id)
                     _org_uuid = _uuid.UUID(org_id)
                     async with session_factory() as _audit_session, _audit_session.begin():
+                        # FAR-801/RBAC: run_node_outputs + runs are RLS FORCE, so
+                        # the audit write must run with the tenant context set or
+                        # Postgres raises 42501 (swallowed by the best-effort
+                        # except) and the row never persists.
+                        await set_rls_org(_audit_session, _org_uuid)
                         await record_resolved_inputs(
                             _audit_session,
                             run_id=_run_uuid,
@@ -7490,6 +7495,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     _run_uuid = _uuid.UUID(run_id)
                     _org_uuid = _uuid.UUID(org_id)
                     async with session_factory() as _audit_session, _audit_session.begin():
+                        # FAR-801/RBAC: run_node_outputs + runs are RLS FORCE, so
+                        # the drift write must run with the tenant context set or
+                        # Postgres raises 42501 (swallowed by the best-effort
+                        # except) and the row + drift flag never persist.
+                        await set_rls_org(_audit_session, _org_uuid)
                         await record_drift(
                             _audit_session,
                             run_id=_run_uuid,

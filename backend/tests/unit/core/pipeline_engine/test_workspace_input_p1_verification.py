@@ -654,6 +654,78 @@ class TestAuditWriteUsesFinalAttemptKey:
         spy_drift.assert_called_once()
         assert spy_drift.call_args.kwargs["attempt_key"] == FINAL_ATTEMPT_KEY
 
+    async def test_producer_sets_rls_org_context_before_audit_write(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The audit write targets RLS-FORCE protected tables (run_node_outputs, runs),
+        so the producer MUST set the tenant context via ``set_rls_org`` before writing.
+        Without it Postgres raises 42501, which the best-effort ``except`` swallows, so
+        the audit row + drift flag silently never persist and the sweep/backfill no-op.
+        Regression guard for the PR Reviewer's blocking RLS finding (head 6bddaa420)."""
+        from modulo.core.pipeline_engine import node_runner as _nr
+        from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+
+        spy_set_rls = AsyncMock()
+        monkeypatch.setattr(_nr, "set_rls_org", spy_set_rls)
+        monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_audit.record_resolved_inputs", AsyncMock())
+        monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_audit.record_drift", AsyncMock())
+
+        node_def: dict[str, Any] = {
+            "id": str(uuid.uuid4()),
+            "node_type": "sandbox_agent",
+            "position": {"x": 0, "y": 0},
+            "template_id": "opencode",
+            "mode": "script",
+            "script_command": "python3 /home/user/main.py",
+            "agent_id": str(uuid.uuid4()),
+            "workspace_inputs": [{"url": _URL_A, "dest": _DEST_A, "ref": {"kind": "branch", "value": "main"}}],
+        }
+        cmd_result = MagicMock()
+        cmd_result.exit_code = 0
+        cmd_result.stdout = "out"
+        cmd_result.stderr = ""
+        handle = MagicMock()
+        handle.wait = AsyncMock(return_value=cmd_result)
+        sandbox = MagicMock()
+        sandbox.files.write = AsyncMock()
+        sandbox.files.read = AsyncMock(return_value='{"result": "ok"}')
+        sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+        sandbox.commands.run = AsyncMock(return_value=handle)
+        sandbox.kill = AsyncMock()
+        sandbox.get_metrics = AsyncMock(return_value=MagicMock(cpu_used_pct=1.0, mem_used=1, disk_used=1))
+        state: dict[str, Any] = {
+            "run_context": {"input": {"task": "x"}},
+            "_run_id": str(uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")),
+            "_pipeline_id": "pipe-1",
+            "_org_id": str(uuid.UUID("11111111-2222-3333-4444-555555555555")),
+        }
+        drift_result = DriftResult(dest=_DEST_A, expected_sha=_SHA_A, final_sha=_SHA_B, drift_detected=True)
+        with (
+            patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+            patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+                new=AsyncMock(return_value=[_resolved_input()]),
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
+                new=AsyncMock(),
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
+                new=AsyncMock(return_value=[drift_result]),
+            ),
+            patch(
+                "modulo.settings.get_settings",
+                new=MagicMock(return_value=MagicMock(modulo_workspace_inputs_enabled=True)),
+            ),
+        ):
+            result = await make_sandbox_agent_fn(node_def, session_factory=_fake_session_factory())(state)
+
+        assert result["output"]["status"] == "completed"
+        # Both the resolved-inputs and drift audit writes must run scoped to the org.
+        from unittest.mock import ANY
+
+        spy_set_rls.assert_any_await(ANY, uuid.UUID("11111111-2222-3333-4444-555555555555"))
+
 
 # ---------------------------------------------------------------------------
 # Deferred (stated gaps — see module docstring):
