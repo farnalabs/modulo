@@ -21,11 +21,19 @@ describe('formatError', () => {
 
   it('falls back to Unknown error when the detail object cannot be serialized', () => {
     // A circular reference makes JSON.stringify throw, exercising the
-    // serialize-on-failure path (stringifyErrorObject -> describeError).
+    // serialize-on-failure fallback path in stringifyErrorObject.
     expect(formatApiError(circular())).toBe('Unknown error')
   })
 
   it('prefers an explicit detail string on a non-ProblemDetail object', () => {
     expect(formatApiError({ detail: 'boom', title: 'x' })).toBe('boom')
+  })
+
+  it('surfaces a raw string error directly', () => {
+    expect(formatApiError('plain string error')).toBe('plain string error')
+  })
+
+  it('surfaces an Error message directly', () => {
+    expect(formatApiError(new Error('boom message'))).toBe('boom message')
   })
 })

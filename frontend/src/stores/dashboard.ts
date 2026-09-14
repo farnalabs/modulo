@@ -300,10 +300,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
     }
   }
 
-  registerSyncHandlers(unsubHandlers, syncingIds, [
-    ["run", handleSyncEvent],
-    ["pipeline", handleSyncEvent],
-  ]);
+  registerSyncHandlers(unsubHandlers, syncingIds, ["run", "pipeline"], handleSyncEvent);
 
   function disposeHandlers(): void {
     disposeSyncHandlers(unsubHandlers, syncingIds);

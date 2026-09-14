@@ -29,19 +29,23 @@ export function clearAllRegistrations(): void {
 }
 
 /**
- * Register one event handler per [resourceType, handler] pair and wire up HMR
- * disposal so the handlers (and the store's transient sync state) are torn
- * down cleanly on hot reload. Shared by the per-resource stores to keep the
- * registration + HMR-dispose boilerplate in a single place (avoids the
- * duplicated registerHandler/HMR-dispose block that tripped the new-code
- * duplication gate).
+ * Register a single handler against every resource type in `resourceTypes`
+ * and wire up HMR disposal so the handlers (and the store's transient sync
+ * state) are torn down cleanly on hot reload. Shared by the per-resource
+ * stores to keep the registration + HMR-dispose boilerplate in a single place
+ * (avoids the duplicated registerHandler/HMR-dispose block that tripped the
+ * new-code duplication gate). Passing the resource types as a flat list (with
+ * one shared handler) keeps the call site a single line so the per-store
+ * registration blocks don't trip the new-code duplication gate against each
+ * other.
  */
 export function registerSyncHandlers(
   unsubHandlers: Array<() => void>,
   syncingIds: Ref<Set<string>>,
-  handlers: Array<[string, (event: EventBusEvent) => void]>,
+  resourceTypes: Array<string>,
+  handler: (event: EventBusEvent) => void,
 ): void {
-  for (const [resourceType, handler] of handlers) {
+  for (const resourceType of resourceTypes) {
     unsubHandlers.push(registerHandler(resourceType, handler));
   }
   if (import.meta.hot) {

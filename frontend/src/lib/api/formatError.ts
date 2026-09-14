@@ -63,17 +63,13 @@ function truncateErrorText(str: string): string {
   return str.length > MAX_ERROR_LENGTH ? str.slice(0, MAX_ERROR_LENGTH) + '...' : str
 }
 
-function describeError(err: unknown): string {
-  if (typeof err === 'string') return err
-  if (err instanceof Error) return err.message
-  return 'Unknown error'
-}
-
-function stringifyErrorObject(obj: Record<string, unknown>, err: unknown): string {
+function stringifyErrorObject(obj: Record<string, unknown>): string {
   try {
     return truncateErrorText(JSON.stringify(obj))
   } catch {
-    return describeError(err)
+    // Reached only when `obj` cannot be serialized (e.g. a circular reference);
+    // surface a stable, non-leaking message rather than the raw recursive value.
+    return 'Unknown error'
   }
 }
 
@@ -93,13 +89,13 @@ function extractErrorDetail(obj: Record<string, unknown>): string | null {
   return formatValidationDetail(obj.detail)
 }
 
-function formatErrorObject(obj: Record<string, unknown>, err: unknown): string {
+function formatErrorObject(obj: Record<string, unknown>): string {
   const detail = extractErrorDetail(obj)
   if (detail !== null) return detail
   if (typeof obj.message === 'string') return obj.message
   if (typeof obj.error === 'string') return obj.error
   if (typeof obj.title === 'string') return obj.title
-  return stringifyErrorObject(obj, err)
+  return stringifyErrorObject(obj)
 }
 
 export function formatApiError(err: unknown): string {
@@ -107,6 +103,6 @@ export function formatApiError(err: unknown): string {
   if (typeof err === 'string') return err
   if (!err) return 'Unknown error'
   if (err instanceof Error) return err.message
-  if (typeof err === 'object') return formatErrorObject(err as Record<string, unknown>, err)
+  if (typeof err === 'object') return formatErrorObject(err as Record<string, unknown>)
   return String(err)
 }

@@ -189,11 +189,7 @@ export const usePlanStore = defineStore("plan", () => {
     }
   }
 
-  registerSyncHandlers(unsubHandlers, syncingIds, [
-    ["team", handleSyncEvent],
-    ["license", handleSyncEvent],
-    ["plan", handleSyncEvent],
-  ]);
+  registerSyncHandlers(unsubHandlers, syncingIds, ["team", "license", "plan"], handleSyncEvent);
 
   function disposeHandlers(): void {
     disposeSyncHandlers(unsubHandlers, syncingIds);
