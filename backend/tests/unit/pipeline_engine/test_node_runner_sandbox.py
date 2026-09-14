@@ -522,9 +522,13 @@ async def test_idle_watchdog_kills_stalled_command_and_raises():
     # The stalled command itself was killed...
     handle.kill.assert_awaited()
     # ...and the still-running sandbox was killed before output.json could be
-    # read — the interrupted process must not fabricate a completion.
+    # read — the interrupted process must not fabricate a completion (FAR-97).
+    # FAR-811 intentionally reads the redirected agent.log (/home/user/agent.log)
+    # on the stall/timeout path to capture the full transcript for the artifact
+    # store, so only the output.json read is the forbidden fabrication vector.
     sandbox.kill.assert_awaited()
-    sandbox.files.read.assert_not_called()
+    _output_reads = [c for c in sandbox.files.read.call_args_list if c.args and c.args[0] == "/home/user/output.json"]
+    assert not _output_reads
     assert "no output" in str(excinfo.value)
 
 
@@ -549,7 +553,11 @@ async def test_timed_out_command_does_not_read_output_json():
 
     assert "no output" in str(excinfo.value)
     assert "30s" in str(excinfo.value)
-    sandbox.files.read.assert_not_called()
+    # FAR-811 intentionally reads the redirected agent.log on the timeout path to
+    # capture the full transcript; the FAR-97 invariant is that output.json is
+    # never read before the kill (an interrupted agent could fabricate a completion).
+    _output_reads = [c for c in sandbox.files.read.call_args_list if c.args and c.args[0] == "/home/user/output.json"]
+    assert not _output_reads
     sandbox.kill.assert_awaited()
 
 
@@ -898,7 +906,11 @@ async def test_stalled_command_raises_with_stall_reason():
     assert "no output" in str(excinfo.value)
     handle.kill.assert_awaited()
     sandbox.kill.assert_awaited()
-    sandbox.files.read.assert_not_called()
+    # FAR-811 intentionally reads the redirected agent.log on the stall path to
+    # capture the full transcript; the FAR-97 invariant is that output.json is
+    # never read before the kill (an interrupted agent could fabricate a completion).
+    _output_reads = [c for c in sandbox.files.read.call_args_list if c.args and c.args[0] == "/home/user/output.json"]
+    assert not _output_reads
 
 
 # FAR-98: live stdout/stderr streaming via run event broker
