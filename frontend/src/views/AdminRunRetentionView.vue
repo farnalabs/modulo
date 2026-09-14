@@ -338,7 +338,7 @@ function toIso(value: string): string | null {
 }
 
 function buildQuery(): Record<string, unknown> {
-  const f = appliedFilters.value ?? {
+  const f = {
     dateFrom: dateFrom.value,
     dateTo: dateTo.value,
     pipelineId: selectedPipelineId.value,
@@ -355,6 +355,9 @@ function buildQuery(): Record<string, unknown> {
 }
 
 function buildBody(): Record<string, unknown> {
+  // The purge/export body must reflect the *applied* snapshot, never an
+  // unapplied edit — a pending filter change that the user has not applied
+  // must not silently change which runs get purged/exported.
   const f = appliedFilters.value ?? {
     dateFrom: dateFrom.value,
     dateTo: dateTo.value,
