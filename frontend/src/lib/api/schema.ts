@@ -14282,6 +14282,13 @@ export interface components {
             retry_policy?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Stdout Retention Config
+             * @description Pipeline-level default for sandbox stdout retention. Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. NULL = no pipeline override (inherit from org ceiling only). When a sandbox node does not explicitly set its own stdout_retention_mode, the pipeline default is inherited; node-explicit settings always win.
+             */
+            stdout_retention_config?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** PipelineFolderMoveRequest */
         PipelineFolderMoveRequest: {
@@ -14677,6 +14684,10 @@ export interface components {
             retry_policy: {
                 [key: string]: unknown;
             };
+            /** Stdout Retention Config */
+            stdout_retention_config?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Snapshot Count
              * @default 0
@@ -14776,6 +14787,13 @@ export interface components {
             } | null;
             /** @description Replace the pipeline graph (nodes + edges). Creates a new snapshot. */
             graph_json?: components["schemas"]["PipelineGraphUpdate"] | null;
+            /**
+             * Stdout Retention Config
+             * @description Pipeline-level default for sandbox stdout retention. Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. Set to {} to clear (no pipeline override).
+             */
+            stdout_retention_config?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** PlanInfo */
         PlanInfo: {
