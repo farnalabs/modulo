@@ -1010,7 +1010,7 @@ function renderMarkdown(text: string): string {
   color: hsl(0 72% 72%);
 }
 .light .tool-badge.success {
-  color: hsl(142 76% 30%);
+  color: hsl(142 76% 26%);
 }
 .light .tool-badge.failed {
   color: hsl(0 72% 40%);
