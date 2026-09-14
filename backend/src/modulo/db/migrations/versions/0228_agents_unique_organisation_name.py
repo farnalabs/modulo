@@ -16,20 +16,18 @@ metadata.  Per-tenant uniqueness is enforced by the model's
 ``UniqueConstraint("organisation_id", "name")`` and is consistent with the
 existing RLS tenant isolation on ``agents``.
 
-Deploy-safety (PostgreSQL 16): a plain ``op.create_unique_constraint`` / ``ALTER
-TABLE ... ADD CONSTRAINT ... UNIQUE`` takes an ``ACCESS EXCLUSIVE`` lock and a full
-table scan, and hard-fails if any duplicate ``(organisation_id, name)`` rows
-already exist — a deploy-blocking failure mode.  Instead we build the unique
-index ONLINE with ``CREATE UNIQUE INDEX CONCURRENTLY`` (issued under AUTOCOMMIT
-isolation because ``CONCURRENTLY`` cannot run inside a transaction) so it takes
-only a ``SHARE UPDATE EXCLUSIVE`` lock and never blocks writers, then promote that
-index to a named ``UNIQUE`` constraint with a brief, non-scanning ``ALTER TABLE ...
-ADD CONSTRAINT ... UNIQUE USING INDEX``.  This is the PostgreSQL-16 equivalent of
-the ``NOT VALID`` + ``VALIDATE`` pattern used for CHECK/FK constraints in
-``0151_fix_constraints`` / ``0164_add_missing_foreign_keys`` — unique constraints
-cannot be marked ``NOT VALID`` before PostgreSQL 18.  A duplicate pre-check raises
-a loud, actionable error (rather than a bare unique-violation) if legacy duplicate
-rows are present.
+Deploy-safety (PostgreSQL 16): ``CONCURRENTLY`` cannot be used here — ``env.py``
+wraps every revision in a single ``engine.begin()`` transaction and ``CREATE [UNIQUE]
+INDEX CONCURRENTLY`` cannot run inside a transaction block (repo precedent in
+``0200`` / ``0193`` / ``0218`` / ``0154`` / ``0155``).  So we add the named
+``UNIQUE`` constraint directly with ``ALTER TABLE ... ADD CONSTRAINT ... UNIQUE``
+(PostgreSQL names the backing index after the constraint, so it lands as
+``uq_agents_organisation_name`` to match the ORM ``UniqueConstraint``).  This takes
+an ``ACCESS EXCLUSIVE`` lock and a table scan, and hard-fails if any duplicate
+``(organisation_id, name)`` rows already exist — a deploy-blocking failure mode.
+The duplicate pre-check below raises a loud, actionable error (rather than a bare
+unique-violation) if legacy duplicate rows are present, so a conflict fails with a
+clear message instead of a bare constraint violation.
 """
 
 from __future__ import annotations
@@ -67,15 +65,15 @@ def upgrade() -> None:
         )
     )
 
-    # Build the unique index ONLINE (CONCURRENTLY) — AUTOCOMMIT isolation is
-    # required because CONCURRENTLY cannot run inside the migration transaction.
+    # Add the named UNIQUE constraint directly.  CONCURRENTLY is unavailable here
+    # because env.py wraps the migration in a single transaction; PostgreSQL names
+    # the backing index after the constraint (uq_agents_organisation_name), matching
+    # the ORM UniqueConstraint.  Runs inside the migration transaction (brief
+    # ACCESS EXCLUSIVE lock + table scan); the duplicate pre-check above fails loud
+    # if any legacy (organisation_id, name) duplicates exist.
     op.execute(
-        text(f"CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS {_CONSTRAINT_NAME} ON {_TABLE} ({', '.join(_COLUMNS)})"),
-        execution_options={"isolation_level": "AUTOCOMMIT"},
+        text(f"ALTER TABLE {_TABLE} ADD CONSTRAINT IF NOT EXISTS {_CONSTRAINT_NAME} UNIQUE ({', '.join(_COLUMNS)})")
     )
-    # Promote the online-built index to a named UNIQUE constraint matching the
-    # ORM UniqueConstraint name (brief, non-scanning ALTER).
-    op.execute(text(f"ALTER TABLE {_TABLE} ADD CONSTRAINT {_CONSTRAINT_NAME} UNIQUE USING INDEX {_CONSTRAINT_NAME}"))
 
 
 def downgrade() -> None:
