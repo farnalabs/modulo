@@ -119,7 +119,7 @@ class TestFieldsToSchema:
         assert definition["properties"]["title"] == {"type": "string"}
         assert definition["properties"]["count"] == {"type": "integer"}
         assert definition["properties"]["notes"] == {"type": "string"}
-        assert "" not in definition["properties"]
+        assert set(definition["properties"]) == {"title", "count", "notes"}
 
     def test_empty_fields(self) -> None:
         definition = _definition_from_fields([])
@@ -164,9 +164,9 @@ class TestConnectorRefType:
         assert _connector_ref_type_id({"type": "fs"}) == "fs"
 
     def test_empty_or_missing(self) -> None:
-        assert _connector_ref_type_id({}) == ""
-        assert _connector_ref_type_id(None) == ""
-        assert _connector_ref_type_id(5) == ""
+        assert not _connector_ref_type_id({})
+        assert not _connector_ref_type_id(None)
+        assert not _connector_ref_type_id(5)
 
 
 class TestConnectorChecklist:
@@ -184,7 +184,7 @@ class TestConnectorChecklist:
             assert c["status"] == "pending"
 
     def test_no_agents_means_empty(self) -> None:
-        assert _build_connector_checklist([_prim(uuid.uuid4(), primitive_type="schema")]) == []
+        assert not _build_connector_checklist([_prim(uuid.uuid4(), primitive_type="schema")])
 
 
 # ---------------------------------------------------------------------------
@@ -629,5 +629,5 @@ class TestInstallCollectionPaths:
         assert install.organisation_id == _ORG_ID
         manifest = install.resolved_manifest
         assert isinstance(manifest, dict)
-        assert manifest["warnings"] == []
+        assert not manifest["warnings"]
         assert "schemas" in manifest
