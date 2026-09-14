@@ -15644,6 +15644,8 @@ export interface components {
             default_context_window: number;
             /** Allowed Providers */
             allowed_providers?: string[];
+            /** Allowed Models */
+            allowed_models?: string[];
         };
         /** RemyConfigUpdate */
         RemyConfigUpdate: {
