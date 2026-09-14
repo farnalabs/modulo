@@ -178,7 +178,7 @@ def _run_diff_cover(
         "--fail-under",
         str(fail_under),
     ]
-    result = subprocess.run(  # NOSONAR - argv elements above are regex-bounded via _validate_ref/_sanitize_path; subprocess has no shell
+    result = subprocess.run(  # NOSONAR - reachable argv = [diff_cover_bin (resolved from the synced venv, not caller input), safe_report (regex fullmatch-bounded by _sanitize_path, rejects leading '-'), "--compare-branch" (literal), safe_compare_branch (regex fullmatch-bounded by _validate_ref, rejects leading '-'), "--fail-under" (literal), str(fail_under) (int->str literal)]; subprocess runs without a shell, so no flag injection is reachable from the only caller-influenced elements (safe_report/safe_compare_branch), which are validated before reaching this line.
         cmd,
         capture_output=True,
         text=True,

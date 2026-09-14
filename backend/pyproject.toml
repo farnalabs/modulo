@@ -599,9 +599,9 @@ dev = [
     # Lua parser, a syntax defect (e.g. a duplicate `end`) can only surface at
     # runtime as a Redis compile error (FAR-439 fail-closed regression).
     "lupa>=2.0",
-    # Changed-lines coverage gate (diff-cover) — enforces a coverage threshold
-    # on the lines each PR actually changes. See scripts/run_coverage_gate.py
-    # for the full rationale (free SonarCloud cannot customise quality gates).
+    # Changed-lines coverage gate (diff-cover). See scripts/run_coverage_gate.py
+    # (and the coverage-gate job in .github/workflows/ci.yml) for the full
+    # rationale — kept here as a single pointer to avoid duplicating it.
     "diff-cover>=10.5",
 ]
 
