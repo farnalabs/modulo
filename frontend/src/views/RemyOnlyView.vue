@@ -296,7 +296,7 @@ function onSessionTablistKeydown(event: KeyboardEvent, tab: RemyTab) {
 function onSubTablistKeydown(event: KeyboardEvent, key: SubTabKey) {
   const index = subTabs.value.findIndex(st => st.key === key)
   if (index === -1) return
-  let nextIndex = index
+  let nextIndex: number
   switch (event.key) {
     case 'ArrowRight':
       nextIndex = (index + 1) % subTabs.value.length

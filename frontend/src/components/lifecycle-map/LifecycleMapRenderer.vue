@@ -127,7 +127,10 @@ const journeysByStage = computed<Record<string, JourneySummary[]>>(() => {
   for (const journey of props.journeys ?? []) {
     const stageId = journey.current_stage?.stage_id
     if (!stageId) continue
-    ;(grouped[stageId] ??= []).push(journey)
+    if (!grouped[stageId]) {
+      grouped[stageId] = []
+    }
+    grouped[stageId].push(journey)
   }
   return grouped
 })
@@ -267,11 +270,17 @@ function stageNodeAriaLabel(data: Record<string, unknown>): string {
 function onStageKeydown(nodeProps: { id: string; data: Record<string, unknown> }, event: KeyboardEvent): void {
   let dx = 0
   let dy = 0
-  if (event.key === 'ArrowLeft') dx = -1
-  else if (event.key === 'ArrowRight') dx = 1
-  else if (event.key === 'ArrowUp') dy = -1
-  else if (event.key === 'ArrowDown') dy = 1
-  else return
+  if (event.key === 'ArrowLeft') {
+    dx = -1
+  } else if (event.key === 'ArrowRight') {
+    dx = 1
+  } else if (event.key === 'ArrowUp') {
+    dy = -1
+  } else if (event.key === 'ArrowDown') {
+    dy = 1
+  } else {
+    return
+  }
   event.preventDefault()
   nudgeNode(nodeProps, dx, dy)
 }
