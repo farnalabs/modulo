@@ -5566,6 +5566,10 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
         async with factory() as session, session.begin():
             # Find terminal runs whose drift column is NULL but an audit row
             # exists with drift_detected=true in the workspace_inputs list.
+            # Ordered by run_id so the bounded scan makes deterministic
+            # progress (it never re-scans the same fixed first-N rows every
+            # tick — runs with a workspace_inputs audit row are marked
+            # definitive below and drop out of the NULL-flag set entirely).
             rows = (
                 await session.execute(
                     sa.select(Run.id, Run.organisation_id)
@@ -5573,6 +5577,7 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
                         Run.status.in_(TERMINAL_STATUSES),
                         Run.workspace_inputs_drift_detected.is_(None),
                     )
+                    .order_by(Run.id)
                     .limit(200)
                 )
             ).all()
@@ -5584,15 +5589,22 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
                     node_id=AUDIT_NODE_ID,
                 )
                 if audit_row is None:
+                    # No audit row yet (it may be written after terminalization,
+                    # or the run had no managed workspace inputs). Leave the flag
+                    # NULL so the run is re-checked on a later tick.
                     continue
                 audit_list = audit_row.get("workspace_inputs", [])
                 if not audit_list:
                     continue
+                # Write the definitive flag (True when drift, else False) so a
+                # non-drift run drops out of the NULL-flag set and is never
+                # re-scanned — the bounded scan thus makes deterministic
+                # progress instead of looping the same first-200 rows each tick.
                 any_drift = any(entry.get("drift_detected") for entry in audit_list)
+                await session.execute(
+                    sa.update(Run).where(Run.id == run_id).values(workspace_inputs_drift_detected=any_drift)
+                )
                 if any_drift:
-                    await session.execute(
-                        sa.update(Run).where(Run.id == run_id).values(workspace_inputs_drift_detected=True)
-                    )
                     corrected += 1
     except asyncio.CancelledError:
         raise

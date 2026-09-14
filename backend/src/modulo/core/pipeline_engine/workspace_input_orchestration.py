@@ -417,10 +417,15 @@ async def resolve_managed_inputs_host_side(
                 from modulo.db.models.connector_instance import ConnectorInstance
 
                 async with session_factory() as _tenancy_session, _tenancy_session.begin():
+                    # FAR-801 tenancy: enforce the connector belongs to THIS org
+                    # explicitly (not just via RLS on the caller's session) so the
+                    # check is correct regardless of session scope — a system /
+                    # bypass-RLS session must NOT admit a cross-org connector.
                     _ci_row = (
                         await _tenancy_session.execute(
                             _sa_select(ConnectorInstance.id).where(
                                 ConnectorInstance.id == connector_instance_id,
+                                ConnectorInstance.organisation_id == org_id,
                             )
                         )
                     ).scalar_one_or_none()

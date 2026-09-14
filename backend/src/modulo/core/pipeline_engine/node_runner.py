@@ -6778,6 +6778,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     from modulo.core.pipeline_engine.workspace_input_orchestration import (
                         _extract_host_from_url,
                     )
+                    from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+
+                    # Map each resolved input back to its requested ref (kind/value)
+                    # for auditability — the audit record should carry the real
+                    # movable ref that was resolved, not empty strings.
+                    _ref_by_dest = {(wi.get("dest")): (wi.get("ref") or {}) for wi in (workspace_inputs or [])}
 
                     _audit_records = [
                         WorkspaceInputAuditRecord(
@@ -6785,8 +6791,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             connector_instance_id=getattr(inp, "connector_instance_id", None),
                             host=_extract_host_from_url(inp.url) if hasattr(inp, "url") else "",
                             url_redacted=redact_url(inp.url) if hasattr(inp, "url") else "",
-                            requested_ref_kind="",
-                            requested_ref_value="",
+                            requested_ref_kind=(_ref_by_dest.get(inp.dest) or {}).get("kind", "branch"),
+                            requested_ref_value=(_ref_by_dest.get(inp.dest) or {}).get("value", ""),
                             resolved_sha=inp.resolved_sha,
                             final_sha=None,
                             drift_detected=False,
@@ -6803,7 +6809,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             run_id=_run_uuid,
                             organisation_id=_org_uuid,
                             node_id=node_id,
-                            attempt_key=attempt_key or "",
+                            attempt_key=FINAL_ATTEMPT_KEY,
                             records=_audit_records,
                             status="resolved",
                         )
@@ -7389,6 +7395,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     from modulo.core.pipeline_engine.workspace_input_audit import (
                         record_drift,
                     )
+                    from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
                     _final_shas = {d.dest: d.final_sha for d in _drift_results}
                     _run_uuid = _uuid.UUID(run_id)
@@ -7399,7 +7406,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             run_id=_run_uuid,
                             organisation_id=_org_uuid,
                             node_id=node_id,
-                            attempt_key=attempt_key or "",
+                            attempt_key=FINAL_ATTEMPT_KEY,
                             final_shas=_final_shas,
                         )
                 except Exception:
