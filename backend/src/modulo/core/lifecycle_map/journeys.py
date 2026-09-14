@@ -19,8 +19,9 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import ColumnElement, Select, and_, cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import BinaryExpression
 
 from modulo.db.lifecycle_refs import canonicalise_kind, canonicalise_ref
 from modulo.db.models.journey import Journey
@@ -237,6 +238,49 @@ async def get_map_journey(
     return journey, _is_unattributed(journey, referenced)
 
 
+def _is_postgres(session: AsyncSession) -> bool:
+    """True when the session's bound engine speaks Postgres.
+
+    Dialect-detected at query-build time (never a static import) so the
+    SQLite unit-test path keeps the portable Python scan.
+    """
+    bind = session.sync_session.get_bind()
+    return getattr(bind.dialect, "name", "") == "postgresql"
+
+
+def _journey_refs_containment(journey: Journey) -> BinaryExpression[bool]:
+    """JSONB containment predicate for the journey's canonical (kind, ref).
+
+    ``work_item_refs @> '[{"kind": K, "ref": R}]'::jsonb`` — the stored
+    entries are ``{"kind", "ref", "source", status?}`` (validate_ref_entry
+    shape), so a two-key containment template subset-matches EVERY entry shape
+    ever persisted. The default jsonb GIN operator class on
+    ``ix_runs_work_item_refs_gin`` (WHERE jsonb_array_length > 0) serves this
+    operator; a containment-in-an-array implies a non-empty array, so the
+    partial predicate is implied. A parametrised CAST keeps the bound value a
+    proper JSONB literal (no string interpolation).
+    """
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    template = json.dumps([{"kind": journey.kind, "ref": journey.ref}])
+    return Run.work_item_refs.op("@>")(cast(template, JSONB))
+
+
+def _journey_runs_postgres_query(journey: Journey, *, limit: int) -> Select[tuple[Run]]:
+    """Scalable Postgres predicate walk for ``list_journey_runs``.
+
+    Translates the portable scan exactly: only refs-carrying runs, matched by
+    JSONB containment OR the canonical work-item-id anchor (when set), newest
+    first, SQL-side ``LIMIT``.
+    """
+    conditions: list[ColumnElement[bool]] = [Run.work_item_refs.isnot(None)]
+    if journey.canonical_work_item_id is not None:
+        conditions.append(or_(_journey_refs_containment(journey), Run.work_item_id == journey.canonical_work_item_id))
+    else:
+        conditions.append(_journey_refs_containment(journey))
+    return select(Run).where(*conditions).order_by(Run.completed_at.desc().nulls_last()).limit(limit)
+
+
 async def list_journey_runs(
     session: AsyncSession,
     *,
@@ -247,11 +291,17 @@ async def list_journey_runs(
 
     A run touches the journey when its ``work_item_refs`` carries the journey's
     canonical (kind, ref) or its ``work_item_id`` equals the journey's canonical
-    id. JSONB containment is Postgres-only, so the refs match is done in Python
-    over the refs-carrying runs ordered by ``completed_at DESC``; the scan stops
-    once *limit* matches are collected. Runs may be purged — an empty result is
-    a valid "history lost to retention" outcome, not an error.
+    id. On Postgres the refs match is a JSONB containment predicate so the
+    partial GIN index ``ix_runs_work_item_refs_gin`` bounds the scan to
+    refs-carrying runs (an unbounded full-table walk on a user-facing path
+    otherwise); non-Postgres dialects (SQLite unit tests) fall back to the
+    portable Python scan with identical semantics. Runs may be purged — an
+    empty result is a valid "history lost to retention" outcome, not an error.
     """
+    if _is_postgres(session):
+        result = await session.execute(_journey_runs_postgres_query(journey, limit=limit))
+        return list(result.scalars())
+    # Portable fallback (SQLite unit tests): unbounded walk, Python filter.
     result = await session.execute(
         select(Run).where(Run.work_item_refs.isnot(None)).order_by(Run.completed_at.desc().nulls_last())
     )
