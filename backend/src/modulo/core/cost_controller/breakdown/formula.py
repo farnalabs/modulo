@@ -90,7 +90,8 @@ def _tokenize(formula: str) -> list[_Token]:
         elif match.lastgroup == "op":
             tokens.append(_Token("op", match.group("op")))
         elif match.lastgroup == "paren":
-            tokens.append(_Token(match.group("paren"), match.group("paren")))
+            ch = match.group("paren")
+            tokens.append(_Token("lparen" if ch == "(" else "rparen", ch))
         else:  # 'bad' — a character the grammar cannot produce (incl. non-ASCII)
             raise CostFormulaError(
                 "unexpected_character",
