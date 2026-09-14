@@ -326,7 +326,17 @@ jobs:
         # hack. Invoke vitest directly so the script's --maxWorkers=4 is never
         # inherited. 15000ms test/hook timeouts (vite.config.ts, from #817)
         # remain the safety net for heavy mount+settle specs.
-        run: pnpm exec vitest run src --pool=threads --maxWorkers=2
+        #
+        # Coverage flags added for the changed-lines coverage gate: v8 provider
+        # + lcov reporter produces frontend/coverage/lcov.info, which the
+        # coverage-gate job downloads to run diff-cover against changed lines.
+        run: pnpm exec vitest run src --pool=threads --maxWorkers=2 --coverage --coverage.provider=v8 --coverage.reporter=lcov
+      - name: Upload frontend coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/lcov.info
       - run: pnpm run build
       - name: Audit dependencies (critical)
         # Best-effort against npm registry outages: a failed audit caused by an
@@ -458,6 +468,46 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
+
+  coverage-gate:
+    # Enforces a coverage threshold on the lines each PR actually changes
+    # (the analogue of SonarCloud's new_coverage). Free SonarCloud cannot
+    # customise quality gates, so we run diff-cover ourselves in CI.
+    # merge-queue.yml skips any PR whose latest CI run is not green, so a
+    # failing coverage-gate job already blocks merges — no changes to the
+    # merge queue are needed.
+    name: Coverage gate (changed lines)
+    if: >-
+      github.event_name == 'pull_request'
+      || github.event_name == 'workflow_dispatch'
+    needs: [backend-test, frontend]
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # diff-cover needs full history to compute the merge base
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Download backend coverage report
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+          path: backend
+      - name: Download frontend coverage report
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+      - name: Run changed-lines coverage gate
+        working-directory: backend
+        run: |
+          uv sync --frozen
+          uv run --no-build --no-sync python ../scripts/run_coverage_gate.py \
+            --compare-branch "origin/${{ github.base_ref }}" \
+            --python-report backend/coverage.xml \
+            --js-report frontend/coverage/lcov.info
 
   schema-freshness:
     # Regenerates frontend/src/lib/api/schema.ts from the backend's OpenAPI and

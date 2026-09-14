@@ -599,6 +599,10 @@ dev = [
     # Lua parser, a syntax defect (e.g. a duplicate `end`) can only surface at
     # runtime as a Redis compile error (FAR-439 fail-closed regression).
     "lupa>=2.0",
+    # Changed-lines coverage gate (diff-cover) — enforces a coverage threshold
+    # on the lines each PR actually changes, the analogue of SonarCloud's
+    # new_coverage metric (free SonarCloud cannot customise quality gates).
+    "diff-cover>=10.5",
 ]
 
 [tool.uv]
