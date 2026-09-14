@@ -5,8 +5,9 @@ Covers ``_sweep_workspace_input_drift_flags`` in ``modulo.core.cron_helpers``:
 * a terminal run whose audit row reports drift is corrected (flag -> True);
 * a terminal run whose audit row reports NO drift is written definitive
   False (drops out of the NULL-flag set, so the bounded scan never loops it);
-* a terminal run with no audit row yet is left NULL and re-checked later
-  (scanned, not corrected);
+* a terminal run with no audit row is written definitive False and drops out
+  of the NULL-flag set (no longer re-scanned — prevents the starvation that
+  clogged the first-200 window when no-audit rows stayed NULL);
 * a run whose flag is already set is excluded from the bounded scan;
 * a read failure is swallowed (logged, not raised) and the run is untouched.
 
@@ -39,7 +40,13 @@ _PROJECT_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 _SNAPSHOT_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
 
-def _make_run(*, run_id: uuid.UUID, status: str, drift_detected: bool | None) -> Run:
+def _make_run(
+    *,
+    run_id: uuid.UUID,
+    status: str,
+    drift_detected: bool | None,
+    run_number: int = 1,
+) -> Run:
     return Run(
         id=run_id,
         organisation_id=_ORG,
@@ -47,7 +54,7 @@ def _make_run(*, run_id: uuid.UUID, status: str, drift_detected: bool | None) ->
         snapshot_id=_SNAPSHOT_ID,
         trigger_type="manual",
         status=status,
-        run_number=1,
+        run_number=run_number,
         input_hash="0" * 64,
         langgraph_thread_id=f"thread-{run_id.hex}",
         workspace_inputs_drift_detected=drift_detected,
@@ -147,18 +154,74 @@ class TestSweepWorkspaceInputDriftFlags:
             assert row.workspace_inputs_drift_detected is False
 
     @pytest.mark.anyio
-    async def test_leaves_null_when_no_audit_row(self, factory: async_sessionmaker[AsyncSession]) -> None:
+    async def test_writes_definitive_false_when_no_audit_row(self, factory: async_sessionmaker[AsyncSession]) -> None:
         run_id = uuid.uuid4()
         async with factory() as session:
             session.add(_make_run(run_id=run_id, status="complete", drift_detected=None))
             await session.commit()
 
         result = await _sweep_workspace_input_drift_flags(factory)
+        # No audit row => definitive False (not NULL), so the run drops out of
+        # the NULL-flag set and is never re-scanned.
         assert result == {"scanned": 1, "corrected": 0}
 
         async with factory() as session:
             row = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
-            assert row.workspace_inputs_drift_detected is None
+            assert row.workspace_inputs_drift_detected is False
+
+    @pytest.mark.anyio
+    async def test_no_audit_runs_drop_out_of_subsequent_scan(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """Regression for the starvation defect: no-audit NULL rows must not
+        clog the first-200 window and prevent a later drifted run from ever
+        being corrected. Two no-audit runs and one later drifted run prove the
+        no-audit runs become definitive False on the first tick and the drifted
+        run is corrected on the next."""
+        no_audit_ids = [uuid.uuid4() for _ in range(2)]
+        drift_id = uuid.uuid4()
+        async with factory() as session:
+            for idx, run_id in enumerate(no_audit_ids):
+                session.add(_make_run(run_id=run_id, status="complete", drift_detected=None, run_number=idx + 1))
+            session.add(
+                _make_run(
+                    run_id=drift_id,
+                    status="complete",
+                    drift_detected=None,
+                    run_number=len(no_audit_ids) + 1,
+                )
+            )
+            session.add(
+                _make_audit_row(
+                    run_id=drift_id,
+                    entries=[
+                        {
+                            "input_name": "my-repo",
+                            "resolved_sha": "a" * 40,
+                            "final_sha": "b" * 40,
+                            "drift_detected": True,
+                        }
+                    ],
+                )
+            )
+            await session.commit()
+
+        # First tick: the no-audit runs become False; the drifted run is corrected.
+        first = await _sweep_workspace_input_drift_flags(factory)
+        assert first["scanned"] == 3
+        assert first["corrected"] == 1
+
+        # Second tick: no-audit runs are excluded (definitive False), only the
+        # already-corrected drifted run remains — proving the no-audit rows no
+        # longer re-occupy the bounded window and starve real corrections.
+        second = await _sweep_workspace_input_drift_flags(factory)
+        assert second["scanned"] == 0
+        assert second["corrected"] == 0
+
+        async with factory() as session:
+            for run_id in no_audit_ids:
+                row = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+                assert row.workspace_inputs_drift_detected is False
+            drift_row = (await session.execute(select(Run).where(Run.id == drift_id))).scalar_one()
+            assert drift_row.workspace_inputs_drift_detected is True
 
     @pytest.mark.anyio
     async def test_excludes_runs_already_flagged(self, factory: async_sessionmaker[AsyncSession]) -> None:
