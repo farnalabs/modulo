@@ -34,6 +34,25 @@
           {{ $t('views.LibraryView.collection_empty_pins') }}
         </p>
       </div>
+      <!-- Install action: published collections only (FAR-826, ADR 032) -->
+      <div v-if="collection.status === 'published'" class="flex justify-end">
+        <Button :disabled="installing" data-testid="collection-install" @click="install">
+          {{
+            installing
+              ? $t('views.CollectionDetail.installing')
+              : $t('views.CollectionDetail.install')
+          }}
+        </Button>
+      </div>
+      <div
+        v-if="installError"
+        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        role="alert"
+        aria-live="assertive"
+        data-testid="collection-install-error"
+      >
+        {{ installError }}
+      </div>
       <div v-if="collection.status === 'draft'" class="flex justify-end">
         <Button :disabled="publishing" data-testid="collection-publish" @click="publish">
           {{
@@ -206,6 +225,8 @@ const error = ref<string | null>(null)
 const publishing = ref(false)
 const publishError = ref<string | null>(null)
 const granting = ref<string | null>(null)
+const installing = ref(false)
+const installError = ref<string | null>(null)
 
 async function load() {
   loading.value = true
@@ -225,20 +246,49 @@ async function load() {
     collection.value = data as unknown as CollectionDetail
 
     // Load installs for this collection.
-    const { data: installData, error: installErr } = await api.GET(
-      '/api/v1/libraries/collections/{primitive_id}/installs',
-      {
-        params: { path: { primitive_id: String(route.params.id) } },
-      },
-    )
-    if (!installErr && installData) {
-      const listResp = installData as unknown as { items: CollectionInstall[] }
-      installs.value = listResp.items || []
-    }
+    await loadInstalls()
   } catch (e) {
     error.value = formatApiError(e)
   } finally {
     loading.value = false
+  }
+}
+
+async function loadInstalls() {
+  const { data: installData, error: installErr } = await api.GET(
+    '/api/v1/libraries/collections/{primitive_id}/installs',
+    {
+      params: { path: { primitive_id: String(route.params.id) } },
+    },
+  )
+  if (!installErr && installData) {
+    const listResp = installData as unknown as { items: CollectionInstall[] }
+    installs.value = listResp.items || []
+  }
+}
+
+async function install() {
+  installing.value = true
+  installError.value = null
+  try {
+    const { data, error: err } = await api.POST(
+      '/api/v1/libraries/collections/{primitive_id}/install',
+      {
+        params: { path: { primitive_id: String(route.params.id) } },
+      },
+    )
+    if (err || !data) {
+      installError.value = err ? formatApiError(err) : t('views.CollectionDetail.install_failed')
+      return
+    }
+    // Refetch so the installs section renders the new install record —
+    // provenance, connector checklist, runnability, and for community-sourced
+    // collections the default-deny state with its Grant Access control.
+    await loadInstalls()
+  } catch (e) {
+    installError.value = formatApiError(e)
+  } finally {
+    installing.value = false
   }
 }
 
