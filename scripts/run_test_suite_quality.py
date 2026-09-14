@@ -217,7 +217,11 @@ def main() -> int:
         pass
 
     t0 = time.monotonic()
-    result = subprocess.run(cmd, cwd=str(BACKEND), env=env, check=False)
+    # argv is a pinned list; operator-supplied tokens (ref/lens/jobs) are
+    # stripped via _sanitize_* before they reach cmd, and shell is never used.
+    result = subprocess.run(  # nosec B603  # NOSONAR
+        cmd, cwd=str(BACKEND), env=env, check=False
+    )
     elapsed = time.monotonic() - t0
 
     print(f"\nElapsed: {elapsed:.1f}s")
