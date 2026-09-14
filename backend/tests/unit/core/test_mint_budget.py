@@ -9,7 +9,7 @@ interleaving — the true row-lock proof runs in the real-Postgres class
 below, which is CI/DEV-DEFERRED: skipped unless ``MINT_BUDGET_TEST_PG_URL``
 names a throwaway Postgres, testcontainers style).
 
-The tests build the budget table by running migration 0239_org_mint_budget_usage
+The tests build the budget table by running migration 0240_org_mint_budget_usage
 (the shipped module itself) through an alembic Operations context on the SQLite engine,
 so assertions exercise the schema the migration actually ships — not a
 hand-built fixture.
@@ -38,7 +38,7 @@ from modulo.core.runtime_config import mint_budget
 from modulo.core.runtime_config.mint_budget import consume_agent_mint_budget
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_STEM = "0239_org_mint_budget_usage"
+_MIGRATION_STEM = "0240_org_mint_budget_usage"
 
 # Postgres-only throwaway DB for the concurrency proof (CI-DEFERRED).
 _PG_URL_ENV = "MINT_BUDGET_TEST_PG_URL"
@@ -246,8 +246,8 @@ class TestMigrationSchema:
 
     def test_migration_head_chain(self) -> None:
         module = _load_migration()
-        assert module.revision == "0239_org_mint_budget_usage"
-        assert module.down_revision == "0238_journey_dismissal"
+        assert module.revision == "0240_org_mint_budget_usage"
+        assert module.down_revision == "0239_journey_dismissal"
 
     async def test_upgrade_creates_budget_table_on_sqlite(
         self, sessionmakers: async_sessionmaker[AsyncSession]
@@ -335,7 +335,7 @@ class TestRealPostgresConcurrency:
     the two supply strategies).
 
     The throwaway DB gets the table via raw DDL matching migration
-    0239_org_mint_budget_usage (the FK to ``organisations`` is deliberately
+    0240_org_mint_budget_usage (the FK to ``organisations`` is deliberately
     omitted; RLS is not asserted here — the org context ceremony is the
     caller's job and the migration exercises it on the real Postgres
     integration leg).

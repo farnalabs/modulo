@@ -702,7 +702,7 @@ def _revalidate_regex(
     return raw.model_copy(update={"passed": not raw.passed})
 
 
-async def _revalidate_llm_judge(
+def _revalidate_llm_judge(
     engine: EvalEngine,
     produced_output: dict[str, Any],
     *,
@@ -1160,7 +1160,7 @@ async def _run_different_family_revalidation(
                 field=str(config.get("field") or ""),
             )
         if family == CorrectionDetectorFamily.LLM_JUDGE:
-            return await _revalidate_llm_judge(
+            return _revalidate_llm_judge(
                 engine,
                 produced_output,
                 judge_callable=judge_callable,

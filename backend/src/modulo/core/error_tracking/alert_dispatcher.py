@@ -51,7 +51,7 @@ async def dispatch_alert(
     admin_url = f"/admin/errors/{alert.error_group_id}"
 
     if alert.action_type == "in_app":
-        await _dispatch_in_app(org_id, alert, sample_message, admin_url, session)
+        _dispatch_in_app(org_id, alert, sample_message, admin_url, session)
     elif alert.action_type == "email":
         await _dispatch_email(org_id, alert, sample_message, admin_url, session)
     elif alert.action_type == "webhook":
@@ -63,7 +63,7 @@ async def dispatch_alert(
         )
 
 
-async def _dispatch_in_app(
+def _dispatch_in_app(
     org_id: uuid.UUID,
     alert: TriggeredAlert,
     sample_message: str,

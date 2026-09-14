@@ -74,7 +74,7 @@ export function setup() {
   return { token, pipelineId };
 }
 
-export default function (data) {
+export default function runExecution(data) {
   const token = data.token;
   const pipelineId = data.pipelineId;
 

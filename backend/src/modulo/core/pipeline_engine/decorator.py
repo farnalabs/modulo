@@ -178,7 +178,7 @@ async def _dispatch_audit_warning(
         )
 
 
-async def _raise_if_state_cancelled(fn_name: str, run_ctx: dict[str, Any]) -> None:
+def _raise_if_state_cancelled(fn_name: str, run_ctx: dict[str, Any]) -> None:
     """1a. State-based cancellation check (fast path — no DB roundtrip)."""
     if run_ctx.get("cancelled", False):
         raise RunCancelledError(f"Run cancelled before node {fn_name!r} could execute.")
@@ -276,7 +276,7 @@ def _record_write_log(
     )
 
 
-async def _handle_context_setter(
+def _handle_context_setter(
     result: dict[str, Any],
     state: dict[str, Any],
     fn_name: str,
@@ -329,7 +329,7 @@ def cancellable_node(
         @functools.wraps(fn)
         async def wrapper(state: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
             run_ctx: dict[str, Any] = state.get("run_context") or {}
-            await _raise_if_state_cancelled(fn.__name__, run_ctx)
+            _raise_if_state_cancelled(fn.__name__, run_ctx)
             await _raise_if_db_cancelled(fn.__name__)
 
             result = await _execute_node(fn, state, kwargs, timeout, fn.__name__)
@@ -337,7 +337,7 @@ def cancellable_node(
             # 3. Context-setter guard and write log
             if result and "run_context" in result and result["run_context"] is not None:
                 if role == "context_setter":
-                    await _handle_context_setter(result, state, fn.__name__, role)
+                    _handle_context_setter(result, state, fn.__name__, role)
                 else:
                     await _raise_context_violation(result, fn.__name__, role)
 

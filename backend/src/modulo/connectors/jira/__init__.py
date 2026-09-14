@@ -345,7 +345,7 @@ class JiraConnector(ConnectorBase):
                 return _jitter(reset_delay, tight=True)
         return _compute_delay(attempt, response)
 
-    async def _parse_json(self, response: httpx.Response) -> Any:
+    def _parse_json(self, response: httpx.Response) -> Any:
         """Safely parse JSON response, wrapping decode errors."""
         try:
             return response.json()
@@ -357,7 +357,7 @@ class JiraConnector(ConnectorBase):
         """Verify connectivity by fetching the current user's profile."""
         try:
             r = await self._call_api("GET", "/myself")
-            user_info = await self._parse_json(r)
+            user_info = self._parse_json(r)
             display_name = user_info.get("displayName", "")
             return HealthResult(ok=True, detail=display_name)
         except ValueError as exc:
@@ -379,7 +379,7 @@ class JiraConnector(ConnectorBase):
         """Get a single issue by ``issue_key``."""
         issue_key = _require_filter(q, "issue_key", "issue")
         r = await self._call_api("GET", f"/issue/{issue_key}")
-        data: dict[str, Any] = await self._parse_json(r)
+        data: dict[str, Any] = self._parse_json(r)
         return ConnectorResult(
             records=[data],
             metadata={"rate_limit": _rate_limit_metadata(r)},
@@ -393,7 +393,7 @@ class JiraConnector(ConnectorBase):
         if q.cursor:
             params["startAt"] = int(q.cursor)
         r = await self._call_api("POST", "/search", json=params)
-        payload: dict[str, Any] = await self._parse_json(r)
+        payload: dict[str, Any] = self._parse_json(r)
         issues = payload.get("issues", [])
         if not isinstance(issues, list):
             issues = []
@@ -412,7 +412,7 @@ class JiraConnector(ConnectorBase):
         if q.cursor:
             comment_params["startAt"] = int(q.cursor)
         r = await self._call_api("GET", f"/issue/{issue_key}/comment", params=comment_params)
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         comments = body.get("comments", [])
         if not isinstance(comments, list):
             comments = []
@@ -428,7 +428,7 @@ class JiraConnector(ConnectorBase):
         """List available transitions for an issue."""
         issue_key = _require_filter(q, "issue_key", "transitions")
         r = await self._call_api("GET", f"/issue/{issue_key}/transitions")
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         transitions = body.get("transitions", [])
         return ConnectorResult(
             records=transitions,
@@ -440,7 +440,7 @@ class JiraConnector(ConnectorBase):
         """List attachments on an issue via the issue's ``fields.attachment``."""
         issue_key = _require_filter(q, "issue_key", "issue_attachments")
         r = await self._call_api("GET", f"/issue/{issue_key}")
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         attachments = body.get("fields", {}).get("attachment") or []
         return ConnectorResult(
             records=attachments,
@@ -452,7 +452,7 @@ class JiraConnector(ConnectorBase):
         """List remote links on an issue (list or ``links``-keyed response)."""
         issue_key = _require_filter(q, "issue_key", "issue_remote_links")
         r = await self._call_api("GET", f"/issue/{issue_key}/remotelink")
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         remote_links: list[Any] = body if isinstance(body, list) else body.get("links", [])
         return ConnectorResult(
             records=remote_links,
@@ -469,7 +469,7 @@ class JiraConnector(ConnectorBase):
         """
         project = _require_filter(q, "project", resource)
         r = await self._call_api("GET", f"/project/{project}/{sub_path}")
-        data = await self._parse_json(r)
+        data = self._parse_json(r)
         records: list[Any] = data if isinstance(data, list) else []
         return ConnectorResult(
             records=records,
@@ -491,7 +491,7 @@ class JiraConnector(ConnectorBase):
     async def _query_projects(self, q: ConnectorQuery) -> ConnectorResult:
         """List accessible projects (list or ``values``-keyed response)."""
         r = await self._call_api("GET", "/project")
-        data = await self._parse_json(r)
+        data = self._parse_json(r)
         projects = data if isinstance(data, list) else data.get("values", [])
         return ConnectorResult(
             records=projects,
@@ -507,7 +507,7 @@ class JiraConnector(ConnectorBase):
             "expand": "projects.issuetypes.fields",
         }
         r = await self._call_api("GET", "/issue/createmeta", params=createmeta_params)
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         projects_meta = body.get("projects", [])
         issue_types = projects_meta[0].get("issuetypes", []) if projects_meta else []
         return ConnectorResult(
@@ -522,7 +522,7 @@ class JiraConnector(ConnectorBase):
     async def _query_fields(self, q: ConnectorQuery) -> ConnectorResult:
         """List all system + custom fields across the instance."""
         r = await self._call_api("GET", "/field")
-        data = await self._parse_json(r)
+        data = self._parse_json(r)
         fields: list[Any] = data if isinstance(data, list) else []
         return ConnectorResult(
             records=fields,
@@ -538,7 +538,7 @@ class JiraConnector(ConnectorBase):
         """List attachments on an issue (fields-scoped fetch)."""
         issue_key = _require_filter(q, "issue_key", "attachments")
         r = await self._call_api("GET", f"/issue/{issue_key}", params={"fields": "attachment"})
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         attachments = body.get("fields", {}).get("attachment", [])
         return ConnectorResult(
             records=attachments,
@@ -576,7 +576,7 @@ class JiraConnector(ConnectorBase):
     async def _write_issue(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Create an issue."""
         r = await self._call_api("POST", "/issue", json=payload.data)
-        created: dict[str, Any] = await self._parse_json(r)
+        created: dict[str, Any] = self._parse_json(r)
         return created
 
     async def _write_issue_update(self, payload: ConnectorPayload) -> dict[str, Any]:
@@ -617,7 +617,7 @@ class JiraConnector(ConnectorBase):
             raise ValueError("Jira issue comment requires 'body' in data")
         body = payload.data["body"]
         r = await self._call_api("POST", f"/issue/{issue_key}/comment", json={"body": body})
-        comment: dict[str, Any] = await self._parse_json(r)
+        comment: dict[str, Any] = self._parse_json(r)
         return comment
 
     async def _write_issue_attachment(self, payload: ConnectorPayload) -> dict[str, Any]:
@@ -637,7 +637,7 @@ class JiraConnector(ConnectorBase):
             f"/issue/{issue_key}/remotelink",
             json={"object": link_object},
         )
-        remote_link: dict[str, Any] = await self._parse_json(r)
+        remote_link: dict[str, Any] = self._parse_json(r)
         return remote_link
 
     async def _write_remote_link_delete(self, payload: ConnectorPayload) -> dict[str, Any]:
@@ -702,7 +702,7 @@ class JiraConnector(ConnectorBase):
             data=form_data,
             headers={"X-Atlassian-Token": "no-check"},
         )
-        uploaded: dict[str, Any] = await self._parse_json(r)
+        uploaded: dict[str, Any] = self._parse_json(r)
         return uploaded
 
     async def _resolve_assignee(self, data: dict[str, Any]) -> dict[str, Any] | None:
@@ -720,7 +720,7 @@ class JiraConnector(ConnectorBase):
             query = data.get("email") or data.get("display_name")
             key = "email" if "email" in data else "display_name"
             r = await self._call_api("GET", "/user/search", params={"query": query, "maxResults": 1})
-            users = await self._parse_json(r)
+            users = self._parse_json(r)
             if not isinstance(users, list) or not users:
                 raise ValueError(f"Jira user not found for {key} {query!r}")
             account_id = users[0].get("accountId")
@@ -744,7 +744,7 @@ class JiraConnector(ConnectorBase):
         fetched first and the target set computed from them.
         """
         r = await self._call_api("GET", f"/issue/{issue_key}")
-        body = await self._parse_json(r)
+        body = self._parse_json(r)
         current = body.get("fields", {}).get("labels") or []
         remove_set = frozenset(remove)
         target = [label for label in current if label not in remove_set]

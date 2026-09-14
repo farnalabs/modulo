@@ -39,7 +39,7 @@ const testUsers = [
   { email: 'editor@modulo.test', password: 'test-password-123' },
 ];
 
-export default function () {
+export default function authBurst() {
   group('Auth login burst', function () {
     // Rotate through test users to avoid token caching effects (non-security test jitter)
     const user = testUsers[Math.floor(Math.random() * testUsers.length)]; // NOSONAR: load-test user rotation, not security-sensitive

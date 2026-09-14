@@ -381,4 +381,14 @@ __all__ = [
     "detect_workspace_input_drift",
     "workspace_drift",
     "workspace_drift_detected",
+    # --- FAR-801 workspace input audit persistence (lazy-imported by
+    #     node_runner._sandbox_agent_impl; vulture cannot see prod call sites) ---
+    "AUDIT_NODE_ID",
+    "WorkspaceInputAuditRecord",
+    "record_resolved_inputs",
+    "record_drift",
+    "redact_url",
+    # --- FAR-801 compensating sweep (wired into dispatcher_reconcile;
+    #     vulture cannot see the lazy-import call site) ---
+    "_sweep_workspace_input_drift_flags",
 ]

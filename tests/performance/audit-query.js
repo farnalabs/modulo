@@ -71,7 +71,7 @@ export function setup() {
   return { token };
 }
 
-export default function (data) {
+export default function auditQuery(data) {
   const token = data.token;
   const params = {
     headers: {

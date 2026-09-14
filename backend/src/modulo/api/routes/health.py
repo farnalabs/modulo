@@ -360,7 +360,7 @@ async def _check_migrations() -> CheckResult:
         )
 
 
-async def _configured_queues() -> list[str]:
+def _configured_queues() -> list[str]:
     """PREFIX-AWARE queue names for this environment (runs + system)."""
     settings = get_settings()
     runs_queue = settings.saq_runs_queue
@@ -437,7 +437,7 @@ async def _check_fleet_saq_workers() -> CheckResult:
     """
     settings = get_settings()
     try:
-        queues = await _configured_queues()
+        queues = _configured_queues()
         live_by_queue: dict[str, set[str]] = {qname: await _live_worker_hostnames(qname) for qname in queues}
     except asyncio.CancelledError:
         raise
@@ -482,7 +482,7 @@ async def _check_saq_workers() -> CheckResult:
     settings = get_settings()
     this_host = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
     try:
-        queues = await _configured_queues()
+        queues = _configured_queues()
         live_by_queue: dict[str, set[str]] = {qname: await _live_worker_hostnames(qname) for qname in queues}
     except asyncio.CancelledError:
         raise

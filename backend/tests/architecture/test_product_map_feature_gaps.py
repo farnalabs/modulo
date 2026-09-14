@@ -482,7 +482,6 @@ _ORPHANED_BDD_FEATURES = frozenset(
         "backend/tests/bdd/features/connectors/circleci.feature",
         "backend/tests/bdd/features/connectors/discord.feature",
         "backend/tests/bdd/features/connectors/dropbox_paper.feature",
-        "backend/tests/bdd/features/connectors/grafana.feature",
         "backend/tests/bdd/features/connectors/jenkins.feature",
         "backend/tests/bdd/features/connectors/microsoft_teams.feature",
         "backend/tests/bdd/features/connectors/opsgenie_connector.feature",

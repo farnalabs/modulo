@@ -13,7 +13,7 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -616,9 +616,19 @@ class _FakeBegin:
         return False
 
 
+class _FakeResultTenancy:
+    """Minimal result proxy for the tenancy check execute()."""
+
+    def scalar_one_or_none(self) -> str | None:
+        return "exists"
+
+
 class _FakeSession:
     def begin(self) -> _FakeBegin:
         return _FakeBegin()
+
+    async def execute(self, _stmt: object) -> _FakeResultTenancy:
+        return _FakeResultTenancy()
 
 
 class _Factory:
@@ -1087,3 +1097,132 @@ async def test_read_only_credential_assertion_failure_raises(
         )
     assert exc.value.error_code == "sandbox.input_credential_failed"
     assert exc.value.retryable is False
+
+
+# ---------------------------------------------------------------------------
+# FAR-801: Connector tenancy enforcement (org filter, fail-CLOSED)
+# ---------------------------------------------------------------------------
+
+
+from sqlalchemy import Column  # noqa: E402
+from sqlalchemy.sql.visitors import iterate  # noqa: E402
+
+_REQUEST_ORG = "org-request"
+
+
+def _where_has_org_column(stmt: object) -> bool:
+    """True when the statement's WHERE clause filters on the
+    ``organisation_id`` column (the tenancy check), as opposed to a plain
+    id-only lookup (URL derivation)."""
+    wc = getattr(stmt, "whereclause", None)
+    if wc is None:
+        return False
+    return any(isinstance(node, Column) and node.name == "organisation_id" for node in iterate(wc))
+
+
+class _TenancyResult:
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def scalar_one_or_none(self) -> object:
+        return self._value
+
+
+class _TenancyCi:
+    connector_type_id = "github"
+    config_json: ClassVar[dict[str, str]] = {"repo": "org/repo", "base_url": "https://api.github.com"}
+
+
+class _TenancySession:
+    def __init__(self, connector_org: str, request_org: str) -> None:
+        self._connector_org = connector_org
+        self._request_org = request_org
+
+    def begin(self) -> _FakeBegin:
+        return _FakeBegin()
+
+    async def execute(self, stmt: object) -> _TenancyResult:
+        # The tenancy check is the ONLY query that filters on organisation_id;
+        # the URL-derivation query filters by id only. Enforce org membership
+        # for the tenancy query so a cross-org connector is rejected even under
+        # a bypass-RLS session.
+        if _where_has_org_column(stmt):
+            if self._connector_org == self._request_org:
+                return _TenancyResult("exists")
+            return _TenancyResult(None)
+        # id-only queries (URL derivation) always find the connector.
+        return _TenancyResult(_TenancyCi())
+
+
+class _TenancySessionCtx:
+    def __init__(self, session: _TenancySession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> _TenancySession:
+        return self._session
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _TenancyFactory:
+    def __init__(self, connector_org: str, request_org: str) -> None:
+        self._connector_org = connector_org
+        self._request_org = request_org
+
+    def __call__(self) -> _TenancySessionCtx:
+        return _TenancySessionCtx(_TenancySession(self._connector_org, self._request_org))
+
+
+async def test_connector_tenancy_rejects_cross_org_connector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A connector owned by a DIFFERENT org must fail the tenancy check
+    (ProvisioningError, fail-CLOSED) even under a bypass-RLS session — FAR-801
+    review finding. The check filters ``ConnectorInstance.organisation_id ==
+    org_id`` explicitly rather than relying on caller RLS."""
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(return_value=None),
+    )
+    factory = _TenancyFactory(connector_org="org-other", request_org=_REQUEST_ORG)
+    with pytest.raises(ProvisioningError, match="tenancy check failed"):
+        await resolve_managed_inputs_host_side(
+            [
+                {
+                    "dest": "/home/user/repo",
+                    "connector_instance_id": str(uuid.uuid4()),
+                    "ref": {"kind": "branch", "value": "main"},
+                }
+            ],
+            org_id=_REQUEST_ORG,
+            session_factory=factory,
+        )
+
+
+async def test_connector_tenancy_allows_same_org_connector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A connector owned by the SAME org passes the tenancy check."""
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(return_value=None),
+    )
+    factory = _TenancyFactory(connector_org=_REQUEST_ORG, request_org=_REQUEST_ORG)
+    resolved = await resolve_managed_inputs_host_side(
+        [
+            {
+                "dest": "/home/user/repo",
+                "connector_instance_id": str(uuid.uuid4()),
+                "ref": {"kind": "branch", "value": "main"},
+            }
+        ],
+        org_id=_REQUEST_ORG,
+        session_factory=factory,
+    )
+    assert len(resolved) == 1
+    assert resolved[0].url == "https://github.com/org/repo.git"

@@ -27,8 +27,9 @@ from modulo.core.pipeline_engine.workspace_input_audit import (
     record_resolved_inputs,
     redact_url,
 )
+from modulo.db.crud.run_node_outputs import read_audit_row_outputs_json
 from modulo.db.models.base import Base
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
 
 _TABLE_NAMES = {"run_node_outputs", "organisations"}
 
@@ -455,3 +456,124 @@ class TestRecordDriftBestEffort:
             )
         assert "record_drift failed" in caplog.text
         assert "swallowed" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# FAR-801 attempt_key contract — producer/reader agreement (prove-the-fix)
+# ---------------------------------------------------------------------------
+
+
+class TestAuditAttemptKeyContract:
+    """The compensating sweep (_sweep_workspace_input_drift_flags) and the
+    workspace_inputs_count analytics backfill both read the audit sentinel row
+    at FINAL_ATTEMPT_KEY.  The producer (node_runner) MUST therefore write the
+    audit row at FINAL_ATTEMPT_KEY, otherwise the sweep/backfill never find it
+    (silent no-op).  These tests pin that contract.
+    """
+
+    @pytest.mark.anyio
+    async def test_sweep_reader_finds_row_written_at_final_attempt_key(self, session: AsyncSession) -> None:
+        """A drift row written at FINAL_ATTEMPT_KEY is found by the sweep's
+        exact reader (read_audit_row_outputs_json, defaulting to FINAL) and
+        reports drift_detected=True — so the sweep WOULD correct the run."""
+        rec = _make_record(resolved_sha="a" * 40)
+        await record_resolved_inputs(
+            session,
+            run_id=_RUN_ID,
+            organisation_id=_ORG,
+            node_id="sandbox-1",
+            attempt_key=FINAL_ATTEMPT_KEY,
+            records=[rec],
+            status="resolved",
+        )
+        await session.flush()
+        await record_drift(
+            session,
+            run_id=_RUN_ID,
+            organisation_id=_ORG,
+            node_id="sandbox-1",
+            attempt_key=FINAL_ATTEMPT_KEY,
+            final_shas={"my-repo": "b" * 40},
+        )
+        await session.flush()
+
+        # This is the EXACT read the sweep performs (attempt_key defaults to
+        # FINAL_ATTEMPT_KEY).
+        audit_row = await read_audit_row_outputs_json(session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID)
+        assert audit_row is not None
+        audit_list = audit_row["workspace_inputs"]
+        assert len(audit_list) == 1
+        assert audit_list[0]["drift_detected"] is True
+
+    @pytest.mark.anyio
+    async def test_sweep_reader_cannot_see_non_final_attempt_key(self, session: AsyncSession) -> None:
+        """Regression guard: if the producer ever writes the audit row at a
+        per-attempt key (the original bug) instead of FINAL_ATTEMPT_KEY, the
+        sweep's reader (defaulting to FINAL) MUST NOT find it — proving the
+        producer/sweep contract would silently break."""
+        rec = _make_record(resolved_sha="a" * 40)
+        await record_resolved_inputs(
+            session,
+            run_id=_RUN_ID,
+            organisation_id=_ORG,
+            node_id="sandbox-1",
+            attempt_key="run:123:node:sandbox-1:0",  # the buggy per-attempt key
+            records=[rec],
+            status="resolved",
+        )
+        await session.flush()
+
+        audit_row = await read_audit_row_outputs_json(session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID)
+        assert audit_row is None  # sweep would find nothing → silent no-op
+
+        # And the explicit FINAL read is also empty.
+        audit_row_final = await read_audit_row_outputs_json(
+            session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID, attempt_key=FINAL_ATTEMPT_KEY
+        )
+        assert audit_row_final is None
+
+    @pytest.mark.anyio
+    async def test_backfill_count_uses_final_attempt_key(self, session: AsyncSession) -> None:
+        """The analytics backfill counts workspace_inputs via the audit row at
+        FINAL_ATTEMPT_KEY (RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY). A
+        row written at FINAL is found (2 inputs); a row written at a non-FINAL
+        key is NOT found — mirroring the production backfill filter."""
+        from sqlalchemy import select
+
+        rec = _make_record(resolved_sha="a" * 40, input_name="repo-1")
+        second = _make_record(input_name="repo-2")
+        await record_resolved_inputs(
+            session,
+            run_id=_RUN_ID,
+            organisation_id=_ORG,
+            node_id="sandbox-1",
+            attempt_key=FINAL_ATTEMPT_KEY,
+            records=[rec, second],
+            status="resolved",
+        )
+        await session.flush()
+
+        row_final = (
+            await session.execute(
+                select(RunNodeOutput).where(
+                    RunNodeOutput.run_id == _RUN_ID,
+                    RunNodeOutput.node_id == AUDIT_NODE_ID,
+                    RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+                )
+            )
+        ).scalar_one_or_none()
+        assert row_final is not None
+        assert len(row_final.outputs_json["workspace_inputs"]) == 2
+
+        # A non-FINAL per-attempt key (the original bug) is invisible to the
+        # backfill filter.
+        row_bad = (
+            await session.execute(
+                select(RunNodeOutput).where(
+                    RunNodeOutput.run_id == _RUN_ID,
+                    RunNodeOutput.node_id == AUDIT_NODE_ID,
+                    RunNodeOutput.attempt_key == "run:123:node:sandbox-1:0",
+                )
+            )
+        ).scalar_one_or_none()
+        assert row_bad is None
