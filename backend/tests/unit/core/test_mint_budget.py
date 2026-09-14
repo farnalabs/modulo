@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import os
+import re
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -303,7 +304,8 @@ async def pg_url() -> AsyncIterator[str]:
         # not coverage-gated.
         pytest.skip(f"testcontainers Postgres unavailable (no Docker): {exc}")
     try:
-        url = container.get_connection_url().replace("postgresql://", "postgresql+asyncpg://", 1)
+        raw = container.get_connection_url()
+        url = re.sub(r"^postgresql(\+[a-z0-9]+)?://", "postgresql+asyncpg://", raw, flags=re.IGNORECASE)
         yield url
     finally:
         container.stop()
