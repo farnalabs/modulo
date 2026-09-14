@@ -57,6 +57,7 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and 0226_agents_json_to_jsonb chains off 0225,
 # and 0227_env_profiles_initialisation_strategy_check chains off 0226_agents_json_to_jsonb,
 # and FAR-802's 0229_add_workspace_inputs_count chains off 0228_drop_scalar_agent_command,
+# and FAR-828's 0230_agents_unique_organisation_name chains off 0229_add_workspace_inputs_count,
 # and FAR-795's 0231_journey_dismissal chains off 0230_agents_unique_organisation_name as the chain head.
 _CHAIN_HEAD_MIGRATION = "0231_journey_dismissal"
 
