@@ -141,8 +141,18 @@ def main() -> int:
     ]
 
     if scope_files:
-        # Set the scope env var for the child process
-        env_scope = os.pathsep.join(str(BACKEND / f) for f in scope_files)
+        # Set the scope env var for the child process.
+        # scope_files are repo-relative (e.g. "backend/tests/.../*.py"); pytest
+        # runs with cwd=backend/, so _iter_test_modules yields paths relative to
+        # backend/ and resolves them to BACKEND/tests/.../*.py. Joining BACKEND
+        # directly to the repo-relative spec would produce the bogus
+        # BACKEND/backend/tests/.../*.py (never exists) -> empty scope -> vacuous
+        # pass. Strip the leading "backend/" prefix so the resolved scope entries
+        # match the paths _iter_test_modules actually yields.
+        env_scope = os.pathsep.join(
+            str(BACKEND / f[len("backend/"):]) if f.startswith("backend/") else str(BACKEND / f)
+            for f in scope_files
+        )
         print(f"Scoped to {len(scope_files)} changed test file(s):")
         for f in scope_files:
             print(f"  {f}")
