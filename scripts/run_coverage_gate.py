@@ -62,27 +62,34 @@ _COVERAGE_LINE_RE = re.compile(r"Coverage:\s*(\d+(?:\.\d+)?)\s*%")
 _THRESHOLD_NOT_MET_RE = re.compile(r"Failure\. Coverage is below", re.IGNORECASE)
 
 
+# Allow-list for values that flow into a subprocess command line.  Deriving the
+# value from a regex ``fullmatch().group(0)`` gives the taint analyser a string
+# provably bounded to safe characters before it reaches ``subprocess`` (the
+# recognised remediation for argument-injection taint, pythonsecurity:S8705).
+_PATH_CHARS_RE = re.compile(r"[A-Za-z0-9._/-]+")
+
+
 def _validate_ref(value: str, name: str) -> str:
     """Reject values that would be interpreted as CLI flags when passed as a
-    subprocess argument (defense against argument injection).
+    subprocess argument (defense against argument injection), and return a
+    regex-bounded copy so the taint analyser sees a value that cannot carry an
+    injection payload.
 
     Mirrors the established guard in ``scripts/backup.py`` / ``scripts/restore.py``.
     ``compare_branch`` originates from the ``--compare-branch`` CLI argument and is
     therefore attacker-influenced; a crafted value such as ``--extra-flag`` passed
     to ``diff-cover`` would be interpreted as an additional flag rather than a
-    branch name.  Refusing anything that starts with ``-`` closes that sink.
+    branch name.  Refusing anything that starts with ``-`` (and deriving the
+    returned value from a strict allow-list match) closes that sink.
     """
+    if not isinstance(value, str):
+        raise ValueError(f"invalid {name}: expected a string, got {type(value).__name__}")
     if not value or value.startswith("-"):
         raise ValueError(f"invalid {name}: must be a non-empty value that does not start with '-'")
-    return value
-
-
-# Allow-list for the report-path argument, which also flows untrusted from the
-# CLI into ``subprocess``.  Deriving the value from a regex ``fullmatch().group(0)``
-# gives the taint analyser a string provably bounded to safe characters before it
-# reaches ``subprocess`` (the recognised remediation for argument-injection
-# taint, pythonsecurity:S8705).
-_PATH_CHARS_RE = re.compile(r"[A-Za-z0-9._/-]+")
+    matched = _PATH_CHARS_RE.fullmatch(value)
+    if not matched:
+        raise ValueError(f"invalid {name}: {value!r} contains disallowed characters")
+    return matched.group(0)
 
 
 def _sanitize_path(value: str, name: str) -> str:
@@ -92,6 +99,8 @@ def _sanitize_path(value: str, name: str) -> str:
     or diff-cover arguments."""
     if not isinstance(value, str):
         raise ValueError(f"invalid {name}: expected a string, got {type(value).__name__}")
+    if not value or value.startswith("-"):
+        raise ValueError(f"invalid {name}: must be a non-empty value that does not start with '-'")
     matched = _PATH_CHARS_RE.fullmatch(value)
     if not matched:
         raise ValueError(f"invalid {name}: {value!r} contains disallowed characters")
