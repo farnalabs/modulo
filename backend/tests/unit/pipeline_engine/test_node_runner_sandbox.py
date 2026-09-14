@@ -1425,6 +1425,8 @@ def test_persist_full_stdout_artifact_propagates_cancelled_error(mock_get_store)
             node_cap=2048,
             redacted_stdout="x" * 4096,
         )
+
+
 async def test_full_retention_drain_keeps_beyond_512kb():
     """In full mode the watchdog's drain window scales to the node cap, so the
     redirected-log path retains more than the 512KB legacy tail (default 5MB)."""
