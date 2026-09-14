@@ -2443,3 +2443,101 @@ async def test_redispatch_marker_refresh_only_for_running_rows():
             session2, MagicMock(), ORG, running_row, "execute_run", "suffix-2", None, False, 0, summary
         )
     clear_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# FAR-801: workspace-input drift flag compensating sweep (new code coverage)
+# ---------------------------------------------------------------------------
+
+
+async def test_sweep_workspace_input_drift_flags_corrects_skips_and_emits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Covers the new ``_sweep_workspace_input_drift_flags`` body: the bounded
+    terminal-run SELECT, the per-run audit read, the drift/non-drift UPDATE,
+    the skip paths for a missing audit row and an empty workspace-inputs
+    list, and the scanned/corrected return."""
+    run_drift = uuid.uuid4()
+    run_clean = uuid.uuid4()
+    run_no_audit = uuid.uuid4()
+    run_empty = uuid.uuid4()
+
+    select_result = _mock_result(all=[(run_drift, ORG), (run_clean, ORG), (run_no_audit, ORG), (run_empty, ORG)])
+    session = _MockSession([select_result])
+
+    audit_rows = {
+        run_drift: {"workspace_inputs": [{"drift_detected": True}]},
+        run_clean: {"workspace_inputs": [{"drift_detected": False}]},
+        run_no_audit: None,
+        run_empty: {"workspace_inputs": []},
+    }
+
+    async def _fake_read(session_arg: Any, *, run_id: uuid.UUID, node_id: str, attempt_key: str | None = None) -> Any:
+        return audit_rows.get(run_id)
+
+    monkeypatch.setattr(
+        "modulo.db.crud.run_node_outputs.read_audit_row_outputs_json",
+        _fake_read,
+    )
+
+    result = await ch._sweep_workspace_input_drift_flags(_factory_for(session))
+    assert result == {"scanned": 4, "corrected": 1}
+    # SELECT + 2 UPDATEs (no_audit and empty-list runs are skipped pre-update).
+    assert len(session.executed) == 3
+
+
+async def test_sweep_workspace_input_drift_flags_swallows_read_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Covers the outer ``except Exception`` branch: a failing audit read must
+    not abort the sweep — scanned is reported and corrected stays 0."""
+    run_id = uuid.uuid4()
+    select_result = _mock_result(all=[(run_id, ORG)])
+    session = _MockSession([select_result])
+
+    async def _boom(session_arg: Any, *, run_id: uuid.UUID, node_id: str, attempt_key: str | None = None) -> Any:
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(
+        "modulo.db.crud.run_node_outputs.read_audit_row_outputs_json",
+        _boom,
+    )
+
+    result = await ch._sweep_workspace_input_drift_flags(_factory_for(session))
+    assert result == {"scanned": 1, "corrected": 0}
+
+
+async def test_run_reconcile_sweeps_records_drift_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Covers the FAR-801 caller block inside ``_run_reconcile_sweeps``: the
+    drift sweep result is written into the summary (and the info log fires
+    when corrected > 0)."""
+    monkeypatch.setattr(
+        ch,
+        "_sweep_workspace_input_drift_flags",
+        AsyncMock(return_value={"scanned": 3, "corrected": 2}),
+    )
+    # The surrounding sweeps are patched so the test exercises only the new
+    # drift block without touching a live Postgres/Redis. Sweeps imported
+    # inside ``_run_reconcile_sweeps`` are patched at their source module.
+    # The factory helpers are stubbed so argument evaluation never reaches a
+    # real engine (the patched sweeps ignore the value anyway).
+    monkeypatch.setattr(ch, "_open_system_factory", lambda: MagicMock())
+    monkeypatch.setattr(ch, "_open_factory", lambda: MagicMock())
+    monkeypatch.setattr(ch, "run_classification_reconcile", AsyncMock(return_value={}))
+    monkeypatch.setattr(ch, "enforce_no_delivery_streaks", AsyncMock(return_value={}))
+    monkeypatch.setattr("modulo.auth.api_key.revoke_run_api_key_sweep", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        "modulo.core.rollback_thresholds.evaluate_rollback_thresholds",
+        AsyncMock(return_value={"orgs_checked": 0, "flagged_orgs": []}),
+    )
+    monkeypatch.setattr("modulo.core.runner_capacity.reconcile_runner_dispatch_markers", AsyncMock(return_value={}))
+    monkeypatch.setattr("modulo.core.error_tracking.metrics.sample_run_runtime_metrics", AsyncMock())
+    monkeypatch.setattr("modulo.core.error_tracking.metrics.sample_error_group_metrics", AsyncMock())
+
+    summary: dict[str, Any] = {}
+    redis_client = AsyncMock()
+    await ch._run_reconcile_sweeps(redis_client, summary)
+    assert summary.get("drift_sweep_scanned") == 3
+    assert summary.get("drift_sweep_corrected") == 2
