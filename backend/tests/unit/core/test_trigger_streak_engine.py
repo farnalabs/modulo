@@ -330,8 +330,10 @@ class TestMigrationBackfillGrace:
         # and 0224_agents_add_indexes chains on top of 0223,
         # and 0225_agents_constraints_rls chains on top of 0224,
         # and 0226_agents_json_to_jsonb chains on top of 0225,
-        # so it is now the single linear head of the chain.
-        assert heads == ["0226_agents_json_to_jsonb"], f"expected a single head, got {heads}"
+        # and 0227_env_profiles_initialisation_strategy_check chains on top of 0226,
+        # and 0228_journey_dismissal chains on top of 0227,
+        # so it is now the single linear head.
+        assert heads == ["0228_journey_dismissal"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

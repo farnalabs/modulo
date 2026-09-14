@@ -1,7 +1,7 @@
 """Operator dismissal (soft-delete) columns for ``journeys`` (FAR-795 slice C).
 
-Revision ID: 0227_journey_dismissal
-Revises: 0226_agents_json_to_jsonb
+Revision ID: 0228_journey_dismissal
+Revises: 0227_env_profiles_initialisation_strategy_check
 Create Date: 2026-09-13
 
 Schema legs (Postgres only; SQLite/ORM-created test schemas get the columns
@@ -34,8 +34,8 @@ from alembic import op
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-revision = "0227_journey_dismissal"
-down_revision = "0226_agents_json_to_jsonb"
+revision = "0228_journey_dismissal"
+down_revision = "0227_env_profiles_initialisation_strategy_check"
 branch_labels = None
 depends_on = None
 
