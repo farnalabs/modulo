@@ -8164,7 +8164,10 @@ async def _read_org_stdout_retention_ceiling(
 
     try:
         async with session_factory() as session, session.begin():
-            raw = await read_system_config(session, _ORG_SANDBOX_STDOUT_RETENTION_MAX_BYTES)
+            raw = await asyncio.wait_for(
+                read_system_config(session, _ORG_SANDBOX_STDOUT_RETENTION_MAX_BYTES),
+                timeout=_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT,
+            )
     except asyncio.CancelledError:
         raise
     except Exception:
