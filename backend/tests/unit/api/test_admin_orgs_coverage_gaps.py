@@ -26,7 +26,11 @@ from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.models.organisation import ORPHAN_ORG_ID, Organisation
+from modulo.db.models.organisation import (
+    MODULO_REGISTRY_ORG_ID,
+    ORPHAN_ORG_ID,
+    Organisation,
+)
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -206,6 +210,25 @@ def test_list_orgs_hides_orphan_org(api: tuple[TestClient, AsyncMock], monkeypat
     data = resp.json()
     assert len(data) == 1
     assert data[0]["slug"] == "target-org"
+
+
+def test_list_orgs_hides_registry_sentinel_org(
+    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-826: the modulo-library registry sentinel org (shadow rows for
+    collection installs) must not appear in the admin org listing, while a
+    normal tenant org and the orphan exclusion still pass."""
+    client, _ = api
+    sentinel = _org(org_id=MODULO_REGISTRY_ORG_ID, name="Modulo", slug="modulo")
+    orphan = _org(org_id=ORPHAN_ORG_ID, name="orphan", slug="orphan")
+    monkeypatch.setattr(admin_orgs, "list_organisations", AsyncMock(return_value=[_org(), sentinel, orphan]))
+    resp = client.get("/api/v1/admin/orgs")
+    assert resp.status_code == 200
+    data = resp.json()
+    slugs = [row["slug"] for row in data]
+    assert "target-org" in slugs
+    assert "modulo" not in slugs  # registry sentinel hidden
+    assert "orphan" not in slugs  # orphan still hidden
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
