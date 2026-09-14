@@ -25,7 +25,7 @@ from alembic.script import ScriptDirectory
 from modulo.core.feature_flags import _KNOWN_FLAGS
 from modulo.core.seed_data.catalog import FLAGS
 
-_HEAD_MIGRATION_NAME = "0228_workspace_input_drift_and_audit"
+_HEAD_MIGRATION_NAME = "0229_workspace_input_drift_and_audit"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"

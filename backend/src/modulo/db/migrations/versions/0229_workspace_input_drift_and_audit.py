@@ -1,7 +1,7 @@
 """Add workspace-input drift column, daily-facts count, and audit partial index (FAR-801).
 
-Revision ID: 0228_workspace_input_drift_and_audit
-Revises: 0227_env_profiles_initialisation_strategy_check
+Revision ID: 0229_workspace_input_drift_and_audit
+Revises: 0228_drop_scalar_agent_command
 Create Date: 2026-09-13
 
 Schema legs (Postgres only; SQLite/ORM-created test schemas get the columns
@@ -28,8 +28,8 @@ from the ``Run`` / ``RunDailyFact`` models' ``create_all``):
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0228_workspace_input_drift_and_audit"
-down_revision = "0227_env_profiles_initialisation_strategy_check"
+revision = "0229_workspace_input_drift_and_audit"
+down_revision = "0228_drop_scalar_agent_command"
 branch_labels = None
 depends_on = None
 
