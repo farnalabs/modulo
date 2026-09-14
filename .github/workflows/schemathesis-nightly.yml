@@ -69,7 +69,12 @@ jobs:
         # collection endpoint, so a per-group run legitimately collects 1 item;
         # only a zero-item collection (the real no-op regression) should fail.
         run: |
-          COUNT=$(uv run --no-build --no-sync pytest tests/integration/test_schemathesis.py --collect-only -q 2>/dev/null | grep -c "test_api_fuzz_get_endpoints\[")
+          # NOTE: `grep -c` exits 1 when it matches zero lines, and GitHub's
+          # bash steps run under `set -eo pipefail`, so a bare `grep -c` would
+          # abort the step (and swallow the real collection error that `2>/dev/null`
+          # was hiding) before our custom ::error message could print. Append
+          # `|| true` to absorb grep's non-zero exit and surface the count/error.
+          COUNT=$(uv run --no-build --no-sync pytest tests/integration/test_schemathesis.py --collect-only -q 2>&1 | grep -c "test_api_fuzz_get_endpoints\[" || true)
           echo "Collected $COUNT fuzz test item(s)"
           if [ "$COUNT" -lt 1 ]; then
             echo "::error::Schemathesis fuzz test is not parametrizing any endpoints (regression) — only $COUNT item collected"

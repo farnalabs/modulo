@@ -84,11 +84,11 @@ except RuntimeError as exc:
 # failure) before the fuzz can finish. Splitting per group keeps each job well
 # inside the runner's usable window while still catching 5xx regressions.
 SCHEMA_GROUPS = {
-    "pipelines": r"^/api/v1/pipelines(\?.*)?$",
-    "schemas": r"^/api/v1/schemas(\?.*)?$",
-    "libraries": r"^/api/v1/libraries(\?.*)?$",
-    "connectors": r"^/api/v1/connectors(\?.*)?$",
-    "model-backends": r"^/api/v1/model-backends(\?.*)?$",
+    "pipelines": r"^/api/v1/pipelines(/.*)?$",
+    "schemas": r"^/api/v1/schemas(/.*)?$",
+    "libraries": r"^/api/v1/libraries(/.*)?$",
+    "connectors": r"^/api/v1/connectors(/.*)?$",
+    "model-backends": r"^/api/v1/model-backends(/.*)?$",
 }
 
 
