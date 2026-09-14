@@ -490,6 +490,15 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+      - name: Fetch base branch for diff comparison
+        # diff-cover compares against `origin/${{ github.base_ref }}`. actions/checkout
+        # fetches the PR head (and its full history) but NOT the base-branch ref, so
+        # `origin/main` does not exist locally. Without this, diff-cover crashes with
+        # "unknown revision origin/main...HEAD", which the gate treats as a failure
+        # (fail-closed) and blocks the merge. Fetch the base ref explicitly so the
+        # comparison target resolves. Works for both pull_request (base_ref set) and
+        # workflow_dispatch (falls back to main).
+        run: git fetch origin "${{ github.base_ref || 'main' }}:refs/remotes/origin/${{ github.base_ref || 'main' }}"
       - name: Download backend coverage report
         uses: actions/download-artifact@v4
         with:
