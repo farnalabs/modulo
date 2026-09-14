@@ -274,13 +274,11 @@ class TestMigrationSchema:
             await engine.dispose()
 
 
-class TestRealPostgresConcurrency:
-    """True row-lock-concurrency proof — runs against a throwaway Postgres.
+@pytest.fixture(scope="class")
+async def pg_url() -> AsyncIterator[str]:
+    """Throwaway Postgres URL for the row-lock-concurrency proof.
 
-    SQLite serialises writers via its single-writer lock, so the unit
-    interleaving above cannot exercise the row-lock wait-then-reevaluate
-    path; this class fills that gap with a real Postgres. The Postgres is
-    supplied two ways, in order of preference:
+    Supplied two ways, in order of preference:
 
     * an externally-provisioned throwaway DB named by ``MINT_BUDGET_TEST_PG_URL``
       (e.g. a testcontainers container the merge-queue/deploy integration leg
@@ -288,6 +286,37 @@ class TestRealPostgresConcurrency:
     * a testcontainers ``PostgresContainer`` spun up on demand (CI/DEV), so the
       row-lock guarantee is exercised by the pipeline itself rather than only by
       agents with a local Docker Postgres.
+    """
+    env_url = os.environ.get(_PG_URL_ENV)
+    if env_url:
+        yield env_url
+        return
+    from testcontainers.community.postgres import PostgresContainer
+
+    try:
+        container = PostgresContainer("postgres:16-alpine")
+        container.start()
+    except Exception as exc:
+        # Genuinely no Docker in this environment (e.g. local dev without the
+        # daemon). CI provisions a Docker-capable runner, so the row-lock
+        # proof still runs in the pipeline — this skip is capability-gated,
+        # not coverage-gated.
+        pytest.skip(f"testcontainers Postgres unavailable (no Docker): {exc}")
+    try:
+        url = container.get_connection_url().replace("postgresql://", "postgresql+asyncpg://", 1)
+        yield url
+    finally:
+        container.stop()
+
+
+class TestRealPostgresConcurrency:
+    """True row-lock-concurrency proof — runs against a throwaway Postgres.
+
+    SQLite serialises writers via its single-writer lock, so the unit
+    interleaving above cannot exercise the row-lock wait-then-reevaluate
+    path; this class fills that gap with a real Postgres. The Postgres is
+    provisioned by the module-level ``pg_url`` fixture (see its docstring for
+    the two supply strategies).
 
     The throwaway DB gets the table via raw DDL matching migration
     0231_org_mint_budget_usage (the FK to ``organisations`` is deliberately
@@ -295,29 +324,6 @@ class TestRealPostgresConcurrency:
     caller's job and the migration exercises it on the real Postgres
     integration leg).
     """
-
-    @pytest.fixture(scope="class")
-    async def pg_url(self) -> AsyncIterator[str]:
-        env_url = os.environ.get(_PG_URL_ENV)
-        if env_url:
-            yield env_url
-            return
-        from testcontainers.community.postgres import PostgresContainer
-
-        try:
-            container = PostgresContainer("postgres:16-alpine")
-            container.start()
-        except Exception as exc:
-            # Genuinely no Docker in this environment (e.g. local dev without the
-            # daemon). CI provisions a Docker-capable runner, so the row-lock
-            # proof still runs in the pipeline — this skip is capability-gated,
-            # not coverage-gated.
-            pytest.skip(f"testcontainers Postgres unavailable (no Docker): {exc}")
-        try:
-            url = container.get_connection_url().replace("postgresql://", "postgresql+asyncpg://", 1)
-            yield url
-        finally:
-            container.stop()
 
     async def test_parallel_sessions_cannot_oversubscribe(self, pg_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
         # Two sessions race for ONE allowed consume — the conflict arm's row
