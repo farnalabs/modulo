@@ -19,7 +19,7 @@ bind seam is elsewhere.
 """
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from urllib.parse import urlparse
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -64,8 +64,7 @@ class HostOriginMiddleware(BaseHTTPMiddleware):
         super().__init__(app)  # type: ignore[arg-type]
         self._lan_origins = frozenset(h.lower() for h in lan_origins)
 
-    async def dispatch(self, request: Request, call_next: object) -> Response:
-        assert callable(call_next)
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         host = _host_of_header(request.headers.get("host", ""))
         if not self._host_allowed(host):
             _log.warning("middleware.host_origin_rejected kind=host host=%s", host or "<missing>")
@@ -74,7 +73,7 @@ class HostOriginMiddleware(BaseHTTPMiddleware):
         if origin and not self._origin_allowed(origin):
             _log.warning("middleware.host_origin_rejected kind=origin origin=%s", origin)
             return JSONResponse({"detail": "Forbidden: origin not allowed"}, status_code=403)
-        return await call_next(request)  # type: ignore[no-any-return]
+        return await call_next(request)
 
     def _effective_hosts(self) -> set[str]:
         return set(LOOPBACK_HOSTS) | self._lan_origins

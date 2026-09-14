@@ -196,6 +196,46 @@ def _fact_telemetry_bytes(blobs: RunBlobs | None) -> int | None:
         return None
 
 
+async def _fact_workspace_inputs_count(session: AsyncSession, run: Run) -> int | None:
+    """Count of managed workspace inputs resolved for this run (FAR-802).
+
+    Reads the ``run_node_outputs`` audit row keyed by ``(run_id,
+    _mwi_audit)`` and returns the length of the ``workspace_inputs`` list.
+    Returns None when no audit record exists (run had no workspace inputs).
+    Best-effort: a read failure degrades to None — never raises.
+    """
+    from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+    from modulo.db.models.run_node_outputs import RunNodeOutput
+
+    try:
+        # One audit row per (run_id, node_id, attempt_key): take the LATEST
+        # attempt so a per-attempt re-run cannot raise MultipleResultsFound
+        # (the table PK is (run_id, node_id, attempt_key)) and silently degrade
+        # the count to NULL.
+        row = (
+            await session.execute(
+                select(RunNodeOutput.outputs_json)
+                .where(
+                    RunNodeOutput.run_id == run.id,
+                    RunNodeOutput.node_id == AUDIT_NODE_ID,
+                )
+                .order_by(RunNodeOutput.attempt_key.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if not isinstance(row, dict):
+            return None
+        inputs = row.get("workspace_inputs")
+        return len(inputs) if isinstance(inputs, list) else None
+    except Exception:
+        _log.warning(
+            "analytics.workspace_inputs_count_read_failed",
+            extra={"run_id": str(run.id)},
+            exc_info=True,
+        )
+        return None
+
+
 def _derive_graph_dimensions(
     graph_json: Any,
 ) -> tuple[int, int, int | None]:
@@ -298,6 +338,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
         team_name, pipeline_name, folder_id = await _snapshot_dimensions(session, run)
         node_count, sandbox_agent_node_count, max_node_timeout_seconds = await _snapshot_graph_dimensions(session, run)
         blobs = await _fact_run_blobs(session, run)
+        workspace_inputs_count = await _fact_workspace_inputs_count(session, run)
         values: dict[str, Any] = {
             "run_id": run.id,
             "organisation_id": run.organisation_id,
@@ -337,6 +378,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "started_at": run.started_at,
             "completed_at": run.completed_at,
             "total_queue_wait_ms": _fact_total_queue_wait_ms(run),
+            "workspace_inputs_count": workspace_inputs_count,
         }
         async with session.begin_nested():
             stmt = pg_insert(RunDailyFact).values(**values)
@@ -373,6 +415,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
                 "started_at": stmt.excluded.started_at,
                 "completed_at": stmt.excluded.completed_at,
                 "total_queue_wait_ms": stmt.excluded.total_queue_wait_ms,
+                "workspace_inputs_count": stmt.excluded.workspace_inputs_count,
             }
             await session.execute(stmt.on_conflict_do_update(index_elements=[RunDailyFact.run_id], set_=update_cols))
     except asyncio.CancelledError:

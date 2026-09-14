@@ -331,7 +331,9 @@ class TestMigrationBackfillGrace:
         # and 0225_agents_constraints_rls chains on top of 0224,
         # and 0226_agents_json_to_jsonb chains on top of 0225,
         # and 0227_env_profiles_initialisation_strategy_check chains on top of 0226,
-        # and 0230_journey_dismissal chains on top of 0228_drop_scalar_agent_command,
+        # and 0228_drop_scalar_agent_command (FAR-828) chains on top of 0227,
+        # and FAR-802's 0229_add_workspace_inputs_count chains on top of 0228_drop_scalar_agent_command,
+        # and 0230_journey_dismissal chains on top of 0229_add_workspace_inputs_count,
         # so it is now the single linear head.
         assert heads == ["0230_journey_dismissal"], f"expected a single head, got {heads}"
 

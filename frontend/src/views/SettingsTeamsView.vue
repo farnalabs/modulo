@@ -68,7 +68,7 @@
               <ChevronRight class="h-4 w-4 shrink-0 text-muted-foreground transition-transform" :class="{ 'rotate-90': expandedTeamId === team.id }" aria-hidden="true" />
               <div>
                 <p class="font-medium">{{ team.name }}</p>
-                <p v-if="team.description" class="text-sm text-muted-foreground">{{ team.description }}</p>
+                <p class="text-sm text-muted-foreground">{{ team.description || '—' }}</p>
               </div>
             </button>
             <div class="flex shrink-0 items-center gap-3">
@@ -108,7 +108,7 @@
             <h3 class="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.SettingsTeamsView.members') }}</h3>
 
             <div v-if="membersLoading[team.id]" class="flex items-center justify-center py-4">
-              <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
+              <LoadingSpinner />
             </div>
             <div v-else-if="membersError[team.id]" class="mb-3 text-sm text-destructive">
               {{ membersError[team.id] }}

@@ -1,7 +1,7 @@
 """Operator dismissal (soft-delete) columns for ``journeys`` (FAR-795 slice C).
 
 Revision ID: 0230_journey_dismissal
-Revises: 0228_drop_scalar_agent_command
+Revises: 0229_add_workspace_inputs_count
 Create Date: 2026-09-13
 
 Schema legs (Postgres only; SQLite/ORM-created test schemas get the columns
@@ -35,7 +35,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 revision = "0230_journey_dismissal"
-down_revision = "0228_drop_scalar_agent_command"
+down_revision = "0229_add_workspace_inputs_count"
 branch_labels = None
 depends_on = None
 

@@ -95,7 +95,10 @@ from modulo.core.node_output_split import (
     resolve_node_contract_output,
 )
 from modulo.core.pipeline_engine.decorator import cancellable_node
-from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+from modulo.core.pipeline_engine.error_codes import (
+    _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
+    sanitize_error_text,
+)
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.hitl_context import serialize_value, slice_with_marker
@@ -5923,6 +5926,11 @@ class _SandboxNodeOutput(NamedTuple):
     # mode) and the stored agent_stdout/agent_stderr were truncated. Default
     # False so honest envelopes carry no key at all (backwards-compatible).
     stdout_truncated: bool = False
+    # FAR-811: when the redacted stdout exceeds the retention cap, a pointer to
+    # the FULL redacted transcript in the artifact store is surfaced here
+    # ({rel_path, size_bytes, sha256, stream, compression, truncated: False,
+    # redacted: True}). Absent (default) = today's inline-only behaviour.
+    stdout_artifact: Any = _UNSET
     attempt_key: str | None = None
     changed_files: Any = _UNSET
     pr_url: Any = _UNSET
@@ -6010,6 +6018,8 @@ def _build_sandbox_node_envelope(
     inner["stderr_length"] = output.stderr_length
     if output.stdout_truncated:
         inner["stdout_truncated"] = True
+    if output.stdout_artifact is not _UNSET:
+        inner["stdout_artifact"] = output.stdout_artifact
     if output.changed_files is not _UNSET:
         inner["changed_files"] = output.changed_files
     if output.pr_url is not _UNSET:
@@ -6240,10 +6250,60 @@ async def _finalize_artifact_writer(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning(
+        _log.exception(
             "sandbox_agent.artifact_finalize_failed",
             extra={"node_id": node_id, "run_id": run_id},
         )
+
+
+def _persist_full_stdout_artifact(
+    *,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    attempt_key: str | None,
+    node_cap: int,
+    redacted_stdout: str,
+) -> dict[str, Any] | None:
+    """FAR-811: write the full redacted stdout transcript to the artifact store
+    when it exceeds the retention cap, returning an envelope pointer.
+
+    Best-effort and non-fatal: any store failure returns None and the caller
+    keeps today's inline (truncated) behaviour. The transcript is written under
+    a ``:full:<cap>``-suffixed attempt key so it never collides with (or doubles)
+    the FAR-582 live side-car writer's per-attempt stream files. The returned
+    pointer mirrors the artifact-store pointer contract plus the FAR-811 flags
+    ``truncated: False`` / ``redacted: True`` (the stored content is the
+    pre-truncation REDACTED transcript, full length).
+    """
+    if not attempt_key or not redacted_stdout:
+        return None
+    try:
+        from modulo.core.artifacts.store import get_store
+
+        store = get_store()
+        overflow_key = f"{attempt_key}:full:{node_cap}"
+        store.append(org_id, run_id, node_id, overflow_key, "stdout", redacted_stdout)
+        pointer = store.finalize(org_id, run_id, node_id, overflow_key, "stdout")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.stdout_artifact_write_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+        )
+        return None
+    if pointer is None:
+        return None
+    return {
+        "rel_path": pointer.get("rel_path"),
+        "size_bytes": pointer.get("size_bytes"),
+        "sha256": pointer.get("sha256"),
+        "stream": "stdout",
+        "compression": pointer.get("compression"),
+        "truncated": False,
+        "redacted": True,
+    }
 
 
 async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
@@ -6740,11 +6800,22 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # FAR-800: resolve managed workspace input refs → SHA HOST-SIDE
         # BEFORE any sandbox is created.  A resolution failure (ref not
         # found, transient network error) must NEVER create a sandbox.
+        # FAR-802: killswitch — when MWI is disabled (default), refuse to
+        # provision inputs with a clear error code so the run is never
+        # silently pretending inputs were provisioned.
         _resolved_workspace_inputs: list[Any] = []
         if workspace_inputs:
             from modulo.core.pipeline_engine.workspace_input_orchestration import (
                 ProvisioningError as WorkspaceProvisioningError,
             )
+            from modulo.settings import get_settings as _get_mwi_settings
+
+            if not _get_mwi_settings().modulo_workspace_inputs_enabled:
+                raise WorkspaceProvisioningError(
+                    "Managed workspace inputs are disabled (MODULO_WORKSPACE_INPUTS_ENABLED is not set or false)",
+                    error_code=_CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
+                    retryable=False,
+                )
             from modulo.core.pipeline_engine.workspace_input_orchestration import (
                 resolve_managed_inputs_host_side,
             )
@@ -7795,6 +7866,22 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             attempt_key=attempt_key,
         )
 
+        # FAR-811: over-cap redacted stdout is retained IN FULL in the artifact
+        # store with an envelope pointer (`stdout_artifact`) instead of only the
+        # truncated head. Best-effort: a store failure keeps today's inline
+        # (truncated) behaviour with no pointer key. Redaction happened BEFORE
+        # this point (order unchanged) — the stored bytes are the redacted text.
+        _stdout_artifact: dict[str, Any] | None = None
+        if stdout_truncated:
+            _stdout_artifact = _persist_full_stdout_artifact(
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                node_cap=_stdout_cap,
+                redacted_stdout=_redact_raw_output(agent_stdout_raw),
+            )
+
         return _build_sandbox_node_envelope(
             node_id=node_id,
             output=_SandboxNodeOutput(
@@ -7812,6 +7899,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 stdout_length=_stdout_len,
                 stderr_length=_stderr_len,
                 stdout_truncated=stdout_truncated,
+                stdout_artifact=_stdout_artifact if _stdout_artifact is not None else _UNSET,
                 attempt_key=attempt_key,
                 agent_status=agent_status,
                 agent_outcome=agent_outcome,

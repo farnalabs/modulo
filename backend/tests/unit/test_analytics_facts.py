@@ -245,6 +245,7 @@ class TestRecordRunFacts:
                 "started_at",
                 "completed_at",
                 "total_queue_wait_ms",
+                "workspace_inputs_count",
             )
 
             def __init__(self, model) -> None:
@@ -274,6 +275,7 @@ class TestRecordRunFacts:
                 _scalar_one_result("Platform"),
                 SimpleNamespace(first=lambda: ("CI", None)),
                 *_blob_read_results(),
+                _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
                 SimpleNamespace(),
             ]
         )
@@ -282,8 +284,9 @@ class TestRecordRunFacts:
         await analytics_mod.record_run_facts(session, run)
 
         session.begin_nested.assert_called_once()
-        # snapshot dims + graph dims + the single blobs read (3 executes) + the upsert.
-        assert session.execute.await_count == 3 + len(_blob_read_results())
+        # snapshot dims + graph dims + the single blobs read + the
+        # workspace_inputs_count read (FAR-802) + the upsert.
+        assert session.execute.await_count == 3 + len(_blob_read_results()) + 1
         assert captured["model"] is analytics_mod.RunDailyFact
         assert len(captured["index_elements"]) == 1
         assert captured["index_elements"][0].key == "run_id"
@@ -305,6 +308,8 @@ class TestRecordRunFacts:
         assert values["started_at"] == run.started_at
         assert values["completed_at"] == run.completed_at
         assert values["total_queue_wait_ms"] == 600_000  # started 10:30 - created 10:20
+        # FAR-802: workspace_inputs_count fact (None when no audit row exists).
+        assert values["workspace_inputs_count"] is None
 
         update_keys = set(captured["set_"])
         assert {"status", "total_cost_usd", "total_tokens", "duration_ms", "run_date"} <= update_keys
@@ -363,6 +368,7 @@ class TestRecordRunFacts:
                 _scalar_one_result(None),
                 SimpleNamespace(first=lambda: (None, None)),
                 *_blob_read_results(),
+                _scalar_one_result(None),  # FAR-802 workspace_inputs_count read (succeeds)
                 RuntimeError("simulated facts insert failure"),
             ]
         )

@@ -392,6 +392,21 @@ def test_get_map_detail_decodes_stages_and_edges(client: tuple[TestClient, _Harn
     assert body["versions"][0]["version"] == 3
 
 
+def test_get_map_detail_versions_carry_uuid(client: tuple[TestClient, _Harness]) -> None:
+    """FAR-833: the version meta in the detail response must include the version id."""
+    http, harness = client
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["versions"]) == 1
+    version_meta = body["versions"][0]
+    assert "id" in version_meta
+    assert version_meta["id"] == str(_MAP_ID)
+
+
 def test_get_map_missing_returns_404(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     harness.stub("get_lifecycle_map", AsyncMock(return_value=None))
