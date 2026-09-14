@@ -273,14 +273,27 @@ async def get_primitive(
     session: AsyncSession,
     org_id: uuid.UUID,
     primitive_id: uuid.UUID,
+    *,
+    organisation_id: uuid.UUID | None = None,
 ) -> LibraryPrimitive | None:
     """Return a primitive visible to org_id, or None.
 
     Checks the org-scoped DB first, then falls back to in-memory modulo primitives.
     Supports being called within an existing transaction or starting its own.
+    When ``organisation_id`` is supplied the DB query carries an EXPLICIT org
+    filter in addition to the RLS context (needed on connections whose role
+    bypasses RLS, e.g. integration-test superusers).
     """
+
+    async def _lookup(s: AsyncSession) -> LibraryPrimitive | None:
+        stmt = select(LibraryPrimitive).where(LibraryPrimitive.id == primitive_id)
+        if organisation_id is not None:
+            stmt = stmt.where(LibraryPrimitive.organisation_id == organisation_id)
+        result = await s.execute(stmt)
+        return result.scalar_one_or_none()
+
     try:
-        item = await _scoped_execute(session, org_id, lambda s: get_library_primitive(s, primitive_id))
+        item = await _scoped_execute(session, org_id, _lookup)
     except ProgrammingError:
         logger.warning("get_primitive — DB not migrated or table missing for %s", primitive_id)
         return None
@@ -297,11 +310,16 @@ async def get_primitive_by_slug(
     org_id: uuid.UUID,
     primitive_type: str,
     slug: str,
+    *,
+    organisation_id: uuid.UUID | None = None,
 ) -> LibraryPrimitive | None:
     """Return a primitive visible to org_id by type and slug, or None.
 
     Checks the org-scoped DB first, then falls back to in-memory modulo primitives.
     Supports being called within an existing transaction or starting its own.
+    When ``organisation_id`` is supplied the DB query carries an EXPLICIT org
+    filter in addition to the RLS context (needed on connections whose role
+    bypasses RLS, e.g. integration-test superusers).
     """
 
     async def _lookup(s: AsyncSession) -> LibraryPrimitive | None:
@@ -309,6 +327,8 @@ async def get_primitive_by_slug(
             LibraryPrimitive.primitive_type == primitive_type,
             LibraryPrimitive.slug == slug,
         )
+        if organisation_id is not None:
+            stmt = stmt.where(LibraryPrimitive.organisation_id == organisation_id)
         result = await s.execute(stmt)
         return result.scalar_one_or_none()
 
