@@ -12,6 +12,7 @@ import {
 export {
   getAccessToken,
   clearAccessToken,
+  clearAccessTokenForLogout,
   setAccessToken,
   setRefreshToken,
   onAuthChange,
@@ -64,12 +65,12 @@ const _origDelete = api.DELETE
 type AnyClientMethod = (
   url: never,
   init?: never,
-) => Promise<{ data?: unknown; error?: unknown; response?: Response | undefined }>
+) => Promise<{ data?: unknown; error?: unknown; response?: Response }>
 
 type CallableMethod = (
   url: string,
   init?: Record<string, unknown>,
-) => Promise<{ data?: unknown; error?: unknown; response?: Response | undefined }>
+) => Promise<{ data?: unknown; error?: unknown; response?: Response }>
 
 function withAuth<M extends AnyClientMethod>(fn: M, retryable: boolean): M {
   const call = fn as unknown as CallableMethod

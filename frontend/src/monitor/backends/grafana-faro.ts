@@ -55,8 +55,8 @@ export class GrafanaFaroMonitorBackend implements MonitorBackend {
         apiKey: cfg.apiKey,
         app: {
           name: cfg.appName ?? 'modulo',
-          version: typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_APP_VERSION as string) ?? '' : '',
-          environment: typeof import.meta !== 'undefined' ? (import.meta.env?.MODE as string) ?? 'production' : 'production',
+          version: import.meta !== undefined ? (import.meta.env?.VITE_APP_VERSION as string) ?? '' : '',
+          environment: import.meta !== undefined ? (import.meta.env?.MODE as string) ?? 'production' : 'production',
         },
       })
 

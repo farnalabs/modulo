@@ -18,7 +18,7 @@ export function trapTabInElement(e: KeyboardEvent, root: HTMLElement | null): vo
     return
   }
   const first = focusable[0]
-  const last = focusable[focusable.length - 1]
+  const last = focusable.at(-1)!
   const active = document.activeElement
   const focusInside = active instanceof HTMLElement && root.contains(active)
 

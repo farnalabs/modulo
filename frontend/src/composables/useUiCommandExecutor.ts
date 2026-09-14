@@ -563,7 +563,7 @@ async function getPageInteractables(): Promise<UiCommandResult> {
     const htmlEl = el as HTMLElement
     if (!htmlEl.offsetParent && !htmlEl.offsetWidth && !htmlEl.offsetHeight) return
     const tag = el.tagName.toLowerCase()
-    const testid = el.getAttribute('data-testid')
+    const testid = (el as HTMLElement).dataset.testid ?? null
     const sel = buildSelector(el)
     if (!sel) return
     interactables.push({
@@ -619,8 +619,8 @@ async function pressKey(key: string): Promise<UiCommandResult> {
 }
 
 function buildSelector(el: Element): string | null {
-  if (el.getAttribute('data-testid')) {
-    return `[data-testid="${CSS.escape(el.getAttribute('data-testid')!)}"]`
+  if ((el as HTMLElement).dataset.testid) {
+    return `[data-testid="${CSS.escape((el as HTMLElement).dataset.testid!)}"]`
   }
   if (el.getAttribute('id')) {
     return `#${CSS.escape(el.getAttribute('id')!)}`

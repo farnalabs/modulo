@@ -47,7 +47,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { clearAccessToken } from "../lib/api/client";
+import { clearAccessTokenForLogout } from "../lib/api/client";
 import { useCurrentUser } from "../composables/useCurrentUser";
 import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
@@ -132,7 +132,7 @@ function logout() {
   // marker, no tombstone) instead of being re-minted into /demo against their
   // will. Involuntary clears (token expiry, 401 recovery) keep the default
   // tombstone so auto-login cannot escalate a dead demo session.
-  clearAccessToken({ demoEnded: false });
+  clearAccessTokenForLogout();
   window.location.reload();
 }
 
