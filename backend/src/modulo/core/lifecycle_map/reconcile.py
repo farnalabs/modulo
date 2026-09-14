@@ -76,6 +76,7 @@ from modulo.core.lifecycle_map.advancement import (
 )
 from modulo.db.lifecycle_refs import (
     REFS_EVENT_ASSIGNED_SOURCE,
+    REFS_EVENT_DISMISSAL_SUPPRESSED,
     REFS_EVENT_MALFORMED,
     REFS_EVENT_SHADOW_STRIP_HIT,
     REFS_EVENT_UNKNOWN_SOURCE,
@@ -98,6 +99,7 @@ __all__ = [
     "record_journey_reconcile_drift",
     "record_refs_by_source",
     "record_refs_cap_dropped",
+    "record_refs_dismissal_suppressed",
     "record_refs_malformed",
     "record_refs_shadow_strip_hit",
     "record_refs_unknown_source",
@@ -135,6 +137,7 @@ _refs_malformed_total: Any = None
 _refs_cap_dropped_total: Any = None
 _refs_agent_minted_total: Any = None
 _refs_agent_mint_suppressed_total: Any = None
+_refs_dismissal_suppressed_total: Any = None
 
 # The cap-drop event name emitted by the finalize merge and the node-input
 # injection paths (both report it verbatim through ``notify_refs_event``).
@@ -176,7 +179,8 @@ def _ensure() -> None:
         _refs_malformed_total, \
         _refs_cap_dropped_total, \
         _refs_agent_minted_total, \
-        _refs_agent_mint_suppressed_total
+        _refs_agent_mint_suppressed_total, \
+        _refs_dismissal_suppressed_total
     if _journey_advance_total is not None:
         return
     meter = _get_meter()
@@ -245,6 +249,11 @@ def _ensure() -> None:
     _refs_agent_mint_suppressed_total = meter.create_counter(
         name="modulo_work_item_refs_agent_mint_suppressed_by_flag_total",
         description="Agent-sourced journey mints suppressed because the org flag was OFF (FAR-795)",
+        unit="1",
+    )
+    _refs_dismissal_suppressed_total = meter.create_counter(
+        name="modulo_work_item_refs_dismissal_suppressed_total",
+        description="Journeys re-mint/advance attempts suppressed by an operator dismissal (FAR-795)",
         unit="1",
     )
 
@@ -358,6 +367,14 @@ def record_refs_agent_mint_suppressed_by_flag(count: int = 1) -> None:
         _refs_agent_mint_suppressed_total.add(count)
 
 
+def record_refs_dismissal_suppressed(count: int = 1) -> None:
+    """Record journey mint/advance attempts suppressed by an operator dismissal (FAR-795)."""
+    if _refs_dismissal_suppressed_total is None:
+        _ensure()
+    if _refs_dismissal_suppressed_total is not None:
+        _refs_dismissal_suppressed_total.add(count)
+
+
 def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
     """Dispatch db-layer ref events onto the FAR-794 counters.
 
@@ -385,6 +402,8 @@ def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
         record_refs_agent_minted(int(count) if count is not None else 1)
     elif event == REFS_EVENT_AGENT_MINT_SUPPRESSED:
         record_refs_agent_mint_suppressed_by_flag(int(count) if count is not None else 1)
+    elif event == REFS_EVENT_DISMISSAL_SUPPRESSED:
+        record_refs_dismissal_suppressed(int(count) if count is not None else 1)
 
 
 def _init_once_register_refs_counter_hook() -> None:
@@ -448,13 +467,17 @@ async def _drift_refs(
     * STALE applies only to *advancing* runs (their evidence can move);
       ``cancelled`` / ``stalled`` runs mint-only, so only MISSING refs are
       drift for them (a stale row can never be moved and must not re-fire).
+    * FAR-795 slice C: a DISMISSED tombstone row is never drift — the sweep
+      must not resurrect a dismissed journey. Its suppressed re-advance
+      attempt is counted (``refs_dismissal_suppressed``) and the ref is
+      skipped.
     """
     if not canonical:
         return []
     clauses = [and_(Journey.kind == entry["kind"], Journey.ref == entry["ref"]) for entry in canonical]
     rows = (
         await session.execute(
-            select(Journey.kind, Journey.ref, Journey.updated_at)
+            select(Journey.kind, Journey.ref, Journey.updated_at, Journey.dismissed_at)
             .where(
                 Journey.organisation_id == organisation_id,
                 or_(*clauses),
@@ -462,12 +485,23 @@ async def _drift_refs(
             .execution_options(populate_existing=True)
         )
     ).all()
-    found: dict[tuple[str, str], datetime | None] = {(row[0], row[1]): row[2] for row in rows}
+    found: dict[tuple[str, str], tuple[datetime | None, datetime | None]] = {
+        (row[0], row[1]): (row[2], row[3]) for row in rows
+    }
     drift: list[dict[str, Any]] = []
+    dismissed = 0
     for entry in canonical:
-        updated_at = found.get((entry["kind"], entry["ref"]))
-        if updated_at is None or (advancing and anchor is not None and updated_at < anchor):
+        row = found.get((entry["kind"], entry["ref"]))
+        if row is None:
             drift.append(entry)
+            continue
+        updated_at, dismissed_at = row
+        if dismissed_at is not None:
+            dismissed += 1
+        elif updated_at is None or (advancing and anchor is not None and updated_at < anchor):
+            drift.append(entry)
+    if dismissed:
+        record_refs_dismissal_suppressed(dismissed)
     return drift
 
 
@@ -519,9 +553,13 @@ def _drift_predicate(dialect: str) -> Any:
         .where(
             or_(
                 Journey.id.is_(None),
+                # FAR-795 slice C: a joined DISMISSED row is never stale drift
+                # — the sweep must not select-and-resurrect a dismissed
+                # journey forever. Mirrors the ``_drift_refs`` skip.
                 and_(
                     stale_evidence,
                     Run.status.in_(_ADVANCING_STATUSES),
+                    Journey.dismissed_at.is_(None),
                 ),
             )
         )

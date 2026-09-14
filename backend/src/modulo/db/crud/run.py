@@ -36,6 +36,7 @@ from modulo.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
     _SOURCE_RANK,
     REFS_EVENT_ASSIGNED_SOURCE,
+    REFS_EVENT_DISMISSAL_SUPPRESSED,
     REFS_EVENT_MALFORMED,
     REFS_EVENT_UNKNOWN_SOURCE,
     WIRE_REFS_ALIAS_KEY,
@@ -487,7 +488,14 @@ _HYDRATE_UPSERT_SUFFIX = (
     "provenance = CASE "
     "WHEN (CASE excluded.provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
     "> (CASE journeys.provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
-    "THEN excluded.provenance ELSE journeys.provenance END"
+    "THEN excluded.provenance ELSE journeys.provenance END "
+    # FAR-795 slice C — dismissal suppression at the upsert predicate: a
+    # dismissed (tombstone) row is never re-minted or re-stamped by ANY
+    # source (agent / derived / caller) on ANY path. This is the
+    # authoritative gate at the single create-time mint chokepoint — no
+    # prior-read can circumvent it (an operator restore is the ONLY way the
+    # row becomes writable again).
+    "WHERE journeys.dismissed_at IS NULL"
 )
 _HYDRATE_VALUES_TEMPLATE = (
     "(:id{i}, :org_id, :kind{i}, :ref{i}, :canonical_id{i}, :prov{i}, :prov{i}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
@@ -588,20 +596,33 @@ async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list
             try:
                 fresh_pairs = [(str(e["kind"]), str(e["ref"])) for e in agent_entries]
                 result = await session.execute(
-                    select(Journey.kind, Journey.ref).where(
+                    select(Journey.kind, Journey.ref, Journey.dismissed_at).where(
                         Journey.organisation_id == org_id,
                         or_(*((Journey.kind == k) & (Journey.ref == r) for k, r in fresh_pairs)),
                     )
                 )
-                probe_rows = {(r[0], r[1]) for r in result.all()}
+                probe_rows = result.all()
+                probe_pairs = {(str(r[0]), str(r[1])) for r in probe_rows if r[2] is None}
+                dismissed_pairs = {(str(r[0]), str(r[1])) for r in probe_rows if r[2] is not None}
             except asyncio.CancelledError:
                 raise
             except Exception:
                 _log.exception("journey agent-mint existence probe failed for org %s", org_id)
-                probe_rows = set()
-            newly = [e for e in agent_entries if (str(e["kind"]), str(e["ref"])) not in probe_rows]
+                probe_pairs = set()
+                dismissed_pairs = set()
+            newly = [e for e in agent_entries if (str(e["kind"]), str(e["ref"])) not in probe_pairs]
             agent_minted = len(newly)
             agent_suppressed = len(agent_entries) - len(newly)
+            if dismissed_pairs:
+                # FAR-795 slice C: agent entries whose canonical row is a
+                # tombstone are DISMISSAL-suppressed, not flag-suppressed —
+                # counted separately, never as minted, and dropped from the
+                # batch (the row's conflict arm would refuse the write anyway).
+                dropped = [e for e in newly if (str(e["kind"]), str(e["ref"])) in dismissed_pairs]
+                newly = [e for e in newly if (str(e["kind"]), str(e["ref"])) not in dismissed_pairs]
+                agent_minted -= len(dropped)
+                if dropped:
+                    notify_refs_event(REFS_EVENT_DISMISSAL_SUPPRESSED, count=len(dropped))
             mintable = mintable + newly
         else:
             agent_suppressed = len(agent_entries)

@@ -32,7 +32,7 @@ downgrade (mirrors the 0222 downgrade posture).
 
 from alembic import op
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection
 
 revision = "0227_journey_dismissal"
 down_revision = "0226_agents_json_to_jsonb"
@@ -46,9 +46,8 @@ _columns = [
 ]
 
 
-def _is_postgres(bind: Engine) -> bool:
-    dialect_name = str(getattr(bind, "dialect", None).name) if getattr(bind, "dialect", None) is not None else ""
-    return dialect_name.startswith("postgres")
+def _is_postgres(bind: Connection) -> bool:
+    return str(bind.dialect.name).startswith("postgres")
 
 
 def upgrade() -> None:

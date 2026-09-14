@@ -83,7 +83,12 @@ from sqlalchemy import DateTime, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.runtime_config.org_flags import FLAG_WORK_ITEM_AGENT_MINTING_ENABLED, is_org_flag_enabled
-from modulo.db.lifecycle_refs import canonical_work_item_id, validate_ref_entry
+from modulo.db.lifecycle_refs import (
+    REFS_EVENT_DISMISSAL_SUPPRESSED,
+    canonical_work_item_id,
+    notify_refs_event,
+    validate_ref_entry,
+)
 from modulo.db.models.journey import Journey
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 
@@ -169,7 +174,12 @@ _ADVANCE_SQL = text(
     "run_count = COALESCE(journeys.run_count, 0) + :run_count_delta, "
     "updated_at = CASE "
     "  WHEN :evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL THEN :evidence_ts "
-    "  ELSE journeys.updated_at END"
+    "  ELSE journeys.updated_at END "
+    # FAR-795 slice C — dismissal suppression at the upsert predicate: a
+    # tombstone (``dismissed_at`` set) is never re-advanced, re-minted, or
+    # re-stamped by ANY source on the mint chokepoint, no matter which path
+    # carried the ref. This is the authoritative gate (not a TOCTOU read).
+    "WHERE journeys.dismissed_at IS NULL"
 ).bindparams(
     # FAR-665: declare the :evidence_ts bind as a tz-aware DateTime so
     # SQLAlchemy converts per backend. On Postgres the parameter is inferred
@@ -206,7 +216,9 @@ _PROVENANCE_UPSERT_SQL = text(
     "provenance = CASE "
     "WHEN (CASE :provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
     "> (CASE journeys.provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
-    "THEN :provenance ELSE journeys.provenance END"
+    "THEN :provenance ELSE journeys.provenance END "
+    # FAR-795 slice C: a dismissed (tombstone) row is never re-stamped.
+    "WHERE journeys.dismissed_at IS NULL"
 )
 
 
@@ -343,6 +355,10 @@ async def confirm_reported_refs(
                     Journey.organisation_id == organisation_id,
                     Journey.kind == entry["kind"],
                     Journey.ref == entry["ref"],
+                    # FAR-795 slice C: a dismissed journey is treated as
+                    # NONEXISTENT for every existence check — a citation of a
+                    # dismissed work item cannot resurrect it.
+                    Journey.dismissed_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -423,7 +439,7 @@ async def _mint_or_advance_ref(
         await session.execute(_MINT_SQL, params)
         return 0
 
-    await session.execute(
+    result = await session.execute(
         _ADVANCE_SQL,
         {
             **params,
@@ -442,7 +458,12 @@ async def _mint_or_advance_ref(
             "evidence_ts": evidence_ts,
         },
     )
-    return 1
+    # FAR-795 slice C: the advance statement carries a dismissal predicate
+    # (``WHERE journeys.dismissed_at IS NULL``) — an arm that refused the
+    # write (tombstone row) reports rowcount 0 and must NOT count as "a
+    # journey advanced" (the reconcile sweep's advanced counter and the
+    # HOUSEKEEPING readout both consume this number).
+    return int(getattr(result, "rowcount", 0) or 0)  # raw-SQL Result exposes rowcount at runtime
 
 
 async def advance_journeys(
@@ -577,6 +598,7 @@ async def upsert_ref_provenances(
     considered = 0
     agent_minted = 0
     agent_suppressed = 0
+    dismissed_suppressed = 0
     for entry in refs:
         mintable = _mintable_source(entry)
         agent = _agent_source(entry)
@@ -590,16 +612,23 @@ async def upsert_ref_provenances(
         if canonical is None:
             continue
         if agent:
-            exists = (
+            rows = (
                 await session.execute(
-                    select(Journey.id).where(
+                    select(Journey.id, Journey.dismissed_at).where(
                         Journey.organisation_id == organisation_id,
                         Journey.kind == canonical["kind"],
                         Journey.ref == canonical["ref"],
                     )
                 )
-            ).scalar_one_or_none()
-            if exists is None:
+            ).first()
+            # FAR-795 slice C: a DISMISSED tombstone row suppresses the mint
+            # on any path — count it and skip the write entirely (the upsert
+            # conservative gate; this probe adds the
+            # counter). A caller citation never un-dismisses.
+            if rows is not None and rows[1] is not None:
+                dismissed_suppressed += 1
+                continue
+            if rows is None:
                 # Row missing: the agent mint either happens (flag ON) or was
                 # suppressed by the flag (flag OFF). An existing row's
                 # agent-cited write is a rank-0 no-op — not counted.
@@ -621,4 +650,6 @@ async def upsert_ref_provenances(
         )
         await session.execute(_PROVENANCE_UPSERT_SQL, params)
         considered += 1
+    if dismissed_suppressed:
+        notify_refs_event(REFS_EVENT_DISMISSAL_SUPPRESSED, count=dismissed_suppressed)
     return considered, agent_minted, agent_suppressed

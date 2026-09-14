@@ -30,7 +30,7 @@ setup in ``test_journey_advancement.py``:
 import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 
 import pytest
@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import modulo.core.lifecycle_map.reconcile as reconcile_mod
 from modulo.core.lifecycle_map.advancement import advance_journeys
+from modulo.core.lifecycle_map.journeys import dismiss_journey
 from modulo.core.lifecycle_map.reconcile import (
     _canonical_refs,
     _drift_predicate,
@@ -55,6 +56,7 @@ from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import JourneyFact
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_ACCOUNT = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _SNAPSHOT = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
 
@@ -883,8 +885,8 @@ class TestReconcileMetrics:
         reconcile_mod._ensure()
         # Only the first call builds the handles; the second returns early.
         # Six journey handles + the five FAR-794 work-item-refs counters
-        # + the two FAR-795 agent-mint counters.
-        assert len(fake_meter.counters) == 13
+        # + the two FAR-795 agent-mint counters + the slice-C dismissal counter.
+        assert len(fake_meter.counters) == 14
 
     def test_refs_cap_dropped_event_is_counted(self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         """The finalize / node-input cap-drop emissions land on the counter."""
@@ -903,3 +905,104 @@ class TestReconcileMetrics:
         reconcile_mod.record_refs_cap_dropped(1)
         for name in _RECONCILE_HANDLE_NAMES:
             assert getattr(reconcile_mod, name) is None
+
+
+class TestDismissalSuppression:
+    async def test_sweep_never_resurrects_dismissed_journey(
+        self,
+        session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        suppressed: list[int] = []
+        monkeypatch.setattr(reconcile_mod, "record_refs_dismissal_suppressed", lambda n: suppressed.append(n))
+        # A mixed run: one genuinely-stale ref (drifts) + one dismissed ref.
+        # The SQL drift predicate includes the run because of the stale ref;
+        # _drift_refs must then exclude the dismissed one (counting it) while
+        # the sweep advances only the stale ref.
+        run = await _seed_run(
+            session,
+            refs=[
+                {"kind": "github_pr", "ref": "123", "source": "derived"},
+                {"kind": "github_pr", "ref": "777", "source": "derived"},
+            ],
+        )
+        completed_at = run.completed_at
+        await _seed_journey(
+            session,
+            "github_pr",
+            "777",
+            updated_at=completed_at - timedelta(days=1),
+            latest_terminal_run_id=uuid.uuid4(),
+        )
+        await _seed_journey(
+            session,
+            "github_pr",
+            "123",
+            updated_at=completed_at - timedelta(days=1),
+            latest_terminal_run_id=uuid.uuid4(),
+        )
+        assert await dismiss_journey(
+            session,
+            _ORG,
+            kind="github_pr",
+            ref="123",
+            dismissed_by=_ACCOUNT,
+        )
+        await session.flush()
+        session.expire_all()
+        dismissed_at_before = (await _read_journey(session, "github_pr", "123")).dismissed_at
+
+        advanced = await reconcile_journeys(session, batch_size=10)
+        assert advanced == 1
+        row = await _read_journey(session, "github_pr", "123")
+        assert row is not None
+        assert row.dismissed_at.replace(tzinfo=None) == dismissed_at_before.replace(tzinfo=None)
+        assert suppressed == [1]
+        # The stale sibling journey WAS re-advanced (evidence moved to the run).
+        stale_row = await _read_journey(session, "github_pr", "777")
+        assert stale_row.updated_at.replace(tzinfo=None) == completed_at.replace(tzinfo=None)
+
+    async def test_drift_refs_excludes_dismissed_includes_missing(
+        self,
+        session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        suppressed: list[int] = []
+        monkeypatch.setattr(reconcile_mod, "record_refs_dismissal_suppressed", lambda n: suppressed.append(n))
+        await _seed_journey(session, "github_pr", "123")
+        assert await dismiss_journey(session, _ORG, kind="github_pr", ref="123", dismissed_by=_ACCOUNT)
+        await session.flush()
+
+        drift = await _drift_refs(
+            session,
+            _ORG,
+            [
+                {"kind": "github_pr", "ref": "123", "source": "derived"},
+                {"kind": "github_pr", "ref": "999", "source": "derived"},
+            ],
+            anchor=_T2,
+            advancing=True,
+        )
+        assert drift == [{"kind": "github_pr", "ref": "999", "source": "derived"}]
+        assert suppressed == [1]
+
+    async def test_drift_refs_no_suppressed_key_when_all_active(
+        self,
+        session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        suppressed: list[int] = []
+        monkeypatch.setattr(reconcile_mod, "record_refs_dismissal_suppressed", lambda n: suppressed.append(n))
+        await _seed_journey(session, "github_pr", "123")
+        await session.flush()
+
+        # All active and up to date -> no drift, no suppression counter.
+        drift = await _drift_refs(
+            session,
+            _ORG,
+            [{"kind": "github_pr", "ref": "123", "source": "derived"}],
+            anchor=None,
+            advancing=True,
+        )
+        assert drift == []
+        assert suppressed == []
