@@ -10,7 +10,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -44,7 +43,6 @@ class Agent(OrgScoped):
         ),
         CheckConstraint("token_budget IS NULL OR token_budget > 0", name="ck_agents_token_budget"),
         CheckConstraint("max_input_length IS NULL OR max_input_length > 0", name="ck_agents_max_input_length"),
-        UniqueConstraint("organisation_id", "name", name="uq_agents_organisation_name"),
     )
 
     is_executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
