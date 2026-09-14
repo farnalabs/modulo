@@ -355,32 +355,32 @@
 
   .badge-context-purple {
     background-color: hsla(270 60% 50% / 0.12);
-    color: hsl(270 60% 50%);
+    color: hsl(270 60% 70%);
   }
 
   .badge-context-indigo {
     background-color: hsla(240 60% 50% / 0.12);
-    color: hsl(240 60% 50%);
+    color: hsl(240 60% 70%);
   }
 
   .badge-context-cyan {
     background-color: hsla(190 80% 40% / 0.12);
-    color: hsl(190 80% 40%);
+    color: hsl(190 80% 58%);
   }
 
   .badge-context-orange {
     background-color: hsla(25 90% 50% / 0.12);
-    color: hsl(25 90% 50%);
+    color: hsl(25 90% 70%);
   }
 
   .badge-context-pink {
     background-color: hsla(340 80% 50% / 0.12);
-    color: hsl(340 80% 50%);
+    color: hsl(340 80% 70%);
   }
 
   .badge-context-rose {
     background-color: hsla(350 80% 50% / 0.12);
-    color: hsl(350 80% 50%);
+    color: hsl(350 80% 70%);
   }
 
   .badge-context-slate {
@@ -399,7 +399,7 @@
   }
 
   .badge-context-green {
-    color: hsl(142 71% 45%);
+    color: hsl(142 71% 68%);
     background-color: hsla(142 71% 45% / 0.1);
   }
 
