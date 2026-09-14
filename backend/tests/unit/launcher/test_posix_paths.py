@@ -14,6 +14,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -253,7 +254,17 @@ class TestIsPostgresProcess:
             start_new_session=True,
         )
         try:
-            result = supervisor_module._is_postgres_process(proc.pid)
+            # Popen returns before the kernel finishes exec-ing the interpreter
+            # named by the script's shebang.  At that instant /proc/<pid>/cmdline
+            # is momentarily empty, so _is_postgres_process finds no part ending
+            # in 'postgres' and would report False.  Poll until the child's
+            # cmdline has been populated (i.e. exec completed) before asserting.
+            result = False
+            for _ in range(100):
+                result = supervisor_module._is_postgres_process(proc.pid)
+                if result is True:
+                    break
+                time.sleep(0.01)
             assert result is True
         finally:
             try:
