@@ -231,21 +231,17 @@ async function doRefresh(): Promise<boolean> {
         return true
       }
 
-      // 409 stale_refresh_token: the token we sent was already used by a sibling.
-      // Re-read localStorage — a fresh token may have appeared — and retry.
-      if (resp.status === 409) {
-        try {
-          const body = await resp.json()
-          if (body?.code === 'stale_refresh_token' && attempt < STALE_RETRY_DELAYS.length) {
-            await new Promise((r) => setTimeout(r, STALE_RETRY_DELAYS[attempt]))
-            continue
-          }
-        } catch {
-          // Body parse failure — fall through to the generic false return.
-        }
+      // 409 from /auth/refresh: treat as retryable stale-token race. The
+      // endpoint has no other 409 semantic that justifies killing the session
+      // (its IntegrityError 409 is also a race a retry can resolve). Re-read
+      // localStorage — a fresh token may have appeared — and retry with bounded
+      // backoff. Only fall through to `return false` after retries are exhausted.
+      if (resp.status === 409 && attempt < STALE_RETRY_DELAYS.length) {
+        await new Promise((r) => setTimeout(r, STALE_RETRY_DELAYS[attempt]))
+        continue
       }
 
-      // Genuine failure (network, non-ok, non-stale).
+      // Genuine failure (network, non-ok, non-409).
       return false
     }
   } catch (err) {

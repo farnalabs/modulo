@@ -585,7 +585,9 @@ def test_refresh_stale_replay_returns_409(client: tuple[TestClient, AsyncMock]) 
         resp = http.post(_REFRESH_URL, json={"refresh_token": _refresh_token()})
 
     assert resp.status_code == 409, resp.text
-    assert "stale" in resp.json()["detail"].lower()
+    body = resp.json()
+    assert body["type"] == "urn:problem:modulo:stale_refresh_token"
+    assert "stale" in body["detail"].lower()
 
 
 def test_refresh_happy_path_rotates_tokens(client: tuple[TestClient, AsyncMock]) -> None:

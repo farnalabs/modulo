@@ -254,6 +254,70 @@ describe('attemptTokenRefresh', () => {
     vi.useRealTimers()
   })
 
+  it('retries a 409 with nested detail.code stale_refresh_token', async () => {
+    setRefreshToken('stale-refresh')
+    vi.useFakeTimers()
+    // Backend shape: {"detail": {"code": "stale_refresh_token", "message": "..."}}
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        detail: { code: 'stale_refresh_token', message: 'Refresh token is stale' },
+      }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const promise = attemptTokenRefresh()
+    await vi.advanceTimersByTimeAsync(2000)
+    // Any 409 is retryable; after exhaustion returns false.
+    await expect(promise).resolves.toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    vi.useRealTimers()
+  })
+
+  it('retries a 409 with ProblemDetail type containing stale_refresh_token', async () => {
+    setRefreshToken('stale-refresh')
+    vi.useFakeTimers()
+    // Actual wire shape from RFC 9457 ProblemDetail exception handler:
+    // {"type": "urn:problem:modulo:stale_refresh_token", "title": "Conflict",
+    //  "status": 409, "detail": "Refresh token is stale; ..."}
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        type: 'urn:problem:modulo:stale_refresh_token',
+        title: 'Conflict',
+        status: 409,
+        detail: 'Refresh token is stale; re-read the current token and retry.',
+      }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const promise = attemptTokenRefresh()
+    await vi.advanceTimersByTimeAsync(2000)
+    await expect(promise).resolves.toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    vi.useRealTimers()
+  })
+
+  it('retries a 409 with unrelated body then returns false after exhaustion', async () => {
+    setRefreshToken('stale-refresh')
+    vi.useFakeTimers()
+    // Any 409 is retryable regardless of body shape.
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ detail: 'A resource with this value already exists' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const promise = attemptTokenRefresh()
+    await vi.advanceTimersByTimeAsync(2000)
+    await expect(promise).resolves.toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    vi.useRealTimers()
+  })
+
   it('persists the rotated refresh token before the refresh promise resolves', async () => {
     setRefreshToken('old-refresh')
     vi.stubGlobal(

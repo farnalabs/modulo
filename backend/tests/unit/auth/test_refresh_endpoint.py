@@ -219,7 +219,13 @@ def test_refresh_stale_replay_returns_409(client: TestClient, mock_session: Asyn
     ):
         resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _make_refresh_token(str(_ORG_ID))})
     assert resp.status_code == 409, resp.text
-    assert "stale" in resp.json()["detail"].lower()
+    # Raw FastAPI shape (no ProblemDetail handler in this test app): detail is
+    # the dict passed to HTTPException.
+    body = resp.json()
+    detail = body["detail"]
+    assert isinstance(detail, dict), detail
+    assert detail["code"] == "stale_refresh_token"
+    assert "stale" in detail["message"].lower()
     advance.assert_awaited_once()
     # Must NOT blacklist on a stale replay
     assert not _blacklist_update_sqls(mock_session)

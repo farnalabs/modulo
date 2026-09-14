@@ -1097,7 +1097,10 @@ async def refresh(
     if stale_replay:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Refresh token is stale; re-read the current token and retry.",
+            detail={
+                "code": "stale_refresh_token",
+                "message": "Refresh token is stale; re-read the current token and retry.",
+            },
         )
     minted_org_role = live_org_role if live_org_role is not None else claims.org_role
     return _mint_refresh_response(claims, minted_org_role, new_sequence, settings)
