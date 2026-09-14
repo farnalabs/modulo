@@ -17,8 +17,8 @@ key is always removed when present.
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0227_drop_scalar_agent_command"
-down_revision: str | None = "0226_agents_json_to_jsonb"
+revision: str = "0228_drop_scalar_agent_command"
+down_revision: str | None = "0227_env_profiles_initialisation_strategy_check"
 branch_labels: str | None = None
 depends_on: str | None = None
 
