@@ -907,12 +907,12 @@ async def _advance_refresh_sequence(
 ) -> tuple[str | None, int, bool, bool]:
     """Re-check live account status + org role (ADR 017), then advance the family.
 
-    Returns (live_org_role, new_sequence, theft_detected, stale_replay).
+    Returns (live_org_role, new_sequence, theft_detected, reuse_replay).
     """
     live_org_role: str | None = None
     new_sequence = 0
     theft_detected = False
-    stale_replay = False
+    reuse_replay = False
     account_denied = False
     async with session.begin():
         # FAR-463 defense-in-depth: re-read ACCOUNT.ACTIVE on every refresh.
@@ -974,18 +974,16 @@ async def _advance_refresh_sequence(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Account no longer has access to this organisation",
                 )
-            new_sequence, theft_detected, stale_replay = await advance_sequence(
+            new_sequence, theft_detected, reuse_replay = await advance_sequence(
                 session,
                 claims.family_uuid,
                 claims.sequence,
                 claims.account_uuid,
                 reuse_grace_seconds=settings.refresh_reuse_grace_seconds,
-                reuse_grace_max_steps=settings.refresh_reuse_grace_max_steps,
-                reuse_grace_max_per_window=settings.refresh_reuse_grace_max_per_window,
             )
-            if stale_replay:
+            if reuse_replay:
                 _log.info(
-                    "auth.refresh_stale_replay",
+                    "auth.refresh_reuse_replay",
                     extra={
                         "family_id": claims.family_id,
                         "account_id": claims.account_id,
@@ -1008,7 +1006,7 @@ async def _advance_refresh_sequence(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Account no longer has access to this organisation",
         )
-    return live_org_role, new_sequence, theft_detected, stale_replay
+    return live_org_role, new_sequence, theft_detected, reuse_replay
 
 
 def _mint_refresh_response(
@@ -1055,7 +1053,7 @@ async def refresh(
     claims = _parse_refresh_token(req, settings)
 
     try:
-        live_org_role, new_sequence, theft_detected, stale_replay = await _advance_refresh_sequence(
+        live_org_role, new_sequence, theft_detected, _reuse_replay = await _advance_refresh_sequence(
             session, claims, settings
         )
     except IntegrityError:
@@ -1093,14 +1091,6 @@ async def refresh(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token has been revoked due to suspected theft",
-        )
-    if stale_replay:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "stale_refresh_token",
-                "message": "Refresh token is stale; re-read the current token and retry.",
-            },
         )
     minted_org_role = live_org_role if live_org_role is not None else claims.org_role
     return _mint_refresh_response(claims, minted_org_role, new_sequence, settings)

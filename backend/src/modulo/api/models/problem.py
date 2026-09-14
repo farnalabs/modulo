@@ -156,12 +156,7 @@ def problem_from_http_exception(
     status = exc.status_code
     # Handle dict detail (from FastAPI's raise HTTPException(detail={...}))
     raw = exc.detail
-    if isinstance(raw, dict):
-        detail = raw.get("detail", str(raw))
-        code = raw.get("code")
-    else:
-        detail = str(raw)
-        code = None
+    detail = raw.get("detail", str(raw)) if isinstance(raw, dict) else str(raw)
 
     lookup = {
         400: ProblemType.BAD_REQUEST,
@@ -180,14 +175,11 @@ def problem_from_http_exception(
         504: ProblemType.GATEWAY_TIMEOUT,
     }
     problem_type = lookup.get(status, ProblemType.INTERNAL_ERROR)
-    problem = ProblemDetail.from_type(
+    return ProblemDetail.from_type(
         problem_type=problem_type,
         detail=detail,
         request_id=getattr(request.state, "request_id", None),
     )
-    if code:
-        problem.type = f"urn:problem:modulo:{code}"
-    return problem
 
 
 def problem_from_validation_error(

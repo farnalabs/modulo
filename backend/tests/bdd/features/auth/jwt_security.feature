@@ -29,10 +29,18 @@ Feature: JWT Security
     And the response contains a new refresh_token
     And the new tokens differ from the old pair
 
+  Scenario: Reusing a refresh token within the reuse grace window advances and mints
+    Given I have a refresh token with sequence 0
+    When I refresh my tokens once
+    And I refresh my tokens again with the same refresh token within the grace window
+    Then the response status is 200
+    And the response contains a new access_token
+    And the response contains a new refresh_token
+
   Scenario: Reusing a refresh token beyond the reuse grace window is detected as theft
     Given I have a refresh token with sequence 0
     When I refresh my tokens once
-    And I refresh my tokens again with the same refresh token
+    And I refresh my tokens again with the same refresh token beyond the grace window
     Then the response status is 401
     And the error indicates suspected theft
 

@@ -189,8 +189,14 @@ function hasWebLocks(): boolean {
   )
 }
 
-// Bounded retry delays (ms) for 409 stale_refresh_token — re-reads localStorage
-// on each iteration in case a sibling tab rotated the token while we waited.
+// Bounded retry delays (ms) for 409 stale_refresh_token — DEFENSIVE BACKSTOP
+// ONLY. Under normal v6 server semantics a refresh-token reuse inside the
+// server's reuse-interval window is accepted and minted (200). A 409 only
+// arrives from an older server or a proxy/edge case — genuine token theft
+// (blacklisted family / sequence ahead of max) returns 401 and is handled by
+// the fatal-session path. On 409 the loop re-reads the shared localStorage
+// token (a sibling tab may have rotated while we waited) and retries with
+// bounded backoff before giving up.
 const STALE_RETRY_DELAYS = [150, 300, 600]
 
 async function doRefresh(): Promise<boolean> {
@@ -199,10 +205,14 @@ async function doRefresh(): Promise<boolean> {
     const entryRefreshToken = getRefreshToken()
     if (!entryRefreshToken) return false
 
-    // --- 409 stale-token bounded retry loop ---
-    // If the server responds 409 stale_refresh_token, another tab likely rotated
-    // while we waited for the lock. Re-read localStorage (shared across tabs) and
-    // retry up to 3 times with a short backoff.
+      // --- 409 stale-token bounded retry loop (defensive backstop) ---
+      // Under v6 server semantics, a refresh-token reuse inside the server's
+      // reuse-interval window is minted normally (200) — a 409 is not the
+      // expected stale path. If a 409 does arrive (older server or a
+      // proxy/edge case — genuine theft returns 401), another tab may have
+      // rotated while we waited for the lock. Re-read localStorage (shared
+      // across tabs) and retry up to 3 times with a short backoff before
+      // giving up.
     for (let attempt = 0; ; attempt++) {
       // Before the POST, check if storage already has a newer token (sibling
       // rotated while we were waiting for the lock or between retries).
@@ -231,11 +241,13 @@ async function doRefresh(): Promise<boolean> {
         return true
       }
 
-      // 409 from /auth/refresh: treat as retryable stale-token race. The
-      // endpoint has no other 409 semantic that justifies killing the session
-      // (its IntegrityError 409 is also a race a retry can resolve). Re-read
-      // localStorage — a fresh token may have appeared — and retry with bounded
-      // backoff. Only fall through to `return false` after retries are exhausted.
+      // 409 from /auth/refresh: DEFENSIVE BACKSTOP — under v6 semantics the
+      // server normally mints for a reuse inside the reuse-interval window (200).
+      // A 409 here means an older server or a proxy/edge case — genuine token
+      // theft (blacklisted family / sequence ahead of max) returns 401 and is
+      // handled by the fatal-session path. Re-read localStorage — a fresh
+      // token may have appeared — and retry with bounded backoff. Only fall
+      // through to `return false` after retries are exhausted.
       if (resp.status === 409 && attempt < STALE_RETRY_DELAYS.length) {
         await new Promise((r) => setTimeout(r, STALE_RETRY_DELAYS[attempt]))
         continue
