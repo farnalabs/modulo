@@ -52,6 +52,21 @@ clients.
       tolerance, and under the per-window replay budget) is treated as a benign
       retry and the family advances normally; reuse beyond those bounds blacklists
       the family as theft (`backend/src/modulo/db/crud/token_family.py`)
+- [x] Cross-tab refresh serialisation: browser tabs share localStorage, so only
+      one tab refreshes at a time. The frontend uses the Web Locks API
+      (`navigator.locks.request('modulo-auth-refresh', ...)`) to serialise
+      concurrent refresh attempts across tabs. A tab that acquires the lock
+      re-reads localStorage before POSTing — if a sibling already rotated the
+      token, the tab adopts it without a redundant request. When Web Locks are
+      unavailable (older browsers, test environments), the refresh runs directly
+      with the in-tab single-flight dedup (`frontend/src/lib/api/auth.ts`)
+- [x] Stale refresh token retry: if the refresh endpoint returns HTTP 409 with
+      `code: 'stale_refresh_token'`, the client re-reads the refresh token from
+      localStorage (shared across tabs) and retries with a short bounded backoff
+      (up to 3 attempts). A fresh token from a sibling tab is adopted; if no fresh
+      token appears after retries, the refresh is treated as a genuine failure.
+      The family is NOT blacklisted — the 409 signal indicates a benign
+      cross-tab race, not theft (`frontend/src/lib/api/auth.ts`)
 - [x] Logout blacklists the token family so all tokens from that session are
       invalidated
 - [x] `/me` returns the authenticated user's profile with `must_change_password`

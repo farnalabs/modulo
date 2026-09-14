@@ -177,6 +177,83 @@ describe('attemptTokenRefresh', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('adopts a fresh token without POSTing when a sibling already rotated', async () => {
+    // Scenario: the first refresh attempt returns 409 stale_refresh_token.
+    // A sibling tab rotated the token to 'fresh-refresh' while we waited.
+    // On the retry loop, the pre-POST re-read of localStorage finds the newer
+    // token and adopts it without issuing a second POST.
+    setRefreshToken('old-refresh')
+    const fetchMock = vi.fn(async () => {
+      // Simulate the sibling rotating the token between the 409 and the retry
+      setRefreshToken('fresh-refresh')
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({ code: 'stale_refresh_token', detail: 'token already used' }),
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(attemptTokenRefresh()).resolves.toBe(true)
+    // The pre-POST re-read found 'fresh-refresh' which differs from the entry
+    // token 'old-refresh' — adopt was triggered without a second POST.
+    expect(getRefreshToken()).toBe('fresh-refresh')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('handles 409 stale_refresh_token by re-reading storage and retrying', async () => {
+    // First call returns 409 with stale_refresh_token code. A sibling tab
+    // rotated the token in the meantime, so the retry (re-reading localStorage)
+    // finds the fresh token and succeeds without a second POST.
+    setRefreshToken('stale-refresh')
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({ code: 'stale_refresh_token', detail: 'token already used' }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    // Simulate the sibling rotating the token between the 409 and the retry.
+    // Since we're not using fake timers, the setTimeout backoff is real but
+    // short (150ms). We need to swap the token right after the first fetch
+    // resolves. Use a proxy approach: the first fetch mock swaps the token.
+    fetchMock.mockImplementationOnce(async () => {
+      // Sibling rotated while we waited
+      setRefreshToken('sibling-refresh')
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({ code: 'stale_refresh_token', detail: 'token already used' }),
+      }
+    })
+
+    // The retry re-reads localStorage and finds 'sibling-refresh' which differs
+    // from the entry token — adopt path triggers.
+    await expect(attemptTokenRefresh()).resolves.toBe(true)
+    expect(getRefreshToken()).toBe('sibling-refresh')
+  })
+
+  it('returns false after exhausting stale retries without a fresh token', async () => {
+    setRefreshToken('stale-refresh')
+    vi.useFakeTimers()
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ code: 'stale_refresh_token', detail: 'token already used' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const promise = attemptTokenRefresh()
+    // Advance past all retry delays (150 + 300 + 600 = 1050ms)
+    await vi.advanceTimersByTimeAsync(2000)
+    await expect(promise).resolves.toBe(false)
+    // Three attempts total (initial + 3 retries that exhaust the budget).
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    vi.useRealTimers()
+  })
+
   it('persists the rotated refresh token before the refresh promise resolves', async () => {
     setRefreshToken('old-refresh')
     vi.stubGlobal(

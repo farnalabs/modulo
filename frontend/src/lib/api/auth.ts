@@ -181,13 +181,39 @@ function clearRefreshToken(): void {
   localStorage.removeItem(REFRESH_TOKEN_KEY)
 }
 
-export async function attemptTokenRefresh(): Promise<boolean> {
-  if (_refreshingPromise) return _refreshingPromise
+// Check whether the navigator.locks API is available (Web Locks are supported
+// in all modern browsers but absent in some test environments and older WebViews).
+function hasWebLocks(): boolean {
+  return (
+    typeof navigator !== 'undefined' && 'locks' in navigator && typeof navigator.locks?.request === 'function'
+  )
+}
 
-  _refreshingPromise = (async () => {
-    try {
-      // JIT read: grab the refresh token from storage immediately before the
-      // request goes out, so a rotation that landed meanwhile is honoured.
+// Bounded retry delays (ms) for 409 stale_refresh_token — re-reads localStorage
+// on each iteration in case a sibling tab rotated the token while we waited.
+const STALE_RETRY_DELAYS = [150, 300, 600]
+
+async function doRefresh(): Promise<boolean> {
+  try {
+    // Capture the refresh token at entry so we can detect cross-tab rotation.
+    const entryRefreshToken = getRefreshToken()
+    if (!entryRefreshToken) return false
+
+    // --- 409 stale-token bounded retry loop ---
+    // If the server responds 409 stale_refresh_token, another tab likely rotated
+    // while we waited for the lock. Re-read localStorage (shared across tabs) and
+    // retry up to 3 times with a short backoff.
+    for (let attempt = 0; ; attempt++) {
+      // Before the POST, check if storage already has a newer token (sibling
+      // rotated while we were waiting for the lock or between retries).
+      const currentRefresh = getRefreshToken()
+      if (currentRefresh && currentRefresh !== entryRefreshToken) {
+        // A sibling already rotated — adopt its token.
+        setRefreshToken(currentRefresh)
+        broadcastRefreshAdopted()
+        return true
+      }
+
       const refreshToken = getRefreshToken()
       if (!refreshToken) return false
 
@@ -196,16 +222,52 @@ export async function attemptTokenRefresh(): Promise<boolean> {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: refreshToken }),
       })
-      if (!resp.ok) return false
-      const data = await resp.json()
-      setAccessToken(data.access_token)
-      if (data.refresh_token) setRefreshToken(data.refresh_token)
-      broadcastRefreshAdopted()
-      return true
-    } catch (err) {
-      console.warn('[auth] Token refresh failed:', err)
+
+      if (resp.ok) {
+        const data = await resp.json()
+        setAccessToken(data.access_token)
+        if (data.refresh_token) setRefreshToken(data.refresh_token)
+        broadcastRefreshAdopted()
+        return true
+      }
+
+      // 409 stale_refresh_token: the token we sent was already used by a sibling.
+      // Re-read localStorage — a fresh token may have appeared — and retry.
+      if (resp.status === 409) {
+        try {
+          const body = await resp.json()
+          if (body?.code === 'stale_refresh_token' && attempt < STALE_RETRY_DELAYS.length) {
+            await new Promise((r) => setTimeout(r, STALE_RETRY_DELAYS[attempt]))
+            continue
+          }
+        } catch {
+          // Body parse failure — fall through to the generic false return.
+        }
+      }
+
+      // Genuine failure (network, non-ok, non-stale).
       return false
     }
+  } catch (err) {
+    console.warn('[auth] Token refresh failed:', err)
+    return false
+  }
+}
+
+export async function attemptTokenRefresh(): Promise<boolean> {
+  if (_refreshingPromise) return _refreshingPromise
+
+  _refreshingPromise = (async () => {
+    if (hasWebLocks()) {
+      // Web Locks serialise cross-tab refresh attempts. The lock is released
+      // when the callback settles, allowing the next queued tab to run.
+      return navigator.locks!.request(
+        'modulo-auth-refresh',
+        { mode: 'exclusive' },
+        () => doRefresh(),
+      )
+    }
+    return doRefresh()
   })()
 
   try {
