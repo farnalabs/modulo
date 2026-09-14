@@ -604,7 +604,7 @@ class Notifier:
         retain_payload: bool,
     ) -> DispatchResult:
         """Send a single notification to one endpoint with retry logic."""
-        signature = await self._sign_payload(body, endpoint)
+        signature = self._sign_payload(body, endpoint)
 
         succeeded, attempt_count, response_code, last_error = await self._deliver_with_retries(
             client, endpoint, signature, body
@@ -638,7 +638,7 @@ class Notifier:
             last_error=last_error,
         )
 
-    async def _sign_payload(self, body: bytes, endpoint: NotificationEndpoint) -> str:
+    def _sign_payload(self, body: bytes, endpoint: NotificationEndpoint) -> str:
         """Build HMAC-SHA256 signature over the JSON body.
         Returns empty string if the endpoint has no secret configured.
         Returns empty string and logs an error if the secret cannot be decrypted.

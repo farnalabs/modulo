@@ -294,7 +294,7 @@ async def _build_payload(
         "run_stats": run_stats,
         "error_stats": error_stats,
         "integration_inventory": integration_inventory,
-        "instance_metadata": await _build_instance_metadata(factory),
+        "instance_metadata": _build_instance_metadata(factory),
     }
 
 
@@ -467,7 +467,7 @@ async def _get_or_create_instance_id(factory: Any) -> str:
     return await _get_or_create_system_config(factory, key, _create_id)
 
 
-async def _build_instance_metadata(_factory: Any) -> dict[str, Any]:
+def _build_instance_metadata(_factory: Any) -> dict[str, Any]:
     import os
 
     from modulo.version import get_version

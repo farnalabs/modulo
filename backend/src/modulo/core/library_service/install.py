@@ -603,7 +603,7 @@ async def _stamp_install_id(
     return entities
 
 
-async def _record_entities(
+def _record_entities(
     session: AsyncSession,
     install_id: uuid.UUID,
     entities: list[dict[str, str]],
@@ -764,7 +764,7 @@ async def install_collection(
     entities = await _stamp_install_id(session, org_id, install_id, result)
 
     # 7. Record entities in collection_install_entity
-    await _record_entities(session, install_id, entities)
+    _record_entities(session, install_id, entities)
 
     # 8. Build connector checklist
     connector_checklist = _build_connector_checklist(resolved_pins)

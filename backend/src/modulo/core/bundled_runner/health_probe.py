@@ -114,7 +114,7 @@ class _EngineBoundary:
         self._docker_host = docker_host
         self._client: Any = None
 
-    async def _get_client(self) -> Any:
+    def _get_client(self) -> Any:
         if self._client is None:
             import aiodocker
 
@@ -133,7 +133,7 @@ class _EngineBoundary:
     async def probe_engine(self) -> EngineProbeOutcome:
         """Ping the engine + read ``/info`` (CPU count + total memory)."""
         try:
-            client = await self._get_client()
+            client = self._get_client()
             info = await client.system.info()
             cpu_count = info.get("NCPU")
             mem_total = info.get("MemTotal")
@@ -160,7 +160,7 @@ class _EngineBoundary:
         probe recovers it.
         """
         try:
-            client = await self._get_client()
+            client = self._get_client()
             await client.images.inspect(image_ref)
             return True
         except Exception as exc:

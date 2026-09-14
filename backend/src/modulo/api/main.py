@@ -1281,7 +1281,7 @@ def _init_once_mount_spa(app: FastAPI, env: Mapping[str, str] | None = None) -> 
         logger.warning("launcher.serve_spa_no_assets dir=%s (serving the SPA root anyway)", assets_dir)
 
     @app.get("/runtime-config.js", include_in_schema=False)
-    async def runtime_config_endpoint() -> Response:
+    def runtime_config_endpoint() -> Response:
         payload = build_runtime_config_payload(os.environ)
         return Response(
             content=render_runtime_config_js(payload),

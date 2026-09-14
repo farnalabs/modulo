@@ -1041,14 +1041,13 @@ class TestGetOrCreateInstanceId:
 
 
 class TestBuildInstanceMetadata:
-    @pytest.mark.asyncio
-    async def test_metadata_shape(self) -> None:
+    def test_metadata_shape(self) -> None:
         factory = _FakeSessionFactory()
         with patch(
             "modulo.version.get_version",
             return_value="1.2.3",
         ):
-            meta = await _build_instance_metadata(factory)
+            meta = _build_instance_metadata(factory)
         assert meta["version"] == "1.2.3"
         assert meta["schema_version"] == SCHEMA_VERSION
         assert isinstance(meta["git_sha"], str)
