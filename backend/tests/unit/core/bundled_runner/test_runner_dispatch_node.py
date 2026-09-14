@@ -5,7 +5,7 @@ gate skip, dispatch-marker denial, wall-clock budget overrun, output parse
 failures, schema-validation failure, delivery-sentinel retention, empty
 command guard) and the streaming/file IO helpers
 (:func:`_write_file_via_exec`, :func:`_read_file_via_exec`,
-:_publish_stream_chunk`, :func:`_consume_stream`,
+ :func:`_publish_stream_chunk`, :func:`_consume_stream`,
 :func:`_resolve_stall_timeout`, :func:`_combine_raw_outputs`,
 :func:`_source_contains_sentinel`), plus the FAR-792 per-node stdout/stderr
 retention cap (:func:`_resolve_stdout_cap`), and the FAR-811
