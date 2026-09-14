@@ -1319,6 +1319,12 @@ class TestLifecycleMapConcurrentSaves:
         """A position-persist save (stages with x/y + edges with description /
         condition_expression) must survive the save -> read-back path so the
         editor's PUT/GET round-trip does not silently null out edge metadata.
+
+        The detail (store/read) shape MUST now carry condition_expression,
+        estimated_frequency and trigger_link — those were previously omitted, so
+        a positions-only PUT (which echoes the detail shape) wiped editor-set
+        edge metadata. After the fix the detail shape and the editor (version)
+        shape agree, and a positions-only PUT preserves all edge metadata.
         """
         engine = await self._engine(tmp_path)
         try:
@@ -1337,7 +1343,8 @@ class TestLifecycleMapConcurrentSaves:
                     "trigger_type": "auto",
                     "description": "on merge",
                     "condition_expression": "x > 1",
-                    "estimated_frequency": None,
+                    "estimated_frequency": "weekly",
+                    "trigger_link": "https://example.com/hook",
                 }
             ]
             async with maker() as s, s.begin():
@@ -1353,11 +1360,60 @@ class TestLifecycleMapConcurrentSaves:
             assert entry.stages[0].y == 456.0
             assert entry.edges[0].description == "on merge"
             assert entry.edges[0].condition_expression == "x > 1"
+            assert entry.edges[0].estimated_frequency == "weekly"
+            assert entry.edges[0].trigger_link == "https://example.com/hook"
 
             detail = _build_detail(final)
             assert detail.stages[0].x == 123.0
             assert detail.stages[0].y == 456.0
             assert detail.transitions[0].description == "on merge"
+            # The detail shape must expose every edge-metadata field so a
+            # positions-only PUT can echo them back unchanged.
+            assert detail.transitions[0].condition_expression == "x > 1"
+            assert detail.transitions[0].estimated_frequency == "weekly"
+            assert detail.transitions[0].trigger_link == "https://example.com/hook"
+
+            # View-flow case: a positions-only drag-save echoes the detail-shaped
+            # transitions (with the same edge metadata) back through PUT. The
+            # server must preserve the metadata, not null it.
+            positions_only_stages = [
+                {"id": "stage-1", "name": "Build", "type": "modulo", "x": 200.0, "y": 300.0},
+                {"id": "stage-2", "name": "Merge", "type": "manual", "x": 0.0, "y": 0.0},
+            ]
+            positions_only_edges = [
+                {
+                    "id": t.id,
+                    "source": t.source_stage_id,
+                    "target": t.target_stage_id,
+                    "trigger_type": t.trigger_type,
+                    "description": t.description,
+                    "condition_expression": t.condition_expression,
+                    "estimated_frequency": t.estimated_frequency,
+                    "trigger_link": t.trigger_link,
+                }
+                for t in detail.transitions
+            ]
+            async with maker() as s, s.begin():
+                lm2 = await save_map_version(
+                    s,
+                    _MAP_ID,
+                    stages=positions_only_stages,
+                    edges=positions_only_edges,
+                    notes="positions-only",
+                )
+                assert lm2 is not None
+
+            async with maker() as s, s.begin():
+                final2 = await get_lifecycle_map(s, _MAP_ID)
+            assert final2 is not None
+            detail2 = _build_detail(final2)
+            # Stage positions updated, but edge metadata is intact.
+            assert detail2.stages[0].x == 200.0
+            assert detail2.stages[0].y == 300.0
+            assert detail2.transitions[0].description == "on merge"
+            assert detail2.transitions[0].condition_expression == "x > 1"
+            assert detail2.transitions[0].estimated_frequency == "weekly"
+            assert detail2.transitions[0].trigger_link == "https://example.com/hook"
         finally:
             await engine.dispose()
 

@@ -31,6 +31,8 @@ export interface LifecycleMapTransition {
   trigger_type: string | null
   description: string | null
   condition_expression?: string | null
+  estimated_frequency?: string | null
+  trigger_link?: string | null
 }
 
 export interface LifecycleMapVersion {

@@ -206,6 +206,9 @@ class LifecycleMapTransitionItem(BaseModel):
     target_stage_id: str
     trigger_type: str | None = None
     description: str | None = None
+    condition_expression: str | None = None
+    estimated_frequency: str | None = None
+    trigger_link: str | None = None
 
 
 class LifecycleMapVersionMeta(BaseModel):
@@ -445,6 +448,9 @@ def _build_detail(lm: Any) -> LifecycleMapDetailResponse:
             target_stage_id=e.get("target", ""),
             trigger_type=e.get("trigger_type"),
             description=e.get("description"),
+            condition_expression=e.get("condition_expression"),
+            estimated_frequency=e.get("estimated_frequency"),
+            trigger_link=e.get("trigger_link"),
         )
         for e in (content.get("edges") or [])
         if isinstance(e, dict)

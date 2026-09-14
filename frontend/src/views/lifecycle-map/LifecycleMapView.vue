@@ -446,8 +446,6 @@ async function persistPositions(positions: Record<string, { x: number; y: number
   // Abort any in-flight save from a previous debounce cycle.
   if (saveAbortController) { saveAbortController.abort(); saveAbortController = null }
   saveTimeout = setTimeout(async () => {
-    // Abort any in-flight save from a previous debounce cycle.
-    if (saveAbortController) { saveAbortController.abort(); saveAbortController = null }
     saveStatus.value = 'saving'
     // Build the version-update payload: current stages with updated x/y, current edges.
     const map = mapData.value
@@ -476,7 +474,8 @@ async function persistPositions(positions: Record<string, { x: number; y: number
       trigger_type: t.trigger_type,
       description: t.description,
       condition_expression: t.condition_expression ?? null,
-      estimated_frequency: null,
+      estimated_frequency: t.estimated_frequency ?? null,
+      trigger_link: t.trigger_link ?? null,
     }))
     const controller = new AbortController()
     saveAbortController = controller

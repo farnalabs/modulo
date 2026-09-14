@@ -21,7 +21,12 @@ async function requestWorker(method: string, path: string, body?: unknown, optio
   // A caller-supplied signal (e.g. a drag-save abort) must also cancel the
   // request, not just the local timeout controller.
   const onCallerAbort = () => controller.abort()
-  if (options?.signal) options.signal.addEventListener('abort', onCallerAbort)
+  if (options?.signal) {
+    // A signal already aborted before the request starts never fires its
+    // listener, so abort up-front to avoid a hung request.
+    if (options.signal.aborted) controller.abort()
+    else options.signal.addEventListener('abort', onCallerAbort)
+  }
   try {
     const headers = {
       'Content-Type': 'application/json',

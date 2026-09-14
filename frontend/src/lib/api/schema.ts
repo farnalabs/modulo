@@ -13194,6 +13194,12 @@ export interface components {
             trigger_type?: string | null;
             /** Description */
             description?: string | null;
+            /** Condition Expression */
+            condition_expression?: string | null;
+            /** Estimated Frequency */
+            estimated_frequency?: string | null;
+            /** Trigger Link */
+            trigger_link?: string | null;
         };
         /** LifecycleMapUpdate */
         LifecycleMapUpdate: {

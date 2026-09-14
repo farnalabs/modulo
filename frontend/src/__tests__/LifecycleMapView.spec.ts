@@ -664,12 +664,23 @@ describe('LifecycleMapView node position persistence (FAR-833)', () => {
     vi.useRealTimers()
   })
 
-  it('sends edge description/condition_expression keys (not stale aliases) so they round-trip', async () => {
+  it('sends edge description/condition_expression/estimated_frequency/trigger_link keys from the real GET detail so they round-trip', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
+    // The GET detail shape now carries the three edge-metadata fields; a
+    // positions-only PUT must echo them back verbatim (not null/wipe them).
     const mapWithTransition = {
       ...mapDetail,
       transitions: [
-        { id: 'e1', source_stage_id: 'stage-1', target_stage_id: 'stage-1', trigger_type: 'auto', description: 'on merge', condition_expression: null },
+        {
+          id: 'e1',
+          source_stage_id: 'stage-1',
+          target_stage_id: 'stage-1',
+          trigger_type: 'auto',
+          description: 'on merge',
+          condition_expression: "contains(ref, 'merge')",
+          estimated_frequency: 'weekly',
+          trigger_link: 'https://example.com/hook',
+        },
       ],
     }
     fetchMock.mockImplementation((url: string) => {
@@ -691,9 +702,12 @@ describe('LifecycleMapView node position persistence (FAR-833)', () => {
     expect(putCalls).toHaveLength(1)
     const [, init] = putCalls[0]
     const body = JSON.parse((init as { body: string }).body)
-    // Edges must use the server read-back keys so descriptions survive a save.
+    // Edges must use the server read-back keys so all edge metadata survives a
+    // positions-only save (the prior stale-alias bug nulled/wiped them).
     expect(body.edges[0].description).toBe('on merge')
-    expect(body.edges[0].condition_expression).toBeNull()
+    expect(body.edges[0].condition_expression).toBe("contains(ref, 'merge')")
+    expect(body.edges[0].estimated_frequency).toBe('weekly')
+    expect(body.edges[0].trigger_link).toBe('https://example.com/hook')
     expect(body.edges[0].trigger_description).toBeUndefined()
     expect(body.edges[0].condition).toBeUndefined()
     vi.useRealTimers()
