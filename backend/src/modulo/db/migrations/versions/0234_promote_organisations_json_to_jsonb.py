@@ -1,14 +1,14 @@
 """Promote organisations JSON columns to JSONB.
 
-Revision ID: 0232_promote_organisations_json_to_jsonb
-Revises: 0231_add_organisations_indexes
+Revision ID: 0234_promote_organisations_json_to_jsonb
+Revises: 0233_add_organisations_indexes
 Create Date: 2026-09-14
 """
 
 from alembic import op
 
-revision = "0232_promote_organisations_json_to_jsonb"
-down_revision = "0231_add_organisations_indexes"
+revision = "0234_promote_organisations_json_to_jsonb"
+down_revision = "0233_add_organisations_indexes"
 
 COLUMNS = [
     "settings_json",

@@ -333,13 +333,13 @@ class TestMigrationBackfillGrace:
         # and 0227_env_profiles_initialisation_strategy_check chains on top of 0226,
         # and 0228_drop_scalar_agent_command (FAR-828) chains on top of 0227,
         # and FAR-802's 0229_add_workspace_inputs_count chains on top of 0228_drop_scalar_agent_command,
-        # and 0230_add_updated_at_audit_to_organisations chains on top of 0229,
-        # and 0231_add_organisations_indexes chains on top of 0230,
-        # and 0232_promote_organisations_json_to_jsonb chains on top of 0231,
-        # and 0233_add_organisations_constraints chains on top of 0232,
-        # and 0234_fix_token_family_org_nullable chains on top of 0233,
+        # and 0232_add_updated_at_audit_to_organisations chains on top of 0229,
+        # and 0233_add_organisations_indexes chains on top of 0230,
+        # and 0234_promote_organisations_json_to_jsonb chains on top of 0231,
+        # and 0235_add_organisations_constraints chains on top of 0232,
+        # and 0236_fix_token_family_org_nullable chains on top of 0233,
         # so it is now the single linear head of the chain.
-        assert heads == ["0234_fix_token_family_org_nullable"], f"expected a single head, got {heads}"
+        assert heads == ["0236_fix_token_family_org_nullable"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
