@@ -138,10 +138,11 @@ fetch() {
 
 sha256_of() {
   # sha256_of <file> — print the digest, preferring sha256sum.
+  local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
+    sha256sum "$file" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
+    shasum -a 256 "$file" | awk '{print $1}'
   else
     die "no sha256 tool found (need sha256sum or shasum) — cannot verify the download"
   fi
@@ -355,7 +356,8 @@ TRUST_KEY_ID_NEXT="modulo-2026-a-next"
 
 _sig_key_id() {
   # sig_key_id <sig-file> — the .sig's recorded "key_id" (store-selected).
-  grep -o '"key_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" 2>/dev/null | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
+  local sig_file="$1"
+  grep -o '"key_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$sig_file" 2>/dev/null | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
 }
 
 _openssl_ed25519_check() {
@@ -379,8 +381,9 @@ hex_to_bin() {
 
 b64_to_der() {
   # b64_to_der <b64> <output>: decode the trust-store SPKI DER key file.
-  [[ -n "$1" ]] || die "b64_to_der: empty key body"
-  printf '%s' "$1" | base64 -d > "$2" 2>/dev/null || die "base64 decode of the trust-store key failed (coreutils base64 required)"
+  local key_body="$1" output="$2"
+  [[ -n "$key_body" ]] || die "b64_to_der: empty key body"
+  printf '%s' "$key_body" | base64 -d > "$output" 2>/dev/null || die "base64 decode of the trust-store key failed (coreutils base64 required)"
 }
 
 verify_shipped_manifest() {
@@ -418,7 +421,7 @@ verify_shipped_manifest() {
   esac
   hex_to_bin "${sig_hex}" > "${sig_file}"
   for slot in ${candidate_keys}; do
-    case "${slot}" in current) key_b64="${TRUST_KEY_CURRENT_B64}" ;; next) key_b64="${TRUST_KEY_NEXT_B64}" ;; esac
+    case "${slot}" in current) key_b64="${TRUST_KEY_CURRENT_B64}" ;; next) key_b64="${TRUST_KEY_NEXT_B64}" ;; *) die "internal error: unknown trust-store slot '${slot}'" ;; esac
     [[ -n "${key_b64}" ]] || continue
     b64_to_der "${key_b64}" "${key_file}"
     if openssl pkeyutl -verify -pubin -inform DER -in "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}" >/dev/null 2>&1; then
@@ -487,7 +490,8 @@ set -- "${tmp}"/*/
 if [[ "$#" -ne 1 ]]; then
   die "unexpected archive layout: expected exactly one top-level directory, found $#, in ${tarball_name}"
 fi
-bundle_dir="${1%/}"
+first_entry="$1"
+bundle_dir="${first_entry%/}"
 [[ -f "${bundle_dir}/SHA256SUMS" ]] || die "malformed bundle: SHA256SUMS missing from the archive"
 verify_sums_in_dir "${bundle_dir}"
 info "bundle internal SHA256SUMS verified"
