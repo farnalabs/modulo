@@ -279,6 +279,12 @@ jobs:
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+          # The Start Redis step above provisions Redis but never exported its
+          # URL.  Without REDIS_URL, integration tests that require Redis
+          # (e.g. test_schemathesis.py) silently collect 0 tests and pytest
+          # exits 5 ("no tests collected"), failing the job.  The deploy
+          # pre-deploy gate and schemathesis-nightly.yml both set REDIS_URL.
+          REDIS_URL: "redis://localhost:6379/0"
 
   runner-ci-harness:
     # Bundled Runner CI harness (FAR-773): boots the deploy/compose/
