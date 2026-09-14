@@ -164,14 +164,11 @@ def _run_diff_cover(
     # The report path is also caller-supplied (or a default derived from argv);
     # sanitise it against a strict allow-list before it reaches subprocess.
     safe_report = _sanitize_path(str(report_path), "report path")
-    # NOSONAR - the rule fires where the tainted value (compare-branch,
-    # argv-derived) enters the command list, not at the subprocess call. Every
-    # arg that reaches `cmd` is validated against a strict regex allow-list in
-    # _validate_ref/_sanitize_path, which reject anything starting with '-' and
-    # return a regex-bounded copy, so the taint can never reach a flag position;
-    # subprocess runs without a shell. Bare NOSONAR (not NOSONAR:<rule>) is the
-    # only token the scanner honours to suppress the issue on this line.
-    cmd = [
+    # Every arg that reaches `cmd` is validated against a strict regex allow-list
+    # in _validate_ref/_sanitize_path, which reject anything starting with '-' and
+    # return a regex-bounded copy, so the tainted (argv-derived) compare-branch can
+    # never reach a flag position; subprocess runs without a shell.
+    cmd = [  # NOSONAR - compare-branch is regex fullmatch-bounded and rejects values starting with '-' via _validate_ref, so only a safe branch ref can reach this list; subprocess has no shell
         str(diff_cover_bin),
         safe_report,
         "--compare-branch",
@@ -179,7 +176,7 @@ def _run_diff_cover(
         "--fail-under",
         str(fail_under),
     ]
-    result = subprocess.run(  # NOSONAR
+    result = subprocess.run(  # NOSONAR - see _validate_ref: compare-branch is regex-bounded and flag-rejecting before it enters cmd; subprocess has no shell
         cmd,
         capture_output=True,
         text=True,
