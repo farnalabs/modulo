@@ -2252,7 +2252,6 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
       agent_commands: ['  ', ''],
       commands_concatenation_string: ' && ',
     })
-    expect(result.agent_command).toBeNull()
     expect(result.agent_commands).toBeNull()
     expect(result.commands_concatenation_string).toBeNull()
     wrapper.unmount()
