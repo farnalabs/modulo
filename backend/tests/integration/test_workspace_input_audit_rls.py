@@ -90,19 +90,21 @@ async def _seed_run(
 async def _read_audit_row(db_engine: object, run_id: uuid.UUID) -> RunNodeOutput | None:
     """Read the audit row via a superuser connection (bypasses RLS)."""
     async with db_engine.connect() as conn:
+        # NOTE: db_engine is a raw AsyncConnection (not a Session), so a
+        # select(RunNodeOutput) returns raw ROW columns, not ORM entities.
+        # `.scalars()` would collapse the row to its first column (run_id, a
+        # UUID) and `row.outputs_json` would then AttributeError. `.first()`
+        # returns the full Row, which supports `row.outputs_json` access by
+        # column name.
         return (
-            (
-                await conn.execute(
-                    select(RunNodeOutput).where(
-                        RunNodeOutput.run_id == run_id,
-                        RunNodeOutput.node_id == AUDIT_NODE_ID,
-                        RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
-                    )
+            await conn.execute(
+                select(RunNodeOutput).where(
+                    RunNodeOutput.run_id == run_id,
+                    RunNodeOutput.node_id == AUDIT_NODE_ID,
+                    RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
                 )
             )
-            .scalars()
-            .one_or_none()
-        )
+        ).first()
 
 
 @pytest.mark.anyio
