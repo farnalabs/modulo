@@ -616,7 +616,7 @@ class _FakeBegin:
         return False
 
 
-class _FakeResult:
+class _FakeResultTenancy:
     """Minimal result proxy for the tenancy check execute()."""
 
     def scalar_one_or_none(self) -> str | None:
@@ -627,8 +627,8 @@ class _FakeSession:
     def begin(self) -> _FakeBegin:
         return _FakeBegin()
 
-    async def execute(self, _stmt: object) -> _FakeResult:
-        return _FakeResult()
+    async def execute(self, _stmt: object) -> _FakeResultTenancy:
+        return _FakeResultTenancy()
 
 
 class _Factory:
