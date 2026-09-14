@@ -314,16 +314,26 @@ async def list_journey_runs(
     )
     matched: list[Run] = []
     for run in result.scalars():
-        if run.work_item_id == journey.canonical_work_item_id:
+        if _run_matches_journey(run, journey):
             matched.append(run)
-        else:
-            for entry in run.work_item_refs or []:
-                if isinstance(entry, dict) and entry.get("kind") == journey.kind and entry.get("ref") == journey.ref:
-                    matched.append(run)
-                    break
         if len(matched) >= limit:
             break
     return matched
+
+
+def _run_matches_journey(run: Run, journey: Journey) -> bool:
+    """True when *run* touches *journey* under the portable (non-Postgres) scan.
+
+    Mirrors the Postgres JSONB containment predicate: an exact canonical
+    work-item-id anchor, or any ``work_item_refs`` entry carrying the journey's
+    (kind, ref).
+    """
+    if run.work_item_id == journey.canonical_work_item_id:
+        return True
+    for entry in run.work_item_refs or []:
+        if isinstance(entry, dict) and entry.get("kind") == journey.kind and entry.get("ref") == journey.ref:
+            return True
+    return False
 
 
 async def dismiss_journey(

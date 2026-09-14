@@ -601,70 +601,98 @@ async def upsert_ref_provenances(
     agent_suppressed = 0
     dismissed_suppressed = 0
     for entry in refs:
-        mintable = _mintable_source(entry)
-        agent = _agent_source(entry)
-        if not mintable and not agent:
-            continue
-        try:
-            canonical = validate_ref_entry(entry)
-        except (ValueError, TypeError) as exc:
-            _log.warning("upsert_ref_provenances: dropping invalid work-item ref entry: %s", exc)
-            continue
-        if canonical is None:
-            continue
-        if agent:
-            rows = (
-                await session.execute(
-                    select(Journey.id, Journey.dismissed_at).where(
-                        Journey.organisation_id == organisation_id,
-                        Journey.kind == canonical["kind"],
-                        Journey.ref == canonical["ref"],
-                    )
-                )
-            ).first()
-            # FAR-795 slice C: a DISMISSED tombstone row suppresses the mint
-            # on any path — count it and skip the write entirely (the upsert
-            # conservative gate; this probe adds the
-            # counter). A caller citation never un-dismisses.
-            if rows is not None and rows[1] is not None:
-                dismissed_suppressed += 1
-                continue
-            if rows is None:
-                # Row missing: the agent mint either happens (flag ON) or was
-                # suppressed by the flag (flag OFF). An existing row's
-                # agent-cited write is a rank-0 no-op — not counted.
-                if include_agent:
-                    # FAR-795 budget cap: a fresh agent mint must clear the
-                    # per-org budget before it is written. consume_agent_mint_budget
-                    # is fail-open (errors/guard-outage allow), so only a genuine
-                    # within-window over-spend denies — and then the mint is
-                    # suppressed exactly like the flag-OFF path.
-                    from modulo.core.lifecycle_map.reconcile import (
-                        REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED,
-                    )
-
-                    budget_ok = await consume_agent_mint_budget(session, organisation_id, n=1)
-                    if not budget_ok:
-                        notify_refs_event(REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED, count=1)
-                        agent_suppressed += 1
-                        continue
-                    agent_minted += 1
-                else:
-                    agent_suppressed += 1
-                    continue
-            # An existing agent row mint: run the rank-0 upsert when allowed
-            # (harmless no-op on the conflict arm); never when OFF.
-            elif not include_agent:
-                continue
-        params = _ref_params(organisation_id, canonical)
-        params.update(
-            {
-                "provenance": canonical["source"],
-                "first_seen_source": canonical["source"],
-            }
-        )
-        await session.execute(_PROVENANCE_UPSERT_SQL, params)
-        considered += 1
+        cons, mint, supp, diss = await _upsert_one_provenance(session, organisation_id, entry, include_agent)
+        considered += cons
+        agent_minted += mint
+        agent_suppressed += supp
+        dismissed_suppressed += diss
     if dismissed_suppressed:
         notify_refs_event(REFS_EVENT_DISMISSAL_SUPPRESSED, count=dismissed_suppressed)
     return considered, agent_minted, agent_suppressed
+
+
+async def _classify_agent_provenance(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    canonical: dict[str, Any],
+    include_agent: bool,
+) -> tuple[int, int, int, bool]:
+    """Classify an agent-sourced provenance entry (FAR-795 slice C).
+
+    Returns ``(agent_minted_delta, agent_suppressed_delta,
+    dismissed_suppressed_delta, skip_write)``. A dismissed tombstone row
+    suppresses the mint (skip_write, dismissed_delta=1). A missing row mints only
+    when the org flag is ON and the per-org budget clears (fail-open); otherwise
+    it is suppressed (skip_write). An existing non-dismissed row is a rank-0
+    no-op write only when the flag is ON.
+    """
+    from modulo.core.lifecycle_map.reconcile import REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED
+
+    rows = (
+        await session.execute(
+            select(Journey.id, Journey.dismissed_at).where(
+                Journey.organisation_id == organisation_id,
+                Journey.kind == canonical["kind"],
+                Journey.ref == canonical["ref"],
+            )
+        )
+    ).first()
+    if rows is not None and rows[1] is not None:
+        # Dismissed tombstone: suppress the mint, skip the write entirely.
+        return (0, 0, 1, True)
+    if rows is None:
+        if not include_agent:
+            return (0, 1, 0, True)
+        budget_ok = await consume_agent_mint_budget(session, organisation_id, n=1)
+        if not budget_ok:
+            notify_refs_event(REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED, count=1)
+            return (0, 1, 0, True)
+        return (1, 0, 0, False)
+    # Existing non-dismissed agent row: rank-0 no-op write only when flag ON.
+    if not include_agent:
+        return (0, 0, 0, True)
+    return (0, 0, 0, False)
+
+
+async def _upsert_one_provenance(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    entry: dict[str, Any],
+    include_agent: bool,
+) -> tuple[int, int, int, int]:
+    """Validate and upsert ONE provenance entry; return counter deltas.
+
+    Returns ``(considered, agent_minted, agent_suppressed, dismissed_suppressed)``.
+    ``considered`` is 1 only when the entry is written; non-mintable,
+    non-agent, invalid, or suppressed entries yield all zeros (the agent
+    deltas are reported even when the write is skipped).
+    """
+    mintable = _mintable_source(entry)
+    agent = _agent_source(entry)
+    if not mintable and not agent:
+        return (0, 0, 0, 0)
+    try:
+        canonical = validate_ref_entry(entry)
+    except (ValueError, TypeError) as exc:
+        _log.warning("upsert_ref_provenances: dropping invalid work-item ref entry: %s", exc)
+        return (0, 0, 0, 0)
+    if canonical is None:
+        return (0, 0, 0, 0)
+    agent_minted = 0
+    agent_suppressed = 0
+    dismissed_suppressed = 0
+    if agent:
+        agent_minted, agent_suppressed, dismissed_suppressed, skip_write = await _classify_agent_provenance(
+            session, organisation_id, canonical, include_agent
+        )
+        if skip_write:
+            return (0, agent_minted, agent_suppressed, dismissed_suppressed)
+    params = _ref_params(organisation_id, canonical)
+    params.update(
+        {
+            "provenance": canonical["source"],
+            "first_seen_source": canonical["source"],
+        }
+    )
+    await session.execute(_PROVENANCE_UPSERT_SQL, params)
+    return (1, agent_minted, agent_suppressed, dismissed_suppressed)

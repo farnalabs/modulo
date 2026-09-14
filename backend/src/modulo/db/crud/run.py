@@ -585,66 +585,8 @@ async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list
     if not refs:
         return
     mintable = [e for e in refs if isinstance(e, dict) and e.get("source") in _MINTABLE_SOURCES]
-    agent_entries = [e for e in refs if isinstance(e, dict) and e.get("source") == _AGENT_SOURCE]
-    agent_mint_enabled = False
-    agent_minted = 0
-    agent_suppressed = 0
-    if agent_entries:
-        agent_mint_enabled = await _agent_minting_enabled(session, org_id)
-        if agent_mint_enabled:
-            # Only a freshly-MINTED agent journey counts as minted — an agent
-            # ref whose row already exists (minted by caller/derived earlier)
-            # is a provenance no-op (rank 0) and is not counted. The
-            # existence probe is read-only and routes through the same
-            # session/savepoint discipline (fail-open).
-            try:
-                fresh_pairs = [(str(e["kind"]), str(e["ref"])) for e in agent_entries]
-                result = await session.execute(
-                    select(Journey.kind, Journey.ref, Journey.dismissed_at).where(
-                        Journey.organisation_id == org_id,
-                        or_(*((Journey.kind == k) & (Journey.ref == r) for k, r in fresh_pairs)),
-                    )
-                )
-                probe_rows = result.all()
-                probe_pairs = {(str(r[0]), str(r[1])) for r in probe_rows if r[2] is None}
-                dismissed_pairs = {(str(r[0]), str(r[1])) for r in probe_rows if r[2] is not None}
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("journey agent-mint existence probe failed for org %s", org_id)
-                probe_pairs = set()
-                dismissed_pairs = set()
-            newly = [e for e in agent_entries if (str(e["kind"]), str(e["ref"])) not in probe_pairs]
-            agent_minted = len(newly)
-            agent_suppressed = len(agent_entries) - len(newly)
-            if dismissed_pairs:
-                # FAR-795 slice C: agent entries whose canonical row is a
-                # tombstone are DISMISSAL-suppressed, not flag-suppressed —
-                # counted separately, never as minted, and dropped from the
-                # batch (the row's conflict arm would refuse the write anyway).
-                dropped = [e for e in newly if (str(e["kind"]), str(e["ref"])) in dismissed_pairs]
-                newly = [e for e in newly if (str(e["kind"]), str(e["ref"])) not in dismissed_pairs]
-                agent_minted -= len(dropped)
-                if dropped:
-                    notify_refs_event(REFS_EVENT_DISMISSAL_SUPPRESSED, count=len(dropped))
-            if agent_minted > 0:
-                # FAR-795 budget cap: fresh agent mints must clear the per-org
-                # budget before they are written. consume_agent_mint_budget is
-                # fail-open internally (errors / guard outage allow), so only a
-                # genuine within-window over-spend denies — and then the fresh
-                # agent mints are suppressed exactly like the flag-OFF path.
-                from modulo.core.runtime_config.mint_budget import consume_agent_mint_budget
-
-                budget_ok = await consume_agent_mint_budget(session, org_id, n=agent_minted)
-                if not budget_ok:
-                    notify_refs_event(_REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED, count=agent_minted)
-                    newly = []
-                    agent_minted = 0
-            mintable = mintable + newly
-        else:
-            agent_suppressed = len(agent_entries)
-            if agent_suppressed:
-                notify_refs_event(_REFS_EVENT_AGENT_MINT_SUPPRESSED, count=agent_suppressed)
+    agent_mint_enabled, agent_minted, _, newly = await _compute_agent_mint_plan(session, org_id, refs)
+    mintable = mintable + newly
     if not mintable:
         return
     deduped: dict[tuple[str, str], dict[str, Any]] = {}
@@ -675,6 +617,74 @@ async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list
         raise
     except Exception:
         _log.exception("journey hydration failed for org %s", org_id)
+
+
+async def _compute_agent_mint_plan(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    refs: list[dict[str, Any]] | None,
+) -> tuple[bool, int, int, list[dict[str, Any]]]:
+    """Compute the agent-mint plan for create-time refs (FAR-795).
+
+    Returns ``(agent_mint_enabled, agent_minted, agent_suppressed, newly)`` where
+    ``newly`` is the list of agent entries to fold into the mintable batch. The
+    org flag is fail-closed; a freshly-minted agent journey counts only when its
+    canonical row is missing AND the per-org budget clears (fail-open to counting
+    all as mints). Dismissed tombstone rows are DISMISSAL-suppressed (counted
+    separately) and excluded from ``newly``.
+    """
+    agent_entries = [e for e in (refs or []) if isinstance(e, dict) and e.get("source") == _AGENT_SOURCE]
+    if not agent_entries:
+        return False, 0, 0, []
+    agent_mint_enabled = await _agent_minting_enabled(session, org_id)
+    if not agent_mint_enabled:
+        if agent_entries:
+            notify_refs_event(_REFS_EVENT_AGENT_MINT_SUPPRESSED, count=len(agent_entries))
+        return False, 0, len(agent_entries), []
+    try:
+        fresh_pairs = [(str(e["kind"]), str(e["ref"])) for e in agent_entries]
+        result = await session.execute(
+            select(Journey.kind, Journey.ref, Journey.dismissed_at).where(
+                Journey.organisation_id == org_id,
+                or_(*((Journey.kind == k) & (Journey.ref == r) for k, r in fresh_pairs)),
+            )
+        )
+        probe_rows = result.all()
+        probe_pairs = {(str(r[0]), str(r[1])) for r in probe_rows if r[2] is None}
+        dismissed_pairs = {(str(r[0]), str(r[1])) for r in probe_rows if r[2] is not None}
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("journey agent-mint existence probe failed for org %s", org_id)
+        probe_pairs = set()
+        dismissed_pairs = set()
+    newly = [e for e in agent_entries if (str(e["kind"]), str(e["ref"])) not in probe_pairs]
+    agent_minted = len(newly)
+    agent_suppressed = len(agent_entries) - len(newly)
+    if dismissed_pairs:
+        # FAR-795 slice C: agent entries whose canonical row is a tombstone are
+        # DISMISSAL-suppressed, not flag-suppressed — counted separately, never
+        # as minted, and dropped from the batch (the row's conflict arm would
+        # refuse the write anyway).
+        dropped = [e for e in newly if (str(e["kind"]), str(e["ref"])) in dismissed_pairs]
+        newly = [e for e in newly if (str(e["kind"]), str(e["ref"])) not in dismissed_pairs]
+        agent_minted -= len(dropped)
+        if dropped:
+            notify_refs_event(REFS_EVENT_DISMISSAL_SUPPRESSED, count=len(dropped))
+    if agent_minted > 0:
+        # FAR-795 budget cap: fresh agent mints must clear the per-org budget
+        # before they are written. consume_agent_mint_budget is fail-open
+        # internally (errors / guard outage allow), so only a genuine
+        # within-window over-spend denies — and then the fresh agent mints are
+        # suppressed exactly like the flag-OFF path.
+        from modulo.core.runtime_config.mint_budget import consume_agent_mint_budget
+
+        budget_ok = await consume_agent_mint_budget(session, org_id, n=agent_minted)
+        if not budget_ok:
+            notify_refs_event(_REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED, count=agent_minted)
+            newly = []
+            agent_minted = 0
+    return True, agent_minted, agent_suppressed, newly
 
 
 _ATOMIC_RUN_NUMBER_SQL = text(

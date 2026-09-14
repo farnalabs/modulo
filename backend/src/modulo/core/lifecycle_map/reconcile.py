@@ -632,23 +632,9 @@ async def reconcile_journeys(session: AsyncSession, batch_size: int = 500) -> in
         # org flag (fail-closed). The sweep is the third mint surface that
         # can observe an agent ref — flag OFF means zero agent mints here
         # too, and the suppressed mints are counted.
-        agent_minting = await agent_minting_enabled(session, run.organisation_id)
-        agent_drift = [entry for entry in drift if entry.get("source") == _AGENT_SOURCE]
-        if agent_drift and not agent_minting:
-            record_refs_agent_mint_suppressed_by_flag(len(agent_drift))
-            drift = [entry for entry in drift if entry.get("source") != _AGENT_SOURCE]
-            if not drift:
-                continue
-        elif agent_drift:
-            # Flag ON: count only the agent entries with NO pre-existing row
-            # as fresh agent mints (row-existence check via the shared
-            # confirm helper — fail-open to counting ALL as mints).
-            try:
-                confirmed, _unmatched = await confirm_reported_refs(session, run.organisation_id, agent_drift)
-            except Exception:
-                _log.exception("journey_reconcile.agent_mint_probe_failed org=%s", run.organisation_id)
-                confirmed = []
-            record_refs_agent_minted(len(agent_drift) - len(confirmed))
+        drift, skip_advance = await _apply_agent_drift_gate(session, run.organisation_id, drift)
+        if skip_advance:
+            continue
         drift_total += len(drift)
         record_journey_reconcile_drift(len(drift), kind="stale" if advancing else "missing")
         try:
@@ -677,3 +663,33 @@ async def reconcile_journeys(session: AsyncSession, batch_size: int = 500) -> in
         extra={"candidates": len(candidates), "advanced": advanced, "drift": drift_total, "errors": errors},
     )
     return advanced
+
+
+async def _apply_agent_drift_gate(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    drift: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Apply the fail-closed agent-mint gate to a run's drift refs (FAR-795 B).
+
+    Returns ``(drift, skip_advance)``. The sweep is the third mint surface that
+    can observe an agent ref: flag OFF drops agent entries (counted as
+    suppressed) and, when that empties the drift, signals ``skip_advance`` so the
+    run is not re-advanced with zero refs. Flag ON leaves the drift intact and
+    counts fresh agent mints (row-existence probe fail-open).
+    """
+    agent_minting = await agent_minting_enabled(session, org_id)
+    agent_drift = [entry for entry in drift if entry.get("source") == _AGENT_SOURCE]
+    if not agent_drift:
+        return drift, False
+    if not agent_minting:
+        record_refs_agent_mint_suppressed_by_flag(len(agent_drift))
+        filtered = [entry for entry in drift if entry.get("source") != _AGENT_SOURCE]
+        return filtered, not bool(filtered)
+    try:
+        confirmed, _unmatched = await confirm_reported_refs(session, org_id, agent_drift)
+    except Exception:
+        _log.exception("journey_reconcile.agent_mint_probe_failed org=%s", org_id)
+        confirmed = []
+    record_refs_agent_minted(len(agent_drift) - len(confirmed))
+    return drift, False

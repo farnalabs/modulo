@@ -162,6 +162,28 @@ def _node_declares_work_item_refs(node_def: dict[str, Any]) -> bool:
     return isinstance(properties, dict) and bool(_WORK_ITEM_REFS_INPUT_PROPS & set(properties))
 
 
+def _validate_node_input_ref_entries(raw: list[Any], node_id: str) -> tuple[list[dict[str, Any]], int]:
+    """Validate each create-time ref entry, fail-open (FAR-795).
+
+    Returns ``(validated, malformed)``. A read or validation failure degrades
+    to fewer/empty validated refs with a warning log (capped at 3) plus a
+    counter event surfaced by the caller.
+    """
+    validated: list[dict[str, Any]] = []
+    malformed = 0
+    for i, entry in enumerate(raw):
+        try:
+            validated.append(validate_ref_entry(entry))
+        except (ValueError, TypeError) as exc:
+            malformed += 1
+            if malformed <= 3:
+                _log.warning(
+                    "node_work_item_refs.validation_failed",
+                    extra={"node_id": node_id, "index": i, "reason": str(exc)},
+                )
+    return validated, malformed
+
+
 def _validated_node_input_refs(node_id: str, run_context: dict[str, Any]) -> list[dict[str, Any]]:
     """Read the VALIDATED, UNCAPPED create-time work-item refs (FAR-795).
 
@@ -182,16 +204,7 @@ def _validated_node_input_refs(node_id: str, run_context: dict[str, Any]) -> lis
     if isinstance(input_obj, dict):
         raw = input_obj.get(WORK_ITEM_REFS_KEY)
         if isinstance(raw, list):
-            for i, entry in enumerate(raw):
-                try:
-                    validated.append(validate_ref_entry(entry))
-                except (ValueError, TypeError) as exc:
-                    malformed += 1
-                    if malformed <= 3:
-                        _log.warning(
-                            "node_work_item_refs.validation_failed",
-                            extra={"node_id": node_id, "index": i, "reason": str(exc)},
-                        )
+            validated, malformed = _validate_node_input_ref_entries(raw, node_id)
     if malformed:
         notify_refs_event("malformed_entry", surface="node_input", node_id=node_id, count=malformed)
     return validated
