@@ -141,7 +141,7 @@ def use_refresh_token(request, client):
     with (
         patch("modulo.api.routes.auth.get_account_by_id", new_callable=AsyncMock, return_value=active_account),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new_callable=AsyncMock, return_value="admin"),
-        patch("modulo.api.routes.auth.advance_sequence", new_callable=AsyncMock, return_value=(1, False)),
+        patch("modulo.api.routes.auth.advance_sequence", new_callable=AsyncMock, return_value=(1, False, False)),
     ):
         resp = client.post(
             "/api/v1/auth/refresh",
