@@ -48,15 +48,50 @@ async def create_family(session: AsyncSession, account_id: uuid.UUID, org_id: uu
 
 
 async def advance_sequence(
-    session: AsyncSession, family_id: uuid.UUID, expected_sequence: int, account_id: uuid.UUID
-) -> tuple[int, bool]:
+    session: AsyncSession,
+    family_id: uuid.UUID,
+    expected_sequence: int,
+    account_id: uuid.UUID,
+    *,
+    reuse_grace_seconds: int,
+    reuse_grace_max_steps: int,
+    reuse_grace_max_per_window: int,
+) -> tuple[int, bool, bool]:
     """Advance the token family sequence.
 
-    Uses SELECT FOR UPDATE to prevent concurrent advancement races.
-    Only advances families owned by *account_id*.
-    Returns (new_sequence, theft_detected).
-    theft_detected=True if the expected_sequence does not match max_sequence
-    (meaning a different token in the family was already used).
+    Uses SELECT FOR UPDATE to prevent concurrent advancement races. Only
+    advances families owned by *account_id*.
+
+    FAR-819 stale-replay semantics: presenting a stale (lower) family
+    sequence is normally a theft signal that blacklists the family. When the
+    reuse grace window is enabled (``reuse_grace_seconds > 0``) a replay is
+    treated as a STALE RETRY instead of theft when ALL of these hold:
+
+    * it is within ``reuse_grace_max_steps`` of the current sequence
+      (0 < max_sequence - expected_sequence <= reuse_grace_max_steps; an
+      expected_sequence ahead of max is never stale);
+    * it arrives inside the live reuse window — ``rotated_at`` is set and
+      ``now - rotated_at <= reuse_grace_seconds`` (the interval since the last
+      rotation in which the superseded token stays acceptable);
+    * it is within the per-window replay budget: the current window (marked by
+      ``reuse_window_started_at``) has not already admitted
+      ``reuse_grace_max_per_window`` replays.
+
+    A stale replay does NOT advance the sequence, does NOT touch
+    ``rotated_at``, and does NOT blacklist the family. It records the replay
+    against the reuse window (starting a new window and resetting the counter
+    when the prior window is NULL or expired), and returns the current
+    ``max_sequence`` unchanged as ``(max_sequence, False, True)``. The client
+    is expected to re-read the fresh token from shared localStorage and retry.
+
+    Every other mismatch — grace disabled, steps-behind beyond tolerance,
+    expected_sequence ahead of max, an expired or never-started reuse window,
+    an exhausted window budget, or an already-blacklisted family — blacklists
+    the family (theft) and returns ``(max_sequence, True, False)``.
+
+    Returns (new_sequence, theft_detected, stale_replay): ``stale_replay``
+    marks a stale-but-plausible replay that returns a retryable signal and
+    implies ``theft_detected is False``. The caller must NOT mint new tokens.
     """
     result = await session.execute(
         select(TokenFamily)
@@ -65,20 +100,82 @@ async def advance_sequence(
     )
     family = result.scalar_one_or_none()
     if family is None:
-        return 0, False
+        return 0, False, False
 
     if family.is_blacklisted:
-        return 0, True
+        return 0, True, False
 
+    now = datetime.now(UTC)
     if family.max_sequence != expected_sequence:
+        if _is_benign_reuse(
+            family,
+            expected_sequence,
+            now,
+            grace_seconds=reuse_grace_seconds,
+            grace_max_steps=reuse_grace_max_steps,
+        ):
+            last_window = _as_utc_aware(family.reuse_window_started_at)
+            if last_window is None or (now - last_window).total_seconds() > reuse_grace_seconds:
+                family.reuse_window_started_at = now
+                family.reuse_replay_count = 0
+            if family.reuse_replay_count + 1 > reuse_grace_max_per_window:
+                family.is_blacklisted = True
+                family.blacklisted_at = now
+                await session.flush()
+                return family.max_sequence, True, False
+            family.reuse_replay_count += 1
+            await session.flush()
+            return family.max_sequence, False, True
+
         family.is_blacklisted = True
-        family.blacklisted_at = datetime.now(UTC)
+        family.blacklisted_at = now
         await session.flush()
-        return family.max_sequence, True
+        return family.max_sequence, True, False
 
     family.max_sequence += 1
+    family.rotated_at = now
     await session.flush()
-    return family.max_sequence, False
+    return family.max_sequence, False, False
+
+
+def _as_utc_aware(value: datetime | None) -> datetime | None:
+    """Normalise a stored timestamp to tz-aware UTC for interval arithmetic.
+
+    PostgreSQL round-trips timezone-aware timestamps as aware datetimes, but
+    the SQLite dialect does not honour ``DateTime(timezone=True)`` and returns
+    naive datetimes — subtract them from a tz-aware ``now`` without this guard
+    and the comparison raises ``TypeError``.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def _is_benign_reuse(
+    family: TokenFamily,
+    expected_sequence: int,
+    now: datetime,
+    *,
+    grace_seconds: int,
+    grace_max_steps: int,
+) -> bool:
+    """Decide whether a sequence mismatch is a stale-but-plausible replay.
+
+    Stale only when grace is enabled, the presented sequence trails the
+    current one within the steps tolerance (never when it is ahead), and the
+    reuse window since the last rotation is still live. The per-window replay
+    budget is enforced by the caller after this passes.
+    """
+    if grace_seconds <= 0:
+        return False
+    if expected_sequence > family.max_sequence:
+        return False
+    if family.max_sequence - expected_sequence > grace_max_steps:
+        return False
+    last_rotation = _as_utc_aware(family.rotated_at)
+    return last_rotation is not None and (now - last_rotation).total_seconds() <= grace_seconds
 
 
 async def blacklist_family(session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID) -> bool:

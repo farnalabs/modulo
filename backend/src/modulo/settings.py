@@ -424,6 +424,22 @@ class Settings(BaseSettings):
     # below the run_claim_stale_seconds claim fence so the watchdog wins before
     # a stale-heartbeat re-claim can double-execute the hung run.
     saq_setup_grace_seconds: int = Field(default=600, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600)
+    # FAR-819 refresh-token reuse grace window. A refresh token presented with a
+    # stale family sequence within this window after the most recent rotation
+    # (``rotated_at``) is treated as a benign retry/replay rather than a theft
+    # signal. Bounds 0..120s: 0 disables the reuse grace entirely (any reuse
+    # blacklists the family immediately); 120s is the largest tolerated retry
+    # window across network latency and clock skew.
+    refresh_reuse_grace_seconds: int = Field(default=30, alias="REFRESH_REUSE_GRACE_SECONDS", ge=0, le=120)
+    # FAR-819 per-window reuse budget. After this many tolerated reuses within a
+    # single grace window (the window is marked by ``reuse_window_started_at``),
+    # the family is blacklisted regardless of the time window. Bounds 1..100.
+    refresh_reuse_grace_max_per_window: int = Field(default=8, alias="REFRESH_REUSE_GRACE_MAX_PER_WINDOW", ge=1, le=100)
+    # FAR-819 steps-behind tolerance. A stale-sequence replay is only benign when
+    # the family's current sequence is at most this many steps ahead of the
+    # presented (expected) sequence — anything further behind is outside a
+    # plausible retry race and blacklists the family. Bounds 1..10.
+    refresh_reuse_grace_max_steps: int = Field(default=3, alias="REFRESH_REUSE_GRACE_MAX_STEPS", ge=1, le=10)
     # FAR-369: absolute node-deadline watchdog fallback. When a node's
     # ``timeout_seconds`` is not present in the graph (or the node id is
     # unknown), the watchdog holds the node to this default. Intentionally a

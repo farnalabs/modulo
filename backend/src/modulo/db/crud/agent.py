@@ -17,7 +17,7 @@ from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.agent import Agent
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
-from modulo.utils.uuid import coerce_uuid
+from modulo.util.uuid import coerce_uuid
 
 _log = logging.getLogger(__name__)
 

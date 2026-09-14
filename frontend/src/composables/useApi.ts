@@ -51,11 +51,12 @@ async function request<T>(method: string, path: string, body?: unknown, options?
   let res = await requestWorker(method, path, body, options)
 
   if (res.status === 401) {
+    const idempotent = method === 'GET' || method === 'HEAD'
     const refreshed = await attemptTokenRefresh()
-    if (refreshed) {
+    if (refreshed && idempotent) {
       res = await requestWorker(method, path, body, options)
     }
-    if (!refreshed || res.status === 401) {
+    if (!refreshed || (idempotent && res.status === 401)) {
       clearAccessToken()
       exitToLogin()
       throw new Error('Session expired. Please log in again.')
