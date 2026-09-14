@@ -65,13 +65,14 @@ jobs:
         # Guard against regressions where the schemathesis test stops being
         # collected as a parametrized test (e.g. a @parametrize-decorated helper
         # called directly, which only ever yields a single uncollected item and
-        # silently stops fuzzing). The fuzz test must enumerate one item per GET
-        # operation; fail loudly if <= 1 item is collected.
+        # silently stops fuzzing). Each SCHEMA_GROUP matrix job fuzzes exactly one
+        # collection endpoint, so a per-group run legitimately collects 1 item;
+        # only a zero-item collection (the real no-op regression) should fail.
         run: |
           COUNT=$(uv run --no-build --no-sync pytest tests/integration/test_schemathesis.py --collect-only -q 2>/dev/null | grep -c "test_api_fuzz_get_endpoints\[")
           echo "Collected $COUNT fuzz test item(s)"
-          if [ "$COUNT" -le 1 ]; then
-            echo "::error::Schemathesis fuzz test is not parametrizing endpoints (regression) — only $COUNT item collected"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "::error::Schemathesis fuzz test is not parametrizing any endpoints (regression) — only $COUNT item collected"
             exit 1
           fi
         env:
