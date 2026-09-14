@@ -102,6 +102,9 @@ from modulo.launcher.entry import PGDATA_DIRNAME
 
 _log = logging.getLogger(__name__)
 
+# Repeated filename (S1192).
+_SECRETS_FILENAME = "secrets.json"
+
 # Quantified disk floor for a healthy single-install data dir.
 MIN_FREE_DISK_BYTES = 512 * 1024 * 1024
 
@@ -439,7 +442,7 @@ def check_privileges(data_dir: Path, _state: Any, probes: DoctorProbes) -> Check
 
 def check_secrets_permissions(data_dir: Path, _state: Any, probes: DoctorProbes) -> CheckResult:
     """Check 9 — the secrets file is 0600 owner-only (POSIX)."""
-    secrets_path = data_dir / "secrets.json"
+    secrets_path = data_dir / _SECRETS_FILENAME
     if not secrets_path.is_file():
         return CheckResult("secrets-permissions", True, "no secrets file (data dir not initialized)")
     try:
@@ -897,7 +900,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
     composed: dict[str, str] = {}
     if state is not None:
         try:
-            secrets = secrets_file_module._parse((data_dir / "secrets.json").read_bytes())
+            secrets = secrets_file_module._parse((data_dir / _SECRETS_FILENAME).read_bytes())
             composed = compose_config(state, secrets)
         except (SecretsFileError, OSError):
             composed = {}
@@ -1039,7 +1042,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         # the P1a source of truth.
         if sys.platform == "win32":
             return None
-        secrets_path = root / "secrets.json"
+        secrets_path = root / _SECRETS_FILENAME
         if not secrets_path.is_file():
             return None
         return secrets_path.stat().st_mode & 0o777
@@ -1137,7 +1140,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
             if sibling.is_dir()
             and sibling != data_dir
             and (sibling / "state.json").is_file()
-            and (sibling / "secrets.json").is_file()
+            and (sibling / _SECRETS_FILENAME).is_file()
         ]
         if not siblings:
             return None
@@ -1328,7 +1331,7 @@ def _load_state_readonly(data_dir: Path) -> tuple[Any, str | None]:
     from modulo.launcher.secrets_file import SecretsFileError, _parse
     from modulo.launcher.state import STATE_FILENAME, StateIntegrityError, StateVersionError, load_state
 
-    secrets_path = data_dir / "secrets.json"
+    secrets_path = data_dir / _SECRETS_FILENAME
     if not secrets_path.exists():
         return None, "data dir is not initialized (no secrets file) — run `modulo start` first"
     try:
@@ -1358,7 +1361,7 @@ def _state_problem_kind(data_dir: Path, state_error: str | None) -> str | None:
 
     if "secrets file unreadable" in state_error:
         return "secrets-unreadable"
-    if not (data_dir / "secrets.json").exists():
+    if not (data_dir / _SECRETS_FILENAME).exists():
         return "missing"
     if "state.json unreadable" in state_error or f"no {STATE_FILENAME}" in state_error:
         # A MISSING state.json (secrets present) is uninitialized, while a

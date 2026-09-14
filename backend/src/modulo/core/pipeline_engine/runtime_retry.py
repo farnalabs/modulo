@@ -225,10 +225,10 @@ def _compensated_marker(node_id: str) -> dict[str, Any]:
     return {"_compensated": True, "_compensated_node": node_id}
 
 
-def resolve_compensation_target(node_id: str, outgoing_edges: list[dict[str, Any]]) -> str | None:
-    """Return the ``on_failure_target`` for *node_id*, or None.
+def resolve_compensation_target(_node_id: str, outgoing_edges: list[dict[str, Any]]) -> str | None:
+    """Return the ``on_failure_target`` for *_node_id*, or None.
 
-    A compensation edge is an outgoing edge from *node_id* that declares an
+    A compensation edge is an outgoing edge from *_node_id* that declares an
     ``on_failure_target`` (rc.edge_has_compensation). The first matching edge
     wins; edges with no compensation config are ignored.
     """

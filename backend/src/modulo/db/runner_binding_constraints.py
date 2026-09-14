@@ -53,7 +53,7 @@ RESERVED_ENV_VARS: frozenset[str] = frozenset(
 #    configuration, not an application credential.
 RESERVED_ENV_VAR_PREFIXES: tuple[str, ...] = ("MODULO_", "APP_MODULO_", "GIT_")
 
-_ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_]\w*$", re.ASCII)
 _MAX_TARGET_ENV_VAR_LEN = 128
 _MAX_SOURCE_FIELD_LEN = 64
 
@@ -67,8 +67,8 @@ _MAX_SOURCE_FIELD_LEN = 64
 KNOWN_SOURCE_FIELDS_ALL: frozenset[str] = frozenset({"api_key"})
 
 
-def known_source_fields_for(provider: str) -> frozenset[str]:
-    """Return the credential fields a backend of ``provider`` can expose.
+def known_source_fields_for(_provider: str) -> frozenset[str]:
+    """Return the credential fields a backend of ``_provider`` can expose.
 
     Uniform surface today (``api_key``); per-provider extension point for the
     day a write path stores richer credential JSON.

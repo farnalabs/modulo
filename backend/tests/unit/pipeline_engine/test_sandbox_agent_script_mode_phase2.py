@@ -265,7 +265,7 @@ async def test_llm_mode_takes_no_fencing_lease():
         "template_id": "opencode",
         "mode": "llm",
         "agent_prompt": "Do the thing",
-        "agent_command": "opencode run --auto",
+        "agent_commands": ["opencode run --auto"],
     }
     state = _run_state()
     state["_claim_lease"] = "claim-token-1"

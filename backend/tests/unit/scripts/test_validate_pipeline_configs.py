@@ -147,7 +147,7 @@ def test_check_node_config_script_mode_missing_command_fails(tmp_path):
 def test_check_node_config_both_commands_fails(tmp_path):
     """FAR-296: agent_command/agent_commands and script_command are mutually exclusive."""
     node = _good_node()
-    node["agent_command"] = "opencode run"
+    node["agent_commands"] = ["opencode run"]
     node["script_command"] = "python3 main.py"
     with patch.object(vpc, "_fail") as fail:
         vpc._check_node_config(Path(tmp_path), node)

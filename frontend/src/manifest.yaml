@@ -933,6 +933,12 @@ elements:
         type: element
         dynamic_testid: false
     /library/collections/:id:
+      - testid: collection-install
+        type: button
+        dynamic_testid: false
+      - testid: collection-install-error
+        type: element
+        dynamic_testid: false
       - testid: collection-publish
         type: button
         dynamic_testid: false

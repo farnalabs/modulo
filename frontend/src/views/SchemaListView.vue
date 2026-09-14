@@ -65,7 +65,7 @@
   :placeholder="$t('views.SchemaListView.folders')"
   data-testid="schema-list-mobile-folder-select"
   class="w-full"
-  :options="[{ value: '__all__', label: $t('views.SchemaListView.all_schemas') }, ...foldersList.map(f => ({ value: f.id, label: f.name }))]"
+  :options="[{ value: '__all__', label: $t('views.SchemaListView.all_schemas') }, ...[...foldersList].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })).map(f => ({ value: f.id, label: f.name }))]"
   option-label="label"
   option-value="value"
 >
@@ -192,7 +192,7 @@
       <div class="space-y-2">
         <button
           type="button"
-          v-for="f in foldersList"
+          v-for="f in [...foldersList].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }))"
           :key="f.id"
           class="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
           :class="moveToFolderId === f.id ? 'border-primary bg-accent' : 'border-border'"

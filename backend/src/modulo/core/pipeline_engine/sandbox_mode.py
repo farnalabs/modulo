@@ -22,6 +22,7 @@ from typing import Any
 import jinja2
 
 _SANDBOX_MODES = frozenset({"llm", "script"})
+_SANDBOX_DEFAULT_MODE = "llm"
 _SANDBOX_EGRESS_POLICIES = frozenset({"default", "deny_all", "selected"})
 _SANDBOX_EGRESS_ALLOWLIST_KEYS = frozenset({"host", "port"})
 # FAR-212 PR B: git-credential scope surface. ``scoped`` = the provisioned git
@@ -212,40 +213,39 @@ def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, d
 
     FAR-296: a sandbox_agent node runs either an LLM agent (``mode="llm"``, the
     default and legacy behaviour) or a verbatim script (``mode="script"``). The
-    two modes are mutually exclusive: ``agent_command`` / ``agent_commands``
-    belong to llm mode, ``script_command`` to script mode. An absent ``mode``
-    key (legacy no-mode snapshots) reads as ``"llm"``.
+    two modes are mutually exclusive: ``agent_commands`` belongs to llm mode,
+    ``script_command`` to script mode. An absent ``mode`` key (legacy no-mode
+    snapshots) reads as ``"llm"``.
 
     Returns ``(mode, command, config)``:
       - ``mode``: ``"llm"`` | ``"script"``
-      - ``command``: the command to execute — the joined agent_command /
-        agent_commands for llm mode; the VERBATIM script_command for script
-        mode (never Jinja-rendered).
+      - ``command``: the command to execute — the joined agent_commands for
+        llm mode; the VERBATIM script_command for script mode (never
+        Jinja-rendered).
       - ``config``: mode-scoped extras — ``{"agent_prompt": <str>}`` for llm
         mode (required non-empty); ``{}`` for script mode (prompt not required
         and never written to the sandbox).
 
     Raises ``ValueError`` with a descriptive message on invalid combinations:
       - unknown ``mode`` value
-      - BOTH agent_command (or agent_commands) AND script_command present
-      - ``mode="llm"``: missing/empty agent_prompt or agent_command
+      - BOTH agent_commands AND script_command present
+      - ``mode="llm"``: missing/empty agent_prompt or agent_commands
       - ``mode="script"``: missing/empty script_command
     """
     node_id = node_def.get("id")
-    mode = node_def.get("mode", "llm")
+    mode = node_def.get("mode", _SANDBOX_DEFAULT_MODE)
     if mode not in _SANDBOX_MODES:
         raise ValueError(f"sandbox_agent node '{node_id}' has invalid mode {mode!r} — expected 'llm' or 'script'")
     commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
     agent_commands_raw: list[str] | None = node_def.get("agent_commands")
-    agent_command_raw: str | None = node_def.get("agent_command")
     script_command_raw: str | None = node_def.get("script_command")
 
-    has_agent_command = bool(agent_commands_raw) or bool(agent_command_raw and str(agent_command_raw).strip())
+    has_agent_command = bool(agent_commands_raw)
     has_script_command = bool(script_command_raw and str(script_command_raw).strip())
 
     if has_agent_command and has_script_command:
         raise ValueError(
-            f"sandbox_agent node '{node_id}' has BOTH agent_command (or agent_commands) "
+            f"sandbox_agent node '{node_id}' has BOTH agent_commands "
             "and script_command — the two modes are mutually exclusive"
         )
 
@@ -261,28 +261,26 @@ def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, d
             "— an empty prompt would dispatch the agent with no instructions"
         )
     if agent_commands_raw:
-        agent_command = commands_concatenation_string.join(agent_commands_raw)
-    elif agent_command_raw and str(agent_command_raw).strip():
-        agent_command = agent_command_raw
-    else:
+        agent_command = commands_concatenation_string.join(str(c) for c in agent_commands_raw)
+        if not agent_command.strip():
+            agent_command = ""
+    if not agent_commands_raw or not agent_command:
         raise ValueError(
-            f"sandbox_agent node '{node_id}' is missing required 'agent_command' "
-            "(or 'agent_commands') — a sandbox agent cannot run without an explicit command"
+            f"sandbox_agent node '{node_id}' is missing required 'agent_commands' "
+            "— a sandbox agent cannot run without an explicit command"
         )
     return mode, agent_command, {"agent_prompt": str(agent_prompt)}
 
 
 def validate_sandbox_agent_command_jinja(node_def: dict[str, Any]) -> str | None:
-    """Validate that an llm-mode sandbox_agent's ``agent_command`` is Jinja-renderable.
+    """Validate that an llm-mode sandbox_agent's ``agent_commands`` list is Jinja-renderable.
 
-    FAR-226: catch a broken ``agent_command`` template at save time instead of
+    FAR-226: catch a broken ``agent_commands`` template at save time instead of
     letting it surface as an opaque instant-fail for every run of the pipeline.
 
-    Returns an error message when the command has invalid Jinja syntax
+    Returns an error message when any command has invalid Jinja syntax
     (``TemplateSyntaxError``), otherwise ``None``. Only llm mode is checked —
-    script mode runs ``script_command`` VERBATIM with no Jinja render. The
-    scalar ``agent_command`` and the joined ``agent_commands`` list are both
-    validated (the same way node_runner resolves the command).
+    script mode runs ``script_command`` VERBATIM with no Jinja render.
 
     Uses the same ``SandboxedEnvironment`` as node_runner so save-time and
     run-time rendering agree. Undefined variables are lenient (render to empty
@@ -292,20 +290,18 @@ def validate_sandbox_agent_command_jinja(node_def: dict[str, Any]) -> str | None
     at run time.
     """
     node_id = node_def.get("id")
-    if node_def.get("mode", "llm") != "llm":
+    if node_def.get("mode", _SANDBOX_DEFAULT_MODE) != _SANDBOX_DEFAULT_MODE:
         return None
-    command = node_def.get("agent_command")
-    if not command or not str(command).strip():
-        agent_commands = node_def.get("agent_commands")
-        if not agent_commands:
-            return None
-        command = node_def.get("commands_concatenation_string", " && ").join(str(c) for c in agent_commands)
+    agent_commands = node_def.get("agent_commands")
+    if not agent_commands:
+        return None
+    command = node_def.get("commands_concatenation_string", " && ").join(str(c) for c in agent_commands)
     from jinja2.sandbox import SandboxedEnvironment
 
     try:
         SandboxedEnvironment().from_string(str(command))
     except jinja2.TemplateSyntaxError as exc:
-        return f"sandbox_agent node '{node_id}' agent_command is not valid Jinja2: {exc}"
+        return f"sandbox_agent node '{node_id}' agent_commands is not valid Jinja2: {exc}"
     return None
 
 
@@ -563,7 +559,7 @@ def _validate_sandbox_managed_inputs_config(node_def: dict[str, Any]) -> None:
 
     Rules enforced:
 
-    * ``agent_command`` must NOT contain a literal ``git clone`` — managed inputs
+    * ``agent_commands`` must NOT contain a literal ``git clone`` — managed inputs
       handle checkout; a user-provided ``git clone`` would race with or bypass
       the managed checkout.  The check is Jinja-aware: a ``git``/``clone`` pair
       split across a Jinja block (e.g. ``{{ 'git clone' }}`` or ``git
@@ -592,25 +588,28 @@ def _validate_sandbox_managed_inputs_config(node_def: dict[str, Any]) -> None:
         return
 
     # --- (a) literal git clone check (Jinja-aware) ---
-    agent_command = node_def.get("agent_command")
-    if agent_command and isinstance(agent_command, str):
-        # A ``git``/``clone`` pair may be split across a Jinja boundary, so check
-        # two normalised views:
-        #   1. inner-kept    — block delimiters dropped, inner expression kept
-        #      (catches ``{{ 'git clone' }}`` and ``git {{ clone_cmd }}``);
-        #   2. block-stripped — blocks replaced with a single space
-        #      (catches ``git {{ x }} clone`` where the variable resolves empty).
-        # Both collapse whitespace first so adjacency survives.  A bare
-        # ``{{ git_clone }}`` interpolation is correctly allowed by neither.
-        inner_kept = _strip_jinja_blocks(agent_command)
-        block_stripped = _re.sub(r"\s+", " ", _JINJA_BLOCK_RE.sub(" ", agent_command))
-        if "git clone" in inner_kept or "git clone" in block_stripped:
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' agent_command contains a literal "
-                "'git clone' after Jinja block removal — managed workspace inputs "
-                "handle checkout; a user-provided git clone would race with or "
-                "bypass the managed checkout"
-            )
+    agent_commands = node_def.get("agent_commands")
+    if isinstance(agent_commands, list):
+        for agent_command in agent_commands:
+            if not isinstance(agent_command, str) or not agent_command:
+                continue
+            # A ``git``/``clone`` pair may be split across a Jinja boundary, so check
+            # two normalised views:
+            #   1. inner-kept    — block delimiters dropped, inner expression kept
+            #      (catches ``{{ 'git clone' }}`` and ``git {{ clone_cmd }}``);
+            #   2. block-stripped — blocks replaced with a single space
+            #      (catches ``git {{ x }} clone`` where the variable resolves empty).
+            # Both collapse whitespace first so adjacency survives.  A bare
+            # ``{{ git_clone }}`` interpolation is correctly allowed by neither.
+            inner_kept = _strip_jinja_blocks(agent_command)
+            block_stripped = _re.sub(r"\s+", " ", _JINJA_BLOCK_RE.sub(" ", agent_command))
+            if "git clone" in inner_kept or "git clone" in block_stripped:
+                raise ValueError(
+                    f"sandbox_agent node '{node_id}' agent_commands item contains a literal "
+                    "'git clone' after Jinja block removal — managed workspace inputs "
+                    "handle checkout; a user-provided git clone would race with or "
+                    "bypass the managed checkout"
+                )
 
     # --- per-input validation ---
     for index, inp in enumerate(workspace_inputs):

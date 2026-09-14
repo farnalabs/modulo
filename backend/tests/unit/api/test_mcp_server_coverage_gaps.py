@@ -2540,7 +2540,7 @@ class TestResourceGaps(_AuthContext):
             {
                 "id": "n1",
                 "agent_prompt": "prompt text",
-                "agent_command": "run it",
+                "agent_commands": ["run it"],
                 "context_files": {"/a.py": "content"},
                 "template_id": "opencode",
             },
@@ -2548,7 +2548,7 @@ class TestResourceGaps(_AuthContext):
         ]
         rendered = ms._render_snapshot_node_details(nodes)
         assert "agent_prompt: prompt text" in rendered
-        assert "agent_command: run it" in rendered
+        assert "agent_commands: run it" in rendered
         assert "context_file /a.py: 7 bytes" in rendered
         assert "template_id: opencode" in rendered
 
@@ -2567,7 +2567,7 @@ class TestResourceGaps(_AuthContext):
         snap.snapshot_version = 3
         snap.graph_json = {
             "nodes": [
-                {"id": "n1", "node_type": "agent", "agent_prompt": "p", "agent_command": "c"},
+                {"id": "n1", "node_type": "agent", "agent_prompt": "p", "agent_commands": ["c"]},
                 {"id": "n2", "node_type": "join"},
             ],
             "edges": [{"id": "e1", "source": "n1", "target": "n2", "type": "normal"}],

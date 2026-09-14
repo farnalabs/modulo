@@ -7,6 +7,7 @@ code:
   - backend/src/modulo/api/routes/admin_rate_limits.py
   - backend/src/modulo/api/routes/admin_housekeeping.py
   - backend/src/modulo/api/routes/admin_run_retention.py
+  - backend/src/modulo/api/middleware/rate_limiter.py
   - backend/src/modulo/api/routes/admin.py
 unit-tests:
   - backend/tests/unit/api/test_admin_runtime_config.py
@@ -19,6 +20,8 @@ bdd:
   - backend/tests/bdd/features/admin/housekeeping.feature
   - backend/tests/bdd/features/operations/run_retention.feature
   - backend/tests/bdd/features/model_backends/rate_limiting.feature
+  - backend/tests/bdd/features/rate_limiting/rate_limiting.feature
+  - backend/tests/bdd/steps/test_rate_limiting.py
 depends-on:
   - feat-system-config
 status: covered
@@ -42,6 +45,11 @@ purging old run data.
 - [x] GET/PUT `/api/v1/admin/rate-limits` returns and replaces rate-limit rules;
       mode (redis/in-memory) is reported
       (`admin_rate_limits.py`, `model_backends/rate_limiting.feature`)
+- [x] The rate-limit middleware enforces independent per-endpoint budgets
+      (`POST /api/v1/runs` 60/min, `POST /api/v1/triggers` 100/min, webhook
+      flood 100/min), isolates counters per API key, applies the window reset,
+      and returns a `Retry-After` header plus a rate-limit problem body on 429
+      (`rate_limiting/rate_limiting.feature`)
 - [x] Housekeeping scan returns cleanup candidates grouped by category;
       cleanup deletes selected candidates; checkpoint purge reclaims DB volume
       (`backend/tests/bdd/features/admin/housekeeping.feature`)
@@ -54,10 +62,17 @@ purging old run data.
 
 ## Known Gaps
 
-- No BDD for rate-limit middleware integration with specific endpoint types;
-  coverage is via unit tests and the `model_backends/rate_limiting.feature` BDD.
-
 ## QA History
+- 2026-09-14: **improve-architecture (product-map walk)** — closed the "no BDD for
+  rate-limit middleware integration with specific endpoint types" gap: wired
+  `rate_limiting/rate_limiting.feature` into the executing suite via
+  `steps/test_rate_limiting.py` (8 scenarios across independent endpoint budgets,
+  per-API-key counter isolation, window reset, Retry-After semantics, and the admin
+  runtime rule update) and dropped the file from the tracked orphaned-BDD debt list
+  (`_ORPHANED_BDD_FEATURES`). Two auth brute-force scenarios that duplicated
+  `auth_brute_force.feature` were removed from the draft (that coverage already
+  executes in `steps/test_auth_rate_limiting.py`). Rate-limit middleware behaviour is
+  no longer unit-tested only.
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for

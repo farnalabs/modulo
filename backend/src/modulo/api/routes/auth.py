@@ -88,6 +88,9 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
+# Repeated token type default (S1192).
+_TOKEN_TYPE_BEARER = "bearer"
+
 
 class LoginRequest(BaseModel):
     email: str = Field(min_length=1)
@@ -97,7 +100,7 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
-    token_type: str = "bearer"
+    token_type: str = _TOKEN_TYPE_BEARER
     requires_bootstrap: bool = False
     must_change_password: bool = False
 
@@ -108,13 +111,13 @@ class RefreshRequest(BaseModel):
 
 class DemoLoginResponse(BaseModel):
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = _TOKEN_TYPE_BEARER
 
 
 class RefreshResponse(BaseModel):
     access_token: str
     refresh_token: str
-    token_type: str = "bearer"
+    token_type: str = _TOKEN_TYPE_BEARER
 
 
 class LogoutResponse(BaseModel):
