@@ -273,7 +273,7 @@ def test_filter_subscribed_skips_unparseable_events() -> None:
 async def test_sign_payload_returns_hmac(notifier: Notifier) -> None:
     ep = _fake_endpoint(secret="test-secret")
 
-    sig = await notifier._sign_payload(b'{"hello":"world"}', ep)
+    sig = notifier._sign_payload(b'{"hello":"world"}', ep)
     expected = "sha256="
     assert sig.startswith(expected)
     assert len(sig) > len(expected)
@@ -283,7 +283,7 @@ async def test_sign_payload_matches_expected_hmac(notifier: Notifier) -> None:
     ep = _fake_endpoint(secret="test-secret")
     body = b'{"hello":"world"}'
 
-    sig = await notifier._sign_payload(body, ep)
+    sig = notifier._sign_payload(body, ep)
     expected_digest = hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
     assert sig == f"sha256={expected_digest}"
 
@@ -291,7 +291,7 @@ async def test_sign_payload_matches_expected_hmac(notifier: Notifier) -> None:
 async def test_sign_payload_empty_when_no_secret(notifier: Notifier) -> None:
     ep = _fake_endpoint(secret=None)
 
-    sig = await notifier._sign_payload(b"data", ep)
+    sig = notifier._sign_payload(b"data", ep)
     assert sig == ""
 
 
@@ -300,7 +300,7 @@ async def test_sign_payload_empty_when_secret_corrupt(notifier: Notifier) -> Non
     ep = _fake_endpoint(secret="test-secret")
     ep.secret_ciphertext = b"not-valid-fernet-ciphertext"
 
-    sig = await notifier._sign_payload(b"data", ep)
+    sig = notifier._sign_payload(b"data", ep)
     assert sig == ""
 
 

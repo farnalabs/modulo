@@ -5,7 +5,7 @@ import json
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from typing import Self
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -455,7 +455,7 @@ class TestCheckSaqWorkersPerQueue:
         settings = _make_settings().model_copy(update={"saq_hard_gate": saq_hard_gate})
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
+            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])) as queues,
             patch("modulo.api.routes.health._live_worker_hostnames") as live,
             patch.dict("os.environ", {"FLY_MACHINE_ID": this_host}, clear=False),
         ):
@@ -519,7 +519,7 @@ class TestCheckSaqWorkersEndToEnd:
         fake = _PerQueueFakeStatsRedis(stats, blobs)
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])),
+            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
             patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
             patch("modulo.api.routes.health.time.time", return_value=self.NOW_MS / 1000),
             patch.dict("os.environ", {"FLY_MACHINE_ID": this_host}, clear=False),
@@ -573,7 +573,7 @@ class TestCheckFleetSaqWorkers:
         settings = _make_settings().model_copy(update={"saq_hard_gate": saq_hard_gate})
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
+            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])) as queues,
             patch("modulo.api.routes.health._live_worker_hostnames") as live,
         ):
             queues.return_value = ["runs", "system"]
@@ -607,7 +607,7 @@ class TestCheckFleetSaqWorkers:
         settings = _make_settings()
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])),
+            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
             patch(
                 "modulo.api.routes.health._live_worker_hostnames",
                 side_effect=RuntimeError("redis down"),
@@ -626,7 +626,7 @@ class TestCheckSaqWorkersProcessGroup:
         settings = _make_settings()
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
+            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])) as queues,
             patch("modulo.api.routes.health._live_worker_hostnames") as live,
             patch.dict("os.environ", {"FLY_MACHINE_ID": "app-1", "FLY_PROCESS_GROUP": "app"}, clear=False),
         ):
@@ -644,7 +644,7 @@ class TestCheckSaqWorkersProcessGroup:
         settings = _make_settings()
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
+            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])) as queues,
             patch("modulo.api.routes.health._live_worker_hostnames", return_value=set()),
             patch.dict("os.environ", {"FLY_MACHINE_ID": "app-1", "FLY_PROCESS_GROUP": "app"}, clear=False),
         ):
@@ -658,7 +658,7 @@ class TestCheckSaqWorkersProcessGroup:
         settings = _make_settings()
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
+            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])) as queues,
             patch("modulo.api.routes.health._live_worker_hostnames") as live,
             patch.dict("os.environ", {"FLY_MACHINE_ID": "machine-a", "FLY_PROCESS_GROUP": "worker"}, clear=False),
         ):
