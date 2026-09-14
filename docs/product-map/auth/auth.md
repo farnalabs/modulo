@@ -48,10 +48,11 @@ clients.
 - [x] Token rotation validates refresh claims, detects token theft (reused sequence
       numbers blacklist the family), and returns new access+refresh tokens. A stale
       sequence presented within the FAR-819 reuse grace window (inside
-      `REFRESH_REUSE_GRACE_SECONDS` of the last rotation, within the steps-behind
-      tolerance, and under the per-window replay budget) is treated as a benign
-      retry and the family advances normally; reuse beyond those bounds blacklists
-      the family as theft (`backend/src/modulo/db/crud/token_family.py`)
+      `REFRESH_REUSE_GRACE_SECONDS` of the last rotation) is treated as a benign
+      reuse-interval replay: the family advances normally and mints new tokens
+      (reuse_replay=True for logging). Reuse outside the window, ahead of max, or
+      from a blacklisted family blacklists the family as theft
+      (`backend/src/modulo/db/crud/token_family.py`)
 - [x] Cross-tab refresh serialisation: browser tabs share localStorage, so only
       one tab refreshes at a time. The frontend uses the Web Locks API
       (`navigator.locks.request('modulo-auth-refresh', ...)`) to serialise
@@ -60,13 +61,13 @@ clients.
       token, the tab adopts it without a redundant request. When Web Locks are
       unavailable (older browsers, test environments), the refresh runs directly
       with the in-tab single-flight dedup (`frontend/src/lib/api/auth.ts`)
-- [x] Stale refresh token retry: if the refresh endpoint returns HTTP 409 with
-      `code: 'stale_refresh_token'`, the client re-reads the refresh token from
-      localStorage (shared across tabs) and retries with a short bounded backoff
-      (up to 3 attempts). A fresh token from a sibling tab is adopted; if no fresh
-      token appears after retries, the refresh is treated as a genuine failure.
-      The family is NOT blacklisted — the 409 signal indicates a benign
-      cross-tab race, not theft (`frontend/src/lib/api/auth.ts`)
+- [x] Reuse-interval refresh: if a stale refresh token is presented within the
+      grace window (`REFRESH_REUSE_GRACE_SECONDS` of the last rotation), the
+      server advances and mints normally (reuse_replay=True for logging). The
+      client does NOT need to retry — the stale token was accepted and new
+      tokens are returned. Reuse outside the window, ahead of max, or from a
+      blacklisted family returns 401 (theft). The family is NOT blacklisted on
+      a within-window reuse (`frontend/src/lib/api/auth.ts`)
 - [x] Logout blacklists the token family so all tokens from that session are
       invalidated
 - [x] `/me` returns the authenticated user's profile with `must_change_password`

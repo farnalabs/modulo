@@ -1,7 +1,7 @@
 """Operator dismissal (soft-delete) columns for ``journeys`` (FAR-795 slice C).
 
-Revision ID: 0232_journey_dismissal
-Revises: 0231_token_families_reuse_replay_count
+Revision ID: 0238_journey_dismissal
+Revises: 0237_fix_token_family_org_nullable
 Create Date: 2026-09-13
 
 Schema legs (Postgres only; SQLite/ORM-created test schemas get the columns
@@ -34,8 +34,8 @@ from alembic import op
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-revision = "0232_journey_dismissal"
-down_revision = "0231_token_families_reuse_replay_count"
+revision = "0238_journey_dismissal"
+down_revision = "0237_fix_token_family_org_nullable"
 branch_labels = None
 depends_on = None
 

@@ -61,44 +61,28 @@ async def advance_sequence(
     account_id: uuid.UUID,
     *,
     reuse_grace_seconds: int,
-    reuse_grace_max_steps: int,
-    reuse_grace_max_per_window: int,
 ) -> tuple[int, bool, bool]:
     """Advance the token family sequence.
 
     Uses SELECT FOR UPDATE to prevent concurrent advancement races. Only
     advances families owned by *account_id*.
 
-    FAR-819 stale-replay semantics: presenting a stale (lower) family
-    sequence is normally a theft signal that blacklists the family. When the
-    reuse grace window is enabled (``reuse_grace_seconds > 0``) a replay is
-    treated as a STALE RETRY instead of theft when ALL of these hold:
+    FAR-819 reuse-interval semantics:
 
-    * it is within ``reuse_grace_max_steps`` of the current sequence
-      (0 < max_sequence - expected_sequence <= reuse_grace_max_steps; an
-      expected_sequence ahead of max is never stale);
-    * it arrives inside the live reuse window — ``rotated_at`` is set and
-      ``now - rotated_at <= reuse_grace_seconds`` (the interval since the last
-      rotation in which the superseded token stays acceptable);
-    * it is within the per-window replay budget: the current window (marked by
-      ``reuse_window_started_at``) has not already admitted
-      ``reuse_grace_max_per_window`` replays.
+    * ``expected_sequence == max_sequence`` → advance + mint (normal).
+    * ``expected_sequence > max_sequence`` (forged/ahead) → blacklist (theft).
+    * ``expected_sequence < max_sequence``:
+      - if ``reuse_grace_seconds > 0`` AND ``rotated_at`` is set AND
+        ``now - rotated_at <= reuse_grace_seconds`` → benign reuse: advance
+        normally (``max_sequence += 1``), reset ``rotated_at`` to now, mint.
+        Set ``reuse_replay=True`` for logging ONLY — never blacklist.
+      - otherwise → blacklist (theft).
+    * family already blacklisted → theft.
 
-    A stale replay does NOT advance the sequence, does NOT touch
-    ``rotated_at``, and does NOT blacklist the family. It records the replay
-    against the reuse window (starting a new window and resetting the counter
-    when the prior window is NULL or expired), and returns the current
-    ``max_sequence`` unchanged as ``(max_sequence, False, True)``. The client
-    is expected to re-read the fresh token from shared localStorage and retry.
-
-    Every other mismatch — grace disabled, steps-behind beyond tolerance,
-    expected_sequence ahead of max, an expired or never-started reuse window,
-    an exhausted window budget, or an already-blacklisted family — blacklists
-    the family (theft) and returns ``(max_sequence, True, False)``.
-
-    Returns (new_sequence, theft_detected, stale_replay): ``stale_replay``
-    marks a stale-but-plausible replay that returns a retryable signal and
-    implies ``theft_detected is False``. The caller must NOT mint new tokens.
+    Returns ``(new_sequence, theft_detected, reuse_replay)``:
+    ``reuse_replay`` flags a benign within-window reuse that was accepted and
+    minted normally. The caller always mints on ``reuse_replay=False`` AND
+    ``theft_detected=False``.
     """
     result = await session.execute(
         select(TokenFamily)
@@ -113,24 +97,21 @@ async def advance_sequence(
         return 0, True, False
 
     now = datetime.now(UTC)
-    if family.max_sequence != expected_sequence:
-        if _is_benign_reuse(
-            family,
-            expected_sequence,
-            now,
-            grace_seconds=reuse_grace_seconds,
-            grace_max_steps=reuse_grace_max_steps,
+    if expected_sequence > family.max_sequence:
+        family.is_blacklisted = True
+        family.blacklisted_at = now
+        await session.flush()
+        return family.max_sequence, True, False
+
+    if expected_sequence < family.max_sequence:
+        last_rotation = _as_utc_aware(family.rotated_at)
+        if (
+            reuse_grace_seconds > 0
+            and last_rotation is not None
+            and (now - last_rotation).total_seconds() <= reuse_grace_seconds
         ):
-            last_window = _as_utc_aware(family.reuse_window_started_at)
-            if last_window is None or (now - last_window).total_seconds() > reuse_grace_seconds:
-                family.reuse_window_started_at = now
-                family.reuse_replay_count = 0
-            if family.reuse_replay_count + 1 > reuse_grace_max_per_window:
-                family.is_blacklisted = True
-                family.blacklisted_at = now
-                await session.flush()
-                return family.max_sequence, True, False
-            family.reuse_replay_count += 1
+            family.max_sequence += 1
+            family.rotated_at = now
             await session.flush()
             return family.max_sequence, False, True
 
@@ -158,31 +139,6 @@ def _as_utc_aware(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value
-
-
-def _is_benign_reuse(
-    family: TokenFamily,
-    expected_sequence: int,
-    now: datetime,
-    *,
-    grace_seconds: int,
-    grace_max_steps: int,
-) -> bool:
-    """Decide whether a sequence mismatch is a stale-but-plausible replay.
-
-    Stale only when grace is enabled, the presented sequence trails the
-    current one within the steps tolerance (never when it is ahead), and the
-    reuse window since the last rotation is still live. The per-window replay
-    budget is enforced by the caller after this passes.
-    """
-    if grace_seconds <= 0:
-        return False
-    if expected_sequence > family.max_sequence:
-        return False
-    if family.max_sequence - expected_sequence > grace_max_steps:
-        return False
-    last_rotation = _as_utc_aware(family.rotated_at)
-    return last_rotation is not None and (now - last_rotation).total_seconds() <= grace_seconds
 
 
 async def blacklist_family(session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID) -> bool:
