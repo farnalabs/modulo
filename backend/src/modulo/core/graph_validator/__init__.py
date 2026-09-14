@@ -630,7 +630,7 @@ def _check_sandbox_timeout_e2b_cap(node: dict[str, Any], nid: str, result: Valid
         )
 
 
-_HEREDOC_OPENER_RE = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
+_HEREDOC_OPENER_RE = re.compile(r"<<-?\s*['\"]?([A-Za-z_]\w*)['\"]?", re.ASCII)
 
 
 def _check_sandbox_heredoc_list_item(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
