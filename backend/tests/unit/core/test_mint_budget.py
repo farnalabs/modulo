@@ -290,9 +290,23 @@ async def pg_url() -> AsyncIterator[str]:
     """
     env_url = os.environ.get(_PG_URL_ENV)
     if env_url:
+        # Normalise a plain ``postgresql://`` URL to the asyncpg dialect so
+        # create_async_engine never falls back to the sync psycopg2 driver
+        # (which is not a project dependency — only psycopg-binary v3 is).
+        if env_url.startswith("postgresql://"):
+            env_url = env_url.replace("postgresql://", "postgresql+asyncpg://", 1)
         yield env_url
         return
-    from testcontainers.community.postgres import PostgresContainer
+
+    # The testcontainers postgres module imports psycopg2 at module load, which
+    # is not a project dependency (only psycopg-binary v3 ships), so the import
+    # itself can raise ModuleNotFoundError. When neither a throwaway DB nor a
+    # Docker-capable runtime is available (e.g. the unit CI runner), skip rather
+    # than error — the row-lock proof is capability-gated, not coverage-gated.
+    try:
+        from testcontainers.community.postgres import PostgresContainer
+    except Exception as exc:
+        pytest.skip(f"testcontainers Postgres unavailable (driver missing): {exc}")
 
     try:
         container = PostgresContainer("postgres:16-alpine")
