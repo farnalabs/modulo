@@ -353,6 +353,34 @@ class TestAdvanceSequenceReuseGraceWindow:
         assert grace_replay is False
         assert family.is_blacklisted is True
 
+    async def test_reuse_with_naive_rotated_at_normalises_window(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # SQLite round-trips timezone-aware timestamps as naive datetimes, so
+        # _as_utc_aware must normalise the stored rotated_at before the window
+        # interval arithmetic (otherwise the subtraction raises TypeError).
+        now = datetime.now(UTC)
+        _freeze_now(monkeypatch, now)
+        family = await self._seed_stale_family(
+            session,
+            max_sequence=5,
+            rotated_at=(now - timedelta(seconds=5)).replace(tzinfo=None),
+        )
+
+        new_sequence, theft_detected, grace_replay = await advance_sequence(
+            session,
+            family.family_id,
+            4,
+            _ACCOUNT_A,
+            reuse_grace_seconds=_GRACE_SECONDS,
+            reuse_grace_max_steps=_GRACE_MAX_STEPS,
+            reuse_grace_max_per_window=_GRACE_MAX_PER_WINDOW,
+        )
+
+        assert theft_detected is False
+        assert grace_replay is True
+        assert new_sequence == 6
+
     async def test_reuse_exceeding_per_window_budget_blacklists(
         self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
