@@ -176,6 +176,30 @@ describe('attemptTokenRefresh', () => {
     expect(c).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('persists the rotated refresh token before the refresh promise resolves', async () => {
+    setRefreshToken('old-refresh')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: 'new-access', refresh_token: 'new-refresh' }),
+      })),
+    )
+
+    let persistedAtResolve = false
+    const pending = attemptTokenRefresh().then((ok) => {
+      // Runs on the first microtask AFTER the refresh promise settles — the
+      // rotated tokens must already be in storage at that instant, proving they
+      // were persisted before the promise resolved (not after an external await).
+      persistedAtResolve = getAccessToken() === 'new-access' && getRefreshToken() === 'new-refresh'
+      return ok
+    })
+
+    await expect(pending).resolves.toBe(true)
+    expect(persistedAtResolve).toBe(true)
+  })
 })
 
 describe('redirectToLogin', () => {

@@ -42,6 +42,43 @@ function storeToken(key: string, token: string): void {
 let _authListeners: Array<(token: string | null) => void> = []
 let _refreshingPromise: Promise<boolean> | null = null
 
+// Stable per-tab identifier so other tabs can tell refresh hints apart when
+// adopting rotated tokens across tabs (pattern: useUiCommandExecutor TAB_ID).
+const TAB_ID =
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : Date.now().toString(36)
+
+let _authChannel: BroadcastChannel | null = null
+let _authChannelInitialized = false
+
+function getAuthChannel(): BroadcastChannel | null {
+  if (_authChannelInitialized) return _authChannel
+  _authChannelInitialized = true
+  if (typeof BroadcastChannel === 'undefined') return null
+  _authChannel = new BroadcastChannel('modulo-auth')
+  _authChannel.addEventListener('message', (e: MessageEvent) => {
+    const data = e.data || {}
+    if (data.type !== 'refresh') return
+    // A sibling tab rotated its session. Adopt the tokens it just persisted —
+    // but only into a live session: never adopt into a tab with no access token
+    // of its own, and never resurrect a session whose demo tombstone is set.
+    if (getAccessToken() === null) return
+    if (wasDemoSessionEnded()) return
+    const storedAccess = getAccessToken()
+    const storedRefresh = getRefreshToken()
+    if (storedAccess) setAccessToken(storedAccess)
+    if (storedRefresh) setRefreshToken(storedRefresh)
+  })
+  return _authChannel
+}
+
+function broadcastRefreshAdopted(): void {
+  const channel = getAuthChannel()
+  if (!channel) return
+  channel.postMessage({ type: 'refresh', tabId: TAB_ID, ts: Date.now() })
+}
+
 export function isDemoSession(): boolean {
   return localStorage.getItem(DEMO_SESSION_KEY) === '1'
 }
@@ -148,10 +185,12 @@ export async function attemptTokenRefresh(): Promise<boolean> {
   if (_refreshingPromise) return _refreshingPromise
 
   _refreshingPromise = (async () => {
-    const refreshToken = getRefreshToken()
-    if (!refreshToken) return false
-
     try {
+      // JIT read: grab the refresh token from storage immediately before the
+      // request goes out, so a rotation that landed meanwhile is honoured.
+      const refreshToken = getRefreshToken()
+      if (!refreshToken) return false
+
       const resp = await fetch('/api/v1/auth/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -161,6 +200,7 @@ export async function attemptTokenRefresh(): Promise<boolean> {
       const data = await resp.json()
       setAccessToken(data.access_token)
       if (data.refresh_token) setRefreshToken(data.refresh_token)
+      broadcastRefreshAdopted()
       return true
     } catch (err) {
       console.warn('[auth] Token refresh failed:', err)
