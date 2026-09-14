@@ -503,7 +503,7 @@ jobs:
       - name: Run changed-lines coverage gate
         working-directory: backend
         run: |
-          uv sync --frozen
+          uv sync --frozen --no-build
           # Run the gate with the freshly-synced backend venv's Python directly
           # (rather than `uv run python <script>`), so no `uv run` setup-script
           # path is exercised and the script finds diff-cover next to this

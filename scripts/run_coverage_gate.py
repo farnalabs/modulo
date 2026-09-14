@@ -172,7 +172,7 @@ def _run_diff_cover(
         "--fail-under",
         str(fail_under),
     ]
-    result = subprocess.run(
+    result = subprocess.run(  # NOSONAR:S8705 - args are validated against a strict regex allow-list (_validate_ref/_sanitize_path) and no shell is used
         cmd,
         capture_output=True,
         text=True,
