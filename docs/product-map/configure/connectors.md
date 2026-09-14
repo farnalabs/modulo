@@ -75,8 +75,8 @@ and per-destination rate limiting.
 - [x] The Grafana connector is BDD-exercised against the real
       `GrafanaConnector` (respx-mocked Grafana API): token validation via
       `/api/health` (200 => healthy, 401 => unhealthy), listing dashboards /
-      alert rules / datasources, fetching a dashboard by uid, and creating an
-      annotation (`grafana.feature`, `steps/test_grafana_connector.py`)
+      dashboard-by-uid / alert-rules / datasources, and annotation writes
+      (`grafana.feature`, `steps/test_grafana_connector.py`)
 
 ## Known Gaps
 
@@ -86,15 +86,15 @@ and per-destination rate limiting.
   coverage is via unit tests.
 
 ## QA History
-- 2026-09-15: **improve-architecture (product-map walk)** — closed the
+- 2026-09-14: **improve-architecture (product-map walk)** — closed the
   `grafana.feature` orphan gap: the feature shipped under
   `tests/bdd/features/connectors/` but no step module registered it via
   `scenarios(...)`, so it never executed. The feature is now wired from the new
   `steps/test_grafana_connector.py`, which drives the REAL `GrafanaConnector`
   against a respx-mocked Grafana API (mirroring
   `tests/unit/connectors/test_grafana.py`): seven scenarios covering token
-  validation (200/401), list dashboards / dashboard-by-uid / alert rules /
-  datasources queries, and annotation creation all collect and execute.
+  validation (200/401), list dashboards / dashboard-by-uid / alert-rules /
+  datasources, and annotation writes all collect and execute.
   `_ORPHANED_BDD_FEATURES` shrinks by one; the remaining connector orphans
   (`azure_key_vault`, `azure_pipelines`, `azure_repos`, `buildkite`, `circleci`,
   `discord`, `dropbox_paper`, `jenkins`, `microsoft_teams`, `opsgenie`,
