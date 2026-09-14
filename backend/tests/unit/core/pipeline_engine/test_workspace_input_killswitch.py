@@ -310,12 +310,19 @@ class TestWorkspaceInputsKillswitchDispatch:
     sandbox is created and short-circuit the node; when enabled it MUST NOT fire
     and the resolution/provisioning path proceeds."""
 
-    async def test_disabled_blocks_provisioning_no_sandbox_created(self) -> None:
+    async def test_disabled_blocks_provisioning_no_sandbox_created(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """MWI OFF (default): dispatch fires the killswitch before any sandbox is
         created — the node fails (never 'completed') with the dedicated
         workspace-inputs-disabled message, and AsyncSandbox.create is NEVER
         called."""
         from modulo.settings import get_settings
+
+        # Ensure a clean settings cache: another sandbox-agent test file may have
+        # set MODULO_WORKSPACE_INPUTS_ENABLED=true and left a cached True in the
+        # lru_cache. Pin the env var and clear the cache so the precondition is
+        # always read fresh.
+        monkeypatch.setenv("MODULO_WORKSPACE_INPUTS_ENABLED", "false")
+        get_settings.cache_clear()
 
         # Default is OFF; assert the precondition explicitly so the test is
         # meaningful even if the default ever flips.
