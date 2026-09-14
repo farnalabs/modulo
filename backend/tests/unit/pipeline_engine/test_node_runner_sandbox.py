@@ -2792,6 +2792,99 @@ async def test_sandbox_generic_exception_envelope_includes_error_type_and_messag
     assert "connection reset" in result["output"]["error_message"]
 
 
+def _raise_once_then_compute(real_compute_cost, raises):
+    """A _compute_sandbox_cost stand-in that raises on the first call then
+    delegates. On a normal sandbox run the FIRST invocation happens on the main
+    path (after stdout capture) and any raise there lands in the generic
+    exception envelope, whose own _compute_sandbox_cost call (the second
+    invocation) must succeed — the mirror of how a real post-capture failure
+    behaves.
+    """
+    cost_calls = {"n": 0}
+
+    def _compute(*args, **kwargs):
+        cost_calls["n"] += 1
+        if cost_calls["n"] == 1:
+            raise raises
+        return real_compute_cost(*args, **kwargs)
+
+    return _compute
+
+
+async def test_exception_path_over_cap_stdout_written_to_artifact_store_with_pointer(tmp_path):
+    """FAR-811 (exception path): a generic exception raised AFTER stdout was
+    captured still emits the stdout_artifact pointer on the FAILED envelope and
+    retains the FULL redacted transcript in the artifact store. Failure output
+    must not lose the over-cap evidence the success path now keeps."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=2048)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox, _ = _sandbox_with_std_bytes("x" * 4096)
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._compute_sandbox_cost",
+            side_effect=_raise_once_then_compute(_compute_sandbox_cost, RuntimeError("boom after capture")),
+        ),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value=""),
+        ),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "failed"
+    assert output["error_type"] == "RuntimeError"
+    # The truncated head is still inline on the failure envelope...
+    assert output["agent_stdout"] == "x" * 2048
+    assert output["stdout_truncated"] is True
+    # ...AND the full redacted transcript is retained via the pointer.
+    pointer = output["stdout_artifact"]
+    assert pointer["truncated"] is False
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stdout"
+    assert pointer["compression"] == "zstd"
+    assert pointer["size_bytes"] == 4096
+    assert pointer["sha256"] == hashlib.sha256(b"x" * 4096).hexdigest()
+    assert pointer["rel_path"].endswith(".zst")
+    assert store.read_bytes(pointer) == b"x" * 4096
+    assert result["artifacts"][0]["output"]["stdout_artifact"] == output["stdout_artifact"]
+
+
+async def test_exception_path_under_cap_stdout_stays_inline_no_artifact(tmp_path):
+    """FAR-811 (exception path): an under-cap run that later fails generically
+    keeps the inline behaviour — no stdout_artifact pointer, no artifact written
+    (the over-cap guard must hold on the exception path too)."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=8192)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox, _ = _sandbox_with_std_bytes("x" * 2048)
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._compute_sandbox_cost",
+            side_effect=_raise_once_then_compute(_compute_sandbox_cost, RuntimeError("boom after capture")),
+        ),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value=""),
+        ),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "failed"
+    assert output["agent_stdout"] == "x" * 2048
+    assert "stdout_truncated" not in output
+    assert "stdout_artifact" not in output
+    assert not list(tmp_path.rglob("*.zst"))
+
+
 async def test_sandbox_provider_exception_message_visible_in_output():
     """FAR-511: an e2b SandboxException's 400 detail (e.g. the 1-hour timeout
     cap) is included in the node output so diagnosis does not require Fly logs."""
