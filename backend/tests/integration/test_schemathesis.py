@@ -106,7 +106,10 @@ if schema is not None:
         case.call_and_validate(excluded_checks=[status_code_conformance])
 else:
 
-    @pytest.mark.skip(reason=(f"Schemathesis fuzz skipped: app import/lifespan failed ({_import_error})"))
+    @pytest.mark.skipif(
+        schema is None,
+        reason=(f"Schemathesis fuzz skipped: app import/lifespan failed ({_import_error})"),
+    )
     def test_api_fuzz_skipped():
         """Placeholder so collection always yields at least one (skipped) item.
 
