@@ -460,11 +460,11 @@ def _check_composite_sandbox_sub_node(
 ) -> None:
     """Validate a sandbox_agent composite sub-node's command + template config."""
     template, node_id = ctx.template, ctx.node_id
-    cmd = sub.get("agent_command", "")
-    if not cmd or not str(cmd).strip():
+    cmd = sub.get("agent_commands")
+    if not isinstance(cmd, list) or not any(str(c).strip() for c in cmd if isinstance(c, str)):
         result.error(
             "COMPOSITE_SUBGRAPH_SANDBOX_MISSING_COMMAND",
-            f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' is missing required agent_command",
+            f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' is missing required agent_commands",
             node_id=node_id,
         )
     if not sub.get("template_id"):
@@ -538,7 +538,7 @@ def _check_sandbox_command(node: dict[str, Any], nid: str, result: ValidationRes
     FAR-296: routed through the SHARED ``_validate_sandbox_mode_config`` helper
     (the same one the node runner, Pydantic model, MCP tool, and config linter
     use) so save-time and run-time validation agree. llm mode requires
-    agent_command / agent_commands + agent_prompt; script mode requires
+    agent_commands + agent_prompt; script mode requires
     script_command; both commands present is an error. The ValueError message
     (which already carries the node id) is surfaced as the issue detail.
     """
@@ -551,7 +551,7 @@ def _check_sandbox_command(node: dict[str, Any], nid: str, result: ValidationRes
 
 
 def _check_sandbox_jinja(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
-    """Sandbox check: the agent_command must be Jinja-renderable (FAR-226).
+    """Sandbox check: the agent_commands list must be Jinja-renderable (FAR-226).
 
     Renders through the same ``SandboxedEnvironment`` the node runner uses, so
     a broken template (e.g. an invalid backslash) is caught at SAVE time as a
@@ -643,10 +643,12 @@ def _check_sandbox_heredoc_list_item(node: dict[str, Any], nid: str, result: Val
     terminator+newline item becomes a line-leading ``&&`` (bash syntax error).
     Neither is fixable at the join layer without changing operator semantics,
     so the shape is rejected at save time (FAR-511 precedent: reject, never
-    clamp). A scalar ``agent_command`` is unaffected — there is no join.
+    clamp).
     """
     commands = node.get("agent_commands")
     if not isinstance(commands, list):
+        return
+    if len(commands) < 2:
         return
     for i, item in enumerate(commands):
         if not isinstance(item, str):
@@ -1005,7 +1007,7 @@ def _check_sandbox_managed_inputs(node: dict[str, Any], nid: str, result: Valida
     Routed through the SHARED ``_validate_sandbox_managed_inputs_config`` helper
     (the same one the Pydantic node model and MCP ``update_pipeline_graph`` use)
     so save-time and run-time validation agree. An invalid dest traversal /
-    ref.kind / URL scheme / literal ``git clone`` in agent_command is a hard
+    ref.kind / URL scheme / literal ``git clone`` in agent_commands is a hard
     ERROR (fail-closed): a malformed managed input would let a checkout write
     outside ``/home/user/`` or bypass the managed checkout.
     """
@@ -2634,7 +2636,7 @@ class GraphValidator:
         """Validate sandbox_agent node configurations.
 
         Checks:
-        1. agent_command (llm mode) / script_command (script mode) is non-empty,
+        1. agent_commands (llm mode) / script_command (script mode) is non-empty,
            per the shared mode-aware validator (FAR-296).
         2. template_id is set.
         3. timeout_seconds within bounds (60-604800) if set.
@@ -2644,7 +2646,7 @@ class GraphValidator:
         7. stall_timeout_seconds is a positive number, not exceeding timeout_seconds.
         8. FAR-306 opt-in stall-detector fields (stdout_percentage_delta,
            watch_globs, watch_log_path, enable_heartbeat) are well-formed.
-        9. agent_command is Jinja-renderable (FAR-226).
+        9. agent_commands is Jinja-renderable (FAR-226).
         10. read_only / git_credentials are validated sandbox-only fields
             (FAR-212 PR B), and no non-sandbox node carries them.
         11. agent_commands list items must not end with a heredoc terminator

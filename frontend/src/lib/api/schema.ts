@@ -9175,8 +9175,6 @@ export interface components {
             required_environment_capabilities: string[];
             /** Template Id */
             template_id: string | null;
-            /** Agent Command */
-            agent_command?: string | null;
             /** Agent Commands */
             agent_commands?: string[] | null;
         };
@@ -9249,8 +9247,6 @@ export interface components {
             required_environment_capabilities: string[];
             /** Template Id */
             template_id: string | null;
-            /** Agent Command */
-            agent_command: string | null;
             /** Agent Commands */
             agent_commands: string[] | null;
             /**
@@ -9303,8 +9299,6 @@ export interface components {
             required_environment_capabilities: string[];
             /** Template Id */
             template_id: string | null;
-            /** Agent Command */
-            agent_command?: string | null;
             /** Agent Commands */
             agent_commands?: string[] | null;
         };
@@ -14410,8 +14404,6 @@ export interface components {
              * @enum {string}
              */
             mode: "llm" | "script";
-            /** Agent Command */
-            agent_command?: string | null;
             /** Agent Commands */
             agent_commands?: string[] | null;
             /**

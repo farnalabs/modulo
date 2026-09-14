@@ -52,7 +52,7 @@ def _base_node_def(**overrides) -> dict:
     node_def = {
         "id": "n1",
         "agent_prompt": "Do the thing",
-        "agent_command": _AGENT_COMMAND,
+        "agent_commands": [_AGENT_COMMAND],
     }
     node_def.update(overrides)
     return node_def

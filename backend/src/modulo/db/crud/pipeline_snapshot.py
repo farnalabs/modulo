@@ -81,8 +81,6 @@ def _apply_agent_fields(node: dict[str, Any], agent: Agent) -> uuid.UUID | None:
         node["prompt_template"] = agent.prompt_template
     if agent.model_backend_id is not None:
         node["model_backend_id"] = str(agent.model_backend_id)
-    if agent.agent_command is not None:
-        node["agent_command"] = agent.agent_command
     if agent.agent_commands is not None:
         node["agent_commands"] = agent.agent_commands
     if agent.parameter_schema_id is not None:

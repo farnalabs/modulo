@@ -693,7 +693,12 @@ def test_sandbox_agent_node_compiles():
     """A sandbox_agent node is added via make_sandbox_agent_fn."""
     graph: dict[str, Any] = {
         "nodes": [
-            {"id": "agent", "node_type": "sandbox_agent", "agent_prompt": "summarise", "agent_command": "opencode run"},
+            {
+                "id": "agent",
+                "node_type": "sandbox_agent",
+                "agent_prompt": "summarise",
+                "agent_commands": ["opencode run"],
+            },
         ],
         "edges": [],
     }

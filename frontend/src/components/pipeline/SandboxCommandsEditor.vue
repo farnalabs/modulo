@@ -12,7 +12,9 @@
           @click="addRow"
         >{{ $t('views.PipelineEditorView.commands_add') }}</button>
       </div>
-      <p class="mt-0.5 text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.commands_list_hint') }}</p>
+      <p class="mt-0.5 text-[11px] text-muted-foreground">
+        {{ $t('views.PipelineEditorView.commands_list_hint') }}
+      </p>
       <p
         v-if="rows.length === 0"
         class="mt-1 text-[11px] italic text-muted-foreground"
@@ -52,7 +54,7 @@
             </button>
             <button
               type="button"
-              class="rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-destructive"
+              class="rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
               :aria-label="$t('views.PipelineEditorView.commands_row_remove', { n: idx + 1 })"
               :data-testid="`pipeline-editor-node-command-remove-${idx}`"
               @click="removeRow(idx)"
@@ -61,8 +63,8 @@
         </li>
       </ol>
 
-      <!-- Join operator + effective-command preview -->
-      <div class="mt-2 space-y-1">
+      <!-- Join operator + effective-command preview (only meaningful for a list) -->
+      <div v-if="listActive" class="mt-2 space-y-1">
         <div>
           <label for="pipeline-editor-node-command-joiner" class="block text-xs font-medium">{{ $t('views.PipelineEditorView.commands_join_operator') }}</label>
           <input
@@ -117,6 +119,8 @@ watch(
 )
 
 const joinerModel = computed(() => props.joiner ?? '')
+
+const listActive = computed(() => rows.value.some((c) => c.trim() !== ''))
 
 function emitCommands() {
   emit('update:commands', [...rows.value])

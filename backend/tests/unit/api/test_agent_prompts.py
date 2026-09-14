@@ -63,16 +63,13 @@ def _make_agent() -> MagicMock:
     a.token_budget = None
     a.library_id = None
     a.template_id = None
-    a.agent_command = None
     a.account_id = _USER_ID
     a.required_environment_capabilities = []
     a.template_id = None
-    a.agent_command = None
     a.created_by = _USER_ID
     a.created_at = _NOW
     a.updated_at = _NOW
     a.template_id = None
-    a.agent_command = None
     a.prompt_version_history = []
     return a
 
