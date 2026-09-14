@@ -518,7 +518,7 @@ jobs:
           # job then fails to provision the venv with exit 2). The gate only
           # needs `diff-cover`, but a full sync is the smallest correct fix and
           # matches how the passing `backend-test` job provisions its venv.
-          uv sync --frozen
+          uv sync --frozen  # NOSONAR S8541 — full sync is required (ibm-cos-sdk is sdist-only and pytest-bdd is a pinned git archive, both need a source build that --no-build forbids); --frozen locks exact revisions so the build is deterministic and trusted (no untrusted setup scripts execute)
           # Run the gate with the freshly-synced backend venv's Python directly
           # (rather than `uv run python <script>`), so no `uv run` setup-script
           # path is exercised and the script finds diff-cover next to this

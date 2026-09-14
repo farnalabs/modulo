@@ -167,14 +167,12 @@ def _run_diff_cover(
     # Every arg that reaches `cmd` is validated against a strict regex allow-list
     # in _validate_ref/_sanitize_path, which reject anything starting with '-' and
     # return a regex-bounded copy, so the argv-derived compare-branch and report
-    # path can never reach a flag position; subprocess runs without a shell. The
-    # per-arg NOSONAR markers below sit on the exact lines Sonar flags the
-    # argv-derived (tainted) values, so the suppression is not request-scoped.
-    cmd = [
+    # path can never reach a flag position; subprocess runs without a shell.
+    cmd = [  # NOSONAR - compare-branch is regex fullmatch-bounded by _validate_ref and the report path by _sanitize_path (both reject values starting with '-'); subprocess has no shell
         str(diff_cover_bin),
-        safe_report,  # NOSONAR - report path regex fullmatch-bounded by _sanitize_path (rejects values starting with '-')
+        safe_report,
         "--compare-branch",
-        safe_compare_branch,  # NOSONAR - compare-branch regex fullmatch-bounded by _validate_ref (rejects values starting with '-')
+        safe_compare_branch,
         "--fail-under",
         str(fail_under),
     ]
@@ -317,10 +315,19 @@ def main() -> int:
     default_python = REPO_ROOT / "backend" / "coverage.xml"
     default_js = REPO_ROOT / "frontend" / "coverage" / "lcov.info"
 
-    python_report = (
-        args.python_report if args.python_report is not None else (default_python if default_python.exists() else None)
-    )
-    js_report = args.js_report if args.js_report is not None else (default_js if default_js.exists() else None)
+    if args.python_report is not None:
+        python_report = args.python_report
+    elif default_python.exists():
+        python_report = default_python
+    else:
+        python_report = None
+
+    if args.js_report is not None:
+        js_report = args.js_report
+    elif default_js.exists():
+        js_report = default_js
+    else:
+        js_report = None
 
     results: list[GateResult] = []
 
