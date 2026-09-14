@@ -1423,7 +1423,7 @@ class TestCheckPgMajor:
         pgdata = data_dir / "pgdata"
         pgdata.mkdir()
         (pgdata / "PG_VERSION").write_text("16\n", encoding="utf-8")
-        upgrade_module._check_pg_major({"postgres": "16.10"}, data_dir)
+        assert upgrade_module._check_pg_major({"postgres": "16.10"}, data_dir) is None
 
     def test_pg_version_read_error(self, tmp_path):
         data_dir = tmp_path / "data"
@@ -1456,7 +1456,7 @@ class TestCheckNoDowngradeExtended:
         monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _: {"abc123"})
         bundle_dir = tmp_path / "bundle"
         bundle_dir.mkdir()
-        upgrade_module.check_no_downgrade(["abc123"], None, bundle_dir)
+        assert upgrade_module.check_no_downgrade(["abc123"], None, bundle_dir) is None
 
     def test_empty_db_heads_with_snapshot_fallback(self, tmp_path, monkeypatch):
         monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _: {"abc123"})
@@ -1465,7 +1465,7 @@ class TestCheckNoDowngradeExtended:
         snapshot_dir = tmp_path / "snap"
         snapshot_dir.mkdir()
         (snapshot_dir / "backup-info.json").write_text(json.dumps({"schema_versions": ["abc123"]}), encoding="utf-8")
-        upgrade_module.check_no_downgrade([], snapshot_dir, bundle_dir)
+        assert upgrade_module.check_no_downgrade([], snapshot_dir, bundle_dir) is None
 
 
 class TestSnapshotSchemaVersions:
@@ -1528,7 +1528,7 @@ class TestQuantifiedDiskPreflight:
         pgdata = data_dir / "pgdata"
         pgdata.mkdir()
         (pgdata / "file.bin").write_bytes(b"y" * 50)
-        upgrade_module._quantified_disk_preflight(tarball, data_dir)
+        assert upgrade_module._quantified_disk_preflight(tarball, data_dir) is None
 
     def test_insufficient_disk_refuses(self, tmp_path):
         tarball = tmp_path / "bundle.tar.gz"
@@ -1614,7 +1614,7 @@ class TestAssertUpgradePlatform:
 
 
 class TestAlembicHeads:
-    def test_missing_ini_returns_unknown(self, tmp_path, monkeypatch):
+    def test_missing_ini_returns_unknown(self, monkeypatch):
         original_exists = Path.exists
 
         def _patched_exists(self):
@@ -1626,7 +1626,7 @@ class TestAlembicHeads:
         result = upgrade_module._alembic_heads()
         assert result == ["unknown"]
 
-    def test_exception_returns_unknown(self, tmp_path, monkeypatch):
+    def test_exception_returns_unknown(self):
         with patch("alembic.config.Config", side_effect=RuntimeError("boom")):
             result = upgrade_module._alembic_heads()
             assert result == ["unknown"]
@@ -1973,10 +1973,11 @@ class TestTerminateBootProcessGroup:
 
         with (
             patch.object(upgrade_module.os, "getpgid", return_value=12345, create=True),
-            patch.object(upgrade_module.os, "killpg", create=True),
+            patch.object(upgrade_module.os, "killpg", create=True) as mock_killpg,
             patch.object(upgrade_module.sys, "platform", "linux"),
         ):
             upgrade_module._terminate_boot_process_group(mock_process)
+        mock_killpg.assert_any_call(12345, upgrade_module.signal.SIGTERM)
 
     def test_windows_terminate_path(self):
         mock_process = MagicMock()
@@ -1999,10 +2000,8 @@ class TestTerminateBootProcessGroup:
             patch.object(upgrade_module.os, "killpg", side_effect=ProcessLookupError, create=True),
             patch.object(upgrade_module.sys, "platform", "linux"),
         ):
-            upgrade_module._terminate_boot_process_group(mock_process)
+            assert upgrade_module._terminate_boot_process_group(mock_process) is None
 
-
-class TestFetchReleaseAssets:
     def test_with_custom_fetch(self, tmp_path):
         fetched_urls = []
 
@@ -2127,7 +2126,7 @@ class TestVerifyExtractedBundleArtifacts:
 
 
 class TestStopRunningStack:
-    def test_no_unit_file_calls_request_stop(self, tmp_path, monkeypatch):
+    def test_no_unit_file_calls_request_stop(self, tmp_path):
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         called = {"stop": False}
@@ -2146,7 +2145,7 @@ class TestStopRunningStack:
             upgrade_module.stop_running_stack(data_dir)
         assert called["stop"]
 
-    def test_unit_stop_timeout_falls_through(self, tmp_path, monkeypatch):
+    def test_unit_stop_timeout_falls_through(self, tmp_path):
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         unit_file = tmp_path / "test.service"
@@ -2168,7 +2167,7 @@ class TestStopRunningStack:
 class TestRestartUnitBestEffort:
     def test_no_unit_file_returns_silently(self, tmp_path, monkeypatch):
         monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: tmp_path / "no.unit")
-        upgrade_module._restart_unit_best_effort(tmp_path, why="test")
+        assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
 
     def test_unit_restart_success(self, tmp_path, monkeypatch):
         unit_file = tmp_path / "test.service"
@@ -2178,7 +2177,7 @@ class TestRestartUnitBestEffort:
 
         mock_result = MagicMock(returncode=0)
         with patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result):
-            upgrade_module._restart_unit_best_effort(tmp_path, why="test")
+            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
 
     def test_unit_restart_failure_logs_error(self, tmp_path, monkeypatch):
         unit_file = tmp_path / "test.service"
@@ -2188,11 +2187,11 @@ class TestRestartUnitBestEffort:
 
         mock_result = MagicMock(returncode=1, stderr=b"failed")
         with patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result):
-            upgrade_module._restart_unit_best_effort(tmp_path, why="test")
+            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
 
     def test_import_error_caught(self, tmp_path):
         with patch("builtins.__import__", side_effect=ImportError("no service module")):
-            upgrade_module._restart_unit_best_effort(tmp_path, why="test")
+            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
 
 
 class TestApiPortOf:
