@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -79,7 +79,7 @@ class RemyConfigResponse(BaseModel):
     default_model: str = _MSG_CLAUDE_SONNET_4_20250514
     default_context_window: int = 200000
     allowed_providers: list[str] = Field(default_factory=lambda: ["anthropic", "openai", "gemini", "deepseek", "groq"])
-    allowed_models: ClassVar[list[str]] = []
+    allowed_models: list[str] = Field(default_factory=list)
 
 
 class RemyConfigUpdate(BaseModel):
