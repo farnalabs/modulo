@@ -212,18 +212,31 @@ def test_cleanup_no_raw_file(tmp_path):
 
 def test_cleanup_idempotent(tmp_path):
     """cleanup() can be called multiple times safely."""
-    writer, _ = _make_writer(tmp_path)
+    writer, store = _make_writer(tmp_path)
     writer.write("data")
+    raw = store._raw_path("org1", "run1", "node1", "attempt1", "stdout")
+    assert raw.exists()
+
     writer.cleanup()
+    assert not raw.exists()
+    assert writer.finalized
     writer.cleanup()  # no error
+    assert not raw.exists()
+    assert writer.finalized
 
 
 def test_cleanup_after_finalize(tmp_path):
     """cleanup() after finalize is safe (no-op for raw file)."""
-    writer, _ = _make_writer(tmp_path)
+    writer, store = _make_writer(tmp_path)
     writer.write("data")
-    writer.finalize()
+    ptr = writer.finalize()
+    assert ptr is not None
+    raw = store._raw_path("org1", "run1", "node1", "attempt1", "stdout")
+    assert not raw.exists()
+
     writer.cleanup()  # raw already gone, should not error
+    assert not raw.exists()
+    assert writer.finalized
 
 
 # ── context manager ───────────────────────────────────────────────────
