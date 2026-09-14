@@ -216,7 +216,7 @@ describe('useApi 401 refresh flow', () => {
 
     const api = useApi()
     await expect(api.post('/api/v1/widgets', { name: 'x' })).rejects.toThrow(
-      'Session expired. Please log in again.',
+      'token expired',
     )
 
     expect(mockedAttemptTokenRefresh).toHaveBeenCalledTimes(1)
@@ -225,8 +225,8 @@ describe('useApi 401 refresh flow', () => {
       '/api/v1/widgets',
       expect.objectContaining({ method: 'POST' }),
     )
-    expect(mockedClearAccessToken).toHaveBeenCalledTimes(1)
-    expect(mockedExitToLogin).toHaveBeenCalledTimes(1)
+    expect(mockedClearAccessToken).not.toHaveBeenCalled()
+    expect(mockedExitToLogin).not.toHaveBeenCalled()
     expect(mockedRedirectToLogin).not.toHaveBeenCalled()
   })
 

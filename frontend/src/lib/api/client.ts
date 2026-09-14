@@ -89,7 +89,7 @@ function withAuth<M extends AnyClientMethod>(fn: M, retryable: boolean): M {
         }
         resp = await call(url, { ...optionsRecord, headers: newHeaders })
       }
-      if (!refreshed || resp.response?.status === 401) {
+      if (!refreshed || (retryable && resp.response?.status === 401)) {
         clearAccessToken()
         exitToLogin()
         return { response: undefined, data: undefined, error: undefined }

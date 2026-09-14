@@ -56,7 +56,7 @@ async function request<T>(method: string, path: string, body?: unknown, options?
     if (refreshed && idempotent) {
       res = await requestWorker(method, path, body, options)
     }
-    if (!refreshed || res.status === 401) {
+    if (!refreshed || (idempotent && res.status === 401)) {
       clearAccessToken()
       exitToLogin()
       throw new Error('Session expired. Please log in again.')
