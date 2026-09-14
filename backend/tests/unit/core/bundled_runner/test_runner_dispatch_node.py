@@ -578,14 +578,6 @@ async def test_run_stdout_org_ceiling_clamps_cap(patch_node_runner, monkeypatch)
 
 def test_resolve_stdout_cap_applies_org_ceiling(patch_node_runner, monkeypatch) -> None:
     """The pure helper passes the org ceiling through to the shared resolver."""
-    import modulo.core.pipeline_engine.node_runner as nrm
-
-    monkeypatch.setattr(
-        nrm,
-        "_read_org_stdout_retention_ceiling",
-        AsyncMock(return_value=1024),
-        raising=False,
-    )
     assert (
         runner_dispatch._resolve_stdout_cap(
             {"stdout_retention_mode": "full", "stdout_max_bytes": 2048},
