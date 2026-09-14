@@ -336,6 +336,35 @@ def _run_matches_journey(run: Run, journey: Journey) -> bool:
     return False
 
 
+async def _fetch_journey(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    *,
+    kind: str,
+    ref: str,
+    dismissed: bool | None,
+) -> Journey | None:
+    """Fetch the single journey for (org, kind, ref), optionally filtering on
+    tombstone state.
+
+    ``dismissed=True`` matches only dismissed (tombstoned) rows,
+    ``dismissed=False`` matches only active rows, and ``dismissed=None`` ignores
+    the tombstone filter. Kind/ref are canonicalised before the lookup.
+    """
+    kind = canonicalise_kind(kind)
+    ref = canonicalise_ref(kind, ref)
+    filters: list[ColumnElement[bool]] = [
+        Journey.organisation_id == organisation_id,
+        Journey.kind == kind,
+        Journey.ref == ref,
+    ]
+    if dismissed is True:
+        filters.append(Journey.dismissed_at.is_not(None))
+    elif dismissed is False:
+        filters.append(Journey.dismissed_at.is_(None))
+    return (await session.execute(select(Journey).where(*filters))).scalar_one_or_none()
+
+
 async def dismiss_journey(
     session: AsyncSession,
     organisation_id: uuid.UUID,
@@ -353,18 +382,7 @@ async def dismiss_journey(
     ACTIVE row matches (missing, or already dismissed — dismiss is idempotent
     and never overwrites an existing tombstone's reason).
     """
-    kind = canonicalise_kind(kind)
-    ref = canonicalise_ref(kind, ref)
-    journey = (
-        await session.execute(
-            select(Journey).where(
-                Journey.organisation_id == organisation_id,
-                Journey.kind == kind,
-                Journey.ref == ref,
-                Journey.dismissed_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
+    journey = await _fetch_journey(session, organisation_id, kind=kind, ref=ref, dismissed=False)
     if journey is None:
         return False
     journey.dismissed_at = datetime.now(UTC)
@@ -388,18 +406,7 @@ async def restore_journey(
     predicate as usual. Nothing else is reset — latest evidence and
     ``run_count`` are the finalise path's domain.
     """
-    kind = canonicalise_kind(kind)
-    ref = canonicalise_ref(kind, ref)
-    journey = (
-        await session.execute(
-            select(Journey).where(
-                Journey.organisation_id == organisation_id,
-                Journey.kind == kind,
-                Journey.ref == ref,
-                Journey.dismissed_at.is_not(None),
-            )
-        )
-    ).scalar_one_or_none()
+    journey = await _fetch_journey(session, organisation_id, kind=kind, ref=ref, dismissed=True)
     if journey is None:
         return False
     journey.dismissed_at = None

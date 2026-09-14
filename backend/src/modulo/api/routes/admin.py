@@ -5,7 +5,7 @@ import logging
 import re
 import secrets
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple, NoReturn
 
@@ -3983,6 +3983,37 @@ class JourneyDismissRestoreResponse(BaseModel):
     dismissed: bool
 
 
+async def _admin_journey_write(
+    session: AsyncSession,
+    current_user: TenantPrincipal,
+    *,
+    do_write: Callable[[], Coroutine[Any, Any, bool]],
+    detail_admin: str,
+    audit_event: str,
+    audit_payload: dict[str, Any],
+) -> None:
+    """Run an operator journey write (dismiss/restore) under the admin RLS
+    contract.
+
+    Opens the RLS-scoped transaction, runs *do_write*, and maps the standard
+    admin error contract (403/501/503) via :func:`_run_admin_rls_txn`. A
+    no-op write (no matching row) surfaces as a 404, and a successful write is
+    recorded to the org audit log. Shared by the dismiss/restore admin routes
+    so the RLS-begin / error-contract / audit boilerplate lives in one place.
+    """
+    _current = current_user
+
+    async def _wrapped() -> bool:
+        async with session.begin():
+            await set_rls_org(session, _current.organisation_id)
+            return await do_write()
+
+    ok = await _run_admin_rls_txn(session, current_user, _wrapped, detail_admin=detail_admin)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
+    await _record_org_audit(session, current_user, audit_event, audit_payload)
+
+
 @router.post("/org/journeys/dismiss", status_code=status.HTTP_200_OK)
 async def admin_dismiss_journey(
     req: JourneyDismissRequest,
@@ -3990,33 +4021,24 @@ async def admin_dismiss_journey(
     session: AsyncSession = Depends(get_db_session),
 ) -> JourneyDismissRestoreResponse:
     """Operator soft-dismiss (tombstone) a journey. Org-scoped, admin-gated."""
-    _current = current_user
 
     async def _do_write() -> bool:
-        async with session.begin():
-            await set_rls_org(session, _current.organisation_id)
-            return await dismiss_journey(
-                session,
-                _current.organisation_id,
-                kind=req.kind,
-                ref=req.ref,
-                dismissed_by=_current.account_id,
-                reason=req.reason,
-            )
+        return await dismiss_journey(
+            session,
+            current_user.organisation_id,
+            kind=req.kind,
+            ref=req.ref,
+            dismissed_by=current_user.account_id,
+            reason=req.reason,
+        )
 
-    dismissed = await _run_admin_rls_txn(
+    await _admin_journey_write(
         session,
         current_user,
-        _do_write,
+        do_write=_do_write,
         detail_admin="Only admin users can dismiss journeys",
-    )
-    if not dismissed:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
-    await _record_org_audit(
-        session,
-        current_user,
-        "org.journey_dismissed",
-        {"kind": req.kind, "ref": req.ref, "reason": req.reason},
+        audit_event="org.journey_dismissed",
+        audit_payload={"kind": req.kind, "ref": req.ref, "reason": req.reason},
     )
     return JourneyDismissRestoreResponse(kind=req.kind, ref=req.ref, dismissed=True)
 
@@ -4033,31 +4055,22 @@ async def admin_restore_journey(
     operator restore clears the tombstone so the journey is mintable and
     listed again.
     """
-    _current = current_user
 
     async def _do_write() -> bool:
-        async with session.begin():
-            await set_rls_org(session, _current.organisation_id)
-            return await restore_journey(
-                session,
-                _current.organisation_id,
-                kind=req.kind,
-                ref=req.ref,
-            )
+        return await restore_journey(
+            session,
+            current_user.organisation_id,
+            kind=req.kind,
+            ref=req.ref,
+        )
 
-    restored = await _run_admin_rls_txn(
+    await _admin_journey_write(
         session,
         current_user,
-        _do_write,
+        do_write=_do_write,
         detail_admin="Only admin users can restore journeys",
-    )
-    if not restored:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
-    await _record_org_audit(
-        session,
-        current_user,
-        "org.journey_restored",
-        {"kind": req.kind, "ref": req.ref},
+        audit_event="org.journey_restored",
+        audit_payload={"kind": req.kind, "ref": req.ref},
     )
     return JourneyDismissRestoreResponse(kind=req.kind, ref=req.ref, dismissed=False)
 
