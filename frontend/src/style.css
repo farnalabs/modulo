@@ -507,6 +507,7 @@
 .light .badge-context-pink { color: hsl(340 80% 35%); background-color: hsla(340 80% 35% / 0.1); }
 .light .badge-context-rose { color: hsl(350 80% 35%); background-color: hsla(350 80% 35% / 0.1); }
 .light .badge-context-amber { color: hsl(38 92% 35%); background-color: hsla(38 92% 35% / 0.1); }
+.light .badge-context-green { color: hsl(142 71% 30%); background-color: hsla(142 71% 30% / 0.1); }
 
 [data-theme="agent"] {
   --background: 222 30% 8%;
