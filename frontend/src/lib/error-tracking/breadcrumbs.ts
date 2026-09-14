@@ -72,11 +72,14 @@ export class BreadcrumbCollector {
     if (typeof window.fetch !== 'function') return
     this.origFetch = window.fetch.bind(window)
     window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url = typeof input === 'string'
-        ? input
-        : input instanceof URL
-          ? input.href
-          : input.url
+      let url: string
+      if (typeof input === 'string') {
+        url = input
+      } else if (input instanceof URL) {
+        url = input.href
+      } else {
+        url = input.url
+      }
       const method = (init?.method ?? 'GET').toUpperCase()
       return this.origFetch!(input, init).then((response) => {
         this.captureApiCall(method, url, response.status)

@@ -77,6 +77,13 @@ function savePort() {
     return;
   }
   formError.value = null;
+  const defaultVal = form.value.default === '' || form.value.default === undefined
+    ? undefined
+    : form.value.type === 'number'
+      ? Number(form.value.default)
+      : form.value.type === 'boolean'
+        ? form.value.default === 'true'
+        : form.value.default
   const port: ParameterPort = {
     id:
       editingIndex.value !== null
@@ -87,14 +94,7 @@ function savePort() {
     description: form.value.description.trim() || undefined,
     type: form.value.type,
     required: form.value.required,
-    default_value:
-      form.value.default === "" || form.value.default === undefined
-        ? undefined
-        : form.value.type === "number"
-          ? Number(form.value.default)
-          : form.value.type === "boolean"
-            ? form.value.default === "true"
-            : form.value.default,
+    default_value: defaultVal,
     multiline: form.value.multiline,
     target_injection: {
       mode: "prompt_replace",

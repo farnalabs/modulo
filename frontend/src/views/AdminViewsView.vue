@@ -270,10 +270,18 @@ function openAddForm() {
 
 function openEditForm(v: SavedView) {
   editingId.value = v.id
+  let filtersVal = ''
+  if (v.filters) {
+    if (typeof v.filters === 'string') {
+      filtersVal = v.filters
+    } else {
+      filtersVal = JSON.stringify(v.filters, null, 2)
+    }
+  }
   form.value = {
     name: v.name,
     view_type: v.view_type,
-    filters: v.filters ? (typeof v.filters === 'string' ? v.filters : JSON.stringify(v.filters, null, 2)) : '',
+    filters: filtersVal,
     columns: v.columns?.join(', ') || '',
     sort_by: v.sort_by || '',
     sort_order: v.sort_order || 'desc',

@@ -11,15 +11,17 @@ const emit = defineEmits<{
   (e: "update:modelValue", value: unknown): void;
 }>();
 
+function resolveDefaultFallback(type: string): unknown {
+  if (type === 'boolean') return false
+  if (type === 'number') return 0
+  return ''
+}
+
 const localValue = computed({
   get: () =>
     props.modelValue ??
     props.port.default_value ??
-    (props.port.type === "boolean"
-      ? false
-      : props.port.type === "number"
-        ? 0
-        : ""),
+    resolveDefaultFallback(props.port.type),
   set: (val: unknown) => emit("update:modelValue", val),
 });
 
