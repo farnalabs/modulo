@@ -47,7 +47,7 @@ from modulo.core.dispatch import dispatch_run
 from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
-from modulo.core.node_output_split import node_return, node_telemetry
+from modulo.core.node_output_split import node_return, node_stdout_artifact, node_telemetry
 from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error, sanitize_error_text
 from modulo.core.pipeline_engine.event_broker import get_registry
@@ -2046,6 +2046,7 @@ class NodeOutputResponse(BaseModel):
     run_id: uuid.UUID
     node_id: str
     output: Any = None
+    stdout_artifact: dict[str, Any] | None = None
 
 
 @router.get("/{run_id}/nodes/{node_id}/output")
@@ -2067,6 +2068,10 @@ async def get_run_node_output(
     ``node_telemetry_json``, a DERIVED ``{status, summary}`` object is
     returned instead of a 404 — never the raw telemetry (no stdout / log
     tail on this surface).
+
+    ``stdout_artifact`` carries the FAR-811 full-stdout transcript pointer
+    for sandbox nodes whose redacted stdout overflowed the inline retention
+    cap (``None`` otherwise) — a pointer only, never the transcript body.
     """
     try:
         async with session.begin():
@@ -2112,20 +2117,21 @@ async def get_run_node_output(
 
     outputs = blobs.outputs or {}
     telemetry = blobs.telemetry or {}
+    stdout_artifact = node_stdout_artifact(telemetry, outputs, node_id)
     node_output = node_return(outputs, telemetry, node_id)
     if node_output is None:
         node_meta = node_telemetry(telemetry, outputs, node_id)
         if isinstance(node_meta, dict):
             derived = {key: node_meta[key] for key in ("status", "summary") if key in node_meta}
             masked = _mask_output_value(derived)
-            return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked)
+            return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked, stdout_artifact=stdout_artifact)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Node {node_id} not found in run outputs",
         )
 
     masked = _mask_output_value(node_output)
-    return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked)
+    return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked, stdout_artifact=stdout_artifact)
 
 
 # ---------------------------------------------------------------------------
@@ -3235,6 +3241,51 @@ async def list_run_artifacts(
     )
 
 
+def _strip_full_attempt_suffix(attempt_key: str) -> str | None:
+    """Return the base attempt key when *attempt_key* addresses a FAR-811
+    full-transcript synthetic key (``<base>:full:<cap>``), else ``None``.
+
+    Sandbox nodes that overflow the inline stdout cap persist the full redacted
+    transcript under a ``:full:<cap>``-suffixed attempt key
+    (``_persist_full_stdout_artifact``). That key exists only in the artifact
+    store, so the run-node-output row lookup by exact attempt key returns no
+    row; the download endpoint must derive the base key and resolve its pointer
+    from the node's telemetry instead.
+    """
+    parts = attempt_key.rsplit(":", 2)
+    if len(parts) != 3 or parts[1] != "full":
+        return None
+    if not parts[2].isdigit():
+        return None
+    return parts[0]
+
+
+async def _stdout_pointer_from_telemetry(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+) -> dict[str, Any] | None:
+    """Resolve a node's FAR-811 full-stdout transcript pointer from telemetry.
+
+    Reads the run's reassembled blobs (``node_telemetry_json`` / the legacy
+    inner output envelope) and returns the persisted ``stdout_artifact``
+    pointer, or ``None`` when the node has no stored transcript (inline-sized
+    stdout, non-sandbox node). A blob-read failure is treated as no-pointer so
+    the download endpoint surfaces its normal 404 rather than a 503.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
+    except SQLAlchemyError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        return None
+    if blobs is None:
+        return None
+    return node_stdout_artifact(blobs.telemetry or {}, blobs.outputs or {}, node_id)
+
+
 @router.get("/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream}")
 @handle_db_errors("runs.get_run_artifact")
 async def get_run_artifact(
@@ -3250,6 +3301,11 @@ async def get_run_artifact(
     Returns the raw ``stdout`` or ``stderr`` content as ``text/plain``.
     Returns 404 when the artifact is not found (node did not produce that
     stream, or artifact storage is disabled).
+
+    Also serves the FAR-811 full stdout transcript addressed by its synthetic
+    ``<base>:full:<cap>`` attempt key (no row exists for that key — the pointer
+    is resolved from the node's telemetry), and falls back to the telemetry
+    pointer when a real row has no stdout pointer in its side-car list.
     """
     if stream not in ("stdout", "stderr"):
         raise HTTPException(
@@ -3286,7 +3342,11 @@ async def get_run_artifact(
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
-    if row is None or not row.artifacts_json:
+    base_attempt_key = _strip_full_attempt_suffix(attempt_key)
+
+    # A synthetic ":full:" attempt key legitimately has no row (the transcript
+    # lives only in the artifact store); only a real, non-synthetic miss 404s.
+    if row is None and base_attempt_key is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=_MSG_ARTIFACT_STREAM_NOT_FOUND,
@@ -3294,10 +3354,17 @@ async def get_run_artifact(
 
     # Find the pointer for the requested stream
     pointer = None
-    for ptr in row.artifacts_json:
-        if ptr.get("stream") == stream:
-            pointer = ptr
-            break
+    if row is not None and row.artifacts_json:
+        for ptr in row.artifacts_json:
+            if ptr.get("stream") == stream:
+                pointer = ptr
+                break
+
+    # FAR-811 fallback: a synthetic ":full:" attempt key has no row at all
+    # (the transcript exists only in the artifact store) — the pointer lives
+    # in the node's telemetry instead.
+    if pointer is None and stream == "stdout" and base_attempt_key is not None:
+        pointer = await _stdout_pointer_from_telemetry(session, principal, run_id, node_id)
 
     if pointer is None:
         raise HTTPException(
