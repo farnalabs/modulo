@@ -91,8 +91,14 @@ _MIGRATION_PATH = (
 # and 0227_env_profiles_initialisation_strategy_check chained onto 0226_agents_json_to_jsonb,
 # and 0228_drop_scalar_agent_command chained onto 0227_env_profiles_initialisation_strategy_check,
 # and FAR-802's 0229_add_workspace_inputs_count chained onto 0228_drop_scalar_agent_command,
-# and FAR-826's 0232_seed_modulo_sentinel_organisation chains off 0231_token_families_reuse_replay_count.
-_CHAIN_HEAD_MIGRATION_NAME = "0232_seed_modulo_sentinel_organisation"
+# and 0230_token_families_refresh_grace chained onto 0229_add_workspace_inputs_count,
+# and 0231_token_families_reuse_replay_count chained onto 0230_token_families_refresh_grace,
+# and 0233_add_updated_at_audit_to_organisations chained onto 0232_seed_modulo_sentinel_organisation,
+# and 0234_add_organisations_indexes chained onto 0232,
+# and 0235_promote_organisations_json_to_jsonb chained onto 0233,
+# and 0236_add_organisations_constraints chained onto 0234,
+# and 0237_fix_token_family_org_nullable chained onto 0235 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0237_fix_token_family_org_nullable"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
