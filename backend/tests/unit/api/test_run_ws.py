@@ -67,8 +67,10 @@ class _FakeBroker:
         self._queue: asyncio.Queue[RunEvent | None] = asyncio.Queue()
         for item in live_items or []:
             self._queue.put_nowait(item)
+        self.last_replay_seq: int | None = None
 
     def replay_since(self, seq: int) -> list[RunEvent]:
+        self.last_replay_seq = seq
         return self._replay
 
     def subscribe(self) -> asyncio.Queue:
@@ -498,4 +500,5 @@ async def test_ws_clamps_large_since_event_seq_to_zero():
         await run_websocket(ws, run_id, since_event_seq=99999, token="tok")
 
     # replay_since was called with 0 (clamped), not 99999
+    assert fake_broker.last_replay_seq == 0
     assert ws.sent[0] == {"status": "terminal"}
