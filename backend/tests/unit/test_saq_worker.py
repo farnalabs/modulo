@@ -935,6 +935,7 @@ class TestRetentionCleanup:
         """retention_cleanup deletes old terminal runs AND old checkpoint rows,
         reporting both counts in its return dict."""
         factory, session = _make_retention_factory()
+        _no_gc = {"orphan_runs": [], "files_deleted": 0}
 
         with (
             patch.object(sw, "_make_system_session_factory", return_value=factory),
@@ -948,19 +949,26 @@ class TestRetentionCleanup:
                 new_callable=AsyncMock,
                 return_value=12,
             ) as ckpt_delete,
+            patch(
+                "modulo.core.artifacts.gc.delete_orphaned_run_artifacts",
+                new_callable=AsyncMock,
+                return_value=_no_gc,
+            ) as gc_delete,
         ):
             result = await sw.retention_cleanup({})
 
-        assert result == {"deleted": 7, "checkpoints_deleted": 12}
+        assert result == {"deleted": 7, "checkpoints_deleted": 12, "artifact_gc": _no_gc}
         runs_delete.assert_awaited_once()
         ckpt_delete.assert_awaited_once()
+        gc_delete.assert_awaited_once()
         assert runs_delete.await_args.args[0] is session
         assert ckpt_delete.await_args.args[0] is session
 
     @pytest.mark.asyncio
     async def test_zero_deletions_returns_zero_counts(self) -> None:
-        """A clean pass must still report both zero counts (no log line)."""
+        """A clean pass must still report all zero counts (no log line)."""
         factory, session = _make_retention_factory()
+        _no_gc = {"orphan_runs": [], "files_deleted": 0}
 
         with (
             patch.object(sw, "_make_system_session_factory", return_value=factory),
@@ -974,12 +982,18 @@ class TestRetentionCleanup:
                 new_callable=AsyncMock,
                 return_value=0,
             ) as ckpt_delete,
+            patch(
+                "modulo.core.artifacts.gc.delete_orphaned_run_artifacts",
+                new_callable=AsyncMock,
+                return_value=_no_gc,
+            ) as gc_delete,
         ):
             result = await sw.retention_cleanup({})
 
-        assert result == {"deleted": 0, "checkpoints_deleted": 0}
+        assert result == {"deleted": 0, "checkpoints_deleted": 0, "artifact_gc": _no_gc}
         runs_delete.assert_awaited_once()
         ckpt_delete.assert_awaited_once()
+        gc_delete.assert_awaited_once()
         assert runs_delete.await_args.args[0] is session
         assert ckpt_delete.await_args.args[0] is session
 
@@ -997,6 +1011,7 @@ class TestRetentionCleanup:
         from sqlalchemy.exc import ProgrammingError
 
         factory, session = _make_retention_factory()
+        _no_gc = {"orphan_runs": [], "files_deleted": 0}
 
         with (
             patch.object(sw, "_make_system_session_factory", return_value=factory),
@@ -1010,13 +1025,78 @@ class TestRetentionCleanup:
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("statement", {}, Exception("checkpoints does not exist")),
             ) as ckpt_delete,
+            patch(
+                "modulo.core.artifacts.gc.delete_orphaned_run_artifacts",
+                new_callable=AsyncMock,
+                return_value=_no_gc,
+            ) as gc_delete,
         ):
             result = await sw.retention_cleanup({})
 
-        assert result == {"deleted": 7, "checkpoints_deleted": 0}
+        assert result == {"deleted": 7, "checkpoints_deleted": 0, "artifact_gc": _no_gc}
         runs_delete.assert_awaited_once()
         ckpt_delete.assert_awaited_once()
+        gc_delete.assert_awaited_once()
         assert runs_delete.await_args.args[0] is session
+
+    @pytest.mark.asyncio
+    async def test_artifact_gc_reports_deleted_files(self) -> None:
+        """Artifact GC results are included in the return dict."""
+        factory, _session = _make_retention_factory()
+        gc_result = {"orphan_runs": [("org1", "run-aaa")], "files_deleted": 3}
+
+        with (
+            patch.object(sw, "_make_system_session_factory", return_value=factory),
+            patch(
+                "modulo.db.crud.run.batch_delete_old_terminal_runs",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "modulo.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "modulo.core.artifacts.gc.delete_orphaned_run_artifacts",
+                new_callable=AsyncMock,
+                return_value=gc_result,
+            ) as gc_delete,
+        ):
+            result = await sw.retention_cleanup({})
+
+        assert result["artifact_gc"] == gc_result
+        gc_delete.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_artifact_gc_failure_does_not_fail_job(self) -> None:
+        """A store/GC error is caught and reported as zero, never failing the job."""
+        factory, _session = _make_retention_factory()
+
+        with (
+            patch.object(sw, "_make_system_session_factory", return_value=factory),
+            patch(
+                "modulo.db.crud.run.batch_delete_old_terminal_runs",
+                new_callable=AsyncMock,
+                return_value=5,
+            ),
+            patch(
+                "modulo.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "modulo.core.artifacts.gc.delete_orphaned_run_artifacts",
+                new_callable=AsyncMock,
+                side_effect=Exception("store unavailable"),
+            ),
+        ):
+            result = await sw.retention_cleanup({})
+
+        # GC failure is swallowed; runs purge still reported
+        assert result["deleted"] == 5
+        assert result["checkpoints_deleted"] == 0
+        assert result["artifact_gc"] == {"orphan_runs": [], "files_deleted": 0}
 
 
 class TestGetAsyncEngine:

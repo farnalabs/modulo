@@ -25,7 +25,7 @@ HITL gates (`hitl_gate_config` on a pipeline edge, PRD §5/§7.x/§8.8) are the 
 Field-level, on an edge with a non-null `hitl_gate_config`:
 - `human_only: true → false`.
 - `required_team_id` changed to `null` or to any different team ID.
-- `condition` changed at all – regardless of `human_only` (verified: `node_runner.py:3446-3521`'s `_hitl_gate` evaluates `condition`/`eval_condition` before `human_only` is ever consulted).
+- `condition` changed at all – regardless of `human_only` (verified: `node_runner.py:3928`'s `_hitl_gate` evaluates `condition`/`eval_condition` before `human_only` is ever consulted).
 - `eval_condition` changed at all – same reasoning.
 
 `claim_expiry_minutes` is deliberately NOT a weakening-capable field: a shorter expiry is stricter, not weaker. On expiry the claim is reset and the run returns to `awaiting_human` (`expiry_job.py`) – it never releases the gate or auto-approves the run, so a decrease cannot reduce the HITL control's effect (review finding on §1; verified against `expiry_job.py` / `pipeline_execution.py` resume semantics).

@@ -201,7 +201,7 @@ class CheckpointRetentionPurgeResponse(BaseModel):
     bytes_freed: int
 
 
-@router.post("/checkpoints/purge", response_model=CheckpointRetentionPurgeResponse)
+@router.post("/checkpoints/purge")
 async def purge_checkpoints(
     req: CheckpointRetentionPurgeRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],

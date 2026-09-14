@@ -82,7 +82,7 @@ class StubModelBackend(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         del stop, run_manager, kwargs
-        return self._result_for(messages)
+        return self._generate(messages)
 
     async def health_check(self) -> HealthResult:
         return HealthResult(ok=True, detail="Stub backend always healthy")

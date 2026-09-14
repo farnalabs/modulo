@@ -307,7 +307,7 @@ def test_refresh_removed_member_returns_401_without_advancing_sequence(mock_sess
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
 
-    advance = AsyncMock(return_value=(2, False))
+    advance = AsyncMock(return_value=(2, False, False))
     try:
         with (
             patch(

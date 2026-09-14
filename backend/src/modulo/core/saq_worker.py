@@ -969,6 +969,13 @@ async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     purges run in SEPARATE transactions so a failure in the checkpoint purge
     can never roll back the already-executed runs purge.
 
+    Also garbage-collects the artifact store (``delete_orphaned_run_artifacts``,
+    FAR-811): any run directory on disk whose run no longer exists in the DB is
+    deleted, so retained full-transcript artifacts are removed by the same
+    retention policy that purges the run rows. The GC runs best-effort in its
+    own system-scoped transaction — a failure is logged as a warning and never
+    fails the job or rolls back the completed purges.
+
     The checkpoint purge is tolerant of a missing saver schema: the system
     worker's cron can fire before the app boot creates the checkpoint tables /
     ``created_at`` columns, in which case ``ProgrammingError`` (the SQLAlchemy
@@ -999,12 +1006,34 @@ async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
             exc_info=True,
         )
 
-    if deleted or checkpoints_deleted:
+    # FAR-811 artifact GC — best-effort, never lets a store failure fail the job.
+    artifact_gc: dict[str, Any] = {"orphan_runs": [], "files_deleted": 0}
+    try:
+        from modulo.core.artifacts.gc import delete_orphaned_run_artifacts
+
+        async with _make_system_session_factory()() as session, session.begin():
+            artifact_gc = await delete_orphaned_run_artifacts(session)
+    except Exception:
+        _log.warning(
+            "saq.retention_cleanup.artifact_gc_failed",
+            exc_info=True,
+        )
+
+    if deleted or checkpoints_deleted or artifact_gc["files_deleted"]:
         _log.info(
             "saq.retention_cleanup.deleted_old_runs",
-            extra={"count": deleted, "checkpoints_deleted": checkpoints_deleted},
+            extra={
+                "count": deleted,
+                "checkpoints_deleted": checkpoints_deleted,
+                "artifact_files_deleted": artifact_gc["files_deleted"],
+                "artifact_orphan_runs": len(artifact_gc["orphan_runs"]),
+            },
         )
-    return {"deleted": deleted, "checkpoints_deleted": checkpoints_deleted}
+    return {
+        "deleted": deleted,
+        "checkpoints_deleted": checkpoints_deleted,
+        "artifact_gc": artifact_gc,
+    }
 
 
 async def webhook_dedup_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:

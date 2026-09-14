@@ -15,6 +15,7 @@
         "test:e2e:mobile": "playwright test tests/e2e/mobile-layout.spec.ts --workers=1",
         "test:mutation": "stryker run",
         "test:unit": "vitest run src --pool=threads --maxWorkers=4",
+        "test:unit:coverage": "vitest run src --pool=threads --maxWorkers=4 --coverage",
         "preview": "vite preview",
         "lint": "eslint src --cache --cache-location .cache/eslint",
         "test:contrast": "playwright test wcag-contrast",

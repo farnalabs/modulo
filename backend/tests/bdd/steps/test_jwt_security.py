@@ -314,7 +314,7 @@ def refresh_with_stored_token(request: Any, ctx: dict[str, Any], token_client: T
     time_mod.sleep(1.0)
     with (
         _patch_active_account(),
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False))),
+        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         resp = token_client.post(
@@ -381,7 +381,7 @@ def refresh_once(request: Any, ctx: dict[str, Any], token_client: TestClient) ->
     refresh_token = ctx.get("theft_refresh_token")
     with (
         _patch_active_account(),
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False))),
+        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         resp = token_client.post(
@@ -396,7 +396,7 @@ def refresh_again_same_token(request: Any, ctx: dict[str, Any], token_client: Te
     refresh_token = ctx.get("theft_refresh_token")
     with (
         _patch_active_account(),
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True))),
+        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         resp = token_client.post(
@@ -433,7 +433,7 @@ def logout(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
 def refresh_rejected_after_logout(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("login_refresh_token")
     with (
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(0, True))),
+        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(0, True, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         resp = token_client.post(

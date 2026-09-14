@@ -20,7 +20,7 @@ operators); apply-template requires ``environment_profile.update``.
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -230,11 +230,11 @@ def _profile_health(
     )
 
 
-@router.get("/status", response_model=RunnersStatusResponse)
+@router.get("/status")
 @handle_db_errors(_CODE_RUNNERS_STATUS)
 async def get_runners_status(
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("environment_profile.list"),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, require_permission("environment_profile.list")],
 ) -> RunnersStatusResponse:
     now = datetime.now(UTC)
     try:
@@ -363,12 +363,12 @@ def _apply_response(p: EnvironmentProfile) -> ApplyTemplateResponse:
     )
 
 
-@router.post("/profiles/{profile_id}/apply-template", response_model=ApplyTemplateResponse)
+@router.post("/profiles/{profile_id}/apply-template")
 @handle_db_errors(_CODE_RUNNERS_APPLY_TEMPLATE)
 async def apply_template(
     profile_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("environment_profile.update"),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, require_permission("environment_profile.update")],
 ) -> ApplyTemplateResponse:
     try:
         async with session.begin():

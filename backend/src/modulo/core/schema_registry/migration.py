@@ -317,9 +317,9 @@ def _build_step_reports(
         added = sorted(set(current) - set(before))
         removed = sorted(set(before) - set(current))
         changed = {}
-        for key in set(current) & set(before):
-            if current[key] != before[key]:
-                changed[key] = {"old": before[key], "new": current[key]}
+        for key, cur_val in current.items():
+            if key in before and cur_val != before[key]:
+                changed[key] = {"old": before[key], "new": cur_val}
         steps.append(
             {
                 "source_version": mf.source_version,

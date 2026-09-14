@@ -23,7 +23,13 @@ export function useRemyContext() {
     ([name, params]) => {
       const resolved: Record<string, string> = {}
       for (const [k, v] of Object.entries(params)) {
-        resolved[k] = typeof v === 'string' ? v : Array.isArray(v) ? v[0] ?? '' : ''
+        if (typeof v === 'string') {
+          resolved[k] = v
+        } else if (Array.isArray(v)) {
+          resolved[k] = v[0] ?? ''
+        } else {
+          resolved[k] = ''
+        }
       }
       pageContext.value = {
         route: (name as string) ?? route.path,

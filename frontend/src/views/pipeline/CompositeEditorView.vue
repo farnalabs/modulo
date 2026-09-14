@@ -197,8 +197,14 @@ const nodeTypes = { agent: 'agent', manual: 'manual', composite: 'composite' }
 
 const flowNodeIds = computed(() => flowNodes.value.map((n: any) => n.id))
 
+function resolveNodeType(nodeType: string): string {
+  if (nodeType === 'manual') return 'manual'
+  if (nodeType === 'composite') return 'composite'
+  return 'agent'
+}
+
 function convertBackendNode(n: any): any {
-  const nodeType = n.node_type === 'manual' ? 'manual' : n.node_type === 'composite' ? 'composite' : 'agent'
+  const nodeType = resolveNodeType(n.node_type)
   return {
     id: n.id,
     type: nodeType,
