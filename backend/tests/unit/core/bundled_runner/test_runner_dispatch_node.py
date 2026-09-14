@@ -576,7 +576,7 @@ async def test_run_stdout_org_ceiling_clamps_cap(patch_node_runner, monkeypatch)
     assert out["output"].stdout_truncated is True
 
 
-async def test_resolve_stdout_cap_applies_org_ceiling(patch_node_runner, monkeypatch) -> None:
+def test_resolve_stdout_cap_applies_org_ceiling(patch_node_runner, monkeypatch) -> None:
     """The pure helper passes the org ceiling through to the shared resolver."""
     import modulo.core.pipeline_engine.node_runner as nrm
 
