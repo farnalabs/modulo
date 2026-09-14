@@ -62,6 +62,44 @@ _FIELD_TYPE_MAP: dict[str, str] = {
 }
 
 
+# Sub-field spec map → JSON Schema object properties (recursive via
+# ``_definition_from_field_spec``), excluding a sibling ``required`` key.
+def _subfield_properties(spec: dict[Any, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Convert a named-sub-field map to ``(properties, required)``.
+
+    ``required`` collects sub-specs that declare ``"required": true`` so the
+    nested object schema carries the same required list as the seed.
+    """
+    properties: dict[str, Any] = {
+        str(name): _definition_from_field_spec(sub) for name, sub in spec.items() if name != "required"
+    }
+    required = [
+        str(name)
+        for name, sub in spec.items()
+        if name != "required" and isinstance(sub, dict) and sub.get("required", False)
+    ]
+    return properties, required
+
+
+def _items_definition(items: Any) -> dict[str, Any] | None:
+    """Convert a field spec's ``items`` value into a JSON Schema items schema.
+
+    - string shorthand (``"items": "string"``) → scalar item schema
+    - dict (a named sub-field spec map) → object schema carrying the nested
+      properties and any nested ``required`` entries
+    - anything else (including absent) → ``None`` (unconstrained items)
+    """
+    if isinstance(items, str):
+        return {"type": _FIELD_TYPE_MAP.get(items, "string")}
+    if isinstance(items, dict):
+        properties, required = _subfield_properties(items)
+        obj: dict[str, Any] = {"type": "object", "properties": properties}
+        if required:
+            obj["required"] = required
+        return obj
+    return None
+
+
 def _definition_from_field_spec(spec: Any) -> dict[str, Any]:
     """Convert a single library-primitive field spec to a JSON Schema property."""
     if isinstance(spec, str):
@@ -71,12 +109,19 @@ def _definition_from_field_spec(spec: Any) -> dict[str, Any]:
     if "type" in spec:
         mapped = _FIELD_TYPE_MAP.get(str(spec["type"]), "string")
         prop: dict[str, Any] = {"type": mapped}
+        if mapped == "array":
+            items = _items_definition(spec.get("items"))
+            if items is not None:
+                prop["items"] = items
         if "enum" in spec:
             prop["enum"] = spec["enum"]
         return prop
     # Named sub-field map (e.g. findings: {severity: {...}}) → object with properties.
-    properties = {str(name): _definition_from_field_spec(sub) for name, sub in spec.items() if name != "required"}
-    return {"type": "object", "properties": properties}
+    properties, required = _subfield_properties(spec)
+    obj: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        obj["required"] = required
+    return obj
 
 
 def _definition_from_fields(fields: list[dict[str, Any]]) -> dict[str, Any]:
