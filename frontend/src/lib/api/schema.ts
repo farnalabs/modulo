@@ -15962,6 +15962,10 @@ export interface components {
             input_payload?: {
                 [key: string]: unknown;
             } | null;
+            /** Workspace Inputs */
+            workspace_inputs?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** RunSummary */
         RunSummary: {

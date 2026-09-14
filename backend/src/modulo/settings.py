@@ -283,6 +283,13 @@ class Settings(BaseSettings):
     # contract where every visit fired). Operators enable it explicitly once the
     # dedup semantics are wanted. Consumed only by ``_connector_write_gate``.
     modulo_connector_write_gate_enabled: bool = Field(False, alias="MODULO_CONNECTOR_WRITE_GATE_ENABLED")
+    # FAR-802: managed workspace inputs kill-switch.  When OFF (default),
+    # sandbox_agent nodes that declare workspace_inputs short-circuit with
+    # ``sandbox.workspace_inputs_disabled`` and provision nothing — existing
+    # sandbox behaviour is unchanged.  Operators enable it explicitly once MWI
+    # is ready for production use.  Consumed in node_runner before host-side
+    # ref resolution.
+    modulo_workspace_inputs_enabled: bool = Field(False, alias="MODULO_WORKSPACE_INPUTS_ENABLED")
     # ------------------------------------------------------------------
     # FAR-582: full sandbox stdout/stderr side-car artifact storage
     # ------------------------------------------------------------------

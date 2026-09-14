@@ -95,7 +95,10 @@ from modulo.core.node_output_split import (
     resolve_node_contract_output,
 )
 from modulo.core.pipeline_engine.decorator import cancellable_node
-from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+from modulo.core.pipeline_engine.error_codes import (
+    _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
+    sanitize_error_text,
+)
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.hitl_context import serialize_value, slice_with_marker
@@ -6740,11 +6743,22 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # FAR-800: resolve managed workspace input refs → SHA HOST-SIDE
         # BEFORE any sandbox is created.  A resolution failure (ref not
         # found, transient network error) must NEVER create a sandbox.
+        # FAR-802: killswitch — when MWI is disabled (default), refuse to
+        # provision inputs with a clear error code so the run is never
+        # silently pretending inputs were provisioned.
         _resolved_workspace_inputs: list[Any] = []
         if workspace_inputs:
             from modulo.core.pipeline_engine.workspace_input_orchestration import (
                 ProvisioningError as WorkspaceProvisioningError,
             )
+            from modulo.settings import get_settings as _get_mwi_settings
+
+            if not _get_mwi_settings().modulo_workspace_inputs_enabled:
+                raise WorkspaceProvisioningError(
+                    "Managed workspace inputs are disabled (MODULO_WORKSPACE_INPUTS_ENABLED is not set or false)",
+                    error_code=_CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
+                    retryable=False,
+                )
             from modulo.core.pipeline_engine.workspace_input_orchestration import (
                 resolve_managed_inputs_host_side,
             )
