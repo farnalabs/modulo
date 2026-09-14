@@ -48,6 +48,11 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+          # When the Detect step skips the harness (no Bundled Runner surface
+          # changes), no `uv sync` runs and the cache dir is never populated,
+          # so the cache-save post-step fails the job with "Cache path does not
+          # exist on disk". Treat an empty cache as success, not a failure.
+          ignore-nothing-to-cache: true
       - name: Detect Bundled Runner surface changes
         id: changed
         shell: bash
