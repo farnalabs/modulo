@@ -90,3 +90,30 @@ class TestCoerceUuid:
     def test_int_form_accepted(self) -> None:
         u = uuid.UUID(int=0)
         assert coerce_uuid(0) == u
+
+    def test_bytes_form_returns_none(self) -> None:
+        # Positional ``uuid.UUID`` treats bytes as the ``hex`` arg, so raw bytes
+        # are intentionally downgraded to "unset" rather than decoded.
+        assert coerce_uuid(b"\x00" * 16) is None
+
+    def test_non_uuid_object_returns_none(self) -> None:
+        class Bad:
+            pass
+
+        assert coerce_uuid(Bad()) is None
+
+
+class TestBackwardCompatShim:
+    """The deprecated ``modulo.utils`` package must keep re-exporting ``coerce_uuid``."""
+
+    def test_utils_package_re_exports_coerce_uuid(self) -> None:
+        from modulo.utils import coerce_uuid as shim_pkg
+
+        assert shim_pkg is coerce_uuid
+        assert shim_pkg("12345678-1234-5678-1234-567812345678") == uuid.UUID("12345678-1234-5678-1234-567812345678")
+
+    def test_utils_uuid_module_re_exports_coerce_uuid(self) -> None:
+        from modulo.utils.uuid import coerce_uuid as shim_mod
+
+        assert shim_mod is coerce_uuid
+        assert shim_mod(None) is None
