@@ -159,11 +159,11 @@ class RunDailyFact(OrgScoped):
         BigInteger,
         comment="Run.started_at - Run.created_at (full wait from creation to start), else NULL",
     )
-    # FAR-802: count of managed workspace inputs resolved for this run.
-    # NULL when no workspace inputs were configured (legacy / non-MWI runs).
+    # FAR-801: count of managed workspace inputs resolved for this run.
+    # NULL when the run had no workspace inputs configured or the audit
+    # row was never written (best-effort write).
     workspace_inputs_count: Mapped[int | None] = mapped_column(
-        Integer,
-        comment="count of workspace inputs resolved for this run (NULL when none configured)",
+        Integer, comment="count of managed workspace inputs resolved for this run (NULL if none)"
     )
 
     team: Mapped["Team | None"] = relationship(foreign_keys=[team_id])
