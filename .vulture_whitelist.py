@@ -338,6 +338,9 @@ __all__ = [
     "clear_agent_mint_flag_cache",
     "consume_agent_mint_budget",  # FAR-795 mint budget guard: prod call sites
     #     land in the mint-path integration slice (later); test-referenced.
+    "collect_injected_refs",  # FAR-795 DAG-ancestor ref-injection collector:
+    #     pure function pre-wired (node-runner wiring is a follow-up slice);
+    #     exercised by tests/unit/core/pipeline_engine/test_ancestor_ref_injection.py.
     # --- FAR-799 SSH transport hardening functions (test-referenced;
     #     production callers land in the provisioning layer, so vulture cannot
     #     see a prod call site yet) ---
