@@ -9,6 +9,7 @@ required-team-id normaliser.
 
 import uuid
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -34,6 +35,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _marker_delivery_done_for_node,
     _normalize_marker_text,
     _normalize_required_team_id,
+    _read_org_stdout_retention_ceiling,
     _resolve_stdout_cap,
     _run_identity_strs,
     _source_contains_delivery_sentinel,
@@ -591,6 +593,116 @@ class TestResolveStdoutCap:
         # A full-mode cap smaller than the tail bound is still honoured as-is
         # (the node asked for less retention); the drain window mirrors it.
         assert _resolve_stdout_cap("full", 10_000) == 10_000
+
+
+class TestResolveStdoutCapOrgCeiling:
+    """FAR-811: the org-level ceiling (system_config
+    sandbox_stdout_retention_max_bytes) hard-clamps a node's retention cap."""
+
+    def test_org_ceiling_clamps_over_large_node_max_bytes(self) -> None:
+        # A node asking for 20MB retention is clamped to the 5MB org ceiling.
+        assert _resolve_stdout_cap("full", 20_000_000, org_ceiling=5_000_000) == 5_000_000
+
+    def test_org_ceiling_unset_leaves_node_cap_unchanged(self) -> None:
+        # No ceiling configured (None) is a no-op — node behaviour is unchanged.
+        assert _resolve_stdout_cap("full", 2_000_000, org_ceiling=None) == 2_000_000
+        assert _resolve_stdout_cap("full", 20_000_000, org_ceiling=None) == 20_000_000
+        assert _resolve_stdout_cap("tail", None, org_ceiling=None) == _MAX_ARTIFACT_LOG
+
+    def test_org_ceiling_does_not_raise_cap_without_ceiling(self) -> None:
+        # A ceiling never raises a node's cap — it can only clamp it down.
+        assert _resolve_stdout_cap("full", 1_024, org_ceiling=5_000_000) == 1_024
+
+    def test_org_ceiling_below_tail_cap_clamps_tail_too(self) -> None:
+        # A ceiling below the legacy 512KB bound clamps even tail mode.
+        assert _resolve_stdout_cap("tail", None, org_ceiling=100_000) == 100_000
+
+    def test_org_ceiling_applies_to_full_default(self) -> None:
+        # The 5MB full-mode default is clamped when the ceiling is lower.
+        assert _resolve_stdout_cap("full", None, org_ceiling=1_000_000) == 1_000_000
+
+
+class _AsyncCtx:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    async def __aenter__(self) -> Any:
+        return self._value
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _FakeDbSession:
+    def begin(self) -> _AsyncCtx:
+        return _AsyncCtx(None)
+
+
+def _fake_session_factory() -> _AsyncCtx:
+    return _AsyncCtx(_FakeDbSession())
+
+
+class TestReadOrgStdoutRetentionCeiling:
+    """FAR-811: the org ceiling is read from system_config via the same
+    read_system_config accessor product analytics uses, and is fail-open."""
+
+    async def test_reads_ceiling_from_system_config(self) -> None:
+        with patch(
+            "modulo.core.cost_controller.system_config.read_system_config",
+            new=AsyncMock(return_value=5_000_000),
+        ) as read:
+            ceiling = await _read_org_stdout_retention_ceiling(_fake_session_factory)
+        read.assert_awaited_once()
+        session_arg, key_arg = read.await_args.args
+        assert isinstance(session_arg, _FakeDbSession)
+        assert key_arg == "sandbox_stdout_retention_max_bytes"
+        assert ceiling == 5_000_000
+
+    async def test_unset_key_returns_none(self) -> None:
+        with patch(
+            "modulo.core.cost_controller.system_config.read_system_config",
+            new=AsyncMock(return_value=None),
+        ):
+            assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
+
+    async def test_no_session_factory_returns_none(self) -> None:
+        assert await _read_org_stdout_retention_ceiling(None) is None
+
+    async def test_malformed_value_coerces_to_none(self) -> None:
+        with patch(
+            "modulo.core.cost_controller.system_config.read_system_config",
+            new=AsyncMock(return_value="lots"),
+        ):
+            assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
+
+    async def test_read_failure_is_fail_open(self) -> None:
+        with patch(
+            "modulo.core.cost_controller.system_config.read_system_config",
+            new=AsyncMock(side_effect=RuntimeError("db down")),
+        ):
+            assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
+
+    async def test_non_scalar_read_is_ignored(self) -> None:
+        """Unit-test ``_FakeSession`` fakes return a bare MagicMock for un-routed
+        ``system_config`` reads; `float(MagicMock()) == 1.0`, so a non-scalar
+        read MUST reject to None or it would clamp real nodes to 1 byte."""
+        with patch(
+            "modulo.core.cost_controller.system_config.read_system_config",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
+
+    async def test_bool_and_float_values_reject(self) -> None:
+        with patch(
+            "modulo.core.cost_controller.system_config.read_system_config",
+            new=AsyncMock(return_value=True),
+        ):
+            assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
+        with patch(
+            "modulo.core.cost_controller.system_config.read_system_config",
+            new=AsyncMock(return_value=5_500_000.5),
+        ):
+            assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
 
 
 class TestStdoutTruncatedEnvelopeKey:
