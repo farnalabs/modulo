@@ -91,8 +91,9 @@ _MIGRATION_PATH = (
 # and 0227_env_profiles_initialisation_strategy_check chained onto 0226_agents_json_to_jsonb,
 # and 0228_drop_scalar_agent_command chained onto 0227_env_profiles_initialisation_strategy_check,
 # and FAR-802's 0229_add_workspace_inputs_count chained onto 0228_drop_scalar_agent_command,
-# and 0230_journey_dismissal chained onto 0229_add_workspace_inputs_count as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0230_journey_dismissal"
+# and 0230_journey_dismissal chained onto 0229_add_workspace_inputs_count,
+# and 0231_org_mint_budget_usage chained onto 0230_journey_dismissal as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0231_org_mint_budget_usage"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

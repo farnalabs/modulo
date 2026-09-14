@@ -336,6 +336,8 @@ __all__ = [
     #     is consumed by the intake tests' flag-cache isolation fixture, so
     #     vulture scans src/ only cannot see a call site) ---
     "clear_agent_mint_flag_cache",
+    "consume_agent_mint_budget",  # FAR-795 mint budget guard: prod call sites
+    #     land in the mint-path integration slice (later); test-referenced.
     # --- FAR-799 SSH transport hardening functions (test-referenced;
     #     production callers land in the provisioning layer, so vulture cannot
     #     see a prod call site yet) ---
