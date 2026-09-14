@@ -20,8 +20,10 @@ unit-tests:
 bdd:
   - backend/tests/bdd/features/licensing/license_management.feature
   - backend/tests/bdd/features/licensing/team_gates.feature
+  - backend/tests/bdd/features/licensing/feature_flag_inspection.feature
   - backend/tests/bdd/steps/test_license_management.py
   - backend/tests/bdd/steps/test_team_gates.py
+  - backend/tests/bdd/steps/test_feature_flag_inspection.py
 depends-on:
   - feat-teams
 status: covered
@@ -50,8 +52,9 @@ and feature-flag inspection endpoints.
       a valid license; expiry degrades those surfaces back to community; community
       features stay accessible without a license (`team_gates.feature`)
 - [x] Feature-flag inspection returns the `license` object plus the active `flags` array,
-      supports per-flag detail and override toggles, and 404s unknown flags
-      (`test_admin_feature_flags.py`)
+      supports per-flag detail and override toggles, and 404s unknown flags; the public
+      `/api/v1/license` surface reports a `tier` and `features` list
+      (`test_admin_feature_flags.py` + `feature_flag_inspection.feature`)
 - [x] Keys are cryptographically verified (`core/license_signing.py`) and exercised
       adversarially (`test_license_adversarial.py`, `test_license_key.py`)
 - [x] Tier activation feeds licensing/feature parity for team surfaces
@@ -62,15 +65,18 @@ and feature-flag inspection endpoints.
 - **`stripe_webhook.py` and `admin_tiers.py` are cited as adjacents but not behaviour-covered
   here** — subscription fulfilments and the tier catalogue are separate surfaces under the
   same feature id; their behaviours are not asserted by the licensing BDD suite.
-- **No executing BDD surface for feature-flag inspection** —
-  `licensing/feature_flag_inspection.feature` ships under
-  `tests/bdd/features/licensing/` but no step module registers it via
-  `scenarios(...)`, so it never executes and is no longer cited as coverage here.
-  The inspection/override endpoints are unit-tested
-  (`test_admin_feature_flags.py`); wiring the feature file up needs its missing
-  step definitions written.
 
 ## QA History
+
+- 2026-09-14: **improve-architecture (product-map walk)** — closed the "no executing BDD
+  surface for feature-flag inspection" gap: wired `licensing/feature_flag_inspection.feature`
+  into the executing suite via the new `steps/test_feature_flag_inspection.py` (5 scenarios)
+  and dropped the file from the tracked orphaned-BDD debt list (`_ORPHANED_BDD_FEATURES`).
+  The feature exercises the real `/api/v1/admin/feature-flags` routes
+  (`admin_feature_flags.py`) with only the DB reads patched (the licensing hermetic-mock
+  pattern): the list endpoint's `license` object + `flags` array shapes, per-flag field
+  presence, the unknown-flag 404, the toggle override write-back (`overridden: true`) and
+  the public `/api/v1/license` surface. Feature-flag inspection is no longer unit-tested only.
 
 - 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to

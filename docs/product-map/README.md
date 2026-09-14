@@ -158,7 +158,11 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > The 2026-09-13 walk wired `library/contribute.feature` into the executing BDD
 > suite (`steps/test_library_contributions.py`) and shrunk
 > `_ORPHANED_BDD_FEATURES` by one, closing `feat-library`'s contribution
-> BDD gap (`library.md`).
+> BDD gap (`library.md`). The 2026-09-14 walk wired
+> `licensing/feature_flag_inspection.feature` into the executing BDD suite
+> (`steps/test_feature_flag_inspection.py`), shrunk `_ORPHANED_BDD_FEATURES` by
+> one more, and closed `feat-license`'s feature-flag-inspection BDD gap
+> (`licensing/license.md`).
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
