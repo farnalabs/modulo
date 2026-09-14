@@ -814,8 +814,8 @@ describe('StatCard delta arrow', () => {
     // Absolute change shown despite the % being a hyphen (no baseline).
     expect(fallback.text()).toContain('▲')
     expect(fallback.text()).toContain('+788')
-    // A11y: the em-dash/arrow alone is not a name — role=img + aria-label.
-    expect(fallback.attributes('role')).toBe('img')
+    // A11y: the arrow is exposed alongside the absolute change; aria-label + title
+    // provide an accessible name for the no-baseline state (role="img" removed per S6819).
     expect(fallback.attributes('aria-label')).toBe('No prior period data')
     expect(fallback.attributes('title')).toBe('No prior period data')
     expect(wrapper.text()).not.toContain('%')

@@ -141,7 +141,6 @@ describe('SettingsGuardrailsView', () => {
 
     const badge = wrapper.find('[data-testid="settings-guardrails-observe-badge"]')
     expect(badge.exists()).toBe(true)
-    expect(badge.attributes('role')).toBe('status')
     expect(badge.attributes('aria-live')).toBe('polite')
   })
 
@@ -190,7 +189,6 @@ describe('SettingsGuardrailsView', () => {
 
     const banner = wrapper.find('[data-testid="settings-guardrails-kill-switch-banner"]')
     expect(banner.exists()).toBe(true)
-    expect(banner.attributes('role')).toBe('status')
     expect(banner.attributes('aria-live')).toBe('polite')
     // Non-admins read the org-scoped endpoint (not the admin-only one).
     expect(getMock).toHaveBeenCalledWith('/api/v1/org/settings/guardrails/kill-switch')
@@ -250,7 +248,6 @@ describe('SettingsGuardrailsView', () => {
 
     const banner = wrapper.find('[data-testid="settings-guardrails-kill-switch-banner"]')
     expect(banner.exists()).toBe(true)
-    expect(banner.attributes('role')).toBe('status')
     expect(banner.attributes('aria-live')).toBe('polite')
     // The block-action guardrail is downgraded to observe while the kill-switch is ON.
     expect(wrapper.find('[data-testid="settings-guardrails-observe-badge"]').exists()).toBe(true)

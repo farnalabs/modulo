@@ -66,11 +66,15 @@
       </EmptyState>
 
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+        <div
           v-for="m in pagedMaps"
           :key="m.id"
-          class="card card-hover p-5"
+          class="card card-hover w-full p-5 text-left cursor-pointer"
+          role="button"
+          tabindex="0"
           @click="openMap(m)"
+          @keydown.enter="openMap(m)"
+          @keydown.space.prevent="openMap(m)"
           data-testid="lifecycle-map-list-card"
         >
           <div class="flex items-start justify-between gap-2 mb-2">

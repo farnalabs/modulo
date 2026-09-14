@@ -285,7 +285,7 @@ describe('HitlGateCard', () => {
     expect(wrapper.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(false)
     const foreignNote = wrapper.find('[data-testid="hitl-gate-foreign-claim"]')
     expect(foreignNote.exists()).toBe(true)
-    expect(foreignNote.attributes('role')).toBe('status')
+    expect(foreignNote.attributes('aria-live')).toBe('polite')
     // The claimed metadata row still shows the holder.
     expect(wrapper.text()).toContain('999e8400-e29b-41d4-a716-446655440009')
   })

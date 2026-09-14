@@ -267,7 +267,7 @@ describe('RunsListView', () => {
     expect(durationCell.exists()).toBe(true)
     expect(durationCell.text()).toContain('(elapsed)')
     expect(durationCell.text()).not.toContain('—')
-    const liveElapsed = durationCell.find('[role="status"]')
+    const liveElapsed = durationCell.find('[aria-live="polite"]')
     expect(liveElapsed.exists()).toBe(true)
     wrapper.unmount()
   })

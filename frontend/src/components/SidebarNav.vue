@@ -37,11 +37,10 @@
             </svg>
           </span>
         </button>
-        <div
+        <section
           v-if="!isGroupCollapsed(group.id, group.defaultCollapsed)"
           :id="`sidebar-group-rail-${group.id}`"
           class="flex flex-col items-center gap-1"
-          role="region"
           :aria-label="groupLabel(group)"
         >
           <SidebarLink
@@ -57,7 +56,7 @@
             class="w-full"
             @click="$emit('navigate')"
           />
-        </div>
+        </section>
       </template>
     </div>
     <template v-else>

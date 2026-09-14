@@ -2,7 +2,7 @@
   <div
     v-if="isDemo"
     class="flex items-center gap-2 border-l-4 border-l-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.08)] px-6 py-2 text-sm text-foreground"
-    role="status"
+    aria-live="polite"
     data-testid="demo-banner"
   >
     <svg

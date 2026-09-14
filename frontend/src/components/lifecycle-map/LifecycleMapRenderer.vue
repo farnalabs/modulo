@@ -16,6 +16,7 @@
       :min-zoom="0.3"
       :max-zoom="2"
       class="bg-dot-muted"
+      @node-drag-stop="emitPositions"
     >
       <Background :gap="24" :size="1" />
       <Controls :show-interactive="false" position="bottom-right" />
@@ -114,10 +115,12 @@ const props = defineProps<{
   journeys?: JourneySummary[]
   onModuloStageClick?: (stage: LifecycleMapStage) => void
   onExternalStageClick?: (stage: LifecycleMapStage) => void
+  savedPositions?: Record<string, { x: number; y: number }>
 }>()
 
 const emit = defineEmits<{
   (e: 'journey-open', journey: JourneySummary): void
+  (e: 'positions-changed', positions: Record<string, { x: number; y: number }>): void
 }>()
 
 const journeysByStage = computed<Record<string, JourneySummary[]>>(() => {
@@ -155,6 +158,16 @@ function onJourneyOpen(journey: JourneySummary): void {
   emit('journey-open', journey)
 }
 
+/** Snapshot all current node positions and emit to the parent. */
+function emitPositions(): void {
+  const positions: Record<string, { x: number; y: number }> = {}
+  for (const node of flowNodes.value) {
+    const stageId = ((node.data?.stageId as string) ?? node.id) as string
+    positions[stageId] = { x: node.position.x, y: node.position.y }
+  }
+  emit('positions-changed', positions)
+}
+
 const defaultEdgeOptions: DefaultEdgeOptions = {
   type: 'smoothstep',
   animated: false,
@@ -177,7 +190,9 @@ function stageNodeClasses(data: Record<string, unknown>): Record<string, boolean
   }
 }
 
-/** Build the node list from mapData (computed for derivation, ref for mutation). */
+/** Build the node list from mapData (computed for derivation, ref for mutation).
+ *  Saved positions (from localStorage) take priority over explicit stage
+ *  positions, which take priority over auto-layout. */
 function buildNodes(): Node<Record<string, unknown>>[] {
   if (!props.mapData) return []
   const stages = props.mapData.stages ?? []
@@ -187,10 +202,13 @@ function buildNodes(): Node<Record<string, unknown>>[] {
     transitions.map((t) => ({ source: t.source_stage_id, target: t.target_stage_id })),
   )
   return stages.map((stage) => {
+    const saved = props.savedPositions?.[stage.id]
     const hasPosition = stage.x != null && stage.y != null
-    const position = hasPosition
-      ? { x: stage.x as number, y: stage.y as number }
-      : autoLayout[stage.id] ?? { x: 0, y: 0 }
+    const position = saved
+      ? { x: saved.x, y: saved.y }
+      : hasPosition
+        ? { x: stage.x as number, y: stage.y as number }
+        : autoLayout[stage.id] ?? { x: 0, y: 0 }
     return {
       id: stage.id,
       type: 'stage',
@@ -271,6 +289,7 @@ function nudgeNode(nodeProps: { id: string; data: Record<string, unknown> }, dx:
       x: (pos?.x ?? 0) + dx * NODE_NUDGE_STEP,
       y: (pos?.y ?? 0) + dy * NODE_NUDGE_STEP,
     }
+    emitPositions()
     return
   }
 }

@@ -2757,6 +2757,9 @@ elements:
       - testid: page-header-right
         type: element
         dynamic_testid: false
+      - testid: lifecycle-map-save-status
+        type: element
+        dynamic_testid: false
     /notifications:
       - testid: notifications-apply-filters
         type: button
@@ -3094,9 +3097,6 @@ elements:
         dynamic_testid: false
       - testid: pipeline-editor-node-commands-editor
         type: element
-        dynamic_testid: false
-      - testid: pipeline-editor-node-command-scalar
-        type: input
         dynamic_testid: false
       - testid: pipeline-editor-node-command-add
         type: button

@@ -17,14 +17,11 @@
         {{ $t('views.SchemaEditorView.no_schemas_yet') }}
       </div>
       <template v-else>
-        <div
-          role="button"
-          tabindex="0"
-          @keydown.enter="($event.currentTarget as HTMLElement).click()"
-          @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+        <button
+          type="button"
           v-for="schema in schemas"
           :key="schema.id"
-          class="border-b px-4 py-3 transition-colors hover:bg-muted/50"
+          class="w-full border-b px-4 py-3 text-left transition-colors hover:bg-muted/50"
           :class="{ 'bg-muted': selectedId === schema.id }"
           data-testid="schema-editor-list-item"
           @click="$emit('select', schema.id)"
@@ -37,7 +34,7 @@
             >{{ $t('views.SchemaEditorView.deprecated') }}</span>
           </div>
           <p v-if="schema.description" class="mt-0.5 truncate text-xs text-muted-foreground">{{ schema.description }}</p>
-        </div>
+        </button>
       </template>
     </div>
 
