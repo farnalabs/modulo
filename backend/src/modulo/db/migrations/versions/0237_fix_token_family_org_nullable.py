@@ -1,15 +1,15 @@
 """Make token_family.organisation_id NOT NULL.
 
-Revision ID: 0236_fix_token_family_org_nullable
-Revises: 0235_add_organisations_constraints
+Revision ID: 0237_fix_token_family_org_nullable
+Revises: 0236_add_organisations_constraints
 Create Date: 2026-09-14
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0236_fix_token_family_org_nullable"
-down_revision = "0235_add_organisations_constraints"
+revision = "0237_fix_token_family_org_nullable"
+down_revision = "0236_add_organisations_constraints"
 
 
 def upgrade() -> None:

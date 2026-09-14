@@ -1,14 +1,14 @@
 """Add CHECK constraints and FK on created_by for organisations.
 
-Revision ID: 0235_add_organisations_constraints
-Revises: 0234_promote_organisations_json_to_jsonb
+Revision ID: 0236_add_organisations_constraints
+Revises: 0235_promote_organisations_json_to_jsonb
 Create Date: 2026-09-14
 """
 
 from alembic import op
 
-revision = "0235_add_organisations_constraints"
-down_revision = "0234_promote_organisations_json_to_jsonb"
+revision = "0236_add_organisations_constraints"
+down_revision = "0235_promote_organisations_json_to_jsonb"
 
 
 def upgrade() -> None:

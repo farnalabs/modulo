@@ -1,15 +1,15 @@
 """Add updated_at, deleted_by, updated_by to organisations.
 
-Revision ID: 0232_add_updated_at_audit_to_organisations
-Revises: 0231_token_families_reuse_replay_count
+Revision ID: 0233_add_updated_at_audit_to_organisations
+Revises: 0232_seed_modulo_sentinel_organisation
 Create Date: 2026-09-14
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0232_add_updated_at_audit_to_organisations"
-down_revision = "0231_token_families_reuse_replay_count"
+revision = "0233_add_updated_at_audit_to_organisations"
+down_revision = "0232_seed_modulo_sentinel_organisation"
 
 
 def upgrade() -> None:

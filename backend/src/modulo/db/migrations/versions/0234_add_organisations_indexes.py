@@ -1,14 +1,14 @@
 """Add status and created_at indexes to organisations.
 
-Revision ID: 0233_add_organisations_indexes
-Revises: 0232_add_updated_at_audit_to_organisations
+Revision ID: 0234_add_organisations_indexes
+Revises: 0233_add_updated_at_audit_to_organisations
 Create Date: 2026-09-14
 """
 
 from alembic import op
 
-revision = "0233_add_organisations_indexes"
-down_revision = "0232_add_updated_at_audit_to_organisations"
+revision = "0234_add_organisations_indexes"
+down_revision = "0233_add_updated_at_audit_to_organisations"
 
 
 def upgrade() -> None:
