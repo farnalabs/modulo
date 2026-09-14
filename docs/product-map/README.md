@@ -178,6 +178,10 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `connectors/grafana.feature` into the executing BDD suite
 > (`steps/test_grafana_connector.py`), shrunk `_ORPHANED_BDD_FEATURES` by one
 > more, and closed `feat-connectors`'s Grafana per-connector BDD gap
+> (`configure/connectors.md`). A sixth 2026-09-14 walk wired
+> `connectors/buildkite.feature` into the executing BDD suite
+> (`steps/test_buildkite_connector.py`), shrunk `_ORPHANED_BDD_FEATURES` by one
+> more, and closed `feat-connectors`'s Buildkite per-connector BDD gap
 > (`configure/connectors.md`).
 
 ### Admin

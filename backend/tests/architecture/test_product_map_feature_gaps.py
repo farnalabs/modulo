@@ -478,7 +478,6 @@ _ORPHANED_BDD_FEATURES = frozenset(
         "backend/tests/bdd/features/connectors/azure_key_vault.feature",
         "backend/tests/bdd/features/connectors/azure_pipelines.feature",
         "backend/tests/bdd/features/connectors/azure_repos.feature",
-        "backend/tests/bdd/features/connectors/buildkite.feature",
         "backend/tests/bdd/features/connectors/circleci.feature",
         "backend/tests/bdd/features/connectors/discord.feature",
         "backend/tests/bdd/features/connectors/dropbox_paper.feature",
