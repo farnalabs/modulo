@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,29 @@ from test_test_suite_quality import (  # noqa: E402
     _iter_test_modules,
     _resolve_scope_paths,
 )
+
+# Import the wrapper script so its scope-building logic can be unit-tested.
+_REPO_ROOT = _ARCH_DIR.parent.parent.parent
+_SCRIPTS_DIR = _REPO_ROOT / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+import run_test_suite_quality as _script  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _clear_scope_cache() -> Iterator[None]:
+    """Clear the functools.cache on _resolve_scope_paths around every test.
+
+    The scanner caches scope resolution keyed on a one-time env read. Under
+    pytest-xdist a stale scoped frozenset could otherwise leak from a scope test
+    into a worker sibling (the main scanner tests never clear the cache) and make
+    those tests scan only the stale subset — a vacuous pass. Clearing before and
+    after each test keeps the cache honest regardless of declaration order.
+    """
+    _resolve_scope_paths.cache_clear()
+    yield
+    _resolve_scope_paths.cache_clear()
 
 
 class TestResolveScopePaths:
@@ -151,3 +175,38 @@ class TestIterTestModulesScope:
                     assert not scoped
                     return
         # If no excluded package dirs exist, test passes vacuously
+
+
+class TestBuildScopeEnv:
+    """Unit tests for the wrapper's scope-building logic (backend/-prefix strip).
+
+    These lock in the bug fix from commit 6d3e9a94: scope_files are repo-relative
+    (``backend/tests/...``) but pytest runs with cwd=backend/, so the script must
+    strip the leading ``backend/`` prefix or every entry resolves to the bogus
+    ``BACKEND/backend/tests/...`` and is silently dropped (vacuous pass).
+    """
+
+    def test_strips_backend_prefix(self) -> None:
+        """Repo-relative 'backend/tests/...' must strip the backend/ prefix."""
+        out = _script._build_scope_env(["backend/tests/architecture/foo.py"])
+        assert out == str(_script.BACKEND / "tests" / "architecture" / "foo.py")
+
+    def test_preserves_non_backend_path(self) -> None:
+        """Paths already without the backend/ prefix are joined as-is."""
+        out = _script._build_scope_env(["tests/foo.py"])
+        assert out == str(_script.BACKEND / "tests" / "foo.py")
+
+    def test_resolves_to_real_file(self) -> None:
+        """The strip must produce a path that actually exists on disk."""
+        rel = "backend/tests/architecture/test_test_suite_quality.py"
+        out = _script._build_scope_env([rel])
+        assert Path(out).exists()
+
+    def test_scope_has_real_files_detects_missing(self) -> None:
+        """The vacuous-pass guard flags a scope with no real files."""
+        assert not _script._scope_has_real_files("/nonexistent/fake.py:/also/gone.py")
+
+    def test_scope_has_real_files_detects_present(self) -> None:
+        """The guard is satisfied when at least one scope entry exists."""
+        rel = "backend/tests/architecture/test_test_suite_quality.py"
+        assert _script._scope_has_real_files(_script._build_scope_env([rel]))

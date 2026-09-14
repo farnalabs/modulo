@@ -56,19 +56,20 @@ def _sanitize_jobs(raw: str) -> str:
     return _JOBS_STRIP.sub("", raw)
 
 
-def _git(*args: str) -> str | None:
-    """Run a git command and return stripped stdout, or None on failure."""
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=str(REPO_ROOT),
-        )
-        return result.stdout.strip()
-    except subprocess.CalledProcessError:
-        return None
+def _git(*args: str) -> str:
+    """Run a git command and return stripped stdout.
+
+    Raises ``subprocess.CalledProcessError`` on failure so callers can
+    distinguish a genuine git error from an empty diff (which returns ``""``).
+    """
+    result = subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=str(REPO_ROOT),
+    )
+    return result.stdout.strip()
 
 
 def _collect_changed_test_files(ref: str) -> list[str]:
@@ -78,6 +79,10 @@ def _collect_changed_test_files(ref: str) -> list[str]:
     1. ref...HEAD  (committed changes on this branch)
     2. HEAD        (uncommitted / working-tree changes)
     Both are restricted to backend/tests/**/*.py with --diff-filter=ACMR.
+
+    A genuine git failure (e.g. an unfetched/wrong ref) raises rather than
+    collapsing to an empty list, so the caller can fail loudly instead of
+    reporting "nothing to scan" and exiting 0 on a vacuous result.
     """
     files: set[str] = set()
 
@@ -96,6 +101,27 @@ def _collect_changed_test_files(ref: str) -> list[str]:
                 files.add(line)
 
     return sorted(files)
+
+
+def _build_scope_env(scope_files: list[str]) -> str:
+    """Build the ``MODULO_TEST_STYLE_SCOPE`` value from repo-relative paths.
+
+    *scope_files* are repo-relative (e.g. ``backend/tests/.../*.py``). pytest
+    runs with ``cwd=backend/``, so ``_iter_test_modules`` yields paths relative
+    to ``backend/`` and resolves them to ``BACKEND/tests/.../*.py``. Joining
+    ``BACKEND`` directly to the repo-relative spec would produce the bogus
+    ``BACKEND/backend/tests/.../*.py`` (never exists) -> empty scope -> vacuous
+    pass. Strip the leading ``backend/`` prefix so the resolved scope entries
+    match the paths ``_iter_test_modules`` actually yields.
+    """
+    return os.pathsep.join(
+        str(BACKEND / f[len("backend/") :]) if f.startswith("backend/") else str(BACKEND / f) for f in scope_files
+    )
+
+
+def _scope_has_real_files(env_scope: str) -> bool:
+    """True if at least one entry in the built scope actually exists on disk."""
+    return any(Path(p).exists() for p in env_scope.split(os.pathsep))
 
 
 def main() -> int:
@@ -179,20 +205,26 @@ def main() -> int:
     ]
 
     if scope_files:
-        # Set the scope env var for the child process.
-        # scope_files are repo-relative (e.g. "backend/tests/.../*.py"); pytest
-        # runs with cwd=backend/, so _iter_test_modules yields paths relative to
-        # backend/ and resolves them to BACKEND/tests/.../*.py. Joining BACKEND
-        # directly to the repo-relative spec would produce the bogus
-        # BACKEND/backend/tests/.../*.py (never exists) -> empty scope -> vacuous
-        # pass. Strip the leading "backend/" prefix so the resolved scope entries
-        # match the paths _iter_test_modules actually yields.
-        env_scope = os.pathsep.join(
-            str(BACKEND / f[len("backend/") :]) if f.startswith("backend/") else str(BACKEND / f) for f in scope_files
-        )
+        # Set the scope env var for the child process. scope_files are
+        # repo-relative (e.g. "backend/tests/.../*.py"); _build_scope_env strips
+        # the leading "backend/" prefix so the entries resolve to real files
+        # under BACKEND (see _build_scope_env for the vacuous-pass rationale).
+        env_scope = _build_scope_env(scope_files)
         print(f"Scoped to {len(scope_files)} changed test file(s):")
         for f in scope_files:
             print(f"  {f}")
+        # Vacuous-pass guard: a non-empty scope_files list that resolves to zero
+        # real files on disk means the scan would scan nothing yet still exit 0 —
+        # exactly the mode the backend/-prefix strip defends against (a regression
+        # would rebuild BACKEND/backend/tests/... and drop every entry). Fail
+        # loudly rather than silently passing.
+        if not _scope_has_real_files(env_scope):
+            print(
+                "ERROR: scoped test files were provided but none resolve to real "
+                "files on disk — aborting to avoid a vacuous pass.",
+                file=sys.stderr,
+            )
+            return 1
     else:
         env_scope = ""
         if not args.full:
