@@ -84,6 +84,26 @@ describe('schema-definition', () => {
       )
       expect(fields.map(f => f._key)).toEqual([6, 7])
     })
+
+    it('JSON-stringifies object defaults instead of producing [object Object]', () => {
+      const fields = parseDefinitionToFields({
+        properties: {
+          config: { type: 'object', default: { min: 0, max: 10 } },
+        },
+      })
+      expect(fields[0].defaultValue).toBe('{"min":0,"max":10}')
+    })
+
+    it('stringifies primitive defaults via String()', () => {
+      const fields = parseDefinitionToFields({
+        properties: {
+          count: { type: 'number', default: 7 },
+          label: { type: 'string', default: 'hi' },
+        },
+      })
+      expect(fields[0].defaultValue).toBe('7')
+      expect(fields[1].defaultValue).toBe('hi')
+    })
   })
 
   describe('buildJsonSchema', () => {
