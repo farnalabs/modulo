@@ -5,7 +5,6 @@ Revises: 0231_add_organisations_indexes
 Create Date: 2026-09-14
 """
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "0232_promote_organisations_json_to_jsonb"
@@ -20,20 +19,14 @@ COLUMNS = [
 
 
 def upgrade() -> None:
+    # Promote organisations JSON columns to JSONB to enable GIN indexing,
+    # containment (@>) queries, and path extraction without loading the full
+    # document. These columns are queried by application code (org settings,
+    # OpenTelemetry config, export bundles, guardrail pins).
     for col in COLUMNS:
-        op.alter_column(
-            "organisations",
-            col,
-            type_=sa.JSON().with_variant(sa.JSONB(), "postgresql"),
-            existing_nullable=False,
-        )
+        op.execute(f"ALTER TABLE organisations ALTER COLUMN {col} TYPE jsonb USING {col}::jsonb")
 
 
 def downgrade() -> None:
     for col in COLUMNS:
-        op.alter_column(
-            "organisations",
-            col,
-            type_=sa.JSON(),
-            existing_nullable=False,
-        )
+        op.execute(f"ALTER TABLE organisations ALTER COLUMN {col} TYPE json USING {col}::json")
