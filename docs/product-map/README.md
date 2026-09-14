@@ -166,7 +166,11 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `rate_limiting/rate_limiting.feature` into the executing BDD suite (steps in
 > `test_rate_limiting.py`), shrunk `_ORPHANED_BDD_FEATURES` by one more, and
 > closed `feat-runtime`'s rate-limit middleware-integration BDD gap
-> (`system/runtime.md`).
+> (`system/runtime.md`). A third 2026-09-14 walk wired
+> `connectors/sentry.feature` into the executing BDD suite
+> (`steps/test_sentry_connector.py`), shrunk `_ORPHANED_BDD_FEATURES` by one
+> more, and closed `feat-connectors`'s Sentry per-connector BDD gap
+> (`configure/connectors.md`).
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

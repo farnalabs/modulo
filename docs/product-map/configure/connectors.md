@@ -19,6 +19,8 @@ bdd:
   - backend/tests/bdd/features/connectors/jira_connector.feature
   - backend/tests/bdd/features/connectors/slack_connector.feature
   - backend/tests/bdd/features/connectors/schema_inference.feature
+  - backend/tests/bdd/features/connectors/sentry.feature
+  - backend/tests/bdd/steps/test_sentry_connector.py
 depends-on:
   - feat-model-backends
 status: covered
@@ -57,6 +59,10 @@ and per-destination rate limiting.
 - [x] ConnectorHub registers and manages 30+ native connector types with
       per-connector BDD features (`backend/src/modulo/connector_hub`,
       `backend/tests/unit/connector_hub/`)
+- [x] The Sentry connector is BDD-exercised against the real `SentryConnector`
+      (respx-mocked Sentry API): token validation via `/` (200 => healthy, 401
+      => unhealthy), listing issues/projects, updating issue status, and
+      creating releases (`sentry.feature`, `steps/test_sentry_connector.py`)
 
 ## Known Gaps
 
@@ -66,6 +72,15 @@ and per-destination rate limiting.
   coverage is via unit tests.
 
 ## QA History
+- 2026-09-14: **improve-architecture (product-map walk)** — closed the `sentry.feature`
+  orphan gap: the feature shipped under `tests/bdd/features/connectors/` but no step
+  module registered it via `scenarios(...)`, so it never executed. The feature is now
+  wired from the new `steps/test_sentry_connector.py`, which drives the REAL
+  `SentryConnector` against a respx-mocked Sentry API (mirroring
+  `tests/unit/connectors/test_sentry.py`): six scenarios covering token validation
+  (200/401), list issues/projects, issue-status update and release creation all collect
+  and execute. `_ORPHANED_BDD_FEATURES` shrinks by one; the remaining connector orphans
+  still await step modules.
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/connectors`
