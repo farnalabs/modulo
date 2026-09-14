@@ -100,7 +100,7 @@ def _load_prd_glossary(prd_path: Path) -> dict[str, str]:
     text = prd_path.read_text(encoding="utf-8")
 
     # Find the ## 5. Core Concepts & Glossary section
-    m = re.search(r"## 5\. Core Concepts & Glossary\s*\n(.*?)(?=\n## \d)", text, re.DOTALL)
+    m = re.search(r"## 5\. Core Concepts & Glossary\s*\n(.+?)(?=\n## \d)", text, re.DOTALL)
     if not m:
         return dict(_GLOSSARY_TERMS)
 

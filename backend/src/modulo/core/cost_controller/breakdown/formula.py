@@ -56,8 +56,7 @@ _TOKEN_RE = re.compile(
         (?P<number>\d+(?:\.\d+)?|\.\d+) |
         (?P<ident>[A-Za-z_]\w*) |
         (?P<op>[+\-*/]) |
-        (?P<lparen>\() |
-        (?P<rparen>\)) |
+        (?P<paren>[()]) |
         (?P<bad>.)
     )
     """,
@@ -90,10 +89,8 @@ def _tokenize(formula: str) -> list[_Token]:
             tokens.append(_Token("ident", match.group("ident")))
         elif match.lastgroup == "op":
             tokens.append(_Token("op", match.group("op")))
-        elif match.lastgroup == "lparen":
-            tokens.append(_Token("lparen", "("))
-        elif match.lastgroup == "rparen":
-            tokens.append(_Token("rparen", ")"))
+        elif match.lastgroup == "paren":
+            tokens.append(_Token(match.group("paren"), match.group("paren")))
         else:  # 'bad' — a character the grammar cannot produce (incl. non-ASCII)
             raise CostFormulaError(
                 "unexpected_character",
