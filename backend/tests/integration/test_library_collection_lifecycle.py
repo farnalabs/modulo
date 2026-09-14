@@ -591,3 +591,90 @@ async def test_grant_community_collection_agents(
     refreshed = await db_session.get(CollectionInstall, install.install_id)
     assert refreshed is not None
     assert refreshed.agents_granted is True
+
+
+# ---------------------------------------------------------------------------
+# Test 5: Install a SHIPPED modulo collection (ADR 032 - prove the fix)
+# ---------------------------------------------------------------------------
+
+
+async def test_install_shipped_github_pr_reviewer_collection(
+    db_engine: AsyncEngine,
+    db_session: AsyncSession,
+    org: uuid.UUID,
+    user: uuid.UUID,
+    model_backend: uuid.UUID,
+) -> None:
+    """Install the shipped in-code github-pr-reviewer collection (ADR 032 §4).
+
+    Nothing is pre-seeded in this org's RLS slice for the collection or its
+    pins — they come from the library_service resolver (in-code modulo
+    registry). Asserts the full round trip: schema + agents (standalone +
+    template) + pipeline materialised, provenance stamped, the installed
+    agent's output schema round-trips to the installed schema entity, and
+    the connector checklist carries the github connector requirement.
+    """
+    from modulo.core.library_service._seed_data import _MODULO_PRIMITIVES
+
+    collection = next(p for p in _MODULO_PRIMITIVES if p.slug == "github-pr-reviewer")
+
+    install = await install_collection(db_session, org, user, collection.id)
+    await db_session.commit()
+
+    assert install.status == "installed"
+    assert install.organisation_id == org
+    assert install.community_sourced is False
+    install_id = install.install_id
+
+    # Entity round trip: 1 schema, 5 agents (1 standalone + 4 template), 1 pipeline
+    entity_counts = await _count_entities(db_engine, install_id)
+    assert entity_counts.get("schema", 0) == 1
+    assert entity_counts.get("agent", 0) == 5
+    assert entity_counts.get("pipeline", 0) == 1
+
+    # Provenance stamped on all installed entities
+    resolved = install.resolved_manifest or {}
+    schema_id_map = resolved.get("schemas", {})
+    agent_id_map = resolved.get("agents", {})
+    installed_schema_ids = list(schema_id_map.values())
+    installed_agent_ids = list(agent_id_map.values())
+    assert len(installed_schema_ids) == 1
+    assert len(installed_agent_ids) == 5
+
+    async with db_engine.connect() as conn:
+        for entity_id in installed_schema_ids:
+            row = await conn.execute(
+                text("SELECT collection_install_id FROM schemas WHERE id = :id"),
+                {"id": entity_id},
+            )
+            r = row.first()
+            assert r is not None
+            assert r[0] == install_id
+
+        for entity_id in installed_agent_ids:
+            row = await conn.execute(
+                text("SELECT collection_install_id FROM agents WHERE id = :id"),
+                {"id": entity_id},
+            )
+            r = row.first()
+            assert r is not None
+            assert r[0] == install_id
+
+        # The standalone PR Review Agent's output schema resolves to the
+        # INSTALLED schema entity (slug wiring from the agent pin content).
+        row = await conn.execute(
+            text("SELECT output_schema_id FROM agents WHERE id = ANY(:aids) AND output_schema_id = ANY(:sids)"),
+            {"aids": list(installed_agent_ids), "sids": list(installed_schema_ids)},
+        )
+        assert row.first() is not None
+
+        # A pipeline was created
+        row = await conn.execute(
+            text("SELECT id FROM pipelines WHERE collection_install_id = :iid"),
+            {"iid": str(install_id)},
+        )
+        assert row.first() is not None
+
+    # Connector checklist: the resolved agent pins require the github connector
+    checklist = install.connector_checklist or []
+    assert any(c.get("connector_type_id") == "github" for c in checklist)
