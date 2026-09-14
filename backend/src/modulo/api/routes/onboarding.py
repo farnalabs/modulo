@@ -230,9 +230,7 @@ async def get_onboarding_status(
         progress = await _get_or_create_progress(session, principal.organisation_id)
         auto_completed = await _check_auto_completion(session, principal.organisation_id)
 
-    is_first_run = (
-        len(progress.completed_actions) == 0 and len(progress.skipped_actions) == 0 and not progress.dismissed
-    )
+    is_first_run = not progress.completed_actions and not progress.skipped_actions and not progress.dismissed
 
     completed = list(set(progress.completed_actions) | auto_completed)
     skipped = list(set(progress.skipped_actions) - auto_completed)
