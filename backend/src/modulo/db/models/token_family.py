@@ -21,10 +21,10 @@ class TokenFamily(Base):
         nullable=False,
         index=True,
     )
-    organisation_id: Mapped[uuid.UUID | None] = mapped_column(
+    organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
     max_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
