@@ -28,6 +28,7 @@ The primitive is confined to the ``artifacts`` package and is NOT wired into
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import logging
 from contextlib import suppress
@@ -105,7 +106,9 @@ class StreamingArtifactWriter:
         """Append *chunk* to the artifact, enforcing the byte cap.
 
         When the cap is reached, the remainder of *chunk* is silently
-        dropped.  Empty chunks are ignored.
+        dropped, cutting only at a complete UTF-8 character boundary so the
+        on-disk artifact stays valid UTF-8 and matches the incremental hash.
+        Empty chunks are ignored.
         """
         if self._finalized:
             raise RuntimeError("write() called after finalize/cleanup")
@@ -119,7 +122,14 @@ class StreamingArtifactWriter:
             if remaining <= 0:
                 return
             if len(chunk_bytes) > remaining:
-                chunk_bytes = chunk_bytes[:remaining]
+                # Truncate to the largest clean UTF-8 *character* boundary
+                # within ``remaining`` so the bytes we hash are exactly the
+                # bytes persisted to disk.  A naive ``chunk_bytes[:remaining]``
+                # cut can land in the middle of a multi-byte codepoint, which
+                # would then be re-encoded with U+FFFD on ``append`` —
+                # corrupting the pointer-integrity contract
+                # (sha256/size_bytes must equal the on-disk artifact).
+                chunk_bytes = self._truncate_to_utf8_boundary(chunk_bytes, remaining)
 
         self._hasher.update(chunk_bytes)
         self._bytes_written += len(chunk_bytes)
@@ -134,6 +144,23 @@ class StreamingArtifactWriter:
             self._stream,
             text,
         )
+
+    # ── helpers ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _truncate_to_utf8_boundary(data: bytes, max_len: int) -> bytes:
+        """Truncate *data* to at most *max_len* bytes, cutting only at a UTF-8
+        character boundary so the result is valid UTF-8.
+
+        A strict incremental decoder returns the fully-decoded prefix (it
+        buffers any incomplete trailing codepoint) and re-encoding yields the
+        largest clean-boundary slice ``<= max_len``.
+        """
+        if len(data) <= max_len:
+            return data
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        decoded = decoder.decode(data[:max_len], final=False)
+        return decoded.encode("utf-8")
 
     # ── finalize ───────────────────────────────────────────────────────
 

@@ -145,8 +145,7 @@ def test_no_cap(tmp_path):
 
 
 def test_cap_truncates_mid_utf8(tmp_path):
-    """Cap truncation respects UTF-8 byte boundaries."""
-    # "e\u0301" is 2 bytes in UTF-8 (0xC3 0xA9)
+    """Cap truncation respects UTF-8 byte boundaries and keeps the pointer contract."""
     writer, store = _make_writer(tmp_path, max_bytes=5)
     writer.write("ab")  # 2 bytes
     writer.write("c\u00e9d")  # "c" = 1, "\u00e9d" = 3 bytes -> total 6, capped at 5
@@ -154,8 +153,31 @@ def test_cap_truncates_mid_utf8(tmp_path):
     assert writer.bytes_written == 5
     ptr = writer.finalize()
     content = store.read_bytes(ptr)
-    # "abc" (3 bytes) + first 2 bytes of "\u00e9d" -> may produce replacement char
+    # "abc" (3 bytes) + both bytes of "\u00e9" -> 5 bytes, a clean codepoint boundary
     assert len(content) == 5
+    assert ptr["size_bytes"] == len(content)
+    assert ptr["sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_cap_truncation_preserves_pointer_integrity(tmp_path):
+    """When the cap splits a multibyte char, the pointer sha/size must match
+    the actual on-disk artifact (no U+FFFD corruption).
+
+    Repro from the CHANGES_REQUESTED review: max_bytes=2, write('wörld') ->
+    'w' is 1 byte and 'ö' is 2 bytes, so only 1 more byte fits.  A naive
+    slice at byte index 1 cuts 'ö' (\xc3\xb6) in half, which would be
+    persisted as U+FFFD and diverge from the hashed bytes.
+    """
+    writer, store = _make_writer(tmp_path, max_bytes=2)
+    writer.write("wörld")
+
+    ptr = writer.finalize()
+    assert ptr is not None
+    content = store.read_bytes(ptr)
+    # The split must fall on a clean character boundary: only 'w'.
+    assert content == b"w"
+    assert ptr["size_bytes"] == len(content)
+    assert ptr["sha256"] == hashlib.sha256(content).hexdigest()
 
 
 # ── finalize lifecycle ────────────────────────────────────────────────
