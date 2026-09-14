@@ -333,8 +333,9 @@ class TestMigrationBackfillGrace:
         # and 0227_env_profiles_initialisation_strategy_check chains on top of 0226,
         # and 0228_drop_scalar_agent_command (FAR-828) chains on top of 0227,
         # and FAR-802's 0229_add_workspace_inputs_count chains on top of 0228_drop_scalar_agent_command,
+        # and FAR-826's 0230_seed_modulo_sentinel_organisation chains on top of 0229_add_workspace_inputs_count,
         # so it is now the single linear head of the chain.
-        assert heads == ["0229_add_workspace_inputs_count"], f"expected a single head, got {heads}"
+        assert heads == ["0230_seed_modulo_sentinel_organisation"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
