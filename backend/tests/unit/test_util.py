@@ -13,7 +13,7 @@ import uuid
 import pytest
 
 from modulo.util import is_valid_http_url, sanitise_log_value
-from modulo.utils.uuid import coerce_uuid
+from modulo.util.uuid import coerce_uuid
 
 
 class TestSanitiseLogValue:
