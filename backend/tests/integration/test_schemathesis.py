@@ -50,10 +50,20 @@ pytestmark = [
 
 # E402: the import must come AFTER the skipif marker is evaluated — importing
 # the app would trigger the full import chain (MCP server startup, DB engine)
-# even when Redis is unreachable and the tests will skip anyway.
-from modulo.api.main import app  # noqa: E402
+# even when Redis is unreachable and the tests will skip anyway. The app
+# lifespan also requires a reachable REDIS_URL; the integration conftest sets
+# REDIS_URL="" so the lifespan raises at collection time. Convert that into a
+# module-level skip (the fuzz also runs in schemathesis-nightly.yml) instead of
+# a collection error that fails the whole suite.
+try:
+    from modulo.api.main import app
 
-schema = schemathesis.openapi.from_asgi("/openapi.json", app)
+    schema = schemathesis.openapi.from_asgi("/openapi.json", app)
+except RuntimeError as exc:
+    pytest.skip(
+        f"Skipping schemathesis fuzz: app lifespan requires a reachable REDIS_URL ({exc})",
+        allow_module_level=True,
+    )
 
 # Each endpoint group is fuzzed in its own job (see schemathesis-nightly.yml
 # matrix). Every schemathesis example spins the full app lifespan (migrations
