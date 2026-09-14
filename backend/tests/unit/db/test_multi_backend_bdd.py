@@ -584,21 +584,29 @@ class TestRegisterTenantFilter:
 
 
 class TestOrganisationRootEntityModel:
-    """Organisation is the root tenant entity — ``created_by`` is nullable and
-    deliberately NOT an FK (the first org must exist before its first user),
-    and the model carries no ``organisation_id`` column so the tenant filter /
-    RLS never scopes it (mirrors ``test_rls_coverage.py``'s only-exclusion)."""
+    """Organisation is the root tenant entity — ``created_by`` is nullable and a
+    FK to ``accounts.id`` with ``ondelete=SET NULL`` (migration 0236): the first
+    org is bootstrapped with ``created_by=NULL`` and the FK does not block that
+    ordering because the column is nullable and the reference nulls on account
+    deletion — and the model carries no ``organisation_id`` column so the tenant
+    filter / RLS never scopes it (mirrors ``test_rls_coverage.py``'s
+    only-exclusion)."""
 
-    def test_created_by_column_is_nullable_and_not_fk(self) -> None:
+    def test_created_by_column_is_nullable_fk_set_null(self) -> None:
         from sqlalchemy import ForeignKey
 
         from modulo.db.models.organisation import Organisation
 
         column = Organisation.__table__.c.created_by
         assert column.nullable is True, "created_by must be nullable for org bootstrap"
-        assert not any(isinstance(fk, ForeignKey) for fk in column.foreign_keys), (
-            "created_by must NOT be a foreign key — the first org is created before its first user exists"
+        fks = [fk for fk in column.foreign_keys if isinstance(fk, ForeignKey)]
+        assert fks, (
+            "created_by must be a foreign key to accounts.id — the first org is "
+            "created with created_by=NULL; the FK (ondelete=SET NULL) does not "
+            "block that ordering"
         )
+        assert fks[0].target_fullname == "accounts.id", "created_by FK must target accounts.id"
+        assert fks[0].ondelete == "SET NULL", "created_by FK must use ondelete=SET NULL"
 
     def test_created_by_defaults_to_none_for_bootstrap_org(self) -> None:
         """The first org is created with no creator (``_ensure_default_org``
