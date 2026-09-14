@@ -370,6 +370,6 @@ describe('AdminRunRetentionView', () => {
     const appliedCall = candidatesCalls[candidatesCalls.length - 1] as unknown[]
     expect(appliedCall).toBeDefined()
     const query = (appliedCall[1] as { params: { query: Record<string, unknown> } }).params.query
-    expect(query.date_from).toBe(new Date('2026-07-01T00:00').toISOString())
+    expect(query.date_from).toBe(new Date('2026-07-01T00:00').toISOString()) // nosemgrep: new-date-without-guard
   })
 })
