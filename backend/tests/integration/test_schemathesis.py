@@ -66,6 +66,13 @@ try:
 
     schema = schemathesis.openapi.from_asgi("/openapi.json", app)
 except RuntimeError as exc:
+    # Only the Redis-unreachable case should be skipped: when REDIS_URL is unset
+    # or unreachable the integration conftest intentionally runs without Redis.
+    # When Redis IS reachable, a RuntimeError here means a genuine FATAL boot
+    # failure (migration failure, owner-role seed error) that must surface so the
+    # nightly fuzz gate fails instead of being silently skipped.
+    if _redis_reachable():
+        raise
     schema = None
     _import_error = exc
 
