@@ -26,6 +26,7 @@ import logging
 import os
 import tempfile
 import urllib.parse
+import uuid
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -128,6 +129,10 @@ class ArtifactStore(Protocol):
         node_id: str,
     ) -> int:
         """Delete all artifact files for a node; return count removed."""
+        ...
+
+    def iter_run_ids(self) -> list[tuple[str, str]]:
+        """All ``(org_id, run_id)`` directories currently on disk."""
         ...
 
 
@@ -349,6 +354,32 @@ class LocalArtifactStore:
         with suppress(OSError):
             node_dir.rmdir()
         return count
+
+    def iter_run_ids(self) -> list[tuple[str, str]]:
+        """All ``(org_id, run_id)`` directories currently on disk.
+
+        Path segments are percent-encoded on write (``_encode_segment``), so
+        they are decoded back to the raw ids here.  Run directories whose
+        decoded run id is not a ``uuid.UUID`` are skipped defensively — a stray
+        non-run directory must not be swept as an orphan.
+        """
+        ids: list[tuple[str, str]] = []
+        if not self._root.exists():
+            return ids
+        for org_dir in self._root.iterdir():
+            if not org_dir.is_dir():
+                continue
+            org_id = urllib.parse.unquote(org_dir.name)
+            for run_dir in org_dir.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                run_id = urllib.parse.unquote(run_dir.name)
+                try:
+                    uuid.UUID(run_id)
+                except (ValueError, TypeError):
+                    continue
+                ids.append((org_id, run_id))
+        return ids
 
 
 # ── module-level factory ─────────────────────────────────────────────────

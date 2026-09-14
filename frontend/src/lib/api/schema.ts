@@ -4001,6 +4001,10 @@ export interface paths {
          *     ``node_telemetry_json``, a DERIVED ``{status, summary}`` object is
          *     returned instead of a 404 — never the raw telemetry (no stdout / log
          *     tail on this surface).
+         *
+         *     ``stdout_artifact`` carries the FAR-811 full-stdout transcript pointer
+         *     for sandbox nodes whose redacted stdout overflowed the inline retention
+         *     cap (``None`` otherwise) — a pointer only, never the transcript body.
          */
         get: operations["get_run_node_output_api_v1_runs__run_id__nodes__node_id__output_get"];
         put?: never;
@@ -4208,6 +4212,11 @@ export interface paths {
          *     Returns the raw ``stdout`` or ``stderr`` content as ``text/plain``.
          *     Returns 404 when the artifact is not found (node did not produce that
          *     stream, or artifact storage is disabled).
+         *
+         *     Also serves the FAR-811 full stdout transcript addressed by its synthetic
+         *     ``<base>:full:<cap>`` attempt key (no row exists for that key — the pointer
+         *     is resolved from the node's telemetry), and falls back to the telemetry
+         *     pointer when a real row has no stdout pointer in its side-car list.
          */
         get: operations["get_run_artifact_api_v1_runs__run_id__nodes__node_id__attempts__attempt_key__artifacts__stream__get"];
         put?: never;
@@ -13717,6 +13726,10 @@ export interface components {
             node_id: string;
             /** Output */
             output?: unknown;
+            /** Stdout Artifact */
+            stdout_artifact?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** NodeRecoverRequest */
         NodeRecoverRequest: {
@@ -15644,6 +15657,8 @@ export interface components {
             default_context_window: number;
             /** Allowed Providers */
             allowed_providers?: string[];
+            /** Allowed Models */
+            allowed_models?: string[];
         };
         /** RemyConfigUpdate */
         RemyConfigUpdate: {

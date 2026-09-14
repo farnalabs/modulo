@@ -66,6 +66,11 @@ export default defineConfig({
     css: {
       include: [/json-viewer/, /vue-json-pretty/],
     },
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'lcov'],
+      reportsDirectory: 'coverage',
+    },
   },
   css: {
     postcss: {

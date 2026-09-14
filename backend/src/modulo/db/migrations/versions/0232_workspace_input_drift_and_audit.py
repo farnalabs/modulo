@@ -1,10 +1,11 @@
 """Add workspace-input drift column and audit partial index (FAR-801).
 
-Revision ID: 0230_workspace_input_drift_and_audit
-Revises: 0229_add_workspace_inputs_count
+Revision ID: 0232_workspace_input_drift_and_audit
+Revises: 0231_token_families_reuse_replay_count
 Create Date: 2026-09-13
 
-Chains on top of FAR-802's 0229_add_workspace_inputs_count, which already
+Chains on top of 0231_token_families_reuse_replay_count (FAR-819), which in
+turn chains on FAR-802's 0229_add_workspace_inputs_count; this migration therefore
 adds ``run_daily_facts.workspace_inputs_count``; this migration therefore
 does NOT re-add that column (it would collide on upgrade).
 
@@ -27,8 +28,8 @@ from the ``Run`` / ``RunDailyFact`` models' ``create_all``):
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0230_workspace_input_drift_and_audit"
-down_revision = "0229_add_workspace_inputs_count"
+revision = "0232_workspace_input_drift_and_audit"
+down_revision = "0231_token_families_reuse_replay_count"
 branch_labels = None
 depends_on = None
 

@@ -213,11 +213,10 @@ import Button from 'primevue/button'
 import LoadingSpinner from '../../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import { useEnvironmentProfilesStore, type EnvironmentProfileSummary } from '../../stores/environmentProfiles'
-import { getAuthHeaders } from '../../lib/api/client'
+import { getAuthHeaders, api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
 import { parseSSEStream } from '../../lib/sse'
 import { runnerTierForProvider, runnerTierLabelKey } from '../../lib/runnerTiers'
-import { api } from '../../lib/api/client'
 import type { ProfileDrift, ProfileHealth, RunnersStatus } from '../../lib/runnersStatus'
 
 const props = defineProps<{

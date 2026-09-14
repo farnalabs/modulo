@@ -497,16 +497,8 @@
           <div>
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.type_label') }}</dt>
             <dd>
-              <span
-                :class="selectedNodeData.node_type === 'manual'
-                  ? 'badge badge-status-warning'
-                  : selectedNodeData.node_type === 'router'
-                    ? 'badge bg-indigo-500/10 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300'
-                    : selectedNodeData.node_type === 'hitl'
-                      ? 'badge bg-rose-500/10 text-rose-600 dark:bg-rose-900 dark:text-rose-300'
-                      : 'badge badge-status-primary'"
-              >
-                {{ selectedNodeData.node_type === 'manual' ? $t('views.PipelineEditorView.manual') : selectedNodeData.node_type === 'sandbox_agent' ? $t('views.PipelineEditorView.sandbox_agent') : selectedNodeData.node_type === 'router' ? $t('views.PipelineEditorView.node_router_label') : selectedNodeData.node_type === 'hitl' ? $t('views.PipelineEditorView.node_hitl_label') : $t('views.PipelineEditorView.node_type_agent') }}
+              <span :class="nodeTypeBadgeClass(selectedNodeData.node_type)">
+                {{ nodeTypeLabel(selectedNodeData.node_type) }}
               </span>
             </dd>
           </div>
@@ -1315,6 +1307,21 @@ function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000
 }
 
 const { t } = useI18n()
+
+function nodeTypeBadgeClass(nodeType: string): string {
+  if (nodeType === 'manual') return 'badge badge-status-warning'
+  if (nodeType === 'router') return 'badge bg-indigo-500/10 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300'
+  if (nodeType === 'hitl') return 'badge bg-rose-500/10 text-rose-600 dark:bg-rose-900 dark:text-rose-300'
+  return 'badge badge-status-primary'
+}
+
+function nodeTypeLabel(nodeType: string): string {
+  if (nodeType === 'manual') return t('views.PipelineEditorView.manual')
+  if (nodeType === 'sandbox_agent') return t('views.PipelineEditorView.sandbox_agent')
+  if (nodeType === 'router') return t('views.PipelineEditorView.node_router_label')
+  if (nodeType === 'hitl') return t('views.PipelineEditorView.node_hitl_label')
+  return t('views.PipelineEditorView.node_type_agent')
+}
 const planStore = usePlanStore()
 const route = useRoute()
 const router = useRouter()

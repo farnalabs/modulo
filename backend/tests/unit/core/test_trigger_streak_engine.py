@@ -331,11 +331,13 @@ class TestMigrationBackfillGrace:
         # and 0225_agents_constraints_rls chains on top of 0224,
         # and 0226_agents_json_to_jsonb chains on top of 0225,
         # and 0227_env_profiles_initialisation_strategy_check chains on top of 0226,
-        # and 0228_drop_scalar_agent_command chains on top of 0227,
-        # and FAR-802's 0229_add_workspace_inputs_count chains on top of 0228,
-        # and FAR-801's 0230_workspace_input_drift_and_audit chains on top of 0229,
+        # and 0228_drop_scalar_agent_command (FAR-828) chains on top of 0227,
+        # and FAR-802's 0229_add_workspace_inputs_count chains on top of 0228_drop_scalar_agent_command,
+        # and 0230_token_families_refresh_grace chains on top of 0229_add_workspace_inputs_count,
+        # and 0231_token_families_reuse_replay_count chains on top of 0230_token_families_refresh_grace,
+        # and FAR-801's 0232_workspace_input_drift_and_audit chains on top of 0231_token_families_reuse_replay_count,
         # so it is now the single linear head of the chain.
-        assert heads == ["0230_workspace_input_drift_and_audit"], f"expected a single head, got {heads}"
+        assert heads == ["0232_workspace_input_drift_and_audit"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

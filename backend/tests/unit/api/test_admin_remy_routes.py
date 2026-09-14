@@ -715,12 +715,33 @@ def test_update_config_accepts_allowed_models(client: TestClient) -> None:
         json={"allowed_models": ["gpt-4o", "claude-sonnet-4-20250514"]},
     )
     assert resp.status_code == 200
-    # allowed_models is stored in the config value but ClassVar on the response model
-    # so it won't appear in the JSON — verify the update succeeded with allowed_providers
-    _queue_executes(client.mock_session, _config_result(None))  # type: ignore[attr-defined]
-    resp2 = client.put(
-        "/api/v1/admin/remy/config",
-        json={"allowed_providers": ["openai"]},
+    # allowed_models must appear in the JSON response (prove-the-fix: ClassVar was not
+    # serialised — this assertion catches the regression)
+    body = resp.json()
+    assert "allowed_models" in body
+    assert body["allowed_models"] == ["gpt-4o", "claude-sonnet-4-20250514"]
+
+
+def test_get_config_returns_allowed_models_from_stored_config(client: TestClient) -> None:
+    """Prove-the-fix: GET /config must serialise allowed_models from the stored dict."""
+    entry = _make_config_entry(
+        {
+            "allowed_models": ["deepseek-chat", "gpt-4o-mini"],
+            "allowed_providers": ["openai", "deepseek"],
+        }
     )
-    assert resp2.status_code == 200
-    assert resp2.json()["allowed_providers"] == ["openai"]
+    _queue_executes(client.mock_session, _config_result(entry))  # type: ignore[attr-defined]
+    resp = client.get("/api/v1/admin/remy/config")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "allowed_models" in body, "allowed_models missing from response — ClassVar bug not fixed"
+    assert body["allowed_models"] == ["deepseek-chat", "gpt-4o-mini"]
+
+
+def test_get_config_defaults_allowed_models_to_empty_list(client: TestClient) -> None:
+    """allowed_models defaults to [] when not stored."""
+    _queue_executes(client.mock_session, _config_result(None))  # type: ignore[attr-defined]
+    resp = client.get("/api/v1/admin/remy/config")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert not body["allowed_models"]

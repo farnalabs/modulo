@@ -39,6 +39,7 @@ __all__ = [
     "SPLITTABLE_NODE_TYPES",
     "extend_node_type_map_from_edges",
     "node_return",
+    "node_stdout_artifact",
     "node_telemetry",
     "resolve_node_contract_output",
     "split_node_output",
@@ -231,6 +232,29 @@ def node_telemetry(telemetry_json: Any, outputs_json: Any, node_id: str) -> Any:
     if isinstance(telemetry_json, dict) and node_id in telemetry_json:
         return telemetry_json[node_id]
     return _legacy_inner_output(outputs_json, node_id)
+
+
+def node_stdout_artifact(telemetry_json: Any, outputs_json: Any, node_id: str) -> dict[str, Any] | None:
+    """The persisted full-stdout transcript pointer for *node_id*, or ``None``.
+
+    Sandbox nodes whose redacted stdout exceeds the inline retention cap hand
+    the full transcript to the artifact store under a ``:full:<cap>``-suffixed
+    attempt key and record its envelope pointer as ``stdout_artifact`` on the
+    node's telemetry (``_persist_full_stdout_artifact``, FAR-811). This returns
+    that pointer dict verbatim (``rel_path``/``size_bytes``/``sha256``/``stream``/
+    ``compression``/``truncated``/``redacted``) from whichever source the node's
+    telemetry lives in -- P1+ rows read ``node_telemetry_json`` directly, legacy
+    rows fall back to the derived inner ``output`` envelope (both carry the
+    pointer; the envelope's top-level ``output`` is never excluded from it).
+    Returns ``None`` for nodes with no stored transcript (non-sandbox nodes,
+    inline-sized stdout) so callers keep their absence/404 handling.
+    """
+    telemetry = node_telemetry(telemetry_json, outputs_json, node_id)
+    if isinstance(telemetry, dict):
+        pointer = telemetry.get("stdout_artifact")
+        if isinstance(pointer, dict):
+            return pointer
+    return None
 
 
 # ---------------------------------------------------------------------------

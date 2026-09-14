@@ -2,7 +2,6 @@ import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
 import { randomString } from 'https://jslib.k6.io/k6-utils/1.2.0/index.js';
-import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.2.0/index.js';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000/api/v1';
 
@@ -120,8 +119,8 @@ export default function (data) {
       });
 
       // Follow cursor if available
-      const lastItem = firstBody.items[firstBody.items.length - 1];
-      if (lastItem && lastItem.id) {
+      const lastItem = firstBody.items?.[firstBody.items.length - 1];
+      if (lastItem?.id) {
         const cursorRes = http.get(`${BASE_URL}/admin/audit?limit=10&cursor=${lastItem.id}`, params);
         auditCursorTrend.add(cursorRes.timings.duration);
 
