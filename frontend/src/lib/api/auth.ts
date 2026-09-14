@@ -205,14 +205,14 @@ async function doRefresh(): Promise<boolean> {
     const entryRefreshToken = getRefreshToken()
     if (!entryRefreshToken) return false
 
-      // --- 409 stale-token bounded retry loop (defensive backstop) ---
-      // Under v6 server semantics, a refresh-token reuse inside the server's
-      // reuse-interval window is minted normally (200) — a 409 is not the
-      // expected stale path. If a 409 does arrive (older server or a
-      // proxy/edge case — genuine theft returns 401), another tab may have
-      // rotated while we waited for the lock. Re-read localStorage (shared
-      // across tabs) and retry up to 3 times with a short backoff before
-      // giving up.
+    // --- 409 stale-token bounded retry loop (defensive backstop) ---
+    // Under v6 server semantics, a refresh-token reuse inside the server's
+    // reuse-interval window is minted normally (200) — a 409 is not the
+    // expected stale path. If a 409 does arrive (older server or a
+    // proxy/edge case — genuine theft returns 401), another tab may have
+    // rotated while we waited for the lock. Re-read localStorage (shared
+    // across tabs) and retry up to 3 times with a short backoff before
+    // giving up.
     for (let attempt = 0; ; attempt++) {
       // Before the POST, check if storage already has a newer token (sibling
       // rotated while we were waiting for the lock or between retries).
