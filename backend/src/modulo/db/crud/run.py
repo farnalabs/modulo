@@ -17,7 +17,7 @@ from decimal import Decimal
 from operator import attrgetter
 from typing import Any, TypeGuard
 
-from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text, update
+from sqlalchemy import Date, bindparam, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
@@ -36,6 +36,7 @@ from modulo.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
     _SOURCE_RANK,
     REFS_EVENT_ASSIGNED_SOURCE,
+    REFS_EVENT_DISMISSAL_SUPPRESSED,
     REFS_EVENT_MALFORMED,
     REFS_EVENT_UNKNOWN_SOURCE,
     WIRE_REFS_ALIAS_KEY,
@@ -47,6 +48,7 @@ from modulo.db.lifecycle_refs import (
     sort_canonical_refs,
     validate_ref_entry,
 )
+from modulo.db.models.journey import Journey
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import (
@@ -486,16 +488,77 @@ _HYDRATE_UPSERT_SUFFIX = (
     "provenance = CASE "
     "WHEN (CASE excluded.provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
     "> (CASE journeys.provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
-    "THEN excluded.provenance ELSE journeys.provenance END"
+    "THEN excluded.provenance ELSE journeys.provenance END "
+    # FAR-795 slice C — dismissal suppression at the upsert predicate: a
+    # dismissed (tombstone) row is never re-minted or re-stamped by ANY
+    # source (agent / derived / caller) on ANY path. This is the
+    # authoritative gate at the single create-time mint chokepoint — no
+    # prior-read can circumvent it (an operator restore is the ONLY way the
+    # row becomes writable again).
+    "WHERE journeys.dismissed_at IS NULL"
 )
 _HYDRATE_VALUES_TEMPLATE = (
     "(:id{i}, :org_id, :kind{i}, :ref{i}, :canonical_id{i}, :prov{i}, :prov{i}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
 )
 
-# Only caller/derived refs mint journey rows at create time. ``agent`` refs
-# (node emissions / reported claims) are stored on the run but never mint —
-# minting stays owned by engine-assigned provenance (FAR-794 slice 2a).
+# Only caller/derived refs mint journey rows at create time by default.
+# ``agent`` refs (node emissions / reported claims) are stored on the run but
+# never mint — minting stays owned by engine-assigned provenance (FAR-794
+# slice 2a) — UNLESS the org-scoped agent-minting flag (FAR-795) is enabled,
+# in which case ``agent`` joins the mintable set (rank 0 — the upsert's
+# rank-guarded conflict arm keeps provenance upgrades monotonic).
 _MINTABLE_SOURCES: frozenset[str] = frozenset({"caller", "derived"})
+_AGENT_SOURCE = "agent"
+
+# ── Org-scoped agent-minting flag (FAR-795 slice B, db-layer mirror) ────────
+# The flag key lives in ``Organisation.settings_json`` — the same JSONB
+# surface ``modulo.core.runtime_config.org_flags`` reads. The db layer cannot
+# import core (the ``db-does-not-import-core`` import-linter contract), so the
+# read is mirrored here with the SAME resolution rules: strictly ``True``
+# (json bool) enables, everything else disables, ANY read error fail-closes
+# to OFF, and a short in-process TTL caches the value so the create-time
+# hydrate gate stays cheap. Mirror duplicates are a deliberate layering
+# precedent (see ``_RUN_IDEMPOTENCY_REF_RE``).
+_AGENT_MINT_FLAG_KEY = "work_item_agent_minting_enabled"
+_AGENT_MINT_FLAG_CACHE_TTL_SECONDS = 30.0
+_agent_mint_flag_cache: dict[uuid.UUID, tuple[bool, float]] = {}
+
+
+def clear_agent_mint_flag_cache() -> None:  # vulture: ignore (test isolation)
+    """Drop the cached agent-minting flag values (test isolation)."""
+    _agent_mint_flag_cache.clear()
+
+
+async def _agent_minting_enabled(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Fail-closed read of the org's agent-sourced minting flag (FAR-795).
+
+    Mirrors :func:`modulo.core.runtime_config.org_flags.is_org_flag_enabled`
+    byte-for-byte in semantics: only an explicit json ``True`` enables; a
+    missing org, malformed settings, or a DB error all mean OFF. Agent minting
+    must never be enabled while its enablement state is unknown.
+    """
+    try:
+        cached = _agent_mint_flag_cache.get(org_id)
+        if cached is not None and cached[1] > time.monotonic():
+            return cached[0]
+        org = await get_organisation(session, org_id)
+        settings = org.settings_json if org is not None else None
+        value = isinstance(settings, dict) and settings.get(_AGENT_MINT_FLAG_KEY) is True
+        _agent_mint_flag_cache[org_id] = (value, time.monotonic() + _AGENT_MINT_FLAG_CACHE_TTL_SECONDS)
+        return value
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("agent_mint_flag.read_failed_fail_closed", extra={"org_id": str(org_id)})
+        _agent_mint_flag_cache.pop(org_id, None)
+        return False
+
+
+# Observability event names emitted through the ``lifecycle_refs`` counter
+# hook (the db layer cannot import core, so the OTel counters live in
+# ``modulo.core.lifecycle_map.reconcile``, whose sink keys on these strings).
+_REFS_EVENT_AGENT_MINTED = "agent_minted"
+_REFS_EVENT_AGENT_MINT_SUPPRESSED = "agent_mint_suppressed_by_flag"
 
 
 async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list[dict[str, Any]] | None) -> None:
@@ -504,18 +567,67 @@ async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list
     ``INSERT ... ON CONFLICT (organisation_id, kind, ref) DO UPDATE`` with a
     rank-guarded ``provenance`` upgrade — MINT-ONLY for everything else:
     ``latest_*`` / ``run_count`` are owned by the finalise path (FAR-143) and
-    are never touched here. ``agent``-sourced entries are NOT minted (stored
-    on the run only). Duplicates of the same canonical ``(kind, ref)`` are
-    collapsed in Python to the highest-rank entry first — Postgres rejects two
-    ON CONFLICT updates to the same row within one statement, so the batch
-    must arrive deduplicated. Wrapped in its own SAVEPOINT and fail-open: a
-    journey write failure logs + continues — a lost create-stamp is recoverable
-    at finalise via the deterministic canonical id. A journey write failure
-    must NEVER abort ``create_run``.
+    are never touched here. ``caller``/``derived``-sourced entries are always
+    minted; ``agent``-sourced entries are minted ONLY when the org-scoped
+    agent-minting flag (FAR-795) is enabled — fail-closed, so an unknown
+    enablement state means OFF. Duplicates of the same canonical
+    ``(kind, ref)`` are collapsed in Python to the highest-rank entry first —
+    Postgres rejects two ON CONFLICT updates to the same row within one
+    statement, so the batch must arrive deduplicated. Wrapped in its own
+    SAVEPOINT and fail-open: a journey write failure logs + continues — a
+    lost create-stamp is recoverable at finalise via the deterministic
+    canonical id. A journey write failure must NEVER abort ``create_run``.
     """
     if not refs:
         return
     mintable = [e for e in refs if isinstance(e, dict) and e.get("source") in _MINTABLE_SOURCES]
+    agent_entries = [e for e in refs if isinstance(e, dict) and e.get("source") == _AGENT_SOURCE]
+    agent_mint_enabled = False
+    agent_minted = 0
+    agent_suppressed = 0
+    if agent_entries:
+        agent_mint_enabled = await _agent_minting_enabled(session, org_id)
+        if agent_mint_enabled:
+            # Only a freshly-MINTED agent journey counts as minted — an agent
+            # ref whose row already exists (minted by caller/derived earlier)
+            # is a provenance no-op (rank 0) and is not counted. The
+            # existence probe is read-only and routes through the same
+            # session/savepoint discipline (fail-open).
+            try:
+                fresh_pairs = [(str(e["kind"]), str(e["ref"])) for e in agent_entries]
+                result = await session.execute(
+                    select(Journey.kind, Journey.ref, Journey.dismissed_at).where(
+                        Journey.organisation_id == org_id,
+                        or_(*((Journey.kind == k) & (Journey.ref == r) for k, r in fresh_pairs)),
+                    )
+                )
+                probe_rows = result.all()
+                probe_pairs = {(str(r[0]), str(r[1])) for r in probe_rows if r[2] is None}
+                dismissed_pairs = {(str(r[0]), str(r[1])) for r in probe_rows if r[2] is not None}
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("journey agent-mint existence probe failed for org %s", org_id)
+                probe_pairs = set()
+                dismissed_pairs = set()
+            newly = [e for e in agent_entries if (str(e["kind"]), str(e["ref"])) not in probe_pairs]
+            agent_minted = len(newly)
+            agent_suppressed = len(agent_entries) - len(newly)
+            if dismissed_pairs:
+                # FAR-795 slice C: agent entries whose canonical row is a
+                # tombstone are DISMISSAL-suppressed, not flag-suppressed —
+                # counted separately, never as minted, and dropped from the
+                # batch (the row's conflict arm would refuse the write anyway).
+                dropped = [e for e in newly if (str(e["kind"]), str(e["ref"])) in dismissed_pairs]
+                newly = [e for e in newly if (str(e["kind"]), str(e["ref"])) not in dismissed_pairs]
+                agent_minted -= len(dropped)
+                if dropped:
+                    notify_refs_event(REFS_EVENT_DISMISSAL_SUPPRESSED, count=len(dropped))
+            mintable = mintable + newly
+        else:
+            agent_suppressed = len(agent_entries)
+            if agent_suppressed:
+                notify_refs_event(_REFS_EVENT_AGENT_MINT_SUPPRESSED, count=agent_suppressed)
     if not mintable:
         return
     deduped: dict[tuple[str, str], dict[str, Any]] = {}
@@ -540,6 +652,8 @@ async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list
                 params[f"canonical_id{i}"] = canonical_work_item_id(org_id, entry["kind"], entry["ref"]).hex
                 params[f"prov{i}"] = entry["source"]
             await session.execute(text(_HYDRATE_UPSERT_PREFIX + ", ".join(values) + _HYDRATE_UPSERT_SUFFIX), params)
+        if agent_mint_enabled and agent_minted:
+            notify_refs_event(_REFS_EVENT_AGENT_MINTED, count=agent_minted)
     except asyncio.CancelledError:
         raise
     except Exception:

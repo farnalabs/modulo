@@ -332,6 +332,10 @@ __all__ = [
     "record_resolved_inputs",
     "record_drift",
     "redact_url",
+    # --- FAR-795 agent-sourced journey minting (test-referenced; the invalidator
+    #     is consumed by the intake tests' flag-cache isolation fixture, so
+    #     vulture scans src/ only cannot see a call site) ---
+    "clear_agent_mint_flag_cache",
     # --- FAR-799 SSH transport hardening functions (test-referenced;
     #     production callers land in the provisioning layer, so vulture cannot
     #     see a prod call site yet) ---

@@ -17,7 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -159,7 +159,7 @@ async def list_map_journeys(
             )
         )
 
-    query = select(Journey).where(or_(*conditions))
+    query = select(Journey).where(or_(*conditions), Journey.dismissed_at.is_(None))
     if kind is not None:
         query = query.where(Journey.kind == kind)
     if ref is not None:
@@ -226,6 +226,8 @@ async def get_map_journey(
         or_(*conditions),
         Journey.kind == kind,
         Journey.ref == ref,
+        # FAR-795 slice C: dismissed tombstones are invisible to the map UI.
+        Journey.dismissed_at.is_(None),
     )
     if owner_team_id is not None:
         query = query.where(Journey.owner_team_id == owner_team_id)
@@ -265,3 +267,75 @@ async def list_journey_runs(
         if len(matched) >= limit:
             break
     return matched
+
+
+async def dismiss_journey(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    *,
+    kind: str,
+    ref: str,
+    dismissed_by: uuid.UUID,
+    reason: str | None = None,
+) -> bool:
+    """Soft-dismiss (tombstone) the journey for (kind, ref) — operator action.
+
+    Sets ``dismissed_at`` / ``dismissed_by`` / ``reason`` on the EXISTING row.
+    A dismissed journey is invisible to every read path and is never re-minted
+    or re-advanced (the upsert predicates refuse it). Returns False when no
+    ACTIVE row matches (missing, or already dismissed — dismiss is idempotent
+    and never overwrites an existing tombstone's reason).
+    """
+    kind = canonicalise_kind(kind)
+    ref = canonicalise_ref(kind, ref)
+    journey = (
+        await session.execute(
+            select(Journey).where(
+                Journey.organisation_id == organisation_id,
+                Journey.kind == kind,
+                Journey.ref == ref,
+                Journey.dismissed_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if journey is None:
+        return False
+    journey.dismissed_at = datetime.now(UTC)
+    journey.dismissed_by = dismissed_by
+    journey.reason = reason
+    return True
+
+
+async def restore_journey(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    *,
+    kind: str,
+    ref: str,
+) -> bool:
+    """Clear a tombstone — operator restore (the ONLY un-dismissal path).
+
+    Returns False when no DISMISSED row matches (missing, or already active —
+    restore is idempotent). Restoring makes the journey writable again: the
+    next mint/advance conflict arm passes the ``dismissed_at IS NULL``
+    predicate as usual. Nothing else is reset — latest evidence and
+    ``run_count`` are the finalise path's domain.
+    """
+    kind = canonicalise_kind(kind)
+    ref = canonicalise_ref(kind, ref)
+    journey = (
+        await session.execute(
+            select(Journey).where(
+                Journey.organisation_id == organisation_id,
+                Journey.kind == kind,
+                Journey.ref == ref,
+                Journey.dismissed_at.is_not(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if journey is None:
+        return False
+    journey.dismissed_at = None
+    journey.dismissed_by = None
+    journey.reason = None
+    return True

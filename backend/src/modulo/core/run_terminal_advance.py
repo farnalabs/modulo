@@ -60,7 +60,16 @@ async def advance_journeys_from_stored_refs(
     roll back or fail the already-committed terminal write.
     """
     try:
-        from modulo.core.lifecycle_map.advancement import advance_journeys
+        from modulo.core.lifecycle_map.advancement import (
+            _canonicalise_and_dedupe,
+            advance_journeys,
+            agent_minting_enabled,
+            confirm_reported_refs,
+        )
+        from modulo.core.lifecycle_map.reconcile import (
+            record_refs_agent_mint_suppressed_by_flag,
+            record_refs_agent_minted,
+        )
 
         factory = async_sessionmaker(async_engine, expire_on_commit=False, autobegin=False)
         async with factory() as session, session.begin():
@@ -69,16 +78,47 @@ async def advance_journeys_from_stored_refs(
             if run is None:
                 _log.warning("run_terminal_advance.journeys_run_missing run=%s", run_id)
                 return
-            if not run.work_item_refs:
-                # Nothing to advance — but NOT a reason to skip the facts
-                # half (the orchestrator runs it unconditionally).
+            refs = list(run.work_item_refs or [])
+            # FAR-795 slice B: agent-sourced stored refs advance/mint ONLY
+            # behind the org flag (fail-closed). The raw writers have no
+            # finalize hook, so without this gate an agent-sourced entry on a
+            # RAW-TERMINALISED run would mint/advance its journey unconditioned.
+            agent_minting = await agent_minting_enabled(session, run.organisation_id)
+            # Canonicalise agent entries once (the accounting must key on the
+            # canonical (kind, ref) the journey rows are keyed on).
+            canonical_agent = [
+                c
+                for c in _canonicalise_and_dedupe(
+                    [e for e in refs if isinstance(e, dict) and e.get("source") == "agent"]
+                )
+                if c.get("source") == "agent"
+            ]
+            if not agent_minting:
+                if canonical_agent:
+                    record_refs_agent_mint_suppressed_by_flag(len(canonical_agent))
+                refs = [e for e in refs if not (isinstance(e, dict) and e.get("source") == "agent")]
+                if not refs:
+                    # Nothing to advance — but NOT a reason to skip the facts
+                    # half (the orchestrator runs it unconditionally).
+                    return
+            elif canonical_agent:
+                # Flag ON mirrors the finalize/hydrate accounting: only the
+                # agent entries with NO pre-existing journey row count as
+                # fresh agent mints (the row-existence check is fail-open).
+                try:
+                    confirmed, _unmatched = await confirm_reported_refs(session, run.organisation_id, canonical_agent)
+                except Exception:
+                    _log.warning("run_terminal_advance.agent_mint_probe_failed run=%s", run_id, exc_info=True)
+                    confirmed = []
+                record_refs_agent_minted(len(canonical_agent) - len(confirmed))
+            if not refs:
                 return
             await advance_journeys(
                 session,
                 run.organisation_id,
                 run_id=run.id,
                 pipeline_id=run.pipeline_id,
-                refs=run.work_item_refs,
+                refs=refs,
                 status=status,
                 completed_at=run.completed_at,
                 run_created_at=run.created_at,

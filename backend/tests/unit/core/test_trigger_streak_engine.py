@@ -333,7 +333,8 @@ class TestMigrationBackfillGrace:
         # and 0227_env_profiles_initialisation_strategy_check chains on top of 0226,
         # and FAR-802's 0229_add_workspace_inputs_count chains on top of 0228_drop_scalar_agent_command,
         # and FAR-828's 0230_agents_unique_organisation_name chains on top of 0229_add_workspace_inputs_count,
-        # so it is now part of the single linear head of the chain.
+        # and FAR-795's 0231_journey_dismissal chains on top of 0230_agents_unique_organisation_name,
+        # so it is now the single linear head of the chain.
         assert heads == ["0231_journey_dismissal"], f"expected a single head, got {heads}"
 
 

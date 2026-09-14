@@ -154,6 +154,8 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("PUT", "/api/v1/admin/org/sandbox-concurrency"): "admin.py inline _require_org_admin",
     ("PUT", "/api/v1/admin/org/run-concurrency"): "admin.py inline _require_org_admin",
     ("PUT", "/api/v1/admin/org/work-item-agent-minting"): "admin.py inline _require_org_admin",
+    ("POST", "/api/v1/admin/org/journeys/dismiss"): "admin.py inline _require_org_admin",
+    ("POST", "/api/v1/admin/org/journeys/restore"): "admin.py inline _require_org_admin",
     ("POST", "/api/v1/admin/org/regenerate-api-key"): "admin.py inline _require_org_admin",
 }
 

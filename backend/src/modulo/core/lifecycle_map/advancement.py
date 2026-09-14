@@ -82,7 +82,13 @@ from typing import Any
 from sqlalchemy import DateTime, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.lifecycle_refs import canonical_work_item_id, validate_ref_entry
+from modulo.core.runtime_config.org_flags import FLAG_WORK_ITEM_AGENT_MINTING_ENABLED, is_org_flag_enabled
+from modulo.db.lifecycle_refs import (
+    REFS_EVENT_DISMISSAL_SUPPRESSED,
+    canonical_work_item_id,
+    notify_refs_event,
+    validate_ref_entry,
+)
 from modulo.db.models.journey import Journey
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 
@@ -104,11 +110,17 @@ _AWAITING_HUMAN = "awaiting_human"
 
 # Mint-only: ensure the journey row exists without touching latest_*/run_count.
 # Mirrors modulo.db.crud.run._hydrate_journeys (uuid bindings as 32-hex for
-# cross-backend portability).
+# cross-backend portability). The provenance / first_seen_source columns are
+# stamped on the INSERT arm (FAR-794 + FAR-795): an agent-sourced mint must
+# carry ``provenance='agent'`` / ``first_seen_source='agent'`` from birth, and
+# caller/derived mint-only rows keep their rank-guarded stamp too. The DO
+# NOTHING conflict arm never rewrites an existing row (``first_seen_source``
+# stays immutable).
 _MINT_SQL = text(
     "INSERT INTO journeys "
-    "(id, organisation_id, kind, ref, canonical_work_item_id, created_at, updated_at) "
-    "VALUES (:id, :org_id, :kind, :ref, :canonical_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+    "(id, organisation_id, kind, ref, canonical_work_item_id, provenance, first_seen_source, created_at, updated_at) "
+    "VALUES (:id, :org_id, :kind, :ref, :canonical_id, :provenance, :first_seen_source, "
+    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
     "ON CONFLICT (organisation_id, kind, ref) DO NOTHING"
 )
 
@@ -129,11 +141,13 @@ _MINT_SQL = text(
 _ADVANCE_SQL = text(
     "INSERT INTO journeys ("
     "id, organisation_id, kind, ref, canonical_work_item_id, "
+    "provenance, first_seen_source, "
     "latest_terminal_run_id, latest_status, latest_provenance, "
     'map_id, map_version, stage_id, stage_name, "position", '
     "run_count, created_at, updated_at"
     ") VALUES ("
     ":id, :org_id, :kind, :ref, :canonical_id, "
+    ":provenance, :first_seen_source, "
     ":run_id, :status, :provenance, "
     ":map_id, :map_version, :stage_id, :stage_name, :position, "
     ":run_count_delta, CURRENT_TIMESTAMP, :evidence_ts"
@@ -160,7 +174,12 @@ _ADVANCE_SQL = text(
     "run_count = COALESCE(journeys.run_count, 0) + :run_count_delta, "
     "updated_at = CASE "
     "  WHEN :evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL THEN :evidence_ts "
-    "  ELSE journeys.updated_at END"
+    "  ELSE journeys.updated_at END "
+    # FAR-795 slice C — dismissal suppression at the upsert predicate: a
+    # tombstone (``dismissed_at`` set) is never re-advanced, re-minted, or
+    # re-stamped by ANY source on the mint chokepoint, no matter which path
+    # carried the ref. This is the authoritative gate (not a TOCTOU read).
+    "WHERE journeys.dismissed_at IS NULL"
 ).bindparams(
     # FAR-665: declare the :evidence_ts bind as a tz-aware DateTime so
     # SQLAlchemy converts per backend. On Postgres the parameter is inferred
@@ -197,8 +216,21 @@ _PROVENANCE_UPSERT_SQL = text(
     "provenance = CASE "
     "WHEN (CASE :provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
     "> (CASE journeys.provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
-    "THEN :provenance ELSE journeys.provenance END"
+    "THEN :provenance ELSE journeys.provenance END "
+    # FAR-795 slice C: a dismissed (tombstone) row is never re-stamped.
+    "WHERE journeys.dismissed_at IS NULL"
 )
+
+
+async def agent_minting_enabled(session: AsyncSession, organisation_id: uuid.UUID) -> bool:
+    """Fail-closed org-flag gate for agent-sourced journey minting (FAR-795).
+
+    True only when ``FLAG_WORK_ITEM_AGENT_MINTING_ENABLED`` is explicitly
+    json-``True`` on the org; ANY read error means OFF (the underlying
+    :func:`is_org_flag_enabled` is fail-closed). Every mint path that can
+    observe an agent-sourced ref must consult this before minting.
+    """
+    return await is_org_flag_enabled(session, organisation_id, FLAG_WORK_ITEM_AGENT_MINTING_ENABLED)
 
 
 def _persisted_provenance(source: str | None) -> str:
@@ -219,9 +251,16 @@ def _mintable_source(entry: dict[str, Any]) -> bool:
     """True for the mintable ref sources (``caller`` / ``derived``).
 
     Agent-emitted refs are stored on the run and CONFIRMED against existing
-    journey rows but never mint a row and never upgrade provenance.
+    journey rows but never mint a row and never upgrade provenance — unless
+    the org-scoped agent-minting flag (FAR-795) is enabled, which the caller
+    gates explicitly.
     """
     return entry.get("source") in ("caller", "derived")
+
+
+def _agent_source(entry: dict[str, Any]) -> bool:
+    """True for agent-sourced entries (rank 0 in the provenance order)."""
+    return entry.get("source") == "agent"
 
 
 def _canonicalise_entry(entry: Any) -> dict[str, Any] | None:
@@ -316,6 +355,10 @@ async def confirm_reported_refs(
                     Journey.organisation_id == organisation_id,
                     Journey.kind == entry["kind"],
                     Journey.ref == entry["ref"],
+                    # FAR-795 slice C: a dismissed journey is treated as
+                    # NONEXISTENT for every existence check — a citation of a
+                    # dismissed work item cannot resurrect it.
+                    Journey.dismissed_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -388,12 +431,15 @@ async def _mint_or_advance_ref(
 
     Returns 0 for the mint path, 1 when a journey advanced.
     """
+    provenance = _persisted_provenance(canonical.get("source"))
     params = _ref_params(organisation_id, canonical)
+    params["first_seen_source"] = provenance
     if not advancing:
+        params["provenance"] = provenance
         await session.execute(_MINT_SQL, params)
         return 0
 
-    await session.execute(
+    result = await session.execute(
         _ADVANCE_SQL,
         {
             **params,
@@ -402,7 +448,7 @@ async def _mint_or_advance_ref(
             # FAR-794 persisted-source invariant: ``latest_provenance`` only
             # ever stores caller/derived/agent — a legacy ``reported`` input
             # marker is normalised here, at the write.
-            "provenance": _persisted_provenance(canonical.get("source")),
+            "provenance": provenance,
             "map_id": stage.map_id.hex if stage is not None else None,
             "map_version": stage.version if stage is not None else None,
             "stage_id": stage.stage_id if stage is not None else None,
@@ -412,7 +458,12 @@ async def _mint_or_advance_ref(
             "evidence_ts": evidence_ts,
         },
     )
-    return 1
+    # FAR-795 slice C: the advance statement carries a dismissal predicate
+    # (``WHERE journeys.dismissed_at IS NULL``) — an arm that refused the
+    # write (tombstone row) reports rowcount 0 and must NOT count as "a
+    # journey advanced" (the reconcile sweep's advanced counter and the
+    # HOUSEKEEPING readout both consume this number).
+    return int(getattr(result, "rowcount", 0) or 0)  # raw-SQL Result exposes rowcount at runtime
 
 
 async def advance_journeys(
@@ -512,7 +563,9 @@ async def upsert_ref_provenances(
     session: AsyncSession,
     organisation_id: uuid.UUID,
     refs: list[dict[str, Any]],
-) -> int:
+    *,
+    include_agent: bool = False,
+) -> tuple[int, int, int]:
     """Rank-guarded provenance UPSERT for the mintable (caller/derived) refs.
 
     FAR-794 slice 2b: at terminal finalise the run's create-stamped refs are
@@ -521,16 +574,35 @@ async def upsert_ref_provenances(
     by rank (derived → caller), independent of the evidence compare-and-set:
     a provenance upgrade is an independent SET that must never gate, or be
     gated by, the ``latest_*`` evidence write. ``first_seen_source`` is
-    immutable (never rewritten here). Agent-emitted entries are skipped —
-    they are storage-owned, never minted.
+    immutable (never rewritten here).
+
+    Agent sourcing (FAR-795 slice B): agent-sourced entries mint ONLY when
+    *include_agent* is True (the org flag already evaluated by the caller —
+    fail-closed upstream). The INSERT arm stamps
+    ``provenance='agent'`` / ``first_seen_source='agent'`` at first mint;
+    rank 0 means an agent write can never downgrade or upgrade an existing
+    row's provenance. When *include_agent* is False (flag OFF) agent entries
+    are NOT written — but the ones whose journey row is MISSING (i.e. the
+    mint that was suppressed) are counted, so the caller can record the
+    ``refs_agent_mint_suppressed_by_flag`` counter without any write.
+
+    Returns ``(considered, agent_minted, agent_suppressed)``:
+    considered = caller/derived upserts attempted;
+    agent_minted = agent-sourced INSERTs minted (only when include_agent);
+    agent_suppressed = agent-sourced mints suppressed by the flag (only when
+    not include_agent).
 
     Runs inside the caller's transaction (the journey savepoint at finalise);
-    the caller owns the RLS org context. Returns the number of entries
-    considered (mint or upgrade attempted).
+    the caller owns the RLS org context.
     """
     considered = 0
+    agent_minted = 0
+    agent_suppressed = 0
+    dismissed_suppressed = 0
     for entry in refs:
-        if not _mintable_source(entry):
+        mintable = _mintable_source(entry)
+        agent = _agent_source(entry)
+        if not mintable and not agent:
             continue
         try:
             canonical = validate_ref_entry(entry)
@@ -539,6 +611,36 @@ async def upsert_ref_provenances(
             continue
         if canonical is None:
             continue
+        if agent:
+            rows = (
+                await session.execute(
+                    select(Journey.id, Journey.dismissed_at).where(
+                        Journey.organisation_id == organisation_id,
+                        Journey.kind == canonical["kind"],
+                        Journey.ref == canonical["ref"],
+                    )
+                )
+            ).first()
+            # FAR-795 slice C: a DISMISSED tombstone row suppresses the mint
+            # on any path — count it and skip the write entirely (the upsert
+            # conservative gate; this probe adds the
+            # counter). A caller citation never un-dismisses.
+            if rows is not None and rows[1] is not None:
+                dismissed_suppressed += 1
+                continue
+            if rows is None:
+                # Row missing: the agent mint either happens (flag ON) or was
+                # suppressed by the flag (flag OFF). An existing row's
+                # agent-cited write is a rank-0 no-op — not counted.
+                if include_agent:
+                    agent_minted += 1
+                else:
+                    agent_suppressed += 1
+                    continue
+            # An existing agent row mint: run the rank-0 upsert when allowed
+            # (harmless no-op on the conflict arm); never when OFF.
+            elif not include_agent:
+                continue
         params = _ref_params(organisation_id, canonical)
         params.update(
             {
@@ -548,4 +650,6 @@ async def upsert_ref_provenances(
         )
         await session.execute(_PROVENANCE_UPSERT_SQL, params)
         considered += 1
-    return considered
+    if dismissed_suppressed:
+        notify_refs_event(REFS_EVENT_DISMISSAL_SUPPRESSED, count=dismissed_suppressed)
+    return considered, agent_minted, agent_suppressed

@@ -260,6 +260,7 @@ REFS_EVENT_SHADOW_STRIP_HIT = "shadow_strip_hit"
 REFS_EVENT_ASSIGNED_SOURCE = "refs_by_source"
 REFS_EVENT_UNKNOWN_SOURCE = "unknown_source_submission"
 REFS_EVENT_MALFORMED = "malformed_entry"
+REFS_EVENT_DISMISSAL_SUPPRESSED = "refs_dismissal_suppressed"
 
 
 def set_refs_counter_hook(hook: RefsCounterHook | None) -> None:
