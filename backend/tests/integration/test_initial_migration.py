@@ -231,6 +231,12 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # exactly those rows; deliberately kept after upgrade (dropped only by
         # the downgrade), never mapped by the ORM.
         "_migration_0191_repoint_state",
+        # FAR-795 per-org agent-mint budget tally (migration 0242): written
+        # exclusively via a single atomic raw-SQL upsert in
+        # modulo.core.runtime_config.mint_budget (the migration comment states
+        # the module has no ORM model to fall back on), never via the ORM.
+        # permanent (documented repo divergence)
+        "org_mint_budget_usage",
     }
 )
 
@@ -241,7 +247,7 @@ _AUDIT_CHAIN_COLUMNS: dict[str, frozenset[str]] = {
     "agents": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
     "connector_instances": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
     "scheduled_reports": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
-    # organisations: migrations 0233 (updated_at/updated_by/deleted_by) add the same
+    # organisations: migrations 0233 (updated_at/deleted_by/updated_by) add the same
     # audit columns the sibling audit-chain tables carry. The Organisation ORM model
     # deliberately does NOT declare them (created_by stays non-FK so the first org can
     # exist before its first user), so they are DB-owned here too — both the
