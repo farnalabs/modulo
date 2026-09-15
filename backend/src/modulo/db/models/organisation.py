@@ -78,15 +78,12 @@ class Organisation(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="SET NULL", name="fk_organisations_created_by")
     )
-    # Audit columns added by migration 0233_add_updated_at_audit_to_organisations.
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.current_timestamp(),
-        onupdate=func.current_timestamp(),
-        nullable=False,
-    )
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    # organisations is intentionally excluded from the trigger-maintained
+    # audit chain (agents / connector_instances / scheduled_reports carry
+    # updated_at/updated_by/deleted_by; organisations does not). Migrations
+    # 0233/0236 added those columns and FK but they were reverted by 0239
+    # (the model never declares them — see test_initial_migration
+    # _AUDIT_CHAIN_COLUMNS), so the ORM stays in step with the deployed schema.
     settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     otel_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     plan_id: Mapped[str | None] = mapped_column(String(255))
