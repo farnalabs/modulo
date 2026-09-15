@@ -916,7 +916,7 @@ def test_replay_failed_deliveries_success(api: tuple[TestClient, AsyncMock], mon
     data = resp.json()
     assert data["replayed"] == 2
     assert data["delivered"] == 2
-    assert data["errors"] == []
+    assert not data["errors"]
     assert data["success"] is True
 
 
