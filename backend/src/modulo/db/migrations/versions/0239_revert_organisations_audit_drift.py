@@ -1,53 +1,39 @@
-"""Revert erroneous organisations audit columns and created_by FK.
+"""No-op: the organisations audit columns / created_by FK are intentional.
 
-PR #530 added updated_at/updated_by/deleted_by columns (0233) and a
-fk_organisations_created_by FK (0236) to the organisations table, but the
-Organisation ORM model never declared them and no application code uses them.
-The model comment is explicit that created_by is "deliberately not an FK"
-(the first organisation must exist before its first user), and organisations
-is intentionally excluded from the trigger-maintained audit-chain (agents /
-connector_instances / scheduled_reports only). Those migrations therefore
-produce schema drift vs the ORM metadata, which the pre-deploy integration
-test (test_migrated_schema_matches_orm_metadata) flags. This migration drops
-the spurious columns/FK so the migrated schema matches the ORM. The 0236 CHECK
-constraints are kept (they are legitimate, migration-owned quality guards).
+PR #530 added updated_at/updated_by/deleted_by (0233) and a
+fk_organisations_created_by FK plus CHECK guards (0236) to ``organisations``.
+#552 originally added THIS migration to drop them because, at that time, the
+Organisation ORM model did not declare them. #553 then aligned the ORM with
+migrations 0233/0236 (fix(deploy): align Organisation ORM with migrations
+0233/0236) — the model now deliberately declares created_by (FK, ondelete
+SET NULL), updated_at, updated_by and deleted_by, and the 0236 CHECK guards
+are legitimate migration-owned quality constraints. So the columns/FK are no
+longer drift: they are the intended, ORM-modelled surface.
+
+This migration therefore does nothing. The columns and FK created by 0233/0236
+stay, matching the ORM metadata, so
+test_migrated_schema_matches_orm_metadata stays green. The revision id is kept
+unchanged (already recorded in alembic_version on deployed DBs) so re-running
+``alembic upgrade heads`` is a safe no-op.
 
 Revision ID: 0239_revert_organisations_audit_drift
 Revises: 0238_workspace_input_drift_and_audit
 Create Date: 2026-09-14
 """
 
-import sqlalchemy as sa
-from alembic import op
-
 revision = "0239_revert_organisations_audit_drift"
 down_revision = "0238_workspace_input_drift_and_audit"
 
 
 def upgrade() -> None:
-    op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
-    op.drop_column("organisations", "updated_by")
-    op.drop_column("organisations", "deleted_by")
-    op.drop_column("organisations", "updated_at")
+    # Intentionally a no-op. The organisations audit columns (updated_at,
+    # updated_by, deleted_by) and the fk_organisations_created_by FK are now
+    # part of the ORM model (see #553), so dropping them would create schema
+    # drift vs the ORM metadata. They remain owned by 0233/0236.
+    pass
 
 
 def downgrade() -> None:
-    op.add_column(
-        "organisations",
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.current_timestamp(),
-            nullable=False,
-        ),
-    )
-    op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
-    op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
-    op.create_foreign_key(
-        "fk_organisations_created_by",
-        "organisations",
-        "accounts",
-        ["created_by"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    # Symmetric no-op: the columns/FK are owned (created/dropped) by 0233/0236,
+    # not by this migration.
+    pass
