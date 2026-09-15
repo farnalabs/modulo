@@ -1514,6 +1514,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/login-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Login Context
+         * @description Return whether the instance has exactly one login-active org.
+         *
+         *     Pre-auth, anonymous — must never require an Authorization header and must
+         *     never 401/402. The plan context is resolved without a user (system-level
+         *     license only).
+         *
+         *     Exactly ONE login-active org → ``multi_org=false, org={slug, name}``
+         *     (powers the single-org auto-skip on the frontend).
+         *
+         *     Zero or more than one → ``multi_org=true, org=null``.
+         *
+         *     Never returns a list of orgs, and never any data about a non-single org.
+         */
+        get: operations["login_context_api_v1_auth_login_context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/org-login/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Org Login
+         * @description Resolve ONE org by slug and return its enabled OIDC providers.
+         *
+         *     Pre-auth, anonymous — must never require an Authorization header and must
+         *     never 401/402. Rate-limited via the existing ``RateLimitMiddleware`` (the
+         *     ``/api/v1/auth/`` prefix is NOT rate-limited by default for GET; the
+         *     ``RateLimitMiddleware`` only fires on POST/PUT/PATCH — see its
+         *     ``_should_rate_limit`` — so this GET endpoint relies on the path being
+         *     included in the RULES list for rate-limit coverage; however the existing
+         *     middleware does not rate-limit GETs, so we add explicit per-route
+         *     rate-limit awareness via a comment for future middleware expansion).
+         *
+         *     For a login-active org returns:
+         *       ``{"org": {slug, name}, "providers": [{provider_id, display_name, preset?}],
+         *         "password_enabled": true}``
+         *
+         *     ``providers`` are that org's ENABLED OIDC providers only — scoped to the
+         *     resolved org (not the system-scoped global read). ``preset`` is included
+         *     only if the column exists (FAR-853); omitted otherwise.
+         *
+         *     For an unknown OR non-login-active slug, returns a uniform generic 404
+         *     with the same body/timing shape for both cases. Never reveals whether
+         *     the slug exists.
+         *
+         *     Security reasoning:
+         *     - No fuzzy matching — exact slug only.
+         *     - Never expose client_secret, client_id, or any secret field.
+         *     - Routing is not authorisation.
+         */
+        get: operations["org_login_api_v1_auth_org_login__slug__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/query": {
         parameters: {
             query?: never;
@@ -13385,12 +13462,20 @@ export interface components {
             /** Created At */
             created_at: string;
         };
+        /** LoginContextResponse */
+        LoginContextResponse: {
+            /** Multi Org */
+            multi_org: boolean;
+            org: components["schemas"]["OrgInfo"] | null;
+        };
         /** LoginRequest */
         LoginRequest: {
             /** Email */
             email: string;
             /** Password */
             password: string;
+            /** Org Slug */
+            org_slug?: string | null;
         };
         /** MachineProbeResponse */
         MachineProbeResponse: {
@@ -14077,6 +14162,13 @@ export interface components {
             /** Enabled At */
             enabled_at: string | null;
         };
+        /** OrgInfo */
+        OrgInfo: {
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+        };
         /** OrgLicenseResponse */
         OrgLicenseResponse: {
             /** Has License */
@@ -14092,6 +14184,26 @@ export interface components {
             expires_at?: string | null;
             /** Org Id */
             org_id?: string | null;
+        };
+        /** OrgLoginProviderInfo */
+        OrgLoginProviderInfo: {
+            /** Provider Id */
+            provider_id: string;
+            /** Display Name */
+            display_name: string;
+            /** Preset */
+            preset?: string | null;
+        };
+        /** OrgLoginResponse */
+        OrgLoginResponse: {
+            org: components["schemas"]["OrgInfo"];
+            /** Providers */
+            providers: components["schemas"]["OrgLoginProviderInfo"][];
+            /**
+             * Password Enabled
+             * @default true
+             */
+            password_enabled: boolean;
         };
         /** OrgProfileResponse */
         OrgProfileResponse: {
@@ -21904,6 +22016,70 @@ export interface operations {
                 };
                 content: {
                     "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_context_api_v1_auth_login_context_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginContextResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    org_login_api_v1_auth_org_login__slug__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgLoginResponse"];
                 };
             };
             /** @description Validation Error */

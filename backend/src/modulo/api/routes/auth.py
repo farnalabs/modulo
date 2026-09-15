@@ -60,6 +60,7 @@ from modulo.db.crud.org_membership import (
     list_memberships_for_account,
     reactivate_membership,
 )
+from modulo.db.crud.organisation import get_login_active_org_by_slug
 from modulo.db.crud.token_family import (
     advance_sequence,
     blacklist_family,
@@ -95,6 +96,7 @@ _TOKEN_TYPE_BEARER = "bearer"
 class LoginRequest(BaseModel):
     email: str = Field(min_length=1)
     password: str = Field(min_length=1)
+    org_slug: str | None = None
 
 
 class LoginResponse(BaseModel):
@@ -347,8 +349,22 @@ async def _run_login_transaction(
     *,
     limiter: AuthRateLimiter | None,
     ip: str,
+    org_slug: str | None = None,
 ) -> _LoginContext:
-    """Authenticate, record login, resolve org context, and mint a family."""
+    """Authenticate, record login, resolve org context, and mint a family.
+
+    When ``org_slug`` is supplied the session is bound to that org:
+      - The org must be login-active (status='active', not deleted, not
+        a sentinel).  A non-login-active slug is treated identically to an
+        unknown slug — same generic failure, same timing shape.
+      - The account must have an ACTIVE membership there → 403 otherwise
+        (do NOT silently fall back to another org, do NOT create anything).
+      - The minted JWT's organisation_id is the bound org.
+
+    When ``org_slug`` is omitted, the legacy behaviour is preserved exactly
+    (``memberships[0]``) so nothing regresses before the frontend (FAR-857)
+    passes the slug.
+    """
     async with session.begin():
         account = await _authenticate_credentials(session, email, password, limiter=limiter, ip=ip)
 
@@ -371,7 +387,33 @@ async def _run_login_transaction(
         # API call, so the tombstone has to gate here at the org-scoping
         # point). Other orgs' active memberships still resolve a login org.
         memberships = await list_memberships_for_account(session, account.id, active_only=True)
-        org_id, org_role = _resolve_login_org_context(memberships, account)
+
+        org_id: uuid.UUID | None = None
+        org_role: str | None = None
+
+        if org_slug is not None:
+            # FAR-856: bind login to the explicit org.
+            org = await get_login_active_org_by_slug(session, org_slug)
+            if org is None:
+                # Non-login-active or unknown slug — same generic failure.
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Organisation not available for login",
+                )
+            # Find the account's active membership in this org.
+            membership = await get_membership_by_account_and_org(session, account.id, org.id)
+            if membership is None or membership.deactivated_at is not None:
+                # Account has no active membership in the requested org.
+                # Routing is NOT authorisation — do NOT silently fall back.
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Account is not a member of this organisation",
+                )
+            org_id = org.id
+            org_role = membership.role
+        else:
+            # Legacy: pick the first active membership.
+            org_id, org_role = _resolve_login_org_context(memberships, account)
 
         family = await create_family(session, account.id, org_id)
 
@@ -442,7 +484,14 @@ async def login(
     limiter = get_auth_rate_limiter(settings)
 
     try:
-        ctx = await _run_login_transaction(session, req.email, req.password, limiter=limiter, ip=ip)
+        ctx = await _run_login_transaction(
+            session,
+            req.email,
+            req.password,
+            limiter=limiter,
+            ip=ip,
+            org_slug=req.org_slug,
+        )
     except IntegrityError:
         _log.exception("auth.login")
         _log.warning("login.integrity_error")
