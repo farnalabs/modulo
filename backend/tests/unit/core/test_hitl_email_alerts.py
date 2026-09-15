@@ -300,7 +300,7 @@ class TestScheduleHitlEmailDispatch:
             await _drain_tasks()
 
         resolved.assert_awaited_once_with(session, _ORG, _PIPELINE)
-        sent.assert_awaited_once_with([_RUNNER_EMAIL], _RUN, _GATE)
+        sent.assert_awaited_once_with([_RUNNER_EMAIL], _RUN, _GATE, None)
         mock_rls.assert_awaited_once()
 
     async def test_resolution_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -378,3 +378,213 @@ class TestSendHitlEmailAlerts:
             pytest.raises(asyncio.CancelledError),
         ):
             await send_hitl_email_alerts([_RUNNER_EMAIL], _RUN, _GATE)
+
+    async def test_briefing_passed_through_to_build_email(self) -> None:
+        """Briefing dict is forwarded into _build_email."""
+        briefing = {
+            "description": "Review the generated code",
+            "reason": "Changes are high-risk",
+            "condition_result": {"expression": "output.score", "value": "0.92"},
+            "artifacts": [{"node_id": str(uuid.uuid4()), "summary": "Generated PR #123"}],
+        }
+        with (
+            patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
+            patch.object(hitl_email_alerts, "send_email") as mock_send,
+        ):
+            await send_hitl_email_alerts([_RUNNER_EMAIL], _RUN, _GATE, briefing)
+
+        assert mock_send.call_count == 1
+        args = mock_send.call_args_list[0].args
+        body_text = args[4]
+        assert "Review the generated code" in body_text
+        assert "Changes are high-risk" in body_text
+        assert "output.score" in body_text
+        assert "0.92" in body_text
+
+    async def test_none_briefing_falls_back_to_legacy(self) -> None:
+        """None briefing produces the original label-only email."""
+        with (
+            patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
+            patch.object(hitl_email_alerts, "send_email") as mock_send,
+        ):
+            await send_hitl_email_alerts([_RUNNER_EMAIL], _RUN, _GATE, None)
+
+        args = mock_send.call_args_list[0].args
+        body_text = args[4]
+        assert f"Gate: {_GATE}" in body_text
+        assert "Run:" in body_text
+        assert "Description:" not in body_text
+
+
+class TestBuildEmailBriefing:
+    """Tests for _build_email briefing rendering."""
+
+    def _full_briefing(self) -> dict:
+        return {
+            "description": "Please approve the deployment",
+            "reason": "All tests pass",
+            "condition_result": {
+                "expression": "output.status",
+                "value": "success",
+                "evaluated_at_node": "node-1",
+            },
+            "artifacts": [{"node_id": "node-1", "summary": "Deployed to staging"}],
+            "trigger": "condition",
+            "pipeline_name": "Deploy Pipeline",
+        }
+
+    def test_full_briefing_renders_all_fields(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        subject, body_html, body_text = _build_email(_GATE, _RUN_LINK, self._full_briefing())
+        assert _GATE in subject
+        assert "Please approve the deployment" in body_text
+        assert "All tests pass" in body_text
+        assert "output.status" in body_text
+        assert "success" in body_text
+        assert "Deployed to staging" in body_text
+        assert _RUN_LINK in body_text
+
+        assert "Please approve the deployment" in body_html
+        assert "All tests pass" in body_html
+        assert "output.status" in body_html
+        assert "success" in body_html
+        assert "Deployed to staging" in body_html
+        assert _RUN_LINK in body_html
+
+    def test_partial_briefing_description_only(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        briefing = {"description": "Review the output"}
+        _, body_html, body_text = _build_email(_GATE, _RUN_LINK, briefing)
+        assert "Review the output" in body_text
+        assert "Reason:" not in body_text
+        assert "Condition:" not in body_text
+        assert "Review the output" in body_html
+
+    def test_partial_briefing_condition_only(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        briefing = {
+            "condition_result": {
+                "expression": "len(state)",
+                "value": "3",
+            }
+        }
+        _, _, body_text = _build_email(_GATE, _RUN_LINK, briefing)
+        assert "len(state)" in body_text
+        assert "3" in body_text
+        assert "Description:" not in body_text
+
+    def test_none_briefing_legacy_format(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        _, body_html, body_text = _build_email(_GATE, _RUN_LINK, None)
+        assert f"Gate: {_GATE}" in body_text
+        assert f"Run: {_RUN_LINK}" in body_text
+        assert "Description:" not in body_text
+        assert f"Gate: {_GATE}" in body_html
+
+    def test_empty_briefing_legacy_format(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        _, _, body_text = _build_email(_GATE, _RUN_LINK, {})
+        assert f"Gate: {_GATE}" in body_text
+        assert "Description:" not in body_text
+
+    def test_html_escape_in_description(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        briefing = {"description": "<script>alert('xss')</script>"}
+        _, body_html, body_text = _build_email(_GATE, _RUN_LINK, briefing)
+        assert "<script>" not in body_html
+        assert "&lt;script&gt;" in body_html
+        assert "<script>" in body_text  # plain text is not escaped
+
+    def test_html_escape_in_reason(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        briefing = {"reason": "Risk: <b>high</b>"}
+        _, body_html, _ = _build_email(_GATE, _RUN_LINK, briefing)
+        assert "<b>high</b>" not in body_html
+        assert "&lt;b&gt;high&lt;/b&gt;" in body_html
+
+    def test_html_escape_in_condition_value(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        briefing = {
+            "condition_result": {
+                "expression": "x",
+                "value": "<img src=x onerror=alert(1)>",
+            }
+        }
+        _, body_html, _ = _build_email(_GATE, _RUN_LINK, briefing)
+        assert "<img" not in body_html
+        assert "&lt;img" in body_html
+
+    def test_html_escape_in_artifact_summary(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        briefing = {"artifacts": [{"node_id": "n1", "summary": "Output: <b>bold</b>"}]}
+        _, body_html, _ = _build_email(_GATE, _RUN_LINK, briefing)
+        assert "<b>bold</b>" not in body_html
+        assert "&lt;b&gt;bold&lt;/b&gt;" in body_html
+
+    def test_artifact_truncation_with_marker(self) -> None:
+        from modulo.core.hitl_email_alerts import _EMAIL_BODY_BUDGET_CHARS, _build_email
+
+        long_summary = "x" * 2000
+        briefing = {"artifacts": [{"node_id": "n1", "summary": long_summary}]}
+        _, _, body_text = _build_email(_GATE, _RUN_LINK, briefing)
+        assert "…" in body_text
+        assert len(body_text) < _EMAIL_BODY_BUDGET_CHARS + 300  # some header overhead
+
+    def test_condition_result_absent_key_does_not_crash(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        briefing = {"condition_result": None}
+        subject, _, body_text = _build_email(_GATE, _RUN_LINK, briefing)
+        assert _GATE in subject
+        assert "Condition:" not in body_text
+
+    def test_artifacts_empty_list_no_artifact_section(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        briefing = {"artifacts": []}
+        _, _, body_text = _build_email(_GATE, _RUN_LINK, briefing)
+        assert "Artifact:" not in body_text
+
+
+class TestScheduleHitlEmailDispatchBriefing:
+    """Ensure the briefing is threaded through the scheduling chain."""
+
+    async def test_briefing_reaches_send_hitl_email_alerts(self) -> None:
+        factory, _session = _dispatch_task_harness()
+        briefing = {"description": "test"}
+        sent = AsyncMock()
+        with (
+            patch.object(hitl_email_alerts, "_dispatch_session_factory", return_value=factory),
+            patch.object(hitl_email_alerts, "set_rls_org", new_callable=AsyncMock),
+            patch.object(hitl_email_alerts, "resolve_hitl_email_recipients", AsyncMock(return_value=[_RUNNER_EMAIL])),
+            patch.object(hitl_email_alerts, "send_hitl_email_alerts", sent),
+        ):
+            schedule_hitl_email_dispatch(_ORG, _PIPELINE, _RUN, _GATE, briefing)
+            await _drain_tasks()
+
+        sent.assert_awaited_once()
+        assert sent.call_args.args[3] is briefing
+
+    async def test_none_briefing_reaches_send(self) -> None:
+        factory, _session = _dispatch_task_harness()
+        sent = AsyncMock()
+        with (
+            patch.object(hitl_email_alerts, "_dispatch_session_factory", return_value=factory),
+            patch.object(hitl_email_alerts, "set_rls_org", new_callable=AsyncMock),
+            patch.object(hitl_email_alerts, "resolve_hitl_email_recipients", AsyncMock(return_value=[_RUNNER_EMAIL])),
+            patch.object(hitl_email_alerts, "send_hitl_email_alerts", sent),
+        ):
+            schedule_hitl_email_dispatch(_ORG, _PIPELINE, _RUN, _GATE, None)
+            await _drain_tasks()
+
+        sent.assert_awaited_once()
+        assert sent.call_args.args[3] is None

@@ -49,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from modulo.auth.permissions import resolve_required
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.email_service import send_email
+from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER, HitlGateContext
 from modulo.db.models.account import Account
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.rls import set_rls_org
@@ -65,6 +66,10 @@ _SUBJECT_TEMPLATE = "HITL gate awaiting review - {gate_label}"
 
 # Log prefix for every swallowed dispatch failure (warning level).
 _DISPATCH_FAILED_LOG = "hitl_email.dispatch_failed: %s"
+
+# Character budget for the rendered email body (plain-text + HTML combined).
+# Keeps the email concise: a full 2KB briefing would overwhelm recipients.
+_EMAIL_BODY_BUDGET_CHARS = 1500
 
 # The claim permission whose holders are eligible recipients, and the org
 # roles that satisfy it (role level >= the permission's minimum role, per the
@@ -152,17 +157,87 @@ def _run_link(settings: Settings, run_id: uuid.UUID) -> str:
     return f"{settings.modulo_public_url.rstrip('/')}/runs/{run_id}"
 
 
-def _build_email(gate_label: str, run_url: str) -> tuple[str, str, str]:
-    """Build the plain-text + HTML (subject, body_html, body_text) email."""
+def _slice(text: str, cap: int) -> str:
+    """Slice *text* to *cap* characters, appending TRUNCATION_MARKER when truncated."""
+    if len(text) <= cap:
+        return text
+    head = cap - len(TRUNCATION_MARKER)
+    if head <= 0:
+        return text[:cap]
+    return text[:head] + TRUNCATION_MARKER
+
+
+def _build_email(
+    gate_label: str,
+    run_url: str,
+    briefing: HitlGateContext | dict[str, Any] | None = None,
+) -> tuple[str, str, str]:
+    """Build the plain-text + HTML (subject, body_html, body_text) email.
+
+    When *briefing* is provided the rendered body includes the decision context
+    (description, reason, condition result, first artifact excerpt) so recipients
+    can evaluate the gate *before* claiming it. A ``None`` or legacy briefing
+    degrades to the original plain label-only format.
+    """
     subject = _SUBJECT_TEMPLATE.format(gate_label=gate_label)
-    body_text = f"A HITL gate is awaiting review.\n\nGate: {gate_label}\nRun: {run_url}"
-    body_html = (
-        "<html><body>"
-        "<p>A HITL gate is awaiting review.</p>"
-        f"<p>Gate: {html.escape(gate_label)}<br>"
-        f'Run: <a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p>'
-        "</body></html>"
-    )
+
+    # --- build the briefing section (only when available) ---
+    sections_text: list[str] = []
+    sections_html: list[str] = []
+
+    if briefing:
+        desc = briefing.get("description")
+        if desc:
+            sections_text.append(f"Description: {desc}")
+            sections_html.append(f"<p><strong>Description:</strong> {html.escape(desc)}</p>")
+
+        reason = briefing.get("reason")
+        if reason:
+            sections_text.append(f"Reason: {reason}")
+            sections_html.append(f"<p><strong>Reason:</strong> {html.escape(reason)}</p>")
+
+        cr = briefing.get("condition_result")
+        if isinstance(cr, dict):
+            expression = cr.get("expression", "")
+            value = cr.get("value", "")
+            cr_text = f"Condition: {expression} = {value}"
+            sections_text.append(cr_text)
+            sections_html.append(f"<p><strong>Condition:</strong> {html.escape(expression)} = {html.escape(value)}</p>")
+
+        artifacts = briefing.get("artifacts")
+        if artifacts and isinstance(artifacts, list) and len(artifacts) > 0:
+            first = artifacts[0]
+            summary = first.get("summary", "")
+            if summary:
+                sections_text.append(f"Artifact: {summary}")
+                sections_html.append(f"<p><strong>Artifact:</strong> {html.escape(summary)}</p>")
+
+    # --- compose final body ---
+    if sections_text:
+        briefing_text = "\n".join(sections_text)
+        briefing_text = _slice(briefing_text, _EMAIL_BODY_BUDGET_CHARS)
+        body_text = f"A HITL gate is awaiting review.\n\nGate: {gate_label}\n{briefing_text}\n\nReview: {run_url}"
+        briefing_html_block = "\n".join(sections_html)
+        briefing_html_block = _slice(briefing_html_block, _EMAIL_BODY_BUDGET_CHARS)
+        body_html = (
+            "<html><body>"
+            "<p>A HITL gate is awaiting review.</p>"
+            f"<p><strong>Gate:</strong> {html.escape(gate_label)}</p>"
+            f"{briefing_html_block}"
+            f"<p><strong>Review:</strong> "
+            f'<a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p>'
+            "</body></html>"
+        )
+    else:
+        body_text = f"A HITL gate is awaiting review.\n\nGate: {gate_label}\nRun: {run_url}"
+        body_html = (
+            "<html><body>"
+            "<p>A HITL gate is awaiting review.</p>"
+            f"<p>Gate: {html.escape(gate_label)}<br>"
+            f'Run: <a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p>'
+            "</body></html>"
+        )
+
     return subject, body_html, body_text
 
 
@@ -170,14 +245,15 @@ async def send_hitl_email_alerts(
     recipients: list[str],
     run_id: uuid.UUID,
     gate_label: str,
+    briefing: HitlGateContext | dict[str, Any] | None = None,
 ) -> None:
     """Send the gate-awaiting email to every recipient. Never raises.
 
     Needs NO database session: call it AFTER the resolution transaction has
     closed so the SMTP loop — synchronous smtplib with retries, one
     connection per recipient — never pins a pooled connection from the
-    shared engine while it runs. One recipient's failure never blocks the
-    others. Any failure is logged as ``hitl_email.dispatch_failed`` (warning)
+    shared engine. One recipient's failure never blocks the others. Any
+    failure is logged as ``hitl_email.dispatch_failed`` (warning)
     and swallowed: a broken email path must never raise into the caller.
     """
     if not recipients:
@@ -185,7 +261,7 @@ async def send_hitl_email_alerts(
     extra = {"run_id": str(run_id), "gate_label": gate_label, "recipient_count": len(recipients)}
     try:
         settings = get_settings()
-        subject, body_html, body_text = _build_email(gate_label, _run_link(settings, run_id))
+        subject, body_html, body_text = _build_email(gate_label, _run_link(settings, run_id), briefing)
         for recipient in recipients:
             try:
                 await asyncio.to_thread(send_email, settings, [recipient], subject, body_html, body_text)
@@ -205,6 +281,7 @@ async def dispatch_hitl_email_alerts(
     pipeline_id: uuid.UUID,
     run_id: uuid.UUID,
     gate_label: str,
+    briefing: HitlGateContext | dict[str, Any] | None = None,
 ) -> None:
     """Resolve the recipients via *session* and send. Never raises.
 
@@ -225,7 +302,7 @@ async def dispatch_hitl_email_alerts(
     except Exception as exc:
         _log.warning(_DISPATCH_FAILED_LOG, exc, extra=extra)
         return
-    await send_hitl_email_alerts(recipients, run_id, gate_label)
+    await send_hitl_email_alerts(recipients, run_id, gate_label, briefing)
 
 
 def _dispatch_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -245,6 +322,7 @@ async def _run_hitl_email_dispatch(
     pipeline_id: uuid.UUID,
     run_id: uuid.UUID,
     gate_label: str,
+    briefing: HitlGateContext | dict[str, Any] | None = None,
 ) -> None:
     """Background task body: resolve in a short RLS transaction, then send.
 
@@ -273,7 +351,7 @@ async def _run_hitl_email_dispatch(
             },
         )
         return
-    await send_hitl_email_alerts(recipients, run_id, gate_label)
+    await send_hitl_email_alerts(recipients, run_id, gate_label, briefing)
 
 
 def schedule_hitl_email_dispatch(
@@ -281,12 +359,16 @@ def schedule_hitl_email_dispatch(
     pipeline_id: uuid.UUID,
     run_id: uuid.UUID,
     gate_label: str,
+    briefing: HitlGateContext | dict[str, Any] | None = None,
 ) -> None:
     """Fire-and-forget the HITL email dispatch (called from ``create_gate``).
 
     Never raises and never awaits: the task is scheduled on the running loop
     with a strong reference retained until completion. ``gate_label`` is the
-    gate's node id (the human-readable label used in the subject line).
+    gate's human-readable label (falling back to the gate id when no label
+    is configured). ``briefing`` is the optional fire-time context captured
+    at gate creation; a ``None`` briefing degrades to the legacy label-only
+    email format.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -297,7 +379,7 @@ def schedule_hitl_email_dispatch(
         )
         return
     task = loop.create_task(
-        _run_hitl_email_dispatch(org_id, pipeline_id, run_id, gate_label),
+        _run_hitl_email_dispatch(org_id, pipeline_id, run_id, gate_label, briefing),
         name=f"hitl-email-dispatch-{run_id}",
     )
     _PENDING_DISPATCH_TASKS.add(task)
