@@ -302,42 +302,15 @@ const yAxisLabelsDesc = computed(() => {
   const seriesMax = max.value;
   const unit = props.unit;
 
-  // First pass: format with the standard precision.
+  // First pass: integers by default.
   const labels = ticks.map((v) => formatAxisValue(v, seriesMax, unit));
 
-  // Check for collapse: do all labels display identically?
-  const allSame = labels.every((l) => l === labels[0]);
-  if (!allSame || ticks.length <= 1) return labels;
+  // Single-tick series can't collapse; otherwise, if every label rounds to the
+  // same string, re-format with 1 extra decimal of precision.
+  const collapsed = labels.length > 1 && labels.every((l) => l === labels[0]);
+  if (!collapsed) return labels;
 
-  // Second pass: bump precision by 1 decimal.
-  return ticks.map((v) => {
-    if (typeof v !== "number" || !Number.isFinite(v)) return "—";
-    if (unit === "%") {
-      return v.toLocaleString(undefined, {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
-      });
-    }
-    if (unit === "$") {
-      if (seriesMax < 1) {
-        // Already at 2 decimals — use 3 for sub-dollar collapse.
-        return `$${v.toLocaleString(undefined, {
-          minimumFractionDigits: 3,
-          maximumFractionDigits: 3,
-        })}`;
-      }
-      // Dollar collapse at integer level: add 1 decimal.
-      return `$${v.toLocaleString(undefined, {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
-      })}`;
-    }
-    // Count collapse: add 1 decimal.
-    return v.toLocaleString(undefined, {
-      minimumFractionDigits: 1,
-      maximumFractionDigits: 1,
-    });
-  });
+  return ticks.map((v) => formatAxisValue(v, seriesMax, unit, 1));
 });
 
 const xTickIndices = computed(() => {
@@ -404,29 +377,31 @@ function formatValue(v: number): string {
  * - Percentages (%): integer.
  * - Dollars ($): if max < 1, show 2 decimals (sub-dollar precision);
  *   otherwise integer. If every tick rounds to the same integer, fall back
- *   to 1 decimal.
+ *   to 1 decimal (3 decimals for sub-dollar series).
  *
- * The tooltip (formatValue) keeps full precision — only the axis is targeted.
+ * `decimals` overrides the default precision on collapse; the tooltip
+ * (formatValue) keeps full precision — only the axis is targeted.
  */
-function formatAxisValue(v: number, seriesMax: number, unit: string): string {
+function formatAxisValue(v: number, seriesMax: number, unit: string, decimals = 0): string {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
 
   if (unit === "%") {
-    return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return v.toLocaleString(undefined, { maximumFractionDigits: decimals });
   }
 
   if (unit === "$") {
-    // Sub-dollar series: show 2 decimals so $0.03 doesn't become $0.
     if (seriesMax < 1) {
-      return `$${v.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+      // Sub-dollar series: 2 decimals by default so $0.03 doesn't become $0,
+      // bumped to 3 when a collapse forces extra precision.
+      const d = decimals === 0 ? 2 : 3;
+      return `$${v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`;
     }
-    // Normal dollar series: integer by default.
-    const intFmt = v.toLocaleString(undefined, { maximumFractionDigits: 0 });
-    return `$${intFmt}`;
+    // Normal dollar series: integer by default, 1 decimal on collapse.
+    return `$${v.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
   }
 
-  // Counts / plain numbers: integer.
-  return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  // Counts / plain numbers: integer by default, 1 decimal on collapse.
+  return v.toLocaleString(undefined, { maximumFractionDigits: decimals });
 }
 
 function formatWithUnit(v: number): string {
