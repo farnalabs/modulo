@@ -754,6 +754,32 @@ def test_discover_plugins_schema_type_entry_point():
     assert "schema_type" in discovered[0].capabilities
 
 
+def test_discover_plugins_eval_and_schema_type_merge():
+    """Eval and schema-type entry points from the same dist merge their capabilities."""
+    registry = PluginRegistry()
+    ep1 = _make_mock_entry_point(
+        "modulo.evals",
+        "e1",
+        dist_name="pkg-x",
+        load_result=lambda config: {"name": "e1"},
+    )
+    ep2 = _make_mock_entry_point(
+        "modulo.schema_types",
+        "s1",
+        dist_name="pkg-x",
+        load_result=lambda config: {"name": "s1"},
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[], [], [ep1], [ep2]],
+    ):
+        registry.discover_plugins()
+
+    plugins = registry.list_plugins()
+    assert "pkg-x" in plugins
+    assert plugins["pkg-x"].capabilities == {"eval", "schema_type"}
+
+
 def test_discover_plugins_both_groups():
     """Discovering from both entry-point groups populates connectors and backends."""
     registry = PluginRegistry()
