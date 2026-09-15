@@ -19,7 +19,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -61,6 +61,26 @@ def _make_org(
     org.deleted_at = deleted_at
     org.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     return org
+
+
+def _make_account(
+    *,
+    id: uuid.UUID | None = None,
+    email: str = "user@example.com",
+    is_system_admin: bool = False,
+) -> MagicMock:
+    account = MagicMock()
+    account.id = id or uuid.uuid4()
+    account.email = email
+    account.display_name = "User"
+    account.active = True
+    account.is_system_admin = is_system_admin
+    account.must_change_password = False
+    account.is_break_glass = False
+    account.password_hash = "$2b$12$existinghash"
+    account.auth_provider = "local"
+    account.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    return account
 
 
 def _make_provider(
@@ -361,3 +381,184 @@ class TestOrgLogin:
         body = resp.text
         assert "client_secret" not in body.lower()
         assert "client_id" not in body.lower()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/auth/login — org_slug binding (Phase B, FAR-856)
+# ---------------------------------------------------------------------------
+
+
+class TestLoginOrgSlugBinding:
+    """Tests for the org_slug parameter on POST /api/v1/auth/login."""
+
+    def test_org_slug_binds_session_to_org(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """When org_slug is supplied, the session is bound to that org."""
+        http, _session = client
+        account = _make_account()
+        org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme")
+        membership = MagicMock()
+        membership.organisation_id = org.id
+        membership.role = "admin"
+        membership.deactivated_at = None
+
+        with (
+            patch(
+                "modulo.api.routes.auth._authenticate_credentials",
+                new=AsyncMock(return_value=account),
+            ),
+            patch(
+                "modulo.api.routes.auth._enforce_break_glass",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "modulo.api.routes.auth.get_login_active_org_by_slug",
+                new=AsyncMock(return_value=org),
+            ),
+            patch(
+                "modulo.api.routes.auth.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=membership),
+            ),
+            patch(
+                "modulo.api.routes.auth.list_memberships_for_account",
+                new=AsyncMock(return_value=[membership]),
+            ),
+            patch(
+                "modulo.api.routes.auth.create_family",
+                new=AsyncMock(return_value=MagicMock(family_id="fam-1")),
+            ),
+            patch(
+                "modulo.api.routes.auth.create_access_token",
+                new=MagicMock(return_value="fake-access-token"),
+            ),
+            patch(
+                "modulo.api.routes.auth.create_refresh_token",
+                new=MagicMock(return_value="fake-refresh-token"),
+            ),
+        ):
+            resp = http.post(
+                "/api/v1/auth/login",
+                json={
+                    "email": "user@example.com",
+                    "password": "pw",
+                    "org_slug": "acme",
+                },
+            )
+            assert resp.status_code == 200
+
+    def test_org_slug_no_membership_returns_403(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """org_slug for an org the account is not a member of → 403."""
+        http, _session = client
+        account = _make_account()
+        org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme")
+
+        with (
+            patch(
+                "modulo.api.routes.auth._authenticate_credentials",
+                new=AsyncMock(return_value=account),
+            ),
+            patch(
+                "modulo.api.routes.auth._enforce_break_glass",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "modulo.api.routes.auth.get_login_active_org_by_slug",
+                new=AsyncMock(return_value=org),
+            ),
+            patch(
+                "modulo.api.routes.auth.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "modulo.api.routes.auth.list_memberships_for_account",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            resp = http.post(
+                "/api/v1/auth/login",
+                json={
+                    "email": "user@example.com",
+                    "password": "pw",
+                    "org_slug": "acme",
+                },
+            )
+            assert resp.status_code == 403
+            assert "not a member" in resp.json()["detail"].lower()
+
+    def test_org_slug_non_login_active_returns_403(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """org_slug for a non-login-active org → 403 (same as unknown)."""
+        http, _session = client
+        account = _make_account()
+
+        with (
+            patch(
+                "modulo.api.routes.auth._authenticate_credentials",
+                new=AsyncMock(return_value=account),
+            ),
+            patch(
+                "modulo.api.routes.auth._enforce_break_glass",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "modulo.api.routes.auth.get_login_active_org_by_slug",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "modulo.api.routes.auth.list_memberships_for_account",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            resp = http.post(
+                "/api/v1/auth/login",
+                json={
+                    "email": "user@example.com",
+                    "password": "pw",
+                    "org_slug": "suspended-org",
+                },
+            )
+            assert resp.status_code == 403
+
+    def test_org_slug_omitted_preserves_legacy_behaviour(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """When org_slug is omitted, memberships[0] is used (legacy behaviour)."""
+        http, _session = client
+        account = _make_account()
+        org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme")
+        membership = MagicMock()
+        membership.organisation_id = org.id
+        membership.role = "admin"
+        membership.deactivated_at = None
+
+        with (
+            patch(
+                "modulo.api.routes.auth._authenticate_credentials",
+                new=AsyncMock(return_value=account),
+            ),
+            patch(
+                "modulo.api.routes.auth._enforce_break_glass",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "modulo.api.routes.auth.list_memberships_for_account",
+                new=AsyncMock(return_value=[membership]),
+            ),
+            patch(
+                "modulo.api.routes.auth.create_family",
+                new=AsyncMock(return_value=MagicMock(family_id="fam-1")),
+            ),
+            patch(
+                "modulo.api.routes.auth.create_access_token",
+                new=MagicMock(return_value="fake-access-token"),
+            ),
+            patch(
+                "modulo.api.routes.auth.create_refresh_token",
+                new=MagicMock(return_value="fake-refresh-token"),
+            ),
+        ):
+            resp = http.post(
+                "/api/v1/auth/login",
+                json={
+                    "email": "user@example.com",
+                    "password": "pw",
+                    # org_slug is omitted — legacy behaviour.
+                },
+            )
+            assert resp.status_code == 200
