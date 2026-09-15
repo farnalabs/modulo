@@ -584,29 +584,28 @@ class TestRegisterTenantFilter:
 
 
 class TestOrganisationRootEntityModel:
-    """Organisation is the root tenant entity — ``created_by`` is nullable and a
-    FK to ``accounts.id`` with ``ondelete=SET NULL`` (migration 0236): the first
-    org is bootstrapped with ``created_by=NULL`` and the FK does not block that
-    ordering because the column is nullable and the reference nulls on account
-    deletion — and the model carries no ``organisation_id`` column so the tenant
-    filter / RLS never scopes it (mirrors ``test_rls_coverage.py``'s
-    only-exclusion)."""
+    """Organisation is the root tenant entity — ``created_by`` is a plain nullable
+    column (NOT a foreign key): the first org is bootstrapped with
+    ``created_by=NULL`` and no ``accounts`` row exists to reference yet, so the
+    column cannot carry an FK. Migration 0239_revert_organisations_audit_drift
+    dropped the ``fk_organisations_created_by`` FK (and the 0233 audit columns
+    updated_at/updated_by/deleted_by) that 0236 briefly added, because the
+    Organisation ORM never declared them and no application code uses them — the
+    ORM metadata stays in lockstep with the migrated schema. The model carries no
+    ``organisation_id`` column so the tenant filter / RLS never scopes it (mirrors
+    ``test_rls_coverage.py``'s only-exclusion)."""
 
-    def test_created_by_column_is_nullable_fk_set_null(self) -> None:
-        from sqlalchemy import ForeignKey
-
+    def test_created_by_column_is_nullable(self) -> None:
         from modulo.db.models.organisation import Organisation
 
         column = Organisation.__table__.c.created_by
         assert column.nullable is True, "created_by must be nullable for org bootstrap"
-        fks = [fk for fk in column.foreign_keys if isinstance(fk, ForeignKey)]
-        assert fks, (
-            "created_by must be a foreign key to accounts.id — the first org is "
-            "created with created_by=NULL; the FK (ondelete=SET NULL) does not "
-            "block that ordering"
+        # Post-0239: created_by is intentionally NOT a foreign key. The
+        # fk_organisations_created_by FK was reverted as spurious schema drift.
+        assert not column.foreign_keys, (
+            "created_by must NOT be a foreign key post-0239: the FK was reverted "
+            "because the Organisation ORM never declared it"
         )
-        assert fks[0].target_fullname == "accounts.id", "created_by FK must target accounts.id"
-        assert fks[0].ondelete == "SET NULL", "created_by FK must use ondelete=SET NULL"
 
     def test_created_by_defaults_to_none_for_bootstrap_org(self) -> None:
         """The first org is created with no creator (``_ensure_default_org``
