@@ -107,6 +107,9 @@
         <div class="min-w-0 flex-1">{{ $t('views.SettingsHitlReviewView.assignee_label') }}</div>
         <span class="w-40 flex-shrink-0 text-right">{{ $t('views.SettingsHitlReviewView.created_label') }}</span>
       </div>
+      <!-- FAR-858: visually-hidden h2 so the h3 gate labels in HitlGateCard
+           don't skip a heading level (page h1 → h2 → h3). -->
+      <h2 class="sr-only">{{ $t('views.SettingsHitlReviewView.title') }}</h2>
       <div class="space-y-2">
       <div
         v-for="gate in filteredGates"
@@ -414,16 +417,22 @@ function pipelineDisplayName(gate: GateItem): string {
 
 /** FAR-858: one-line snippet for the collapsed row — gate description or condition-result value. */
 function gateDescriptionSnippet(gate: GateItem): string {
-  if (gate.description && gate.description.trim()) return gate.description
-  const ctx = gate.context
-  if (ctx && typeof ctx === 'object' && !Array.isArray(ctx)) {
-    const cr = (ctx as Record<string, unknown>).condition_result
-    if (cr && typeof cr === 'object' && !Array.isArray(cr)) {
-      const entry = cr as Record<string, unknown>
-      if (typeof entry.value === 'string' && entry.value.trim()) return entry.value
+  let raw = ''
+  if (gate.description && gate.description.trim()) {
+    raw = gate.description
+  } else {
+    const ctx = gate.context
+    if (ctx && typeof ctx === 'object' && !Array.isArray(ctx)) {
+      const cr = (ctx as Record<string, unknown>).condition_result
+      if (cr && typeof cr === 'object' && !Array.isArray(cr)) {
+        const entry = cr as Record<string, unknown>
+        if (typeof entry.value === 'string' && entry.value.trim()) raw = entry.value
+      }
     }
   }
-  return ''
+  // Cap at 120 chars so the full text is never exposed to the accessibility tree.
+  const MAX_SNIPPET = 120
+  return raw.length > MAX_SNIPPET ? raw.slice(0, MAX_SNIPPET) + '\u2026' : raw
 }
 
 function matchesPipeline(gate: GateItem): boolean {
