@@ -257,13 +257,14 @@ describe('AdminRunRetentionView', () => {
     clickSpy.mockRestore()
   })
 
-  it('purges the applied snapshot, not unapplied filter edits', async () => {
+  it('purges the currently applied snapshot (auto-apply keeps applied in sync, FAR-868)', async () => {
     const wrapper = await mountView()
-    // Edit a filter WITHOUT clicking Apply, so the displayed/confirmed set
-    // still reflects the last load (empty applied filters).
+    // With auto-apply, filter changes are applied immediately, so the
+    // applied snapshot always reflects the current filter state.
     await wrapper.find('[data-testid="admin-run-retention-date-from"]').setValue('2026-07-01T00:00')
-    await flushPromises()
-    await flushPromises()
+    // Wait for the debounce (300ms) + load to complete
+    await new Promise(r => setTimeout(r, 400))
+    for (let i = 0; i < 10; i++) await flushPromises()
 
     await wrapper.find('[data-testid="admin-run-retention-purge"]').trigger('click')
     await flushPromises()
@@ -278,9 +279,8 @@ describe('AdminRunRetentionView', () => {
     const purgeCall = postMock.mock.calls.find((c: unknown[]) => c[0] === '/api/v1/admin/run-retention/purge')
     expect(purgeCall).toBeDefined()
     const body = (purgeCall![1] as { body: Record<string, unknown> }).body
-    // The purge must target the applied snapshot (empty filters), never the
-    // unapplied date_from edit — otherwise it could purge a different set than confirmed.
-    expect(body.date_from).toBeNull()
+    // With auto-apply, the applied snapshot now reflects the date_from we set.
+    expect(body.date_from).toBe(new Date('2026-07-01T00:00').toISOString()) // nosemgrep: new-date-without-guard
   })
 
   it('surfaces an export error when the export endpoint fails', async () => {
@@ -356,11 +356,11 @@ describe('AdminRunRetentionView', () => {
     expect(dialog.textContent).not.toContain('500')
   })
 
-  it('normalises a valid date filter through toIso into the candidates query', async () => {
+  it('normalises a valid date filter through toIso into the candidates query (FAR-868 auto-apply)', async () => {
     const wrapper = await mountView()
     await wrapper.find('[data-testid="admin-run-retention-date-from"]').setValue('2026-07-01T00:00')
-    await flushPromises()
-    await wrapper.find('[data-testid="admin-run-retention-apply"]').trigger('click')
+    // Wait for debounce (300ms) + load
+    await new Promise(r => setTimeout(r, 400))
     for (let i = 0; i < 10; i++) await flushPromises()
 
     const getMock = api.GET as Mock

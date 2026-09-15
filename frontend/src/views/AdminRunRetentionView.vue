@@ -108,9 +108,6 @@
             </div>
           </div>
           <div class="mt-3 flex items-center gap-2">
-            <Button data-testid="admin-run-retention-apply" @click="loadCandidates">
-              {{ $t('views.AdminRunRetentionView.apply_filters') }}
-            </Button>
             <button
               type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
@@ -234,7 +231,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -492,6 +489,23 @@ function statusBadge(status: string): string {
   if (status === 'cancelled' || status === 'stalled') return 'bg-muted text-muted-foreground'
   return 'bg-secondary text-secondary-foreground'
 }
+
+// Auto-apply on dropdown filter changes (immediate)
+watch(selectedPipelineId, loadCandidates)
+watch(selectedStatus, loadCandidates)
+
+// Auto-apply on date filter changes (debounced)
+let dateFromDebounce: ReturnType<typeof setTimeout> | null = null
+watch(dateFrom, () => {
+  if (dateFromDebounce) clearTimeout(dateFromDebounce)
+  dateFromDebounce = setTimeout(loadCandidates, 300)
+})
+
+let dateToDebounce: ReturnType<typeof setTimeout> | null = null
+watch(dateTo, () => {
+  if (dateToDebounce) clearTimeout(dateToDebounce)
+  dateToDebounce = setTimeout(loadCandidates, 300)
+})
 
 loadPipelines()
 loadCandidates()

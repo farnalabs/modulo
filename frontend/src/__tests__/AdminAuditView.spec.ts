@@ -63,12 +63,10 @@ beforeEach(() => {
 })
 
 // The initial fetch succeeds (the filter refs are declared above
-// useDataFetch, FAR-608). mountLoaded still applies the filters once — the
-// real user path — before asserting, so the refetched state is what's checked.
+// useDataFetch, FAR-608). With auto-apply (FAR-868), filters are applied
+// automatically on change — no explicit click needed.
 async function mountLoaded() {
   const wrapper = mountView()
-  await nextTick()
-  await wrapper.find('[data-testid="admin-audit-apply-filters"]').trigger('click')
   await nextTick()
   return wrapper
 }
@@ -151,7 +149,8 @@ describe('AdminAuditView — event list', () => {
     // Load first, then make the refetch fail.
     const wrapper = await mountLoaded()
     ;(api.GET as Mock).mockRejectedValue(new Error('audit down'))
-    await wrapper.find('[data-testid="admin-audit-apply-filters"]').trigger('click')
+    // Trigger a refetch via the reset button (auto-apply means filter changes trigger refetch)
+    await wrapper.find('[data-testid="admin-audit-reset"]').trigger('click')
     await nextTick()
     expect(wrapper.text()).toContain('audit down')
     expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(1)
@@ -257,7 +256,7 @@ describe('AdminAuditView — filters', () => {
     expect(wrapper.find('[data-testid="admin-audit-target-type"]').exists()).toBe(true)
   })
 
-  it('apply filters resets the cursor and sends the actor, from-date and entity type', async () => {
+  it('auto-applies filter changes — sets actor, from-date and entity type (FAR-868)', async () => {
     mockAuditGet([auditEvent('evt-1')], { total: 3 })
     const wrapper = await mountLoaded()
 
@@ -269,7 +268,8 @@ describe('AdminAuditView — filters', () => {
     vm.filterTargetType = 'pipeline'
     await nextTick()
 
-    await wrapper.find('[data-testid="admin-audit-apply-filters"]').trigger('click')
+    // Wait for debounce (300ms) on text/date filters
+    await new Promise(r => setTimeout(r, 400))
     await nextTick()
 
     const calls = (api.GET as Mock).mock.calls.filter((c: unknown[]) => c[0] === '/api/v1/admin/audit')

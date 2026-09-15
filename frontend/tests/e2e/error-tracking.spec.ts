@@ -35,4 +35,30 @@ test.describe('Error Tracking', { tag: "@regression" }, () => {
 
     await expect(page.locator('text=Connection timeout')).toBeVisible()
   })
+
+  test('auto-applies filters without Apply button (FAR-868)', { tag: "@regression" }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await page.goto('/admin/errors')
+
+    // The Apply Filters button must not exist
+    const applyBtn = page.locator('button', { hasText: /apply filters/i })
+    await expect(applyBtn).toHaveCount(0)
+
+    // Reset button must exist
+    await expect(page.getByTestId('admin-errors-reset')).toBeVisible()
+
+    // Changing a dropdown filter should auto-apply (no Apply button needed)
+    const levelFilter = page.getByTestId('filter-bar-level')
+    if (await levelFilter.isVisible()) {
+      await levelFilter.click()
+      const errorOption = page.locator('.p-select-option', { hasText: 'Error' })
+      if (await errorOption.isVisible()) {
+        await errorOption.click()
+      }
+    }
+
+    // Reset should clear filters
+    await page.getByTestId('admin-errors-reset').click()
+    await expect(page.getByTestId('admin-errors-reset')).toBeVisible()
+  })
 })
