@@ -8,10 +8,17 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import apply_updates
-from modulo.db.models.organisation import Organisation
+from modulo.db.models.organisation import (
+    MODULO_REGISTRY_ORG_ID,
+    ORPHAN_ORG_ID,
+    Organisation,
+)
 from modulo.db.seed import seed_system_schemas
 
 _log = logging.getLogger(__name__)
+
+# Sentinel org IDs that must never resolve a login page.
+_SENTINEL_ORG_IDS: frozenset[uuid.UUID] = frozenset({ORPHAN_ORG_ID, MODULO_REGISTRY_ORG_ID})
 
 
 async def get_organisation(
@@ -127,3 +134,63 @@ async def update_organisation(
     apply_updates(org, updates)
     await session.flush()
     return org
+
+
+# ---------------------------------------------------------------------------
+# Login-active predicate (FAR-856)
+# ---------------------------------------------------------------------------
+
+# An org counts for login when ALL of:
+#   - status == 'active'
+#   - deleted_at IS NULL
+#   - id is not a sentinel (ORPHAN_ORG_ID, MODULO_REGISTRY_ORG_ID)
+
+
+def is_login_active_org(org: Organisation) -> bool:
+    """Return whether *org* counts for login resolution.
+
+    Reused by the login-context and org-login endpoints so the predicate
+    is single-sourced and cannot drift between read sites.
+    """
+    return org.status == "active" and org.deleted_at is None and org.id not in _SENTINEL_ORG_IDS
+
+
+async def list_login_active_orgs(session: AsyncSession) -> list[Organisation]:
+    """Return every login-active organisation (for login-context resolution).
+
+    The query applies the same predicate as ``is_login_active_org`` at the
+    SQL level so the DB does the filtering — the ORM-level predicate is a
+    second safety net, not the primary filter.
+    """
+    stmt = (
+        select(Organisation)
+        .where(
+            Organisation.status == "active",
+            Organisation.deleted_at.is_(None),
+            Organisation.id.notin_(_SENTINEL_ORG_IDS),
+        )
+        .order_by(Organisation.created_at)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_login_active_org_by_slug(session: AsyncSession, slug: str) -> Organisation | None:
+    """Resolve a single login-active org by exact slug.
+
+    Returns ``None`` for unknown, soft-deleted, suspended, or sentinel orgs.
+    The uniform None for all non-login-active cases is deliberate — callers
+    must not reveal whether the slug exists.
+    """
+    stmt = (
+        select(Organisation)
+        .where(
+            Organisation.slug == slug,
+            Organisation.status == "active",
+            Organisation.deleted_at.is_(None),
+            Organisation.id.notin_(_SENTINEL_ORG_IDS),
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
