@@ -1,7 +1,7 @@
 <template>
   <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
-  <BackLink to="/admin/errors" :label="$t('views.AdminErrorDetailView.back_to_error_dashboard')" />
   <div class="page-wide">
+    <BackLink to="/admin/errors" :label="$t('views.AdminErrorDetailView.back_to_error_dashboard')" />
     <header class="flex items-center justify-between">
       <div class="flex items-center gap-3">
         <button

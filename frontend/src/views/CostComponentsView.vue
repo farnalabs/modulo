@@ -1,11 +1,11 @@
 <template>
-  <PageTabs :tabs="[
-    { label: 'Overview', to: '/admin/costs' },
-    { label: 'Spend Limits', to: '/admin/costs/limits' },
-    { label: 'Cost Components', to: '/admin/costs/components' },
-    { label: 'Cost Controls', to: '/admin/costs/controls' },
-  ]" />
   <div data-theme="agent" class="page-wide">
+    <PageTabs :tabs="[
+      { label: 'Overview', to: '/admin/costs' },
+      { label: 'Spend Limits', to: '/admin/costs/limits' },
+      { label: 'Cost Components', to: '/admin/costs/components' },
+      { label: 'Cost Controls', to: '/admin/costs/controls' },
+    ]" />
     <div class="flex items-center justify-between">
       <PageHeader :title="$t('views.CostComponentsView.cost_components')" :subtitle="$t('views.CostComponentsView.configure_the_named_cost_components_that_make_up_a_runs_cost')" />
       <Button class="border-primary/30 hover:border-primary/60" data-testid="cost-components-add" @click="openCreate">

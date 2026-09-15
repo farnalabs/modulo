@@ -1,11 +1,10 @@
 <template>
-  <PageTabs :tabs="[
-    { label: 'Evals', to: '/evals/editor' },
-    { label: 'Proposals', to: '/evals/proposals' },
-    { label: 'Variants', to: '/variants/compare' },
-  ]" />
-
   <div class="page-wide">
+    <PageTabs :tabs="[
+      { label: 'Evals', to: '/evals/editor' },
+      { label: 'Proposals', to: '/evals/proposals' },
+      { label: 'Variants', to: '/variants/compare' },
+    ]" />
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
@@ -157,7 +156,6 @@
         :description="$t('views.variantBatch.notFoundDescription')"
       />
     </template>
-  </div>
 
   <div class="page-wide mt-8 border-t pt-6">
     <div class="mb-3 flex items-center justify-between">
@@ -211,6 +209,7 @@
         </table>
       </div>
     </template>
+  </div>
   </div>
 </template>
 

@@ -1,9 +1,9 @@
 <template>
   <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
-  <PageTabs :tabs="[
-    { label: 'Dashboard', to: '/admin/errors' },
-  ]" />
   <div class="page-wide">
+    <PageTabs :tabs="[
+      { label: 'Dashboard', to: '/admin/errors' },
+    ]" />
     <PageHeader :title="$t('views.AdminErrorsView.error_dashboard')" :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')" />
 
     <div

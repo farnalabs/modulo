@@ -128,6 +128,12 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^4.1.11
         version: 4.1.11(vitest@4.1.11)
+      '@vue/compiler-dom':
+        specifier: ^3.5.0
+        version: 3.5.42
+      '@vue/compiler-sfc':
+        specifier: ^3.5.0
+        version: 3.5.42
       '@vue/eslint-config-typescript':
         specifier: ^14.9.0
         version: 14.9.0(@typescript/typescript6@6.0.2)(eslint-plugin-vue@10.11.0(@typescript-eslint/parser@8.70.0(@typescript/typescript6@6.0.2)(eslint@10.10.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2))(eslint@10.10.0(jiti@2.7.0)(supports-color@10.2.2))(vue-eslint-parser@10.4.1(eslint@10.10.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)))(eslint@10.10.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)

@@ -1,10 +1,10 @@
 <template>
-  <PageTabs :tabs="[
-    { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
-    { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
-    { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
-  ]" />
-    <div class="page-wide">
+  <div class="page-wide">
+    <PageTabs :tabs="[
+      { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+      { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+      { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
+    ]" />
     <PageHeader :title="$t('views.SchemaInferenceView.schema_inference')" :subtitle="$t('views.SchemaInferenceView.infer_a_schema_from_a_connected_data_source')" />
 
     <LoadingSpinner v-if="loadingConnectors" />
