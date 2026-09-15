@@ -20,36 +20,69 @@ Create Date: 2026-09-15
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 
 revision = "0240_reinstate_organisations_audit_columns"
 down_revision = "0239_revert_organisations_audit_drift"
 
+_AUDIT_COLUMNS = ("updated_at", "updated_by", "deleted_by")
+
+
+def _organisations_columns(bind: sa.Connection) -> set[str]:
+    """Return the set of column names currently present on organisations.
+
+    On a fresh DB the audit columns are already created by 0233, so re-adding
+    them here would raise DuplicateColumn. On a live DB where 0239 was once a
+    real DROP they may be absent. Guard each add with a presence check so the
+    migration is safe to (re)apply against either starting state.
+    """
+    return {c["name"] for c in inspect(bind).get_columns("organisations")}
+
+
+def _fk_exists(bind: sa.Connection, name: str) -> bool:
+    inspector = inspect(bind)
+    return any(fk["name"] == name for fk in inspector.get_foreign_keys("organisations"))
+
 
 def upgrade() -> None:
-    op.add_column(
-        "organisations",
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.current_timestamp(),
-            onupdate=sa.func.current_timestamp(),
-            nullable=False,
-        ),
-    )
-    op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
-    op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
-    op.create_foreign_key(
-        "fk_organisations_created_by",
-        "organisations",
-        "accounts",
-        ["created_by"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    bind = op.get_bind()
+    existing = _organisations_columns(bind)
+
+    if "updated_at" not in existing:
+        op.add_column(
+            "organisations",
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.current_timestamp(),
+                onupdate=sa.func.current_timestamp(),
+                nullable=False,
+            ),
+        )
+    if "updated_by" not in existing:
+        op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
+    if "deleted_by" not in existing:
+        op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
+
+    if not _fk_exists(bind, "fk_organisations_created_by"):
+        op.create_foreign_key(
+            "fk_organisations_created_by",
+            "organisations",
+            "accounts",
+            ["created_by"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
-    op.drop_column("organisations", "deleted_by")
-    op.drop_column("organisations", "updated_by")
-    op.drop_column("organisations", "updated_at")
+    bind = op.get_bind()
+    if _fk_exists(bind, "fk_organisations_created_by"):
+        op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
+    existing = _organisations_columns(bind)
+    if "deleted_by" in existing:
+        op.drop_column("organisations", "deleted_by")
+    if "updated_by" in existing:
+        op.drop_column("organisations", "updated_by")
+    if "updated_at" in existing:
+        op.drop_column("organisations", "updated_at")
