@@ -105,7 +105,7 @@ async def test_containment_predicate_surfaces_the_mixing_run(
         snapshot_id=test_snapshot,
         work_item_refs=_refs(kind="jira", ref="PAY-77"),
         completed_at=datetime(2026, 6, 1, tzinfo=UTC),
-        run_number=1,
+        run_number=101,
     )
     newer_rich = await _seed_run(
         app_role_rls_session,
@@ -117,7 +117,7 @@ async def test_containment_predicate_surfaces_the_mixing_run(
             _refs(kind="jira", ref="PAY-77", source="agent", status="done")[0],
         ],
         completed_at=datetime(2026, 6, 2, tzinfo=UTC),
-        run_number=2,
+        run_number=102,
     )
     # Unrelated refs — enough to prove the predicate never widens.
     await _seed_run(
@@ -127,7 +127,7 @@ async def test_containment_predicate_surfaces_the_mixing_run(
         snapshot_id=test_snapshot,
         work_item_refs=_refs(kind="jira", ref="PAY-40"),
         completed_at=datetime(2026, 6, 3, tzinfo=UTC),
-        run_number=3,
+        run_number=103,
     )
     await _seed_run(
         app_role_rls_session,
@@ -136,7 +136,7 @@ async def test_containment_predicate_surfaces_the_mixing_run(
         snapshot_id=test_snapshot,
         work_item_refs=_refs(kind="github_issue", ref="a/b#5"),
         completed_at=datetime(2026, 6, 4, tzinfo=UTC),
-        run_number=4,
+        run_number=104,
     )
 
     runs = await list_journey_runs(app_role_rls_session, journey=journey)
@@ -176,7 +176,7 @@ async def test_containment_query_respects_order_and_limit_on_postgres(
             snapshot_id=test_snapshot,
             work_item_refs=_refs(kind="linear", ref="FAR-9"),
             completed_at=ts,
-            run_number=index + 1,
+            run_number=201 + index,
         )
 
     newest_first = await list_journey_runs(app_role_rls_session, journey=journey)

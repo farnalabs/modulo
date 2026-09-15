@@ -231,6 +231,12 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # exactly those rows; deliberately kept after upgrade (dropped only by
         # the downgrade), never mapped by the ORM.
         "_migration_0191_repoint_state",
+        # FAR-795 per-org agent-mint budget tally (migration 0242): written and
+        # read entirely via raw SQL in core/runtime_config/mint_budget.py
+        # (atomic INSERT ... ON CONFLICT upsert + windowed SUM); the table is
+        # intentionally unmapped by the ORM, so the remove_table drift is
+        # migration-owned, benign divergence.
+        "org_mint_budget_usage",
     }
 )
 
