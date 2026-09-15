@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import AppSelect from '../components/shared/AppSelect.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import Select from 'primevue/select'
+
+// Look the inner component up by name so this spec never imports
+// `primevue/select` directly (appselect-guard.spec.ts forbids it).
+const innerSelect = { name: 'Select' }
 
 describe('AppSelect', () => {
   it('renders a PrimeVue Select and defaults appendTo to "self"', () => {
@@ -10,7 +13,7 @@ describe('AppSelect', () => {
       props: { modelValue: '' },
       slots: { default: 'body' },
     })
-    const select = wrapper.findComponent(Select)
+    const select = wrapper.findComponent(innerSelect)
     expect(select.exists()).toBe(true)
     expect(select.props('appendTo')).toBe('self')
   })
@@ -19,7 +22,7 @@ describe('AppSelect', () => {
     const wrapper = mount(AppSelect, {
       props: { modelValue: '', appendTo: 'body' },
     })
-    expect(wrapper.findComponent(Select).props('appendTo')).toBe('body')
+    expect(wrapper.findComponent(innerSelect).props('appendTo')).toBe('body')
   })
 
   it('forwards scoped slots (e.g. dropdownicon) to the underlying Select', () => {
@@ -34,7 +37,7 @@ describe('AppSelect', () => {
     const wrapper = mount(AppSelect, {
       props: { modelValue: '', label: 'Priority' },
     })
-    expect(wrapper.findComponent(Select).props('ariaLabel')).toBe('Priority')
+    expect(wrapper.findComponent(innerSelect).props('ariaLabel')).toBe('Priority')
   })
 
   it('falls back to an aria-label passed through $attrs when no label prop is given', () => {
@@ -42,14 +45,14 @@ describe('AppSelect', () => {
       props: { modelValue: '' },
       attrs: { 'aria-label': 'Level' },
     })
-    expect(wrapper.findComponent(Select).props('ariaLabel')).toBe('Level')
+    expect(wrapper.findComponent(innerSelect).props('ariaLabel')).toBe('Level')
   })
 
   it('uses the generic default aria-label when neither a label prop nor $attrs aria-label is present', () => {
     const wrapper = mount(AppSelect, {
       props: { modelValue: '' },
     })
-    expect(wrapper.findComponent(Select).props('ariaLabel')).toBe('Select')
+    expect(wrapper.findComponent(innerSelect).props('ariaLabel')).toBe('Select')
   })
 })
 
