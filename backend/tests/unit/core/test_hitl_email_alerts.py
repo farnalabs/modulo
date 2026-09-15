@@ -554,6 +554,36 @@ class TestBuildEmailBriefing:
         _, _, body_text = _build_email(_GATE, _RUN_LINK, briefing)
         assert "Artifact:" not in body_text
 
+    def test_gate_label_html_escaped_in_briefing_path(self) -> None:
+        """gate_label with HTML is escaped in the briefing-path HTML body."""
+        from modulo.core.hitl_email_alerts import _build_email
+
+        xss_label = "<script>alert(1)</script>"
+        briefing = {"description": "test"}
+        _, body_html, _ = _build_email(xss_label, _RUN_LINK, briefing)
+        assert "<script>" not in body_html
+        assert "&lt;script&gt;" in body_html
+
+    def test_long_briefing_no_truncated_html_entity(self) -> None:
+        """Truncation must never split an HTML entity in the HTML body.
+
+        The old code truncated *after* HTML escaping, which could turn
+        ``&amp;`` into ``&am``.  This test uses ``&amp;`` repeatedly in a
+        long description so truncation would land inside one if the old
+        code path were still active.
+        """
+        from modulo.core.hitl_email_alerts import _build_email
+
+        # Each "foo &amp; bar " is 16 chars.  Enough to exceed the budget.
+        long_desc = ("foo &amp; bar " * 200).strip()
+        briefing = {"description": long_desc}
+        _, body_html, _ = _build_email(_GATE, _RUN_LINK, briefing)
+        # Every ``&amp;`` in the HTML must be complete — no partial entities.
+        import re
+
+        partial_entities = re.findall(r"&[a-z]{1,5}(?![a-z;])", body_html)
+        assert partial_entities == [], f"Found truncated HTML entities: {partial_entities}"
+
 
 class TestScheduleHitlEmailDispatchBriefing:
     """Ensure the briefing is threaded through the scheduling chain."""

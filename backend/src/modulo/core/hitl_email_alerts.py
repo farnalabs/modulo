@@ -49,7 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from modulo.auth.permissions import resolve_required
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.email_service import send_email
-from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER, HitlGateContext
+from modulo.core.pipeline_engine.hitl_context import HitlGateContext, slice_with_marker
 from modulo.db.models.account import Account
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.rls import set_rls_org
@@ -157,16 +157,6 @@ def _run_link(settings: Settings, run_id: uuid.UUID) -> str:
     return f"{settings.modulo_public_url.rstrip('/')}/runs/{run_id}"
 
 
-def _slice(text: str, cap: int) -> str:
-    """Slice *text* to *cap* characters, appending TRUNCATION_MARKER when truncated."""
-    if len(text) <= cap:
-        return text
-    head = cap - len(TRUNCATION_MARKER)
-    if head <= 0:
-        return text[:cap]
-    return text[:head] + TRUNCATION_MARKER
-
-
 def _build_email(
     gate_label: str,
     run_url: str,
@@ -182,43 +172,49 @@ def _build_email(
     subject = _SUBJECT_TEMPLATE.format(gate_label=gate_label)
 
     # --- build the briefing section (only when available) ---
-    sections_text: list[str] = []
-    sections_html: list[str] = []
+    # Collect raw (unescaped) values so we can bound the plain text first.
+    briefing_raw: list[tuple[str, str]] = []  # (label, value) pairs
 
     if briefing:
         desc = briefing.get("description")
         if desc:
-            sections_text.append(f"Description: {desc}")
-            sections_html.append(f"<p><strong>Description:</strong> {html.escape(desc)}</p>")
+            briefing_raw.append(("Description", desc))
 
         reason = briefing.get("reason")
         if reason:
-            sections_text.append(f"Reason: {reason}")
-            sections_html.append(f"<p><strong>Reason:</strong> {html.escape(reason)}</p>")
+            briefing_raw.append(("Reason", reason))
 
         cr = briefing.get("condition_result")
         if isinstance(cr, dict):
             expression = cr.get("expression", "")
             value = cr.get("value", "")
-            cr_text = f"Condition: {expression} = {value}"
-            sections_text.append(cr_text)
-            sections_html.append(f"<p><strong>Condition:</strong> {html.escape(expression)} = {html.escape(value)}</p>")
+            briefing_raw.append(("Condition", f"{expression} = {value}"))
 
         artifacts = briefing.get("artifacts")
         if artifacts and isinstance(artifacts, list) and len(artifacts) > 0:
             first = artifacts[0]
             summary = first.get("summary", "")
             if summary:
-                sections_text.append(f"Artifact: {summary}")
-                sections_html.append(f"<p><strong>Artifact:</strong> {html.escape(summary)}</p>")
+                briefing_raw.append(("Artifact", summary))
 
     # --- compose final body ---
-    if sections_text:
-        briefing_text = "\n".join(sections_text)
-        briefing_text = _slice(briefing_text, _EMAIL_BODY_BUDGET_CHARS)
-        body_text = f"A HITL gate is awaiting review.\n\nGate: {gate_label}\n{briefing_text}\n\nReview: {run_url}"
+    if briefing_raw:
+        # Build plain text and truncate BEFORE escaping — no truncated
+        # HTML entities.  slice_with_marker is the shared helper from
+        # hitl_context (same marker-within-cap semantics as everywhere else).
+        plain_sections = [f"{label}: {value}" for label, value in briefing_raw]
+        bounded_text = slice_with_marker("\n".join(plain_sections), _EMAIL_BODY_BUDGET_CHARS)
+        body_text = f"A HITL gate is awaiting review.\n\nGate: {gate_label}\n{bounded_text}\n\nReview: {run_url}"
+        # Rebuild HTML from the truncated plain text — split each line
+        # into label and value, then escape individually so no HTML
+        # entity can be split by truncation.
+        sections_html = []
+        for line in bounded_text.split("\n"):
+            parts = line.split(": ", 1)
+            if len(parts) == 2:
+                label, value = parts
+                sections_html.append(f"<p><strong>{html.escape(label + ':')}</strong> {html.escape(value)}</p>")
         briefing_html_block = "\n".join(sections_html)
-        briefing_html_block = _slice(briefing_html_block, _EMAIL_BODY_BUDGET_CHARS)
         body_html = (
             "<html><body>"
             "<p>A HITL gate is awaiting review.</p>"
