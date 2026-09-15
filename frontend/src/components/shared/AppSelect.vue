@@ -1,5 +1,9 @@
 <template>
-  <Select v-bind="$attrs" :append-to="appendTo">
+  <Select
+    v-bind="$attrs"
+    :append-to="appendTo"
+    :aria-label="resolvedAriaLabel"
+  >
     <template v-for="(_, name) in $slots" #[name]="slotData">
       <slot :name="name" v-bind="slotData ?? {}" />
     </template>
@@ -20,11 +24,30 @@
  * All Select instances across the app should use this wrapper
  * instead of importing `primevue/select` directly.
  */
+import { useAttrs } from 'vue'
 import Select from 'primevue/select'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   appendTo?: string
+  /**
+   * Accessible label for the underlying PrimeVue `Select` (which
+   * renders an `<input>` internally).  Falls back to an `aria-label`
+   * passed through `$attrs`, then to a generic default.  An explicit
+   * association is required so the field is never rendered without a
+   * label (SonarCloud `Web:InputWithoutLabelCheck`).
+   */
+  label?: string
 }>(), {
   appendTo: 'self',
+  label: '',
 })
+
+const attrs = useAttrs()
+
+// Consumers usually pass `aria-label` through `$attrs`; surface it
+// explicitly so the label association is statically visible and the
+// meaningful per-instance label (e.g. "Level") is preserved.
+const resolvedAriaLabel = props.label
+  || (attrs['aria-label'] as string | undefined)
+  || 'Select'
 </script>
