@@ -61,7 +61,7 @@ class VendorClient:
         self._instance_secret = instance_secret
         self._http_client: httpx.AsyncClient | None = None
 
-    async def _get_client(self) -> httpx.AsyncClient:
+    def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=25.0, write=25.0, pool=30.0))
         return self._http_client
@@ -165,7 +165,7 @@ class VendorClient:
         signature = sign_outbound_batch(self._instance_secret, payload, timestamp, sequence)
         url = f"{self._endpoint_url}/api/v1/batch"
 
-        client = await self._get_client()
+        client = self._get_client()
         last_error: str | None = None
         response_code: int | None = None
 

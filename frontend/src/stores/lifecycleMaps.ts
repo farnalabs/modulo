@@ -123,7 +123,7 @@ export function updatedSinceForPeriod(period: JourneyPeriod, now: number = Date.
   const hours: number | undefined = period === 'all' ? undefined : JOURNEY_PERIOD_HOURS[period]
   if (!hours) return undefined
   const date = new Date(now - hours * 3600000) // nosemgrep: new-date-without-guard
-  if (isNaN(date.getTime())) {
+  if (Number.isNaN(date.getTime())) {
     return undefined
   }
   return date.toISOString()
@@ -325,8 +325,11 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     for (const journey of journeys.value) {
       const stageId = journey.current_stage?.stage_id
       const key = stageId ?? (journey.unattributed ? UNATTRIBUTED_STAGE_KEY : null)
-      if (!key) continue
-      ;(grouped[key] ??= []).push(journey)
+      if (!key) {
+        continue
+      }
+      const stageJourneys = grouped[key] ??= []
+      stageJourneys.push(journey)
     }
     return grouped
   })

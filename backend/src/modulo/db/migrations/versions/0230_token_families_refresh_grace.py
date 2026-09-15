@@ -1,15 +1,16 @@
-"""Add token-family refresh-reuse grace tracking columns.
+"""Add token-family refresh-reuse grace tracking column.
 
 Revision ID: 0230_token_families_refresh_grace
 Revises: 0229_add_workspace_inputs_count
 Create Date: 2026-09-14
 
-Adds nullable, timezone-aware ``rotated_at`` and ``reuse_window_started_at``
-columns to ``token_families`` so refresh-token reuse can be tolerated within a
-grace window (FAR-819) without losing the theft signal entirely: a reuse
-arriving within ``REFRESH_REUSE_GRACE_SECONDS`` of the last rotation is
-accepted and the family's reuse window start is recorded, while reuse beyond
-the window (or beyond the per-window budget) still blacklists the family.
+Adds a nullable, timezone-aware ``rotated_at`` column to ``token_families``
+so refresh-token reuse can be tolerated within a grace window (FAR-819): a
+reuse arriving within ``REFRESH_REUSE_GRACE_SECONDS`` of the last rotation
+is treated as a benign reuse-interval replay (advance + mint), while reuse
+outside the window blacklists the family as theft. The family advances
+normally on every reuse within the window — no per-window budget, no steps
+tolerance, no 409 path.
 """
 
 import sqlalchemy as sa
@@ -26,12 +27,7 @@ def upgrade() -> None:
         "token_families",
         sa.Column("rotated_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.add_column(
-        "token_families",
-        sa.Column("reuse_window_started_at", sa.DateTime(timezone=True), nullable=True),
-    )
 
 
 def downgrade() -> None:
-    op.drop_column("token_families", "reuse_window_started_at")
     op.drop_column("token_families", "rotated_at")

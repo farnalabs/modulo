@@ -206,11 +206,9 @@ def test_refresh_active_system_admin_without_membership_succeeds(client: TestCli
     assert not _blacklist_update_sqls(mock_session)
 
 
-def test_refresh_stale_replay_returns_409(client: TestClient, mock_session: AsyncMock) -> None:
-    """A stale-but-plausible refresh token returns 409 (retryable), does NOT
-    advance, and does NOT blacklist the family."""
-    # stale_replay=True (third element): server should NOT mint new tokens
-    advance = AsyncMock(return_value=(2, False, True))
+def test_refresh_reuse_within_window_mints_tokens(client: TestClient, mock_session: AsyncMock) -> None:
+    """A reuse within the grace window advances and mints (reuse_replay=True)."""
+    advance = AsyncMock(return_value=(3, False, True))
     resolve_role = AsyncMock(return_value="admin")
     with (
         _patch_account(_make_account(True)),
@@ -218,14 +216,10 @@ def test_refresh_stale_replay_returns_409(client: TestClient, mock_session: Asyn
         patch("modulo.api.routes.auth.advance_sequence", new=advance),
     ):
         resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _make_refresh_token(str(_ORG_ID))})
-    assert resp.status_code == 409, resp.text
-    # Raw FastAPI shape (no ProblemDetail handler in this test app): detail is
-    # the dict passed to HTTPException.
+    assert resp.status_code == 200, resp.text
     body = resp.json()
-    detail = body["detail"]
-    assert isinstance(detail, dict), detail
-    assert detail["code"] == "stale_refresh_token"
-    assert "stale" in detail["message"].lower()
+    assert body["access_token"]
+    assert body["refresh_token"]
     advance.assert_awaited_once()
-    # Must NOT blacklist on a stale replay
+    # Must NOT blacklist on a reuse replay
     assert not _blacklist_update_sqls(mock_session)

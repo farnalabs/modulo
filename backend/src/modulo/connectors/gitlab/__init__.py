@@ -473,7 +473,7 @@ class GitLabConnector(ConnectorBase):
             return min(retry_after, _MAX_DELAY)
         return _backoff_delay(attempt)
 
-    async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
+    def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
         return cast("dict[str, Any]", _safe_json(response))
 

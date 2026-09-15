@@ -532,6 +532,562 @@ def _source_contains_sentinel(text: Any, sentinel: Any) -> bool:
     return _source_contains_delivery_sentinel(text, sentinel)
 
 
+async def _check_idempotency_gate(
+    *,
+    session_factory: Callable[..., Any] | None,
+    state: dict[str, Any],
+    run_id: str,
+    org_id: str,
+    node_id: str,
+    delivery_sentinel: str | None,
+    single_sandbox_node: bool,
+) -> dict[str, Any] | None:
+    """Guard A: delivery-sentinel idempotency gate (shared with E2B path).
+
+    Returns the skip envelope when the node was already delivered, or ``None``
+    to continue normal dispatch.
+    """
+    if not (delivery_sentinel and single_sandbox_node):
+        return None
+    try:
+        from modulo.settings import get_settings
+
+        gate_enabled = bool(getattr(get_settings(), "modulo_idempotency_gate_enabled", True))
+    except Exception:
+        gate_enabled = True
+    if not gate_enabled:
+        return None
+    from modulo.core.pipeline_engine.node_runner import (
+        _idempotency_gate_skipped_envelope,
+        _marker_delivery_done_for_node,
+        _read_run_raw_output_markers_for_gate,
+    )
+
+    markers = await _read_run_raw_output_markers_for_gate(
+        session_factory,
+        run_id=run_id,
+        org_id_raw=org_id,
+        claim_lease=state.get("_claim_lease"),
+        node_id=node_id,
+    )
+    if _marker_delivery_done_for_node(markers, run_id, node_id):
+        _log.info(
+            "sandbox_agent.runner.idempotency_gate.skipped",
+            extra={"node_id": node_id, "run_id": run_id},
+        )
+        return _idempotency_gate_skipped_envelope(node_id)
+    return None
+
+
+async def _render_agent_template(
+    *,
+    sandbox_mode: str,
+    agent_command: str,
+    agent_prompt_template: str,
+    state: dict[str, Any],
+    scoped_run_context: dict[str, Any],
+    raw_input: Any,
+    run_id: str,
+    node_id: str,
+) -> tuple[str, str, str] | dict[str, Any]:
+    """Render agent prompt and command templates for the sandbox.
+
+    Returns ``(rendered_prompt, rendered_agent_command, input_json)`` on
+    success, or a skip-status dict when the template references missing input
+    fields (the caller returns this dict directly as the node result).
+    """
+    if sandbox_mode == "script":
+        return ("", agent_command, json.dumps(raw_input))
+    env = SandboxedEnvironment()
+    scoped_state = dict(state)
+    scoped_state["run_context"] = scoped_run_context
+    template_vars: dict[str, Any] = {
+        "state": scoped_state,
+        "run_context": scoped_run_context,
+        "input": raw_input,
+    }
+    try:
+        rendered_prompt = env.from_string(agent_prompt_template).render(**template_vars)
+        rendered_agent_command = env.from_string(agent_command).render(**template_vars)
+    except jinja2.UndefinedError as _exc:
+        _log.warning("runner_dispatch.template_missing_input run=%s: %s", run_id, _exc)
+        return {
+            "status": "skipped",
+            "summary": f"Skipped: prompt template references missing input fields ({_exc})",
+            "agent_stdout": "",
+            "agent_stderr": "",
+            "exit_code": 0,
+        }
+    except (TypeError, jinja2.TemplateSyntaxError) as _exc:
+        _log.warning(
+            "runner_dispatch.agent_command_not_template run=%s node=%s; verbatim: %s",
+            run_id,
+            node_id,
+            _exc,
+        )
+        rendered_agent_command = agent_command
+    if rendered_agent_command and not rendered_agent_command.strip():
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' rendered agent_command is empty after "
+            "template resolution — a sandbox agent cannot run an empty command"
+        ) from None
+    return (rendered_prompt, rendered_agent_command, json.dumps(raw_input))
+
+
+@dataclass(frozen=True)
+class _ProvisionResult:
+    """Result of workspace provisioning for a Bundled Runner dispatch."""
+
+    attempt_key: str
+    provider_ref: str
+
+
+async def _provision_workspace(
+    *,
+    session_factory: Callable[..., Any] | None,
+    state: dict[str, Any],
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    route: RunnerDispatchRoute,
+    org_uuid: uuid.UUID | None,
+    run_uuid: uuid.UUID | None,
+    sandbox_mode: str,
+    context_files: dict[str, str],
+    input_json: str,
+    raw_input: Any,
+    rendered_prompt: str,
+) -> _ProvisionResult:
+    """Acquire the dispatch marker, provision a workspace, and write context/input files.
+
+    Raises :class:`SupersededNodeError` when the dispatch marker is denied.
+    Returns the attempt key and provider reference on success.
+    """
+    from modulo.core.pipeline_engine.node_runner import (
+        SupersededNodeError,
+        _emit_script_span_event,
+        _sandbox_acquire_dispatch_marker,
+        _sandbox_store_dispatch_marker_sandbox,
+    )
+
+    attempt_key = await _sandbox_acquire_dispatch_marker(
+        session_factory=session_factory,
+        claim_lease=state.get("_claim_lease"),
+        org_id=org_id,
+        run_id=run_id,
+        node_id=node_id,
+    )
+    if attempt_key is None:
+        raise SupersededNodeError(
+            "Bundled Runner dispatch marker denied — run superseded or not running; workspace not created"
+        )
+
+    profile = route.profile
+    provider = route.provider
+    if profile is None or provider is None:
+        raise RuntimeError("Bundled Runner route resolved without a profile/provider")
+    spec = _workspace_spec_for_dispatch(
+        profile,
+        org_id=org_uuid,
+        run_id=run_id,
+        node_id=node_id,
+        run_uuid=run_uuid,
+    )
+    provider_ref = await provider.create_workspace(spec)
+    _emit_script_span_event(
+        "script.provisioned",
+        {"sandbox_id": provider_ref, "provider": "runner_docker", "mode": sandbox_mode},
+    )
+    await _sandbox_store_dispatch_marker_sandbox(
+        provider_ref,
+        session_factory=session_factory,
+        claim_lease=state.get("_claim_lease"),
+        org_id=org_id,
+        run_id=run_id,
+        attempt_key=attempt_key,
+    )
+
+    for raw_path, raw_content in context_files.items():
+        write_path = raw_path.removesuffix(".b64") if raw_path.endswith(".b64") else raw_path
+        write_content = base64.b64decode(raw_content).decode() if raw_path.endswith(".b64") else raw_content
+        await _write_file_via_exec(provider, provider_ref, write_path, write_content)
+    if sandbox_mode == "script":
+        await _write_file_via_exec(provider, provider_ref, _INPUT_JSON_PATH, input_json)
+    else:
+        safe_input = input_json
+        if len(input_json) > 10240:
+            safe_input = json.dumps(
+                {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
+            )
+        await _write_file_via_exec(provider, provider_ref, _INPUT_JSON_PATH, safe_input)
+        await _write_file_via_exec(provider, provider_ref, _PROMPT_PATH, rendered_prompt)
+
+    return _ProvisionResult(attempt_key=attempt_key, provider_ref=provider_ref)
+
+
+async def _resolve_sandbox_envs_with_script_setup(
+    *,
+    node_def: dict[str, Any],
+    run_id: str,
+    pipeline_id: str,
+    org_id: str,
+    sandbox_mode: str,
+    state: dict[str, Any],
+    session_factory: Callable[..., Any] | None,
+    wallclock_budget_seconds: int | None,
+    start_time: float,
+    attempt_key: str,
+    sandbox_timeout: int,
+    input_json: str,
+) -> tuple[dict[str, str], bool]:
+    """Resolve sandbox env vars and perform script-mode pre-run setup.
+
+    Returns ``(sandbox_envs, script_lease_claimed)``.  In script mode this
+    also claims the script lease, mints a run API key, and checks the
+    wallclock budget (raising :class:`ScriptBudgetKilledError` on overrun).
+    """
+    from modulo.core.pipeline_engine.node_runner import (
+        ScriptBudgetKilledError,
+        _build_sandbox_envs,
+        _emit_script_span_event,
+        _sandbox_mint_run_api_key_for_sandbox,
+        _sandbox_resolve_secret_ref,
+        _sandbox_store_script_lease,
+        _sandbox_wallclock_budget_exceeded,
+        resolve_env_var_refs,
+    )
+
+    env_vars_extra: dict[str, str] = await resolve_env_var_refs(
+        node_def.get("env_vars") or {},
+        lambda key: _sandbox_resolve_secret_ref(
+            key,
+            session_factory=session_factory,
+            org_id=org_id,
+        ),
+    )
+    node_scope = node_def.get("capability_scope") or {}
+    allowed_tools = node_scope.get("allowed_tools")
+    if allowed_tools:
+        env_vars_extra["MODULO_ALLOWED_TOOLS"] = ",".join(str(t) for t in allowed_tools)
+    sandbox_envs = _build_sandbox_envs(
+        run_id=run_id,
+        pipeline_id=pipeline_id,
+        org_id=org_id,
+        input_json=input_json,
+        sandbox_mode=sandbox_mode,
+        env_vars_extra=env_vars_extra,
+    )
+
+    script_lease_claimed = False
+    if sandbox_mode == "script":
+        if _sandbox_wallclock_budget_exceeded(
+            sandbox_mode=sandbox_mode,
+            wallclock_budget_seconds=wallclock_budget_seconds,
+            start_time=start_time,
+        ):
+            _log.warning(
+                "sandbox_agent.runner.wallclock_budget_overrun_pre_run",
+                extra={"run_id": run_id, "node_id": node_def.get("node_id", "")},
+            )
+            raise ScriptBudgetKilledError(_budget_killed_message(node_def.get("node_id", ""))) from None
+        await _sandbox_store_script_lease(
+            session_factory=session_factory,
+            claim_lease=state.get("_claim_lease"),
+            org_id=org_id,
+            run_id=run_id,
+            attempt_key=attempt_key,
+        )
+        script_lease_claimed = True
+        _emit_script_span_event(
+            "script.lease_claimed",
+            {"run_id": run_id, "node_id": node_def.get("node_id", "")},
+        )
+        run_api_key = await _sandbox_mint_run_api_key_for_sandbox(
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=run_id,
+            node_id=node_def.get("node_id", ""),
+            sandbox_timeout=sandbox_timeout,
+        )
+        if run_api_key:
+            sandbox_envs["MODULO_API_KEY"] = run_api_key
+
+    return sandbox_envs, script_lease_claimed
+
+
+def _classify_exec_result(
+    exec_process: Any,
+    *,
+    timed_out: bool,
+    stalled: bool,
+    sandbox_mode: str,
+    script_lease_claimed: bool,
+    stall_timeout: float,
+    sandbox_timeout: int,
+    node_id: str,
+) -> int:
+    """Classify the exec result: raise on error, return exit_code on success.
+
+    Raises :class:`SandboxNodeFailedError` on stream error, stall, timeout,
+    or missing exit code.  Raises :class:`ScriptSideEffectUnknownError` when
+    a script-mode run is killed mid-execution.
+    """
+    from modulo.core.pipeline_engine.node_runner import (
+        SandboxNodeFailedError,
+        ScriptSideEffectUnknownError,
+    )
+
+    if exec_process.error:
+        raise SandboxNodeFailedError(
+            f"Bundled Runner exec stream error (retryable, engine/proxy drop): {exec_process.error[:500]}",
+            node_id=node_id,
+        )
+    if timed_out or stalled:
+        if sandbox_mode == "script" and script_lease_claimed:
+            raise ScriptSideEffectUnknownError(
+                "Bundled Runner script-mode terminated mid-execution (side effect unknown): "
+                + (
+                    f"stalled — no output for {stall_timeout:.0f}s"
+                    if stalled
+                    else f"no output within {sandbox_timeout}s"
+                )
+            )
+        raise SandboxNodeFailedError(
+            (
+                f"agent produced no output for {stall_timeout:.0f}s"
+                if stalled
+                else f"Bundled Runner command produced no output within {sandbox_timeout}s"
+            ),
+            node_id=node_id,
+        )
+    if exec_process.exit_code is None:
+        raise SandboxNodeFailedError(
+            "Bundled Runner exec stream ended without an inspectable exit code (retryable)",
+            node_id=node_id,
+        )
+    exit_code: int = exec_process.exit_code
+    return exit_code
+
+
+async def _read_and_validate_output(
+    *,
+    provider: Any,
+    provider_ref: str,
+    session_factory: Callable[..., Any] | None,
+    run_id: str,
+    org_id: str,
+    node_id: str,
+    attempt_key: str,
+    agent_stdout_raw: str,
+    agent_stderr_raw: str,
+    delivery_sentinel: str | None,
+    stdout_cap: int,
+    exit_code: int,
+    sandbox_mode: str,
+    script_lease_claimed: bool,
+    output_schema_json: Any,
+) -> Any:
+    """Read output.json from the workspace, parse it, and validate against schema.
+
+    Returns the parsed output dict (or a non-dict parseable value).  Raises
+    on truly-empty output, script-mode non-zero exit, or schema validation
+    failure.  Retains raw-output markers on every error path.
+    """
+    from modulo.core.pipeline_engine.node_runner import (
+        SandboxNodeFailedError,
+        ScriptFailedError,
+        ScriptInvalidOutputError,
+        _retain_raw_output_marker,
+        _validate_against_schema,
+    )
+
+    raw_output_str = await _read_file_via_exec(provider, provider_ref, _OUTPUT_JSON_PATH)
+    output_json: Any = None
+    if raw_output_str:
+        try:
+            output_json = json.loads(raw_output_str)
+        except json.JSONDecodeError:
+            output_json = None
+
+    if output_json is None or not isinstance(output_json, dict):
+        if raw_output_str and not isinstance(output_json, dict) and output_json is not None:
+            parse_error = f"output.json parsed to non-dict type {type(output_json).__name__}"
+        elif raw_output_str:
+            parse_error = "output.json is not valid JSON"
+        else:
+            parse_error = "output.json is empty or JSON null"
+        await _retain_raw_output_marker(
+            session_factory,
+            run_id=run_id,
+            org_id_raw=org_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            summary="Bundled Runner agent produced no parseable output.json — raw output retained",
+            source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
+            parse_error=parse_error,
+            exit_code=exit_code,
+            stdout_length=len(agent_stdout_raw),
+            stderr_length=len(agent_stderr_raw),
+            delivery_sentinel=delivery_sentinel,
+            max_artifact_bytes=stdout_cap,
+        )
+        if output_json is None:
+            if sandbox_mode == "script" and script_lease_claimed:
+                raise ScriptInvalidOutputError(_no_output_message(node_id))
+            raise SandboxNodeFailedError(_no_output_message(node_id), node_id=node_id)
+
+    if sandbox_mode == "script" and exit_code != 0:
+        raise ScriptFailedError(f"Script-mode Bundled Runner exited with code {exit_code} (post-claim, terminal)")
+
+    if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
+        try:
+            _validate_against_schema(output_json, output_schema_json)
+        except ValueError as schema_exc:
+            _log.exception(
+                "sandbox_agent.runner.schema_validation_failed",
+                extra={"node_id": node_id},
+            )
+            if sandbox_mode == "script" and script_lease_claimed:
+                raise ScriptInvalidOutputError(
+                    f"Script-mode output failed schema validation for node {node_id!r}: {schema_exc}"
+                ) from None
+            await _retain_raw_output_marker(
+                session_factory,
+                run_id=run_id,
+                org_id_raw=org_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                summary=("Bundled Runner agent output failed declared output schema validation — raw output retained"),
+                source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
+                parse_error=str(schema_exc),
+                exit_code=exit_code,
+                stdout_length=len(agent_stdout_raw),
+                stderr_length=len(agent_stderr_raw),
+                delivery_sentinel=delivery_sentinel,
+                max_artifact_bytes=stdout_cap,
+            )
+            raise SandboxNodeFailedError(
+                _schema_failure_message(node_id=node_id, schema_exc=str(schema_exc)),
+                node_id=node_id,
+            ) from None
+
+    return output_json
+
+
+@dataclass(frozen=True)
+class _ResultShape:
+    """Shaped result envelope fields for a Bundled Runner node."""
+
+    status: str
+    result_summary: str
+    agent_status: str | None
+    agent_outcome: str | None
+    changed_files: list[str]
+    pr_url: str
+    cost: float
+    sandbox_session_lost: bool
+
+
+def _shape_result(
+    *,
+    exit_code: int,
+    output_json: Any,
+    sandbox_mode: str,
+    elapsed: float,
+) -> _ResultShape:
+    """Determine the final status, summary, and agent-failure fields from the exec result.
+
+    Surfaces the agent's own ``status`` / ``outcome`` verdicts verbatim
+    (A1 elevation input for agent-failure UX) — never derived from
+    ``exit_code``.
+    """
+    from modulo.core.pipeline_engine.node_runner import (
+        _compute_sandbox_cost,
+        _is_sandbox_session_lost_echo,
+    )
+
+    cost = _compute_sandbox_cost(elapsed, output_json)
+    status = "completed" if exit_code == 0 else "failed"
+    result_summary = ""
+    agent_status: str | None = None
+    agent_outcome: str | None = None
+    changed_files: list[str] = []
+    pr_url: str = ""
+    sandbox_session_lost = False
+    if sandbox_mode == "script":
+        result_summary = f"script mode: exit_code={exit_code}"
+    elif isinstance(output_json, dict):
+        result_summary = output_json.get("summary", "")
+        changed_files = output_json.get("changed_files", [])
+        pr_url = output_json.get("pr_url", "")
+        sandbox_session_lost = _is_sandbox_session_lost_echo(output_json)
+        _raw_status = output_json.get("status")
+        _raw_outcome = output_json.get("outcome")
+        if isinstance(_raw_status, str) and not sandbox_session_lost:
+            agent_status = _raw_status
+        if isinstance(_raw_outcome, str) and not sandbox_session_lost:
+            agent_outcome = _raw_outcome
+        if sandbox_session_lost:
+            status = "failed"
+    if status == "failed" and not result_summary:
+        result_summary = "Bundled Runner command failed"
+
+    return _ResultShape(
+        status=status,
+        result_summary=result_summary,
+        agent_status=agent_status,
+        agent_outcome=agent_outcome,
+        changed_files=changed_files,
+        pr_url=pr_url,
+        cost=cost,
+        sandbox_session_lost=sandbox_session_lost,
+    )
+
+
+async def _maybe_retain_delivery_sentinel(
+    *,
+    session_factory: Callable[..., Any] | None,
+    run_id: str,
+    org_id: str,
+    node_id: str,
+    attempt_key: str,
+    agent_stdout_raw: str,
+    exit_code: int,
+    stdout_len: int,
+    stderr_len: int,
+    delivery_sentinel: str | None,
+    status: str,
+    stdout_cap: int,
+) -> None:
+    """Best-effort retention of the delivery-sentinel idempotency marker."""
+    from modulo.core.pipeline_engine.node_runner import _retain_raw_output_marker
+
+    if not (delivery_sentinel and _source_contains_sentinel(agent_stdout_raw, delivery_sentinel)):
+        return
+    try:
+        await _retain_raw_output_marker(
+            session_factory,
+            run_id=run_id,
+            org_id_raw=org_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            summary="Bundled Runner completed with delivery sentinel observed (idempotency gate)",
+            source=agent_stdout_raw,
+            parse_error="",
+            exit_code=exit_code,
+            stdout_length=stdout_len,
+            stderr_length=stderr_len,
+            delivery_sentinel=delivery_sentinel,
+            status=status,
+            max_artifact_bytes=stdout_cap,
+        )
+    except Exception:
+        _log.exception(
+            "sandbox_agent.runner.delivery_marker_persist_failed",
+            extra={"node_id": node_id},
+        )
+
+
 async def run_bundled_runner_node(
     state: dict[str, Any],
     config: Any,
@@ -553,34 +1109,15 @@ async def run_bundled_runner_node(
     from modulo.core.pipeline_engine.node_runner import (
         _UNSET,
         SandboxNodeFailedError,
-        ScriptBudgetKilledError,
-        ScriptFailedError,
-        ScriptInvalidOutputError,
-        ScriptSideEffectUnknownError,
-        SupersededNodeError,
-        _build_sandbox_envs,
         _build_sandbox_node_envelope,
         _compute_sandbox_cost,
         _configure_stall_detector,
         _emit_script_span_event,
-        _idempotency_gate_skipped_envelope,
-        _is_sandbox_session_lost_echo,
-        _marker_delivery_done_for_node,
         _persist_full_stdout_artifact,
         _read_org_stdout_retention_ceiling,
-        _read_run_raw_output_markers_for_gate,
         _redact_raw_output,
-        _retain_raw_output_marker,
         _run_identity_strs,
-        _sandbox_acquire_dispatch_marker,
-        _sandbox_mint_run_api_key_for_sandbox,
-        _sandbox_resolve_secret_ref,
-        _sandbox_store_dispatch_marker_sandbox,
-        _sandbox_store_script_lease,
-        _sandbox_wallclock_budget_exceeded,
         _SandboxNodeOutput,
-        _validate_against_schema,
-        resolve_env_var_refs,
     )
 
     node_id: str = config.node_id
@@ -624,27 +1161,17 @@ async def run_bundled_runner_node(
 
     try:
         # Guard A (delivery-sentinel skip) — shared with the E2B path.
-        if delivery_sentinel and single_sandbox_node:
-            try:
-                from modulo.settings import get_settings
-
-                gate_enabled = bool(getattr(get_settings(), "modulo_idempotency_gate_enabled", True))
-            except Exception:
-                gate_enabled = True
-            if gate_enabled:
-                markers = await _read_run_raw_output_markers_for_gate(
-                    session_factory,
-                    run_id=run_id,
-                    org_id_raw=org_id,
-                    claim_lease=state.get("_claim_lease"),
-                    node_id=node_id,
-                )
-                if _marker_delivery_done_for_node(markers, run_id, node_id):
-                    _log.info(
-                        "sandbox_agent.runner.idempotency_gate.skipped",
-                        extra={"node_id": node_id, "run_id": run_id},
-                    )
-                    return _idempotency_gate_skipped_envelope(node_id)
+        gate_result = await _check_idempotency_gate(
+            session_factory=session_factory,
+            state=state,
+            run_id=run_id,
+            org_id=org_id,
+            node_id=node_id,
+            delivery_sentinel=delivery_sentinel,
+            single_sandbox_node=single_sandbox_node,
+        )
+        if gate_result is not None:
+            return gate_result
 
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input: Any = run_context.get("input", {})
@@ -653,153 +1180,55 @@ async def run_bundled_runner_node(
         scoped_run_context = filter_run_context_scope(
             run_context, (node_def.get("capability_scope") or {}).get("context_scope")
         )
-        if sandbox_mode == "script":
-            rendered_prompt = ""
-            rendered_agent_command = agent_command
-            input_json = json.dumps(raw_input)
-        else:
-            env = SandboxedEnvironment()
-            scoped_state = dict(state)
-            scoped_state["run_context"] = scoped_run_context
-            template_vars: dict[str, Any] = {
-                "state": scoped_state,
-                "run_context": scoped_run_context,
-                "input": raw_input,
-            }
-            try:
-                rendered_prompt = env.from_string(agent_prompt_template).render(**template_vars)
-                rendered_agent_command = env.from_string(agent_command).render(**template_vars)
-            except jinja2.UndefinedError as _exc:
-                _log.warning("runner_dispatch.template_missing_input run=%s: %s", run_id, _exc)
-                return {
-                    "status": "skipped",
-                    "summary": f"Skipped: prompt template references missing input fields ({_exc})",
-                    "agent_stdout": "",
-                    "agent_stderr": "",
-                    "exit_code": 0,
-                }
-            except (TypeError, jinja2.TemplateSyntaxError) as _exc:
-                _log.warning(
-                    "runner_dispatch.agent_command_not_template run=%s node=%s; verbatim: %s",
-                    run_id,
-                    node_id,
-                    _exc,
-                )
-                rendered_agent_command = agent_command
-            if rendered_agent_command and not rendered_agent_command.strip():
-                raise ValueError(
-                    f"sandbox_agent node '{node_id}' rendered agent_command is empty after "
-                    "template resolution — a sandbox agent cannot run an empty command"
-                ) from None
-            input_json = json.dumps(raw_input)
+        template_result = await _render_agent_template(
+            sandbox_mode=sandbox_mode,
+            agent_command=agent_command,
+            agent_prompt_template=agent_prompt_template,
+            state=state,
+            scoped_run_context=scoped_run_context,
+            raw_input=raw_input,
+            run_id=run_id,
+            node_id=node_id,
+        )
+        if isinstance(template_result, dict):
+            return template_result
+        rendered_prompt, rendered_agent_command, input_json = template_result
 
         # DB-atomic dispatch fence (same fenced WHERE as the E2B path).
-        attempt_key = await _sandbox_acquire_dispatch_marker(
+        provision = await _provision_workspace(
             session_factory=session_factory,
-            claim_lease=state.get("_claim_lease"),
+            state=state,
             org_id=org_id,
             run_id=run_id,
             node_id=node_id,
-        )
-        if attempt_key is None:
-            raise SupersededNodeError(
-                "Bundled Runner dispatch marker denied — run superseded or not running; workspace not created"
-            )
-        dispatch_marker_set = True
-
-        profile = route.profile
-        provider = route.provider
-        if profile is None or provider is None:
-            raise RuntimeError("Bundled Runner route resolved without a profile/provider")
-        spec = _workspace_spec_for_dispatch(
-            profile,
-            org_id=org_uuid,
-            run_id=run_id,
-            node_id=node_id,
+            route=route,
+            org_uuid=org_uuid,
             run_uuid=run_uuid,
+            sandbox_mode=sandbox_mode,
+            context_files=context_files,
+            input_json=input_json,
+            raw_input=raw_input,
+            rendered_prompt=rendered_prompt,
         )
-        provider_ref = await provider.create_workspace(spec)
-        _emit_script_span_event(
-            "script.provisioned",
-            {"sandbox_id": provider_ref, "provider": "runner_docker", "mode": sandbox_mode},
-        )
-        await _sandbox_store_dispatch_marker_sandbox(
-            provider_ref,
-            session_factory=session_factory,
-            claim_lease=state.get("_claim_lease"),
-            org_id=org_id,
-            run_id=run_id,
-            attempt_key=attempt_key,
-        )
+        attempt_key = provision.attempt_key
+        dispatch_marker_set = True
+        provider_ref = provision.provider_ref
+        provider = route.provider
 
-        for raw_path, raw_content in context_files.items():
-            write_path = raw_path.removesuffix(".b64") if raw_path.endswith(".b64") else raw_path
-            write_content = base64.b64decode(raw_content).decode() if raw_path.endswith(".b64") else raw_content
-            await _write_file_via_exec(provider, provider_ref, write_path, write_content)
-        if sandbox_mode == "script":
-            await _write_file_via_exec(provider, provider_ref, _INPUT_JSON_PATH, input_json)
-        else:
-            safe_input = input_json
-            if len(input_json) > 10240:
-                safe_input = json.dumps(
-                    {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
-                )
-            await _write_file_via_exec(provider, provider_ref, _INPUT_JSON_PATH, safe_input)
-            await _write_file_via_exec(provider, provider_ref, _PROMPT_PATH, rendered_prompt)
-
-        env_vars_extra: dict[str, str] = await resolve_env_var_refs(
-            node_def.get("env_vars") or {},
-            lambda key: _sandbox_resolve_secret_ref(
-                key,
-                session_factory=session_factory,
-                org_id=org_id,
-            ),
-        )
-        node_scope = node_def.get("capability_scope") or {}
-        allowed_tools = node_scope.get("allowed_tools")
-        if allowed_tools:
-            env_vars_extra["MODULO_ALLOWED_TOOLS"] = ",".join(str(t) for t in allowed_tools)
-        sandbox_envs = _build_sandbox_envs(
+        sandbox_envs, script_lease_claimed = await _resolve_sandbox_envs_with_script_setup(
+            node_def=node_def,
             run_id=run_id,
             pipeline_id=pipeline_id,
             org_id=org_id,
-            input_json=input_json,
             sandbox_mode=sandbox_mode,
-            env_vars_extra=env_vars_extra,
+            state=state,
+            session_factory=session_factory,
+            wallclock_budget_seconds=wallclock_budget_seconds,
+            start_time=start_time,
+            attempt_key=attempt_key,
+            sandbox_timeout=sandbox_timeout,
+            input_json=input_json,
         )
-
-        if sandbox_mode == "script":
-            if _sandbox_wallclock_budget_exceeded(
-                sandbox_mode=sandbox_mode,
-                wallclock_budget_seconds=wallclock_budget_seconds,
-                start_time=start_time,
-            ):
-                _log.warning(
-                    "sandbox_agent.runner.wallclock_budget_overrun_pre_run",
-                    extra={"run_id": run_id, "node_id": node_id},
-                )
-                raise ScriptBudgetKilledError(_budget_killed_message(node_id)) from None
-            await _sandbox_store_script_lease(
-                session_factory=session_factory,
-                claim_lease=state.get("_claim_lease"),
-                org_id=org_id,
-                run_id=run_id,
-                attempt_key=attempt_key,
-            )
-            script_lease_claimed = True
-            _emit_script_span_event(
-                "script.lease_claimed",
-                {"run_id": run_id, "node_id": node_id},
-            )
-            run_api_key = await _sandbox_mint_run_api_key_for_sandbox(
-                session_factory=session_factory,
-                org_id=org_id,
-                run_id=run_id,
-                node_id=node_id,
-                sandbox_timeout=sandbox_timeout,
-            )
-            if run_api_key:
-                sandbox_envs["MODULO_API_KEY"] = run_api_key
 
         effective_command = rendered_agent_command
         if loop_intercept is not None and loop_intercept.enabled:
@@ -879,127 +1308,34 @@ async def run_bundled_runner_node(
 
         # Stream error / engine-proxy drop / no exit code: RETRYABLE — never
         # a fabricated zero-exit completion (D4 acceptance criteria).
-        if exec_process.error:
-            raise SandboxNodeFailedError(
-                f"Bundled Runner exec stream error (retryable, engine/proxy drop): {exec_process.error[:500]}",
-                node_id=node_id,
-            )
-        if timed_out or stalled:
-            # FAR-296 stage-split parity with the E2B path: a kill while the
-            # command may still be running leaves the script's side effects
-            # unknown (terminal post-claim); llm mode is a retryable failure.
-            if sandbox_mode == "script" and script_lease_claimed:
-                raise ScriptSideEffectUnknownError(
-                    "Bundled Runner script-mode terminated mid-execution (side effect unknown): "
-                    + (
-                        f"stalled — no output for {stall_timeout:.0f}s"
-                        if stalled
-                        else f"no output within {sandbox_timeout}s"
-                    )
-                )
-            raise SandboxNodeFailedError(
-                (
-                    f"agent produced no output for {stall_timeout:.0f}s"
-                    if stalled
-                    else f"Bundled Runner command produced no output within {sandbox_timeout}s"
-                ),
-                node_id=node_id,
-            )
-        if exec_process.exit_code is None:
-            raise SandboxNodeFailedError(
-                "Bundled Runner exec stream ended without an inspectable exit code (retryable)",
-                node_id=node_id,
-            )
-        exit_code = exec_process.exit_code
+        exit_code = _classify_exec_result(
+            exec_process,
+            timed_out=timed_out,
+            stalled=stalled,
+            sandbox_mode=sandbox_mode,
+            script_lease_claimed=script_lease_claimed,
+            stall_timeout=stall_timeout,
+            sandbox_timeout=sandbox_timeout,
+            node_id=node_id,
+        )
 
-        raw_output_str = await _read_file_via_exec(provider, provider_ref, _OUTPUT_JSON_PATH)
-        if raw_output_str:
-            try:
-                output_json = json.loads(raw_output_str)
-            except json.JSONDecodeError:
-                output_json = None
-
-        if output_json is None or not isinstance(output_json, dict):
-            if raw_output_str and not isinstance(output_json, dict) and output_json is not None:
-                parse_error = f"output.json parsed to non-dict type {type(output_json).__name__}"
-            elif raw_output_str:
-                parse_error = "output.json is not valid JSON"
-            else:
-                parse_error = "output.json is empty or JSON null"
-            await _retain_raw_output_marker(
-                session_factory,
-                run_id=run_id,
-                org_id_raw=org_id,
-                node_id=node_id,
-                attempt_key=attempt_key,
-                summary="Bundled Runner agent produced no parseable output.json — raw output retained",
-                source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
-                parse_error=parse_error,
-                exit_code=exit_code,
-                stdout_length=len(agent_stdout_raw),
-                stderr_length=len(agent_stderr_raw),
-                delivery_sentinel=delivery_sentinel,
-                max_artifact_bytes=stdout_cap,
-            )
-            if output_json is None:
-                # Truly-empty read (read failure / JSON null): a node with zero
-                # usable work must never complete silently (A6) — raise.
-                if sandbox_mode == "script" and script_lease_claimed:
-                    raise ScriptInvalidOutputError(_no_output_message(node_id))
-                raise SandboxNodeFailedError(_no_output_message(node_id), node_id=node_id)
-            # FAR-188 parity with the E2B path (node_runner._sandbox_agent_impl):
-            # a PARSEABLE but non-dict output.json (a list, string, number,
-            # true/false) retains the raw evidence (above) and CONTINUES through
-            # the shaping path with agent_status left None — it is surfaced
-            # verbatim rather than misclassified as a no-output retryable error.
-            # Only the truly-empty read (output_json is None) raises.
-
-        if sandbox_mode == "script" and exit_code != 0:
-            raise ScriptFailedError(f"Script-mode Bundled Runner exited with code {exit_code} (post-claim, terminal)")
-
-        if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
-            try:
-                _validate_against_schema(output_json, output_schema_json)
-            except ValueError as schema_exc:
-                _log.exception(
-                    "sandbox_agent.runner.schema_validation_failed",
-                    extra={"node_id": node_id},
-                )
-                if sandbox_mode == "script" and script_lease_claimed:
-                    raise ScriptInvalidOutputError(
-                        f"Script-mode output failed schema validation for node {node_id!r}: {schema_exc}"
-                    ) from None
-                # FAR-780: an llm-mode output that violates the node's DECLARED
-                # output contract (a missing schema-required field such as
-                # pr_url) must fail RETRYABLY so runtime_retry re-dispatches the
-                # node in a fresh sandbox. The previous synthetic
-                # ``status="failed"`` envelope (modulo_synthetic_failure=True)
-                # completed the node non-retryably: the run proceeded to a
-                # blocking eval (eval.blocked) with the sandbox destroyed and
-                # tokens burned, and the retryable ``sandbox.no_output_json``
-                # path never fired. The raw agent evidence is retained via the
-                # raw-output marker exactly as the no-output path above.
-                await _retain_raw_output_marker(
-                    session_factory,
-                    run_id=run_id,
-                    org_id_raw=org_id,
-                    node_id=node_id,
-                    attempt_key=attempt_key,
-                    summary=(
-                        "Bundled Runner agent output failed declared output schema validation — raw output retained"
-                    ),
-                    source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
-                    parse_error=str(schema_exc),
-                    exit_code=exit_code,
-                    stdout_length=len(agent_stdout_raw),
-                    stderr_length=len(agent_stderr_raw),
-                    delivery_sentinel=delivery_sentinel,
-                    max_artifact_bytes=stdout_cap,
-                )
-                raise SandboxNodeFailedError(
-                    _schema_failure_message(node_id=node_id, schema_exc=str(schema_exc)),
-                    node_id=node_id,
-                ) from None
+        output_json = await _read_and_validate_output(
+            provider=provider,
+            provider_ref=provider_ref,
+            session_factory=session_factory,
+            run_id=run_id,
+            org_id=org_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            agent_stdout_raw=agent_stdout_raw,
+            agent_stderr_raw=agent_stderr_raw,
+            delivery_sentinel=delivery_sentinel,
+            stdout_cap=stdout_cap,
+            exit_code=exit_code,
+            sandbox_mode=sandbox_mode,
+            script_lease_claimed=script_lease_claimed,
+            output_schema_json=output_schema_json,
+        )
 
         # FAR-792: redact BEFORE truncation so credential-scrubbing sees the
         # full stream, then slice to the node's effective retention cap.
@@ -1038,61 +1374,34 @@ async def run_bundled_runner_node(
             )
 
         cost = _compute_sandbox_cost(elapsed, output_json)
-        status = "completed" if exit_code == 0 else "failed"
-        result_summary = ""
-        # A1 elevation input (agent-failure UX, §15.4 / FAR-188): surface the
-        # agent's RAW verdict from output.json VERBATIM — never derived from
-        # exit_code — so the executor's ``_node_output_agent_failure`` can fire.
-        # A self-reported ``status: failed`` / ``outcome: failed`` with exit 0
-        # must NOT land the run ``completed`` (matching the E2B path's contract);
-        # ``agent_status`` / ``agent_outcome`` are carried into the envelope and
-        # the executor elevates to ``agent.failed``.
-        agent_status: str | None = None
-        agent_outcome: str | None = None
-        changed_files: list[str] = []
-        pr_url: str = ""
-        sandbox_session_lost = False
-        if sandbox_mode == "script":
-            result_summary = f"script mode: exit_code={exit_code}"
-        elif isinstance(output_json, dict):
-            result_summary = output_json.get("summary", "")
-            changed_files = output_json.get("changed_files", [])
-            pr_url = output_json.get("pr_url", "")
-            sandbox_session_lost = _is_sandbox_session_lost_echo(output_json)
-            _raw_status = output_json.get("status")
-            _raw_outcome = output_json.get("outcome")
-            if isinstance(_raw_status, str) and not sandbox_session_lost:
-                agent_status = _raw_status
-            if isinstance(_raw_outcome, str) and not sandbox_session_lost:
-                agent_outcome = _raw_outcome
-            if sandbox_session_lost:
-                status = "failed"
-        if status == "failed" and not result_summary:
-            result_summary = "Bundled Runner command failed"
+        result = _shape_result(
+            exit_code=exit_code,
+            output_json=output_json,
+            sandbox_mode=sandbox_mode,
+            elapsed=elapsed,
+        )
+        status = result.status
+        result_summary = result.result_summary
+        agent_status = result.agent_status
+        agent_outcome = result.agent_outcome
+        changed_files = result.changed_files
+        pr_url = result.pr_url
+        sandbox_session_lost = result.sandbox_session_lost
 
-        if delivery_sentinel and _source_contains_sentinel(agent_stdout_raw, delivery_sentinel):
-            try:
-                await _retain_raw_output_marker(
-                    session_factory,
-                    run_id=run_id,
-                    org_id_raw=org_id,
-                    node_id=node_id,
-                    attempt_key=attempt_key,
-                    summary="Bundled Runner completed with delivery sentinel observed (idempotency gate)",
-                    source=agent_stdout_raw,
-                    parse_error="",
-                    exit_code=exit_code,
-                    stdout_length=stdout_len,
-                    stderr_length=stderr_len,
-                    delivery_sentinel=delivery_sentinel,
-                    status=status,
-                    max_artifact_bytes=stdout_cap,
-                )
-            except Exception:
-                _log.exception(
-                    "sandbox_agent.runner.delivery_marker_persist_failed",
-                    extra={"node_id": node_id},
-                )
+        await _maybe_retain_delivery_sentinel(
+            session_factory=session_factory,
+            run_id=run_id,
+            org_id=org_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            agent_stdout_raw=agent_stdout_raw,
+            exit_code=exit_code,
+            stdout_len=stdout_len,
+            stderr_len=stderr_len,
+            delivery_sentinel=delivery_sentinel,
+            status=status,
+            stdout_cap=stdout_cap,
+        )
 
         return _build_sandbox_node_envelope(
             node_id=node_id,

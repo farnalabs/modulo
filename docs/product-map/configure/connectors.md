@@ -23,6 +23,10 @@ bdd:
   - backend/tests/bdd/steps/test_sentry_connector.py
   - backend/tests/bdd/features/connectors/pagerduty.feature
   - backend/tests/bdd/steps/test_pagerduty_connector.py
+  - backend/tests/bdd/features/connectors/grafana.feature
+  - backend/tests/bdd/steps/test_grafana_connector.py
+  - backend/tests/bdd/features/connectors/buildkite.feature
+  - backend/tests/bdd/steps/test_buildkite_connector.py
 depends-on:
   - feat-model-backends
 status: covered
@@ -70,6 +74,16 @@ and per-destination rate limiting.
       `/users` (200 => healthy, 401 => unhealthy), listing incidents/services,
       and trigger/acknowledge/resolve incident writes (`pagerduty.feature`,
       `steps/test_pagerduty_connector.py`)
+- [x] The Grafana connector is BDD-exercised against the real
+      `GrafanaConnector` (respx-mocked Grafana API): token validation via
+      `/api/health` (200 => healthy, 401 => unhealthy), listing dashboards /
+      dashboard-by-uid / alert-rules / datasources, and annotation writes
+      (`grafana.feature`, `steps/test_grafana_connector.py`)
+- [x] The Buildkite connector is BDD-exercised against the real
+      `BuildkiteConnector` (respx-mocked Buildkite REST API v2): token
+      validation via `/user` (200 => healthy, 401 => unhealthy), triggering a
+      build on a branch, getting run status / listing runs / fetching per-job
+      run logs (`buildkite.feature`, `steps/test_buildkite_connector.py`)
 
 ## Known Gaps
 
@@ -79,6 +93,35 @@ and per-destination rate limiting.
   coverage is via unit tests.
 
 ## QA History
+- 2026-09-14: **improve-architecture (product-map walk)** — closed the
+  `buildkite.feature` orphan gap: the feature shipped under
+  `tests/bdd/features/connectors/` but no step module registered it via
+  `scenarios(...)`, so it never executed. The feature is now wired from the new
+  `steps/test_buildkite_connector.py`, which drives the REAL `BuildkiteConnector`
+  against a respx-mocked Buildkite REST API v2 (mirroring
+  `tests/unit/connectors/test_buildkite.py`): six scenarios covering token
+  validation via `/user` (200/401), triggering a build on a branch, get run
+  status (scheduled => queued, running => in_progress), list recent builds
+  (passed => success, failed => failure), and per-job run logs all collect and
+  execute. `_ORPHANED_BDD_FEATURES` shrinks by one; the remaining connector
+  orphans (`azure_key_vault`, `azure_pipelines`, `azure_repos`, `circleci`,
+  `discord`, `dropbox_paper`, `jenkins`, `microsoft_teams`, `opsgenie`,
+  `sharepoint`, `swappable_binding`, `teamcity`) and the two pipeline-validation
+  orphans still await step modules.
+- 2026-09-14: **improve-architecture (product-map walk)** — closed the
+  `grafana.feature` orphan gap: the feature shipped under
+  `tests/bdd/features/connectors/` but no step module registered it via
+  `scenarios(...)`, so it never executed. The feature is now wired from the new
+  `steps/test_grafana_connector.py`, which drives the REAL `GrafanaConnector`
+  against a respx-mocked Grafana API (mirroring
+  `tests/unit/connectors/test_grafana.py`): seven scenarios covering token
+  validation (200/401), list dashboards / dashboard-by-uid / alert-rules /
+  datasources, and annotation writes all collect and execute.
+  `_ORPHANED_BDD_FEATURES` shrinks by one; the remaining connector orphans
+  (`azure_key_vault`, `azure_pipelines`, `azure_repos`, `circleci`,
+  `discord`, `dropbox_paper`, `jenkins`, `microsoft_teams`, `opsgenie`,
+  `sharepoint`, `swappable_binding`, `teamcity`) and the two pipeline-validation
+  orphans still await step modules.
 - 2026-09-14: **improve-architecture (product-map walk)** — closed the
   `pagerduty.feature` orphan gap: the feature shipped under
   `tests/bdd/features/connectors/` but no step module registered it via

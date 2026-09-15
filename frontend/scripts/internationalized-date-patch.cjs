@@ -1,5 +1,5 @@
-﻿const fs = require('fs');
-const path = require('path');
+﻿const fs = require('node:fs');
+const path = require('node:path');
 
 const mjs = path.join(__dirname, '..', 'node_modules', '@internationalized', 'date', 'dist', 'index.mjs');
 const js = path.join(__dirname, '..', 'node_modules', '@internationalized', 'date', 'dist', 'index.js');

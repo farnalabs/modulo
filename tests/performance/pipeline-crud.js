@@ -50,7 +50,7 @@ export function setup() {
   return { token: JSON.parse(loginRes.body).access_token };
 }
 
-export default function (data) {
+export default function pipelineCrud(data) {
   const token = data.token;
   const params = {
     headers: {

@@ -219,7 +219,7 @@ class SkillLoader:
         if section:
             parts.append(section)
 
-    async def _append_ui_tools_text(self, parts: list[str], include_ui_tools_text: bool) -> None:
+    def _append_ui_tools_text(self, parts: list[str], include_ui_tools_text: bool) -> None:
         if not (include_ui_tools_text and self._ui_tools_text_fn):
             return
         try:
@@ -273,7 +273,7 @@ class SkillLoader:
         always_on_user = self._filter_always_on(user_skills)
         self._append_skills_block(parts, always_on_user, _SECTION_USER_SKILLS)
 
-        await self._append_ui_tools_text(parts, include_ui_tools_text)
+        self._append_ui_tools_text(parts, include_ui_tools_text)
 
         return "\n\n".join(parts)
 

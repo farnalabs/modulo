@@ -355,4 +355,21 @@ describe('AdminRunRetentionView', () => {
     expect(dialog.textContent).toContain('640')
     expect(dialog.textContent).not.toContain('500')
   })
+
+  it('normalises a valid date filter through toIso into the candidates query', async () => {
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="admin-run-retention-date-from"]').setValue('2026-07-01T00:00')
+    await flushPromises()
+    await wrapper.find('[data-testid="admin-run-retention-apply"]').trigger('click')
+    for (let i = 0; i < 10; i++) await flushPromises()
+
+    const getMock = api.GET as Mock
+    const candidatesCalls = getMock.mock.calls.filter(
+      (c: unknown[]) => c[0] === '/api/v1/admin/run-retention/candidates',
+    )
+    const appliedCall = candidatesCalls[candidatesCalls.length - 1] as unknown[]
+    expect(appliedCall).toBeDefined()
+    const query = (appliedCall[1] as { params: { query: Record<string, unknown> } }).params.query
+    expect(query.date_from).toBe(new Date('2026-07-01T00:00').toISOString()) // nosemgrep: new-date-without-guard
+  })
 })

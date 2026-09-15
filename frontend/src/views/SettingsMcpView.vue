@@ -331,11 +331,6 @@ const mcpConfigSnippet = computed(() => {
     case 'opencode':
       return `mcp {\n  server = "${url}"\n}`
     case 'claude':
-      return JSON.stringify({
-        mcpServers: {
-          modulo: { url, apiKey: '<YOUR_API_KEY>' },
-        },
-      }, null, 2)
     case 'cursor':
       return JSON.stringify({
         mcpServers: {

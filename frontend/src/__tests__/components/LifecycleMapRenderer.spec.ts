@@ -317,6 +317,16 @@ describe('LifecycleMapRenderer', () => {
     await nextTick()
     nodes = (wrapper.findComponent({ name: 'VueFlowStub' }).props('nodes') as Array<{ id: string; position: { x: number; y: number } }>)
     expect(nodes.find((n) => n.id === 'stage-1')!.position).toEqual({ x: 100 + NODE_NUDGE_STEP, y: 200 - NODE_NUDGE_STEP })
+
+    await wrapper.find('.stage-node').trigger('keydown', { key: 'ArrowLeft' })
+    await nextTick()
+    nodes = (wrapper.findComponent({ name: 'VueFlowStub' }).props('nodes') as Array<{ id: string; position: { x: number; y: number } }>)
+    expect(nodes.find((n) => n.id === 'stage-1')!.position).toEqual({ x: 100, y: 200 - NODE_NUDGE_STEP })
+
+    await wrapper.find('.stage-node').trigger('keydown', { key: 'ArrowDown' })
+    await nextTick()
+    nodes = (wrapper.findComponent({ name: 'VueFlowStub' }).props('nodes') as Array<{ id: string; position: { x: number; y: number } }>)
+    expect(nodes.find((n) => n.id === 'stage-1')!.position).toEqual({ x: 100, y: 200 })
   })
 
   it('emits positions-changed on keyboard nudge (FAR-829)', async () => {

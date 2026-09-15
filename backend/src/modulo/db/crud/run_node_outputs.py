@@ -101,6 +101,7 @@ __all__ = [
     "assert_write_org",
     "dialect_insert",
     "parse_marker_node_id",
+    "read_audit_row_outputs_json",
     "read_node_output_blob_bytes",
     "read_run_blobs",
     "read_run_markers",
@@ -948,6 +949,37 @@ async def read_node_output_blob_bytes(
         total += 0 if r.markers_absent else json_bytes(r.raw_output_markers)
         totals[run_key] = total
     return totals
+
+
+# ── FAR-801: audit row reader ─────────────────────────────────────────
+
+
+async def read_audit_row_outputs_json(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    node_id: str,
+    attempt_key: str = FINAL_ATTEMPT_KEY,
+) -> dict[str, Any] | None:
+    """Read the ``outputs_json`` column for a single audit sentinel row.
+
+    Used by :func:`modulo.core.cron_helpers._sweep_workspace_input_drift_flags`
+    to check for ``drift_detected`` in the workspace-inputs audit payload
+    without directly touching the ORM blob column (FAR-583 read-switch).
+
+    Returns the ``outputs_json`` dict when the row exists, or ``None``
+    when no matching row is found.
+    """
+    row = (
+        await session.execute(
+            select(RunNodeOutput.outputs_json).where(
+                RunNodeOutput.run_id == run_id,
+                RunNodeOutput.node_id == node_id,
+                RunNodeOutput.attempt_key == attempt_key,
+            )
+        )
+    ).scalar_one_or_none()
+    return row if isinstance(row, dict) else None
 
 
 # ── FAR-582: artifact pointer persistence ──────────────────────────────

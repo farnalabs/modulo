@@ -406,6 +406,38 @@ def refresh_again_same_token(request: Any, ctx: dict[str, Any], token_client: Te
         _store_response(request, ctx, resp)
 
 
+@when("I refresh my tokens again with the same refresh token within the grace window")
+def refresh_again_within_grace(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
+    """Reuse a refresh token within the grace window — accepted and mints (200)."""
+    refresh_token = ctx.get("theft_refresh_token")
+    with (
+        _patch_active_account(),
+        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, True))),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+    ):
+        resp = token_client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": refresh_token},
+        )
+        _store_response(request, ctx, resp)
+
+
+@when("I refresh my tokens again with the same refresh token beyond the grace window")
+def refresh_again_beyond_grace(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
+    """Reuse a refresh token beyond the grace window — detected as theft (401)."""
+    refresh_token = ctx.get("theft_refresh_token")
+    with (
+        _patch_active_account(),
+        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True, False))),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+    ):
+        resp = token_client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": refresh_token},
+        )
+        _store_response(request, ctx, resp)
+
+
 @then("the error indicates suspected theft")
 def error_suspected_theft(request: Any) -> None:
     body = request.node.response.json()

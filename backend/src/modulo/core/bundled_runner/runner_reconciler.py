@@ -75,7 +75,7 @@ class _DockerWorkspaceSource:
         self._docker_host = docker_host
         self._client: Any = None
 
-    async def _get_client(self) -> Any:
+    def _get_client(self) -> Any:
         if self._client is None:
             import aiodocker
 
@@ -84,7 +84,7 @@ class _DockerWorkspaceSource:
 
     async def list_labelled_workspaces(self) -> list[_LabelledContainer]:
         """List modulo-labelled workspace containers + their ages."""
-        client = await self._get_client()
+        client = self._get_client()
         filters = {"label": [f"{_MACHINE_LABEL}={deployment_identity()}", _RUN_ID_LABEL]}
         results = await client.containers.list(filters=filters)
         now = time.time()
@@ -113,7 +113,7 @@ class _DockerWorkspaceSource:
         return entries
 
     async def destroy_by_container_id(self, container_id: str) -> None:
-        client = await self._get_client()
+        client = self._get_client()
         container = await client.containers.get(container_id)
         await container.delete(force=True)
 

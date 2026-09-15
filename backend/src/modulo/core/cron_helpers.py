@@ -36,6 +36,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import sqlalchemy as sa
 from croniter import croniter
 from redis.asyncio import Redis as AsyncRedis
 from saq.queue.redis import RedisQueue
@@ -5544,6 +5545,101 @@ async def _reconcile_org(
     return enqueue_failed_redispatched
 
 
+async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
+    """FAR-801 compensating sweep: correct terminal runs whose audit row has
+    ``drift_detected=true`` but ``runs.workspace_inputs_drift_detected`` is NULL.
+
+    Uses the partial index ``ix_run_node_outputs_audit`` to find audit rows
+    efficiently.  Reads the audit payload to determine drift, then updates the
+    runs row.  Bounded to 200 rows per tick (the sweep is idempotent —
+    remaining rows are picked up on the next tick).
+
+    Every terminal run selected by the window receives a definitive value
+    (``True`` when any audit entry reports drift, otherwise ``False``),
+    including runs with no audit row or an empty workspace-inputs list.  That
+    guarantees the run drops out of the ``workspace_inputs_drift_detected IS
+    NULL`` set, so the bounded scan makes deterministic progress instead of
+    re-selecting the same no-audit rows every tick and starving later drift
+    corrections once they exceed the LIMIT 200 window.
+
+    Returns ``{"scanned": N, "corrected": M}``.
+    """
+    from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+    from modulo.db.crud.run_node_outputs import read_audit_row_outputs_json
+    from modulo.db.models.run import TERMINAL_STATUSES, Run
+
+    scanned = 0
+    corrected = 0
+    try:
+        async with factory() as session, session.begin():
+            # Find terminal runs whose drift column is NULL but an audit row
+            # exists with drift_detected=true in the workspace_inputs list.
+            # Ordered by run_id so the bounded scan makes deterministic
+            # progress (it never re-scans the same fixed first-N rows every
+            # tick — runs with a workspace_inputs audit row are marked
+            # definitive below and drop out of the NULL-flag set entirely).
+            rows = (
+                await session.execute(
+                    sa.select(Run.id, Run.organisation_id)
+                    .where(
+                        Run.status.in_(TERMINAL_STATUSES),
+                        Run.workspace_inputs_drift_detected.is_(None),
+                    )
+                    .order_by(Run.id)
+                    .limit(200)
+                )
+            ).all()
+            scanned = len(rows)
+            for run_id, _org_id in rows:
+                audit_row = await read_audit_row_outputs_json(
+                    session,
+                    run_id=run_id,
+                    node_id=AUDIT_NODE_ID,
+                )
+                if audit_row is None:
+                    # Terminal run with no workspace-input audit row. The audit
+                    # record is written at FINAL_ATTEMPT_KEY during node
+                    # execution (node_runner), so a terminal run that has none
+                    # definitively has no managed workspace inputs and will
+                    # never receive one later. Write the definitive False
+                    # terminal value so the run drops out of the NULL-flag set;
+                    # otherwise the bounded scan re-selects it every tick and,
+                    # once such runs exceed the LIMIT 200 window, permanently
+                    # starves real drift corrections behind them (FAR-801 sweep
+                    # no-op — MAJOR review finding).
+                    await session.execute(
+                        sa.update(Run).where(Run.id == run_id).values(workspace_inputs_drift_detected=False)
+                    )
+                    continue
+                audit_list = audit_row.get("workspace_inputs", [])
+                if not audit_list:
+                    # Audit record present but no resolved workspace inputs for
+                    # this run: definitive False — drop out of the NULL set so
+                    # the bounded scan keeps advancing.
+                    await session.execute(
+                        sa.update(Run).where(Run.id == run_id).values(workspace_inputs_drift_detected=False)
+                    )
+                    continue
+                # Write the definitive flag (True when drift, else False) so a
+                # non-drift run drops out of the NULL-flag set and is never
+                # re-scanned — the bounded scan thus makes deterministic
+                # progress instead of looping the same first-200 rows each tick.
+                any_drift = any(entry.get("drift_detected") for entry in audit_list)
+                await session.execute(
+                    sa.update(Run).where(Run.id == run_id).values(workspace_inputs_drift_detected=any_drift)
+                )
+                if any_drift:
+                    corrected += 1
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "workspace_input_drift_sweep.error",
+            extra={"scanned": scanned, "corrected": corrected},
+        )
+    return {"scanned": scanned, "corrected": corrected}
+
+
 async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any]) -> None:
     """FAR-189/FAR-190 compensating sweeps + the healthz stats write (best-effort)."""
     try:
@@ -5563,6 +5659,26 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         raise
     except Exception:
         _log.warning("dispatcher_reconcile.classification_sweep_failed", exc_info=True)
+    # FAR-801: workspace-input drift flag compensating sweep — corrects
+    # terminal runs whose audit row has drift_detected=true but the runs
+    # column is NULL (the drift write was missed or the audit row was
+    # written after terminalization).
+    try:
+        drift_result = await _sweep_workspace_input_drift_flags(_open_system_factory())
+        summary["drift_sweep_corrected"] = drift_result.get("corrected", 0)
+        summary["drift_sweep_scanned"] = drift_result.get("scanned", 0)
+        if drift_result.get("corrected"):
+            _log.info(
+                "dispatcher_reconcile.drift_sweep",
+                extra={
+                    "scanned": drift_result.get("scanned", 0),
+                    "corrected": drift_result.get("corrected", 0),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatcher_reconcile.drift_sweep_failed", exc_info=True)
     try:
         streak = await enforce_no_delivery_streaks(redis_client=redis_client)
         summary["streak_scanned"] = streak.get("scanned", 0)

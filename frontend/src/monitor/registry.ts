@@ -1,7 +1,7 @@
 import type { ErrorEventInput, MonitorBackend, MonitorLevel, UserInfo } from './types'
 
 export class MonitorBackendRegistry {
-  private backends: MonitorBackend[] = []
+  private readonly backends: MonitorBackend[] = []
 
   add(backend: MonitorBackend): void {
     this.backends.push(backend)
