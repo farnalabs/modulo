@@ -585,19 +585,33 @@ class TestRegisterTenantFilter:
 
 class TestOrganisationRootEntityModel:
     """Organisation is the root tenant entity — ``created_by`` is nullable and
-    deliberately NOT an FK (the first org must exist before its first user),
-    and the model carries no ``organisation_id`` column so the tenant filter /
-    RLS never scopes it (mirrors ``test_rls_coverage.py``'s only-exclusion)."""
+    is an FK to ``accounts.id`` with ``ondelete=SET NULL`` (reinstated by
+    migration 0240_reinstate_organisations_audit_columns, which re-adds the FK
+    that migration 0236_add_organisations_constraints first created). The FK is
+    nullable so the first org can be created before its first user exists (the
+    column is left NULL at bootstrap); ``ondelete=SET NULL`` means deleting the
+    creating account nulls the column rather than blocking the drop, so the
+    "first org before first user" ordering concern is satisfied by the
+    nullable + SET NULL pairing, not by omitting the reference. The model
+    carries no ``organisation_id`` column so the tenant filter / RLS never
+    scopes it (mirrors ``test_rls_coverage.py``'s only-exclusion)."""
 
-    def test_created_by_column_is_nullable_and_not_fk(self) -> None:
+    def test_created_by_column_is_nullable_fk_to_accounts_set_null(self) -> None:
         from sqlalchemy import ForeignKey
 
         from modulo.db.models.organisation import Organisation
 
         column = Organisation.__table__.c.created_by
         assert column.nullable is True, "created_by must be nullable for org bootstrap"
-        assert not any(isinstance(fk, ForeignKey) for fk in column.foreign_keys), (
-            "created_by must NOT be a foreign key — the first org is created before its first user exists"
+        fks = [fk for fk in column.foreign_keys if isinstance(fk, ForeignKey)]
+        assert len(fks) == 1, "created_by must reference exactly one table"
+        fk = fks[0]
+        assert fk.target_fullname == "accounts.id", (
+            "created_by must reference accounts.id (migration 0240 re-adds this FK)"
+        )
+        assert fk.ondelete == "SET NULL", (
+            "ondelete=SET NULL lets the first org exist before its creator account "
+            "and nulls created_by when the account is deleted"
         )
 
     def test_created_by_defaults_to_none_for_bootstrap_org(self) -> None:

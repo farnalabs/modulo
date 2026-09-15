@@ -837,7 +837,7 @@ async def _assert_capacity_within_cap(session: AsyncSession, org_id: uuid.UUID) 
     return breached
 
 
-@dataclass(frozen=True)
+@dataclass
 class RunnerMarkerSweepError(RuntimeError):
     """The marker sweep failed (partially or wholly) — qa F5 liveness contract.
 
