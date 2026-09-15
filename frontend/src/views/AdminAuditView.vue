@@ -124,9 +124,6 @@
         </div>
       </FilterBar>
       <div class="mt-3 flex items-center gap-2">
-        <Button data-testid="admin-audit-apply-filters" @click="applyFilters">
-          {{ $t('views.AdminAuditView.apply_filters') }}
-        </Button>
         <button
           type="button"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -295,7 +292,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -305,7 +302,6 @@ import { formatError } from '../lib/utils'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
-import Button from 'primevue/button'
 import { formatDateFilename } from '../lib/formatDate'
 import { shortId } from '../utils/format'
 import Select from '../components/shared/AppSelect.vue'
@@ -450,11 +446,34 @@ function goToPage(c: string | null) {
   loadEvents()
 }
 
-function applyFilters() {
+function applyAutoFilters() {
   currentPage.value = 1
   cursor.value = null
   loadEvents()
 }
+
+// Auto-apply on dropdown/select filter changes (immediate)
+watch(filterEventType, applyAutoFilters)
+watch(filterTargetType, applyAutoFilters)
+
+// Auto-apply on text/date filter changes (debounced)
+let actorDebounce: ReturnType<typeof setTimeout> | null = null
+watch(filterActor, () => {
+  if (actorDebounce) clearTimeout(actorDebounce)
+  actorDebounce = setTimeout(applyAutoFilters, 300)
+})
+
+let dateFromDebounce: ReturnType<typeof setTimeout> | null = null
+watch(filterDateFrom, () => {
+  if (dateFromDebounce) clearTimeout(dateFromDebounce)
+  dateFromDebounce = setTimeout(applyAutoFilters, 300)
+})
+
+let dateToDebounce: ReturnType<typeof setTimeout> | null = null
+watch(filterDateTo, () => {
+  if (dateToDebounce) clearTimeout(dateToDebounce)
+  dateToDebounce = setTimeout(applyAutoFilters, 300)
+})
 
 function resetFilters() {
   filterEventType.value = ''

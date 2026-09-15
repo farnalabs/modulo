@@ -58,8 +58,7 @@
       @update:filter="handleFilterUpdate"
     >
       <template #after>
-        <Button @click="applyFilters">{{ $t('views.AdminErrorsView.apply_filters') }}</Button>
-        <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">{{ $t('common.reset') }}</button>
+        <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="admin-errors-reset" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
 
@@ -183,7 +182,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { watchDebounced, useIntervalFn } from '@vueuse/core'
 import { useRouter } from 'vue-router'
 import { fetchErrorGroups, fetchSchedulerStarvation, type ErrorGroupSummary, type FetchErrorGroupsParams, type SchedulerStarvationResponse } from '../lib/api/errors'
@@ -193,7 +192,6 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
 import { formatApiError } from "../lib/api/formatError"
-import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { useI18n } from 'vue-i18n'
@@ -216,6 +214,13 @@ watchDebounced(filterSearch, () => {
   offset.value = 0
   loadGroups()
 }, { debounce: 300 })
+
+// Auto-apply on dropdown filter changes (immediate)
+watch([filterLevel, filterStatus, filterSource], () => {
+  currentPage.value = 1
+  offset.value = 0
+  loadGroups()
+})
 
 const { data: groupsData, loading, error, load: loadGroups } = useDataFetch<{ items: ErrorGroupSummary[]; total: number }>(
   () => fetchErrorGroups(buildParams()).then(
@@ -286,12 +291,6 @@ function buildParams(): FetchErrorGroupsParams {
   if (filterEnvironment.value) params.environment = filterEnvironment.value
   if (filterSearch.value) params.search = filterSearch.value
   return params
-}
-
-function applyFilters() {
-  currentPage.value = 1
-  offset.value = 0
-  loadGroups()
 }
 
 function resetFilters() {
