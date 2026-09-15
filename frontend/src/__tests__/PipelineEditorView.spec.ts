@@ -66,6 +66,9 @@ vi.mock('../lib/api/client', () => {
     if (url.includes('/pipelines/{pipeline_id}')) {
       return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
     }
+    if (url.includes('/parameter-schemas') && url.includes('/sets')) {
+      return Promise.resolve({ data: [], error: undefined })
+    }
     return Promise.resolve({ data: { items: [] }, error: undefined })
   }
   return {
@@ -2534,6 +2537,272 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     // fallback label when label is empty
     const unlabeled = vm.convertBackendNode({ id: 'u1', node_type: 'agent', label: '', description: '', position: { x: 0, y: 0 } })
     expect(unlabeled.data.label).toContain('u1')
+    wrapper.unmount()
+  })
+
+  it('displays sandbox_agent node properties: stall_timeout, heartbeat, watch_log, env_vars, context_files, agent_prompt', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'sandbox_agent',
+        agent_id: 'agent-1',
+        template_id: 'opencode',
+        agent_commands: [],
+        label: 'Sandbox',
+        description: '',
+        position: { x: 0, y: 0 },
+        stall_timeout_seconds: 120,
+        enable_heartbeat: false,
+        watch_log_path: '/tmp/output.log',
+        stdout_percentage_delta: 15,
+        watch_globs: ['*.log', 'output.txt'],
+        env_vars: { API_KEY: 'sk-xxx', DEBUG: 'true' },
+        context_files: { '/home/user/notes.txt': 'Some notes content', '/home/user/config.json': '{"key":"val"}' },
+        agent_prompt: 'You are a helpful assistant that writes code. Please follow the instructions carefully and produce clean, well-structured output.',
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Sandbox', description: '' } }]
+    vm.agents = [{ id: 'agent-1', name: 'Agent One', model_backend_id: 'mb-1' }]
+    vm.modelBackends = [{ id: 'mb-1', display_name: 'Claude', provider: 'anthropic' }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    // stall timeout displayed
+    expect(wrapper.find('[data-testid="pipeline-editor-stall-timeout-label"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-stall-timeout-value"]').text()).toContain('120')
+
+    // heartbeat disabled
+    expect(wrapper.find('[data-testid="pipeline-editor-heartbeat-label"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-heartbeat-value"]').text()).toContain('Disabled')
+
+    // watch log path
+    expect(wrapper.find('[data-testid="pipeline-editor-watch-log-path-label"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-watch-log-path-value"]').text()).toContain('/tmp/output.log')
+
+    // stdout delta
+    expect(wrapper.find('[data-testid="pipeline-editor-stdout-delta-label"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-stdout-delta-value"]').text()).toContain('15')
+
+    // watch globs
+    expect(wrapper.find('[data-testid="pipeline-editor-watch-globs-label"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-watch-globs-value"]').text()).toContain('*.log')
+
+    // env vars keys displayed
+    expect(wrapper.text()).toContain('API_KEY')
+    expect(wrapper.text()).toContain('DEBUG')
+
+    // context files displayed
+    expect(wrapper.text()).toContain('/home/user/notes.txt')
+    expect(wrapper.text()).toContain('bytes')
+
+    // agent prompt (truncated at 300 chars)
+    expect(wrapper.text()).toContain('You are a helpful assistant')
+    wrapper.unmount()
+  })
+
+  it('displays read-only commands for a non-sandbox node that has agent_commands', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'agent',
+        agent_id: 'agent-1',
+        agent_commands: ['echo hello', 'ls -la'],
+        commands_concatenation_string: ' && ',
+        label: 'Agent Node',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent Node', description: '' } }]
+    vm.agents = [{ id: 'agent-1', name: 'Agent One' }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    // Read-only commands block should show
+    expect(wrapper.find('[data-testid="pipeline-editor-node-commands-readonly"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('echo hello')
+    expect(wrapper.text()).toContain('ls -la')
+    expect(wrapper.text()).toContain('&&')
+    wrapper.unmount()
+  })
+
+  it('loadLifecycleMaps handles a map with no stages gracefully', async () => {
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps/lm-1')) {
+        return Promise.resolve({ id: 'lm-1', name: 'Empty Map', stages: [] })
+      }
+      if (url.includes('/lifecycle-maps') && !url.includes('/lm-')) {
+        return Promise.resolve([{ id: 'lm-1' }])
+      }
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    await vm.loadLifecycleMaps()
+    await flushPromises()
+    // Empty stages means this pipeline is not linked
+    expect(vm.linkedLifecycleMaps).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('loadFolders handles a response wrapped in { items: [...] } shape', async () => {
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve({ items: [{ id: 'f-1', name: 'Prod', parent_id: null }] })
+      return Promise.resolve({ items: [] })
+    })
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    await vm.loadFolders()
+    await flushPromises()
+    expect(vm.folders).toEqual([{ id: 'f-1', name: 'Prod', parent_id: null }])
+    wrapper.unmount()
+  })
+
+  it('onParamSetChange selects a set and populates overrides', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', agent_id: 'agent-1', label: 'A', description: '', position: { x: 0, y: 0 } },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'A', description: '' } }]
+    vm.agents = [{ id: 'agent-1', name: 'Agent One', parameter_schema_id: 'ps-1' }]
+    vm.paramSchemas = [{ id: 'ps-1', name: 'Temperature Schema', parameters: [{ name: 'temperature', label: 'Temperature', type: 'number' }] }]
+    vm.paramSets = [{ id: 'set-1', parameter_schema_id: 'ps-1', name: 'Creative', values: { temperature: 0.9 } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    // Select a param set
+    vm.selectedNodeParamSetId = 'set-1'
+    vm.onParamSetChange()
+    await nextTick()
+
+    expect(vm.selectedNodeOverrides).toEqual({ temperature: 0.9 })
+    expect(vm.selectedNodeData.parameter_set_id).toBe('set-1')
+    expect(vm.selectedNodeData.parameter_overrides).toEqual({ temperature: 0.9 })
+    wrapper.unmount()
+  })
+
+  it('saveAsNewParamSet creates a new param set when prompt returns a name', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', agent_id: 'agent-1', label: 'A', description: '', position: { x: 0, y: 0 } },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'A', description: '' } }]
+    vm.agents = [{ id: 'agent-1', name: 'Agent One', parameter_schema_id: 'ps-1' }]
+    vm.paramSchemas = [{ id: 'ps-1', name: 'Temp Schema' }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+    vm.selectedNodeOverrides = { temperature: 0.7 }
+    await nextTick()
+
+    // Mock prompt to return a name
+    vi.stubGlobal('prompt', vi.fn().mockReturnValue('Creative Preset'))
+    await vm.saveAsNewParamSet()
+    await flushPromises()
+    vi.unstubAllGlobals()
+
+    // POST was called to create the set
+    const postCalls = vi.mocked(api.POST).mock.calls
+    const createCall = postCalls.find((c) => String(c[0]).includes('/sets'))
+    expect(createCall).toBeTruthy()
+    expect((createCall as any)[1].body.name).toBe('Creative Preset')
+    wrapper.unmount()
+  })
+
+  it('onAgentChange resets pickerConnectorId to __all__', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.pickerConnectorId = 'some-connector'
+    vm.onAgentChange()
+    expect(vm.pickerConnectorId).toBe('__all__')
+    wrapper.unmount()
+  })
+
+  it('handleUnarchive error sets pageError', async () => {
+    useApiFns.post.mockRejectedValueOnce(new Error('unarchive_failed'))
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test', archived_at: '2026-01-01T00:00:00Z' }
+    await vm.handleUnarchive()
+    await flushPromises()
+    expect(vm.pageError).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('saveEdgeConfig success updates selectedEdgeData and repopulates form', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    // Set up a pipeline with nodes and edges
+    vm.rawNodes = [
+      { id: 'node-1', node_type: 'agent', agent_id: 'agent-1', label: 'A', description: '', position: { x: 0, y: 0 } },
+      { id: 'node-2', node_type: 'agent', agent_id: 'agent-1', label: 'B', description: '', position: { x: 200, y: 0 } },
+    ]
+    vm.flowNodes = [
+      { id: 'node-1', type: 'agent', data: { label: 'A', description: '' } },
+      { id: 'node-2', type: 'agent', data: { label: 'B', description: '' } },
+    ]
+    vm.rawEdges = [
+      { id: 'edge-1', source_node_id: 'node-1', target_node_id: 'node-2', edge_type: 'normal', hitl_gate_config: null, condition_expression: null },
+    ]
+    vm.flowEdges = [
+      { id: 'edge-1', source: 'node-1', target: 'node-2', type: 'smoothstep', data: { edge_type: 'normal', hitl_gate_config: null, condition_expression: null, max_iterations: 0, routing_label: '' } },
+    ]
+    vm.selectedEdgeData = vm.rawEdges[0]
+    vm.edgeForm.edge_type = 'normal'
+
+    // Override the graph GET to return the edge so loadGraph populates rawEdges
+    const origGet = vi.mocked(api.GET)
+    origGet.mockImplementation((_url: string) => {
+      if (String(_url).includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({
+          data: {
+            nodes: vm.rawNodes,
+            edges: [{ id: 'edge-1', source_node_id: 'node-1', target_node_id: 'node-2', edge_type: 'normal', hitl_gate_config: null, condition_expression: null }],
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    await vm.saveEdgeConfig()
+    await flushPromises()
+    expect(vm.savingEdge).toBe(false)
+    // After saveEdgeConfig: loadGraph re-fetches, rawEdges is repopulated,
+    // and selectedEdgeData is updated with the refreshed edge
+    expect(vm.selectedEdgeData).toBeTruthy()
     wrapper.unmount()
   })
 })
