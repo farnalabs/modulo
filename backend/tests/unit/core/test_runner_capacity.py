@@ -832,6 +832,62 @@ def test_sweep_staleness_reference_falls_back_to_updated_at() -> None:
     assert sweep_staleness_reference(fresh_marker, updated) != updated
 
 
+def _early_detect_settings(*, early: int | None, nodeless: int = 35) -> Any:
+    class _S:
+        saq_job_heartbeat = 300
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = nodeless
+        saq_nodeless_early_detect_minutes = early
+
+    return _S()
+
+
+def test_sweep_recoverability_predicate_resolves_early_detect_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-873 parity (qa F3): the D8 sweep's recovery predicate MUST resolve the
+    SAME early-detect window the reconcile scan does. A fresh-heartbeat nodeless
+    zombie inside the early window is recoverable to the scan, so the sweep must
+    judge it recoverable too — otherwise the sweep clears a dispatch marker it
+    should keep. A defaulted argument at this call site silently diverged the
+    two predicates, so this pins the window flows through."""
+    import modulo.core.cron_helpers as ch
+    import modulo.core.runner_capacity as rc
+
+    captured: dict[str, Any] = {}
+
+    def _spy(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _early_detect_settings(early=15))
+    monkeypatch.setattr(ch, "reconciler_recovery_predicate", _spy)
+    rc._sweep_recoverability_predicate()
+    assert captured["nodeless_window"] == 35
+    assert captured["early_detect_minutes"] == 15
+
+
+def test_sweep_recoverability_predicate_disables_early_detect_when_not_early(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the early-detect window is not EARLIER than the full window the
+    shared resolver returns None, so the scan and the sweep disable the branch
+    identically — no silent one-sided divergence."""
+    import modulo.core.cron_helpers as ch
+    import modulo.core.runner_capacity as rc
+
+    captured: dict[str, Any] = {}
+
+    def _spy(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _early_detect_settings(early=35))
+    monkeypatch.setattr(ch, "reconciler_recovery_predicate", _spy)
+    rc._sweep_recoverability_predicate()
+    assert captured["early_detect_minutes"] is None
+
+
 # ---------------------------------------------------------------------------
 # Sweep orchestration (fake factory)
 # ---------------------------------------------------------------------------

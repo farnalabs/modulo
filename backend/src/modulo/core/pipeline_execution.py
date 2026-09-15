@@ -837,8 +837,21 @@ async def zombie_watchdog(
     """
     if grace_seconds is None:
         grace_seconds = int(get_settings().saq_setup_grace_seconds)
+    # FAR-873: record monotonic start so the claim→dispatch gap is measurable
+    # in the log when first_progress fires (or times out).
+    _watchdog_start = time.monotonic()
     try:
         await asyncio.wait_for(first_progress.wait(), timeout=grace_seconds)
+        # FAR-873: first_progress fired — log the claim→dispatch gap so the
+        # next occurrence is attributable in seconds.  The gap is the time
+        # between claim (execute_run entry) and first node dispatch.
+        _elapsed = time.monotonic() - _watchdog_start
+        _log.info(
+            "zombie_watchdog.first_progress run=%s elapsed=%.1fs of %ds grace — node dispatched",
+            run_id,
+            _elapsed,
+            grace_seconds,
+        )
         return
     except TimeoutError:
         # Expected: first_progress did not fire within the grace window.
@@ -850,9 +863,12 @@ async def zombie_watchdog(
     if exec_task.done():
         return
 
+    _elapsed = time.monotonic() - _watchdog_start
     _log.warning(
-        "zombie_watchdog.stalled run=%s no node dispatched within %ds — cancelling executor and failing run",
+        "zombie_watchdog.stalled run=%s elapsed=%.1fs of %ds grace — "
+        "no node dispatched, cancelling executor and failing run",
         run_id,
+        _elapsed,
         grace_seconds,
     )
     exec_task.cancel()

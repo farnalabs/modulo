@@ -766,7 +766,8 @@ def _sweep_recoverability_predicate() -> tuple[Any, Any]:
     Returns ``(recovery_or, exclusion)``: ``recovery_or`` is the SAME
     OR-composition the reconciler's scan selects with
     (``cron_helpers.reconciler_recovery_predicate`` — re-dispatch predicate OR
-    the nodeless zombie branch), and ``exclusion`` is the capacity-marker
+    the nodeless zombie branch OR the FAR-873 early-detect branch), and
+    ``exclusion`` is the capacity-marker
     exclusion applied AFTER the OR (exactly the scan's
     ``WHERE recovery OR … AND NOT capacity-marker-excluded`` shape). Lazy
     import: cron_helpers transitively reaches dispatch/pipeline machinery that
@@ -778,16 +779,23 @@ def _sweep_recoverability_predicate() -> tuple[Any, Any]:
         RECONCILE_STALE_HEARTBEAT_FACTOR,
         reconcile_capacity_marker_exclusion,
         reconciler_recovery_predicate,
+        resolve_nodeless_early_detect_minutes,
     )
 
     settings = get_settings()
     stale_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
+    nodeless_window = int(settings.saq_claimed_nodeless_minutes)
     recovery_or = reconciler_recovery_predicate(
         reenqueue_window=int(settings.saq_reenqueue_window),
         stale_window=stale_window,
         capacity_redispatch_seconds=CAPACITY_REDISPATCH_SECONDS,
-        nodeless_window=int(settings.saq_claimed_nodeless_minutes),
+        nodeless_window=nodeless_window,
         enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
+        # FAR-873 parity: resolve the SAME early-detect window the reconcile
+        # scan does, through the shared helper. A nodeless zombie the scan
+        # judges recoverable MUST be recoverable here too, or this sweep clears
+        # a dispatch marker it should keep.
+        early_detect_minutes=resolve_nodeless_early_detect_minutes(settings, nodeless_window),
     )
     return recovery_or, reconcile_capacity_marker_exclusion(CAPACITY_REDISPATCH_SECONDS)
 

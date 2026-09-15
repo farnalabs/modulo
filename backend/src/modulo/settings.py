@@ -483,6 +483,17 @@ class Settings(BaseSettings):
     # bounds that accumulation while staying above the max node timeout so a
     # slow-but-healthy first node is never false-failed. Tunable per deploy.
     saq_claimed_nodeless_minutes: int = Field(default=35, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
+    # FAR-873: early-detect window for claimed-but-nodeless zombies. A SAQ run
+    # that has been 'running' with a FRESH heartbeat but ZERO progress after
+    # this many minutes is re-dispatched EARLY (before the full nodeless
+    # window elapses). The fresh-heartbeat gate ensures we only re-dispatch
+    # when the executor is either wedged (live heartbeat, no progress) or
+    # dead (heartbeat stale — the stale branch already handles this). Safe:
+    # zero nodes executed, so nothing can double-execute. The throttle uses
+    # the FULL saq_claimed_nodeless_minutes window to prevent hot-loop
+    # re-dispatching, so the early-detect path fires at most once per full
+    # window. Must be < saq_claimed_nodeless_minutes.
+    saq_nodeless_early_detect_minutes: int = Field(default=15, alias="SAQ_NODELESS_EARLY_DETECT_MINUTES", ge=5, le=120)
     # Budget of successful-claim cycles for claimed-but-nodeless SAQ zombies
     # whose retry_policy does not cover "stall" (dispatcher_reconcile nodeless
     # repair, FAR-509). FAR-649: an absent-`on` policy (key missing or null)
@@ -943,6 +954,26 @@ class Settings(BaseSettings):
                 extra={
                     "saq_setup_grace_seconds": self.saq_setup_grace_seconds,
                     "run_claim_stale_seconds": self.run_claim_stale_seconds,
+                },
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _warn_nodeless_early_detect_disabled(self) -> "Settings":
+        """WARN-only: the early-detect window must stay below the full nodeless window.
+
+        ``dispatcher_reconcile`` only adds the FAR-873 early-detect branch when
+        ``saq_nodeless_early_detect_minutes < saq_claimed_nodeless_minutes``. A
+        value at or above the full window silently disables the branch (the run
+        simply waits the full nodeless window), so warn at Settings load to make
+        the misconfiguration visible instead of a silent no-op.
+        """
+        if self.saq_nodeless_early_detect_minutes >= self.saq_claimed_nodeless_minutes:
+            _log.warning(
+                "settings.nodeless_early_detect_disabled",
+                extra={
+                    "saq_nodeless_early_detect_minutes": self.saq_nodeless_early_detect_minutes,
+                    "saq_claimed_nodeless_minutes": self.saq_claimed_nodeless_minutes,
                 },
             )
         return self

@@ -4093,6 +4093,61 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     return bool((datetime.now(UTC) - row.started_at).total_seconds() > age_minutes * 60)
 
 
+# ---------------------------------------------------------------------------
+# FAR-873: early-detect for fresh-heartbeat nodeless zombies.
+# ---------------------------------------------------------------------------
+
+# SQL predicate: the same structure as _nodeless_zombie_predicate but at a
+# SHORTER window (SAQ_NODELESS_EARLY_DETECT_MINUTES) and requiring a FRESH
+# heartbeat (the executor is alive but not progressing — a wedged worker or
+# a node dispatched but hanging).  Safe: zero nodes executed, so nothing can
+# double-execute.
+
+
+def resolve_nodeless_early_detect_minutes(settings: Any, nodeless_window: int) -> int | None:
+    """Resolve the FAR-873 early-detect window from settings.
+
+    Returns the configured window ONLY when it is a valid EARLY window
+    (``5 <= value < nodeless_window``), else ``None`` (feature disabled). This
+    is the SINGLE source of that decision: the reconcile scan AND the runner
+    capacity sweep's recovery predicate both call it, so their composed
+    predicates stay identical (parity by construction — qa F3). A defaulted
+    argument at either call site would silently diverge the two.
+    """
+    raw = getattr(settings, "saq_nodeless_early_detect_minutes", None)
+    if raw is None:
+        return None
+    value = int(raw)
+    if 5 <= value < nodeless_window:
+        return value
+    return None
+
+
+def _nodeless_early_detect_predicate(
+    early_detect_minutes: int,
+    stale_seconds: int,
+) -> Any:
+    """Match a claimed-but-nodeless zombie EARLY (before the full nodeless window).
+
+    Predicate: ``_nodeless_zombie_predicate`` at the shorter window PLUS a
+    fresh heartbeat (heartbeat_at > now() - stale_seconds).  A fresh heartbeat
+    means the SAQ worker is alive (or wedged with a live heartbeat); the early
+    detect catches the wedged-worker case BEFORE the full nodeless window
+    elapses, reducing exposure from ~35 min to ~15 min.
+
+    The throttle uses the FULL saq_claimed_nodeless_minutes window (not the
+    early-detect window) so at most one early re-dispatch happens per full
+    cycle — preventing hot-loop re-dispatching while still closing the gap.
+    """
+    from sqlalchemy import and_
+
+    from modulo.db.models.run import Run
+
+    base = _nodeless_zombie_predicate(early_detect_minutes)
+    fresh_heartbeat = Run.heartbeat_at > func_now_minus(stale_seconds)
+    return and_(base, fresh_heartbeat)
+
+
 def _should_redispatch_nodeless(row: Any) -> bool:
     """Decide whether a nodeless zombie's retry BUDGET allows a re-dispatch.
 
@@ -4224,6 +4279,16 @@ async def _fail_nodeless_run(
     started_at = getattr(run, "started_at", None)
     if started_at is not None:
         zombie_age_minutes = max((datetime.now(UTC) - started_at).total_seconds() / 60, 0.0)
+    # FAR-873: claim→dispatch gap observability. dispatched_at records when
+    # dispatch_run enqueued the SAQ job (BEFORE the claim); started_at records
+    # when the executor claimed the run (claim_run_async). The gap between
+    # dispatched_at and started_at is the SAQ queue wait; the gap between
+    # started_at and now is the wasted zombie age. Both make the stall
+    # attributable per-run in seconds instead of an hour of forensics.
+    dispatched_at = getattr(run, "dispatched_at", None)
+    saq_queue_wait_seconds: float | None = None
+    if dispatched_at is not None and started_at is not None:
+        saq_queue_wait_seconds = max((started_at - dispatched_at).total_seconds(), 0.0)
     run.status = "failed"
     run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
     run.error_detail = (
@@ -4235,13 +4300,18 @@ async def _fail_nodeless_run(
     # executing a node — the environment (worker or sandbox) that claimed them
     # is degraded. ERROR level + the wasted age makes the burst visible.
     age_text = f"{zombie_age_minutes:.0f}" if zombie_age_minutes is not None else "unknown"
+    queue_wait_text = f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown"
     _log.error(
-        "dispatcher_reconcile.claimed_but_never_dispatched run=%s org=%s claim_count=%s zombie_age_minutes=%s — "
+        "dispatcher_reconcile.claimed_but_never_dispatched run=%s org=%s claim_count=%s "
+        "zombie_age_minutes=%s saq_queue_wait_seconds=%s dispatched_at=%s started_at=%s — "
         "terminal-failed; SAQ claimed this run but no node was ever dispatched",
         run_id,
         org_id,
         getattr(run, "claim_count", None),
         age_text,
+        queue_wait_text,
+        dispatched_at.isoformat() if dispatched_at is not None else "None",
+        started_at.isoformat() if started_at is not None else "None",
     )
     await _ingest_saq_error(
         session,
@@ -4257,6 +4327,9 @@ async def _fail_nodeless_run(
             "run_id": str(run_id),
             "claim_count": getattr(run, "claim_count", None),
             "zombie_age_minutes": zombie_age_minutes,
+            "saq_queue_wait_seconds": saq_queue_wait_seconds,
+            "dispatched_at": dispatched_at.isoformat() if dispatched_at is not None else None,
+            "started_at": started_at.isoformat() if started_at is not None else None,
         },
     )
 
@@ -4373,23 +4446,31 @@ def reconciler_recovery_predicate(
     capacity_redispatch_seconds: int,
     nodeless_window: int,
     enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
+    early_detect_minutes: int | None,
 ) -> Any:
     """The reconciler's COMPOSED recovery predicate (single source, qa F3).
 
-    ``re_dispatch OR nodeless_zombie`` — the exact OR-composition the
-    60s ``dispatcher_reconcile`` scan selects with. The D8 marker sweep
-    composes the SAME object (imported from here — parity by construction),
-    so a run the reconciler would re-dispatch can never have its dispatch
-    marker swept: the composition lives in ONE place instead of being
+    ``re_dispatch OR nodeless_zombie OR (FAR-873 early-detect)`` — the exact
+    OR-composition the 60s ``dispatcher_reconcile`` scan selects with. The D8
+    marker sweep composes the SAME object (imported from here — parity by
+    construction), so a run the reconciler would re-dispatch can never have its
+    dispatch marker swept: the composition lives in ONE place instead of being
     re-assembled (and silently drifted) at both call sites. This also fixes
     the sweep's recoverability evaluation: the previous sweep evaluated the
     branches AND-composed, so a fresh-heartbeat nodeless zombie (matched ONLY
     by the nodeless branch, excluded by the stale branch) was misjudged
     unrecoverable and its marker cleared.
+
+    FAR-873: ``early_detect_minutes`` adds a shorter-window branch that
+    matches running + fresh heartbeat + zero progress.  This catches wedged-
+    worker zombies ~20 min sooner than the full nodeless window. It is a
+    REQUIRED keyword-only argument (both call sites resolve it through
+    :func:`resolve_nodeless_early_detect_minutes`) so a new call site cannot
+    silently omit the branch and diverge from the scan.
     """
     from sqlalchemy import or_
 
-    return or_(
+    predicates = [
         _build_re_dispatch_predicate(
             reenqueue_window=reenqueue_window,
             stale_window=stale_window,
@@ -4397,7 +4478,10 @@ def reconciler_recovery_predicate(
             enqueue_failed_redispatch_seconds=enqueue_failed_redispatch_seconds,
         ),
         _nodeless_zombie_predicate(nodeless_window),
-    )
+    ]
+    if early_detect_minutes is not None and early_detect_minutes < nodeless_window:
+        predicates.append(_nodeless_early_detect_predicate(early_detect_minutes, stale_window))
+    return or_(*predicates)
 
 
 # Public aliases (qa F3): the leaf predicates are part of the shared
@@ -5189,6 +5273,9 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     reenqueue_window = int(settings.saq_reenqueue_window)
     stale_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
     nodeless_window = int(settings.saq_claimed_nodeless_minutes)
+    # FAR-873: early-detect window — must be < nodeless_window.  Resolved by
+    # the shared helper so the runner-capacity sweep composes the SAME branch.
+    early_detect_minutes = resolve_nodeless_early_detect_minutes(settings, nodeless_window)
     capacity_redispatch_seconds = CAPACITY_REDISPATCH_SECONDS
     max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
     claim_cap = _saq_run_claim_cap()
@@ -5247,6 +5334,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     redis_client=redis_client,
                     summary=summary,
                     terminalized_run_ids=terminalized_run_ids,
+                    early_detect_minutes=early_detect_minutes,
                 )
         except TimeoutError as exc:
             # Inner deadline fired — the current per-org transaction
@@ -5295,6 +5383,7 @@ async def _dispatcher_reconcile_body(
     redis_client: AsyncRedis,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    early_detect_minutes: int | None = None,
 ) -> dict[str, Any]:
     """Inner body of dispatcher_reconcile — runs under the inner deadline.
 
@@ -5321,6 +5410,7 @@ async def _dispatcher_reconcile_body(
         capacity_redispatch_seconds=capacity_redispatch_seconds,
         nodeless_window=nodeless_window,
         enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
+        early_detect_minutes=early_detect_minutes,
     )
     for org_id in org_ids:
         enqueue_failed_redispatched = await _reconcile_org(
@@ -5339,6 +5429,7 @@ async def _dispatcher_reconcile_body(
             terminalized_run_ids,
             hitl_gate_cancel_grace,
             terminalize_max=terminalize_max,
+            early_detect_minutes=early_detect_minutes,
         )
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_superseded / claim_cap_exhausted / dispatch_failed /
@@ -5436,6 +5527,7 @@ async def _reconcile_org(
     hitl_gate_cancel_grace_seconds: int,
     *,
     terminalize_max: int = _TERMINALIZE_UNLIMITED_ROWS,
+    early_detect_minutes: int | None = None,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop)."""
     from modulo.db.models.pipeline import Pipeline
@@ -5541,6 +5633,7 @@ async def _reconcile_org(
                 enqueue_failed_redispatched,
                 summary,
                 terminalized_run_ids,
+                early_detect_minutes=early_detect_minutes,
             )
     return enqueue_failed_redispatched
 
@@ -6236,14 +6329,70 @@ async def _reconcile_one_row(
     enqueue_failed_redispatched: int,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    *,
+    early_detect_minutes: int | None = None,
 ) -> int:
     """Reconcile ONE matched run row; returns the updated enqueue-failed counter.
 
-    Handles the nodeless zombie (via ``_reconcile_nodeless_repair``), B3
-    enqueue-failed branch, F6a resume guard, capacity check, the job
-    re-check, and the re-dispatch decision for a single row. ``summary`` and
-    ``terminalized_run_ids`` are mutated in place.
+    Handles the nodeless zombie (via ``_reconcile_nodeless_repair``), FAR-873
+    early-detect, B3 enqueue-failed branch, F6a resume guard, capacity check,
+    the job re-check, and the re-dispatch decision for a single row.
+    ``summary`` and ``terminalized_run_ids`` are mutated in place.
     """
+    # FAR-873: early-detect for fresh-heartbeat nodeless zombies.  Fire BEFORE
+    # the full nodeless repair so a wedged-worker zombie is re-dispatched ~20
+    # min sooner.  The throttle uses the FULL nodeless_window (not the
+    # early-detect window) so at most one early re-dispatch happens per full
+    # cycle — preventing hot-loop re-dispatching while closing the gap.
+    if (
+        early_detect_minutes is not None
+        and _is_nodeless_zombie_row(row, early_detect_minutes)
+        and not _is_nodeless_redispatch_throttled(row, nodeless_window)
+    ):
+        # Budget first, exactly as the full-window repair: budget exhaustion
+        # terminal-fails REGARDLESS of the cap (terminal-fail reduces load; it
+        # never enqueues), so waiting out the cap could never help.
+        if not _should_redispatch_nodeless(row):
+            summary["nodeless_failed"] += 1
+            await _fail_nodeless_run(session, row.id, org_id, summary)
+            terminalized_run_ids.append((row.id, org_id))
+            return enqueue_failed_redispatched
+        # Per-tick fleet cap (FAR-873/FAR-509 parity): the early-detect branch
+        # must obey the SAME fleet-wide cap as the full-window repair. Without
+        # it, a mass worker wedge makes many fresh-heartbeat zombies eligible in
+        # the SAME tick and this branch re-dispatches them unbounded — exactly
+        # the scenario the cap exists for. Defer the overflow to a later tick
+        # (no enqueue, no terminal-fail; budget/throttle unaffected) and count
+        # ``nodeless_capped`` (warning once per tick).
+        if summary["nodeless_redispatched"] >= NODELESS_REDISPATCH_MAX_PER_TICK:
+            first_capped = summary["nodeless_capped"] == 0
+            summary["nodeless_capped"] += 1
+            if first_capped:
+                _log.warning(
+                    "dispatcher_reconcile: nodeless re-dispatch cap hit (%d/tick); deferring run %s to a later tick",
+                    NODELESS_REDISPATCH_MAX_PER_TICK,
+                    row.id,
+                )
+            return enqueue_failed_redispatched
+        # Re-dispatch is safe: zero nodes executed, nothing to double-execute.
+        # The throttle (above) uses the FULL nodeless_window so at most one
+        # early re-dispatch happens per full cycle (prevents hot-loop).
+        _log.info(
+            "dispatcher_reconcile.nodeless_early_detect_redispatched run=%s org=%s "
+            "started_at=%s (early-detect at %d min, full window %d min)",
+            row.id,
+            org_id,
+            row.started_at.isoformat() if row.started_at is not None else "None",
+            early_detect_minutes,
+            nodeless_window,
+        )
+        job_type = _reconcile_job_type(row.status)
+        key_suffix = uuid.uuid4().hex
+        await _redispatch_nodeless(session, q, org_id, row, job_type, key_suffix, summary, terminalized_run_ids)
+        return enqueue_failed_redispatched
+    # Throttled or not early-detect — fall through to the full nodeless
+    # repair which may handle it via a different branch (stale heartbeat, etc.).
+
     # Claimed-but-never-executed zombie repair — see
     # ``_reconcile_nodeless_repair`` / ``_redispatch_nodeless``.
     handled = await _reconcile_nodeless_repair(

@@ -2900,3 +2900,318 @@ class TestTerminalizeBatchCap:
         )
         assert summary["mid_graph_wedge_terminalized"] == 1
         assert summary["terminalize_capped"] == 0
+
+
+class TestNodelessEarlyDetect:
+    """FAR-873: early-detect for fresh-heartbeat nodeless zombies.
+
+    The early-detect path fires BEFORE the full nodeless window
+    (SAQ_NODELESS_EARLY_DETECT_MINUTES, default 15) and re-dispatches runs
+    with a fresh heartbeat and zero progress.  This catches wedged-worker
+    zombies ~20 min sooner than the full 35-min nodeless window.
+    """
+
+    @pytest.mark.asyncio
+    async def test_early_detect_fresh_heartbeat_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A running + FRESH heartbeat + zero progress + started > early_detect
+        minutes ago is RE-DISPATCHED via the early-detect path (not the full
+        nodeless path).  The throttle uses the FULL nodeless_window, so a
+        never-dispatched run (dispatched_at=NULL) is never throttled."""
+        summary, reenqueue, _ingest, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [
+                _run_row(
+                    uuid.uuid4(),
+                    "running",
+                    stale=False,
+                    nodeless=True,
+                    dispatched=False,
+                    dispatched_minutes_ago=None,
+                    claim_count=1,
+                )
+            ],
+            settings_overrides={
+                "saq_claimed_nodeless_minutes": 35,
+                "saq_nodeless_early_detect_minutes": 15,
+            },
+        )
+        # The run started 60 min ago (nodeless=True default in _run_row),
+        # which is > 15 min (early detect) and > 35 min (full window).
+        # The early-detect branch fires first and re-dispatches.
+        assert summary["nodeless_redispatched"] == 1
+        assert summary["nodeless_failed"] == 0
+        reenqueue.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_early_detect_budget_exhausted_terminal_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Budget-exhausted early-detect zombie is terminal-failed (same as
+        the full nodeless path)."""
+        summary, _reenqueue, ingest, _, _, _session = await _run_reconcile(
+            monkeypatch,
+            [
+                _run_row(
+                    uuid.uuid4(),
+                    "running",
+                    stale=False,
+                    nodeless=True,
+                    dispatched=False,
+                    dispatched_minutes_ago=None,
+                    claim_count=5,
+                )
+            ],
+            settings_overrides={
+                "saq_claimed_nodeless_minutes": 35,
+                "saq_nodeless_early_detect_minutes": 15,
+            },
+        )
+        assert summary["nodeless_failed"] == 1
+        assert summary["claimed_but_never_dispatched"] == 1
+        _reenqueue.assert_not_awaited()
+        ingest.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_early_detect_throttled_skips(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An early-detect zombie that was recently dispatched (within the full
+        nodeless window) is THROTTLED — neither the early-detect nor the full
+        nodeless repair fires. The run stays running for a later tick."""
+        summary, reenqueue, _ingest, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [
+                _run_row(
+                    uuid.uuid4(),
+                    "running",
+                    stale=False,
+                    nodeless=True,
+                    dispatched=True,
+                    dispatched_minutes_ago=10,
+                    claim_count=1,
+                )
+            ],
+            settings_overrides={
+                "saq_claimed_nodeless_minutes": 35,
+                "saq_nodeless_early_detect_minutes": 15,
+            },
+        )
+        # The run started 60 min ago (nodeless=True) — matches both predicates.
+        # But dispatched_at is 10 min ago (< 35 min full window) — throttled
+        # by BOTH paths. No re-dispatch, no terminal-fail.
+        assert summary["nodeless_redispatched"] == 0
+        assert summary["nodeless_failed"] == 0
+        assert summary["skipped"] >= 1
+        reenqueue.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_early_detect_disabled_when_equal_to_full_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When saq_nodeless_early_detect_minutes >= saq_claimed_nodeless_minutes,
+        the early-detect branch is disabled (no extra predicate added)."""
+        summary, _reenqueue, _ingest, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [
+                _run_row(
+                    uuid.uuid4(),
+                    "running",
+                    stale=False,
+                    nodeless=True,
+                    dispatched=False,
+                    dispatched_minutes_ago=None,
+                    claim_count=1,
+                )
+            ],
+            settings_overrides={
+                "saq_claimed_nodeless_minutes": 35,
+                "saq_nodeless_early_detect_minutes": 35,
+            },
+        )
+        # Early detect disabled (35 >= 35). The full nodeless path handles it.
+        assert summary["nodeless_redispatched"] == 1
+
+    @pytest.mark.asyncio
+    async def test_early_detect_disabled_when_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When saq_nodeless_early_detect_minutes is not set, the early-detect
+        branch is disabled."""
+        summary, _reenqueue, _ingest, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [
+                _run_row(
+                    uuid.uuid4(),
+                    "running",
+                    stale=False,
+                    nodeless=True,
+                    dispatched=False,
+                    dispatched_minutes_ago=None,
+                    claim_count=1,
+                )
+            ],
+            settings_overrides={
+                "saq_claimed_nodeless_minutes": 35,
+            },
+        )
+        # Early detect disabled (not set). The full nodeless path handles it.
+        assert summary["nodeless_redispatched"] == 1
+
+    @pytest.mark.asyncio
+    async def test_early_detect_only_matches_fresh_heartbeat(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A nodeless zombie with a STALE heartbeat does NOT match the early-
+        detect predicate — it falls through to the full nodeless path (which
+        does not require a fresh heartbeat)."""
+        summary, _reenqueue, _ingest, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [
+                _run_row(
+                    uuid.uuid4(),
+                    "running",
+                    stale=True,
+                    nodeless=True,
+                    dispatched=False,
+                    dispatched_minutes_ago=None,
+                    claim_count=1,
+                )
+            ],
+            settings_overrides={
+                "saq_claimed_nodeless_minutes": 35,
+                "saq_nodeless_early_detect_minutes": 15,
+            },
+        )
+        # Stale heartbeat — early-detect predicate does NOT match.
+        # Falls through to the full nodeless path which re-dispatches.
+        assert summary["nodeless_redispatched"] == 1
+
+    @pytest.mark.asyncio
+    async def test_early_detect_logs_gap(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The early-detect re-dispatch log includes the started_at gap for
+        diagnosis."""
+        run_id = uuid.uuid4()
+        with caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"):
+            summary, reenqueue, _ingest, _, _, _ = await _run_reconcile(
+                monkeypatch,
+                [
+                    _run_row(
+                        run_id,
+                        "running",
+                        stale=False,
+                        nodeless=True,
+                        dispatched=False,
+                        dispatched_minutes_ago=None,
+                        claim_count=1,
+                    )
+                ],
+                settings_overrides={
+                    "saq_claimed_nodeless_minutes": 35,
+                    "saq_nodeless_early_detect_minutes": 15,
+                },
+            )
+        assert summary["nodeless_redispatched"] == 1
+        reenqueue.assert_awaited_once()
+        gap_records = [r for r in caplog.records if "nodeless_early_detect_redispatched" in r.message]
+        assert gap_records, "expected an early-detect re-dispatch log"
+        assert f"run={run_id}" in gap_records[0].message
+        assert "started_at=" in gap_records[0].message
+        assert "early-detect at 15 min" in gap_records[0].message
+
+    @pytest.mark.asyncio
+    async def test_early_detect_window_only_matches_early_branch(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A run started 20 min ago is inside the early-detect window (15 min)
+        but OUTSIDE the full nodeless window (35 min), so ONLY the early-detect
+        predicate matches.  This proves the early-detect branch — not the full
+        window fall-through — is what re-dispatches, and the distinct
+        ``nodeless_early_detect_redispatched`` log line is emitted."""
+        run_id = uuid.uuid4()
+        row = _run_row(
+            run_id,
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=None,
+            claim_count=1,
+        )
+        # 20 min: > early_detect (15) and < nodeless_window (35).
+        row.started_at = datetime.now(UTC) - timedelta(minutes=20)
+        with caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"):
+            summary, reenqueue, _ingest, _, _, _ = await _run_reconcile(
+                monkeypatch,
+                [row],
+                settings_overrides={
+                    "saq_claimed_nodeless_minutes": 35,
+                    "saq_nodeless_early_detect_minutes": 15,
+                },
+            )
+        assert summary["nodeless_redispatched"] == 1
+        assert summary["nodeless_failed"] == 0
+        reenqueue.assert_awaited_once()
+        assert any("nodeless_early_detect_redispatched" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_early_detect_obeys_per_tick_fleet_cap(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The early-detect branch obeys NODELESS_REDISPATCH_MAX_PER_TICK — a
+        mass worker wedge making many fresh-heartbeat zombies eligible in the
+        SAME tick must not re-dispatch them unbounded. Rows started 20 min ago
+        are inside the early window (15) but outside the full window (35), so
+        ONLY the early-detect branch is exercised: the cap's worth are enqueued,
+        the rest deferred and counted ``nodeless_capped``, warning once."""
+        monkeypatch.setattr(ch, "NODELESS_REDISPATCH_MAX_PER_TICK", 2)
+        rows = []
+        for _ in range(4):
+            row = _run_row(
+                uuid.uuid4(),
+                "running",
+                stale=False,
+                nodeless=True,
+                dispatched=False,
+                dispatched_minutes_ago=None,
+                claim_count=1,
+            )
+            row.started_at = datetime.now(UTC) - timedelta(minutes=20)
+            rows.append(row)
+        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+            summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
+                monkeypatch,
+                rows,
+                settings_overrides={
+                    "saq_claimed_nodeless_minutes": 35,
+                    "saq_nodeless_early_detect_minutes": 15,
+                },
+            )
+        assert summary["nodeless_redispatched"] == 2
+        assert summary["nodeless_capped"] == 2
+        assert summary["nodeless_failed"] == 0
+        assert reenqueue.await_count == 2
+        ingest.assert_not_awaited()
+        assert sum("nodeless re-dispatch cap hit" in r.message for r in caplog.records) == 1
+
+
+class TestFailNodelessObservability:
+    """FAR-873: the claim→dispatch gap observability in _fail_nodeless_run."""
+
+    @pytest.mark.asyncio
+    async def test_fail_nodeless_logs_dispatched_at_and_started_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_fail_nodeless_run emits an ERROR log carrying dispatched_at and
+        started_at so the claim→dispatch gap is attributable per-run in
+        seconds."""
+        run_id = uuid.uuid4()
+        exhausted = _run_row(
+            run_id,
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=40,
+            claim_count=5,
+        )
+        # Override started_at to be 40 min ago (matching the dispatched_at)
+        exhausted.started_at = datetime.now(UTC) - timedelta(minutes=40)
+        exhausted.dispatched_at = datetime.now(UTC) - timedelta(minutes=40)
+        summary, _reenqueue, ingest, _, _, _session = await _run_reconcile(monkeypatch, [exhausted])
+        assert summary["claimed_but_never_dispatched"] == 1
+        # The error event context should include dispatched_at and started_at.
+        ingest.assert_awaited_once()
+        ctx = ingest.await_args.kwargs["context"]
+        assert "dispatched_at" in ctx
+        assert "started_at" in ctx
+        assert "saq_queue_wait_seconds" in ctx
