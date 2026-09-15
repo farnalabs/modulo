@@ -13,8 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.tier_catalog import list_tiers
 from modulo.settings import Settings, get_settings
@@ -35,7 +34,7 @@ router = APIRouter(prefix="/api/v1/admin/tiers", tags=["admin-tiers"])
 @handle_db_errors("admin.tiers.list_tiers_endpoint")
 async def list_tiers_endpoint(
     settings: Settings = Depends(get_settings),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("org.config"),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     # Attempt Redis cache read (300s TTL — tiers don't change often)

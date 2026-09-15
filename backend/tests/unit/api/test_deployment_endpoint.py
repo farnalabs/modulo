@@ -1,12 +1,22 @@
-"""Unit tests for the deployment info endpoint."""
+"""Unit tests for the deployment info endpoint.
+
+FAR-880: the endpoint now requires a system admin principal
+(``require_system_permission("system.config.manage")``).
+"""
 
 from collections.abc import Generator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.main import app
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+
+_ORG_ID = "00000000-0000-0000-0000-000000000001"
+_USER_ID = "00000000-0000-0000-0000-000000000002"
 
 
 def _make_settings() -> Settings:
@@ -19,14 +29,48 @@ def _make_settings() -> Settings:
     )
 
 
+def _system_admin_principal() -> dict[str, Any]:
+    return {
+        "username": "sysadmin",
+        "organisation_id": _ORG_ID,
+        "account_id": _USER_ID,
+        "org_role": "admin",
+        "is_system_admin": True,
+    }
+
+
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**_system_admin_principal())
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
 class TestDeploymentInfo:
+    def test_unauthenticated_returns_4xx(self, client: TestClient) -> None:
+        app.dependency_overrides.pop(get_current_user, None)
+        try:
+            resp = client.get("/api/v1/deployment")
+        finally:
+            app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**_system_admin_principal())
+        assert resp.status_code in (401, 403)
+
+    def test_non_system_admin_returns_403(self, client: TestClient) -> None:
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="orgadmin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+            is_system_admin=False,
+        )
+        try:
+            resp = client.get("/api/v1/deployment")
+        finally:
+            app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**_system_admin_principal())
+        assert resp.status_code == 403
+        assert "system admin" in resp.json()["detail"]
+
     def test_get_returns_200(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")
         assert resp.status_code == 200

@@ -45,7 +45,6 @@ from modulo.api.team_scope import (
     team_membership_exists,
     validate_owner_team_for_create,
 )
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_logger import append_audit_event
@@ -2702,7 +2701,11 @@ async def save_as_composite_endpoint(
     pipeline_id: uuid.UUID,
     req: SaveAsCompositeRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
+    principal: Annotated[TenantPrincipal, require_permission("pipeline.create")],
+    _: Annotated[
+        TenantPrincipal,
+        require_team_membership_or_admin(resolve_pipeline_team_scope),
+    ],
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -2711,6 +2714,7 @@ async def save_as_composite_endpoint(
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline.id)
 
             all_nodes = pipeline.graph_nodes_json
             selected_ids_str = {str(nid) for nid in req.selected_node_ids}

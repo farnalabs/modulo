@@ -944,7 +944,7 @@ async def list_members_endpoint(
 async def add_member_endpoint(
     team_id: uuid.UUID,
     req: AddMemberRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("team.members.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
     user_id = uuid.UUID(req.user_id)
@@ -1034,7 +1034,7 @@ async def add_member_endpoint(
 async def remove_member_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("team.members.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
@@ -1119,7 +1119,7 @@ async def change_member_role_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
     req: ChangeMemberRoleRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("team.members.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
     try:

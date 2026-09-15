@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter
 
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.dependencies import require_system_permission
 from modulo.version import get_version
 
 router = APIRouter(prefix="/api/v1/deployment", tags=["deployment"])
@@ -17,7 +18,9 @@ _started_at = datetime.now(UTC)
 
 @router.get("")
 @handle_db_errors("deployment.deployment_info")
-async def deployment_info() -> dict[str, object]:
+async def deployment_info(
+    _current_user: object = require_system_permission("system.config.manage"),
+) -> dict[str, object]:
     """Return deployment metadata for operational visibility.
 
     Build-time values (git_sha, git_branch, build_timestamp, etc.) are injected

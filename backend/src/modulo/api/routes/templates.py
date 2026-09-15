@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.pipeline import create_pipeline
@@ -217,6 +217,9 @@ async def _persist_template_edges(
     return persisted_edges
 
 
+_TEMPLATE_CREATE_PERMISSION = require_permission("pipeline.create")
+
+
 @router.post(
     "/pipelines/from-template/{template_id}",
     status_code=status.HTTP_201_CREATED,
@@ -225,7 +228,7 @@ async def _persist_template_edges(
 async def create_pipeline_from_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = _TEMPLATE_CREATE_PERMISSION,
 ) -> FromTemplateResponse:
     try:
         async with session.begin():

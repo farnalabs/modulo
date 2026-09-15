@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.dependencies import get_db_session, require_permission
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.web_vital_event import WebVitalEvent
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -105,7 +104,7 @@ async def ingest_web_vitals(
 @router.get("/web-vitals/summary")
 async def get_web_vitals_summary(
     days: int = Query(7, ge=1, le=90),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("metrics.ingest"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[WebVitalSummaryItem]:
     """Get summary statistics for web vitals over the given period."""
@@ -159,7 +158,7 @@ async def get_web_vitals_summary(
 async def get_web_vitals_timeseries(
     metric_name: str = Query(..., max_length=50),
     days: int = Query(7, ge=1, le=90),
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: TenantPrincipal = require_permission("metrics.ingest"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[WebVitalTimeSeriesPoint]:
     """Get daily-averaged time series for a specific metric."""
