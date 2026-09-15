@@ -3637,7 +3637,8 @@ export default {
       "dismiss_for_all_admins": "Dismiss for all admins",
       "dismiss_for_me": "Dismiss for me",
       "dismiss_choice_description": "Choose whether to dismiss for yourself or for everyone who can see this notification.",
-      "dismiss": "Dismiss"
+      "dismiss": "Dismiss",
+      "open_dismiss_dialog": "Open dismiss dialog"
     },
     "SidebarNav": {
       "main_navigation": "Main navigation",
@@ -3711,7 +3712,10 @@ export default {
     "NotificationCard": {
       "hide_from_dashboard_keep_in_notifications_page": "Hide from dashboard, keep in notifications page",
       "dismiss_this_notification": "Dismiss this notification",
-      "just_now": "just now"
+      "review_later": "Review Later",
+      "just_now": "just now",
+      "lapsed_hitl": "No longer awaiting review \u2014 the gate lapsed and the run was cancelled.",
+      "lapsed_hitl_view_run": "View run"
     },
     "NodeCategoryEditor": {
       "message_circle": "Message Circle",
@@ -3762,7 +3766,11 @@ export default {
     "DashboardNotificationsPanel": {
       "failed_to_dismiss_notification": "Failed to dismiss notification",
       "notifications": "Notifications",
-      "view_all": "View all notifications"
+      "view_all": "View all notifications",
+      "no_notifications": "No notifications",
+      "page_x_of_y": "Page {current} of {total}",
+      "previous_page": "Previous page",
+      "next_page": "Next page"
     },
     "PipelineSnapshotTimeline": {
       "version_timeline": "Version timeline",
