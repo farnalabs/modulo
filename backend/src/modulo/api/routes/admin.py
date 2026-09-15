@@ -5,7 +5,7 @@ import logging
 import re
 import secrets
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple, NoReturn
 
@@ -20,6 +20,7 @@ import modulo.db.crud.account as account_crud
 from modulo.api.constants import (
     MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
     MSG_FEATURE_NOT_AVAILABLE,
+    MSG_NOT_FOUND,
     MSG_ORGANISATION_NOT_FOUND,
     MSG_RESOURCE_ALREADY_EXISTS,
     MSG_TEAM_NAME_ALREADY_EXISTS,
@@ -43,6 +44,7 @@ from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
+from modulo.core.lifecycle_map.journeys import dismiss_journey, restore_journey
 from modulo.core.runtime_config import (
     FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
     read_org_flag,
@@ -3959,6 +3961,118 @@ async def admin_update_run_concurrency(
         },
     )
     return RunConcurrencyResponse(run_concurrency_limit=req.run_concurrency_limit)
+
+
+# ── Journey dismissal (soft-delete) + operator restore (FAR-795 slice C) ────
+
+
+class JourneyDismissRequest(BaseModel):
+    kind: str = Field(min_length=1, max_length=64)
+    ref: str = Field(min_length=1, max_length=255)
+    reason: str | None = Field(default=None, max_length=1024)
+
+
+class JourneyRestoreRequest(BaseModel):
+    kind: str = Field(min_length=1, max_length=64)
+    ref: str = Field(min_length=1, max_length=255)
+
+
+class JourneyDismissRestoreResponse(BaseModel):
+    kind: str
+    ref: str
+    dismissed: bool
+
+
+async def _admin_journey_write(
+    session: AsyncSession,
+    current_user: TenantPrincipal,
+    *,
+    do_write: Callable[[], Coroutine[Any, Any, bool]],
+    detail_admin: str,
+    audit_event: str,
+    audit_payload: dict[str, Any],
+) -> None:
+    """Run an operator journey write (dismiss/restore) under the admin RLS
+    contract.
+
+    Opens the RLS-scoped transaction, runs *do_write*, and maps the standard
+    admin error contract (403/501/503) via :func:`_run_admin_rls_txn`. A
+    no-op write (no matching row) surfaces as a 404, and a successful write is
+    recorded to the org audit log. Shared by the dismiss/restore admin routes
+    so the RLS-begin / error-contract / audit boilerplate lives in one place.
+    """
+    _current = current_user
+
+    async def _wrapped() -> bool:
+        async with session.begin():
+            await set_rls_org(session, _current.organisation_id)
+            return await do_write()
+
+    ok = await _run_admin_rls_txn(session, current_user, _wrapped, detail_admin=detail_admin)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
+    await _record_org_audit(session, current_user, audit_event, audit_payload)
+
+
+@router.post("/org/journeys/dismiss", status_code=status.HTTP_200_OK)
+async def admin_dismiss_journey(
+    req: JourneyDismissRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> JourneyDismissRestoreResponse:
+    """Operator soft-dismiss (tombstone) a journey. Org-scoped, admin-gated."""
+
+    async def _do_write() -> bool:
+        return await dismiss_journey(
+            session,
+            current_user.organisation_id,
+            kind=req.kind,
+            ref=req.ref,
+            dismissed_by=current_user.account_id,
+            reason=req.reason,
+        )
+
+    await _admin_journey_write(
+        session,
+        current_user,
+        do_write=_do_write,
+        detail_admin="Only admin users can dismiss journeys",
+        audit_event="org.journey_dismissed",
+        audit_payload={"kind": req.kind, "ref": req.ref, "reason": req.reason},
+    )
+    return JourneyDismissRestoreResponse(kind=req.kind, ref=req.ref, dismissed=True)
+
+
+@router.post("/org/journeys/restore", status_code=status.HTTP_200_OK)
+async def admin_restore_journey(
+    req: JourneyRestoreRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> JourneyDismissRestoreResponse:
+    """Operator restore (un-dismiss) — the ONLY un-dismissal path (FAR-795).
+
+    A caller citation of a dismissed work item never un-dismisses it; an
+    operator restore clears the tombstone so the journey is mintable and
+    listed again.
+    """
+
+    async def _do_write() -> bool:
+        return await restore_journey(
+            session,
+            current_user.organisation_id,
+            kind=req.kind,
+            ref=req.ref,
+        )
+
+    await _admin_journey_write(
+        session,
+        current_user,
+        do_write=_do_write,
+        detail_admin="Only admin users can restore journeys",
+        audit_event="org.journey_restored",
+        audit_payload={"kind": req.kind, "ref": req.ref},
+    )
+    return JourneyDismissRestoreResponse(kind=req.kind, ref=req.ref, dismissed=False)
 
 
 @router.get("/runs/storage")

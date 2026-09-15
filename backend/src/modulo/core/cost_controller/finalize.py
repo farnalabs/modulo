@@ -72,11 +72,13 @@ from modulo.core.cost_controller.system_config import (
     read_system_config,
     write_system_config,
 )
-from modulo.core.lifecycle_map.advancement import advance_journeys, upsert_ref_provenances
+from modulo.core.lifecycle_map.advancement import advance_journeys, agent_minting_enabled, upsert_ref_provenances
 from modulo.core.lifecycle_map.reconcile import (
     record_journey_advance,
     record_journey_finalise_attempt,
     record_journey_parse_failure,
+    record_refs_agent_mint_suppressed_by_flag,
+    record_refs_agent_minted,
     record_self_report_refs_capped,
     record_unmatched_self_report_refs,
 )
@@ -1690,7 +1692,20 @@ async def _advance_journeys_on_terminal(
             # evidence. Post-advance, the upsert's INSERT arm is a no-op
             # (advance already minted caller/derived) and its UPDATE arm only
             # upgrades ``provenance`` by rank.
-            await upsert_ref_provenances(session, run.organisation_id, resolution.effective)
+            # FAR-795 slice B: agent-sourced refs mint ONLY behind the
+            # org flag (fail-closed read). The upsert returns the mint /
+            # suppress accounting, recorded here.
+            agent_minting = await agent_minting_enabled(session, run.organisation_id)
+            _considered, agent_minted, agent_suppressed = await upsert_ref_provenances(
+                session,
+                run.organisation_id,
+                resolution.effective,
+                include_agent=agent_minting,
+            )
+            if agent_minted:
+                record_refs_agent_minted(agent_minted)
+            if agent_suppressed:
+                record_refs_agent_mint_suppressed_by_flag(agent_suppressed)
             # The merged effective list (create-stamped + confirmed reported +
             # node-emission attributions) is ALWAYS persisted — agent-sourced
             # entries are storage-minted even when nothing advanced.

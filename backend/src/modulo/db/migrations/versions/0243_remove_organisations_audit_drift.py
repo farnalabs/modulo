@@ -17,11 +17,11 @@ test_migrated_schema_matches_orm_metadata forbids.
 
 This migration performs the correction 0239 should have: it removes the drift
 columns/FK so the migrated schema matches the ORM metadata. It chains off
-0240_reinstate_organisations_audit_columns and is idempotent — it is a no-op if
-the columns/FK are already absent.
+0242_org_mint_budget_usage (main's head, FAR-795) and is idempotent — it is a
+no-op if the columns/FK are already absent.
 
-Revision ID: 0241_remove_organisations_audit_drift
-Revises: 0240_reinstate_organisations_audit_columns
+Revision ID: 0243_remove_organisations_audit_drift
+Revises: 0242_org_mint_budget_usage
 Create Date: 2026-09-15
 """
 
@@ -29,8 +29,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0241_remove_organisations_audit_drift"
-down_revision = "0240_reinstate_organisations_audit_columns"
+revision = "0243_remove_organisations_audit_drift"
+down_revision = "0242_org_mint_budget_usage"
 branch_labels = None
 depends_on = None
 

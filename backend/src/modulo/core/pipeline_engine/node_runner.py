@@ -94,6 +94,7 @@ from modulo.core.node_output_split import (
     SPLITTABLE_NODE_TYPES,
     resolve_node_contract_output,
 )
+from modulo.core.pipeline_engine.ancestor_refs import collect_injected_refs
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.error_codes import (
     _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
@@ -161,6 +162,54 @@ def _node_declares_work_item_refs(node_def: dict[str, Any]) -> bool:
     return isinstance(properties, dict) and bool(_WORK_ITEM_REFS_INPUT_PROPS & set(properties))
 
 
+def _validate_node_input_ref_entries(raw: list[Any], node_id: str) -> tuple[list[dict[str, Any]], int]:
+    """Validate each create-time ref entry, fail-open (FAR-795).
+
+    Returns ``(validated, malformed)``. A read or validation failure degrades
+    to fewer/empty validated refs with a warning log (capped at 3) plus a
+    counter event surfaced by the caller.
+    """
+    validated: list[dict[str, Any]] = []
+    malformed = 0
+    for i, entry in enumerate(raw):
+        try:
+            validated.append(validate_ref_entry(entry))
+        except (ValueError, TypeError) as exc:
+            malformed += 1
+            if malformed <= 3:
+                _log.warning(
+                    "node_work_item_refs.validation_failed",
+                    extra={"node_id": node_id, "index": i, "reason": str(exc)},
+                )
+    return validated, malformed
+
+
+def _validated_node_input_refs(node_id: str, run_context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read the VALIDATED, UNCAPPED create-time work-item refs (FAR-795).
+
+    This is the validation half of ``_node_input_work_item_refs`` — same
+    reserved carrier (the create-time ``run_context.input._work_item_refs``
+    key from slice 2a; the alias ``work_item_refs`` is a declaration-level
+    key, not a data carrier), same per-entry canonicalisation, same fail-open
+    guarantees (a read or validation failure degrades to fewer/empty refs
+    with a warning log plus a counter event). NO cap is applied here: the
+    union injection path (``collect_injected_refs``) applies the unified cap
+    over create-time + DAG-ancestor refs, keeping ONE cap over the union —
+    separately capping the supplies could drop a create-time entry that the
+    union cap would have kept.
+    """
+    input_obj = run_context.get("input")
+    validated: list[dict[str, Any]] = []
+    malformed = 0
+    if isinstance(input_obj, dict):
+        raw = input_obj.get(WORK_ITEM_REFS_KEY)
+        if isinstance(raw, list):
+            validated, malformed = _validate_node_input_ref_entries(raw, node_id)
+    if malformed:
+        notify_refs_event("malformed_entry", surface="node_input", node_id=node_id, count=malformed)
+    return validated
+
+
 def _node_input_work_item_refs(node_id: str, run_context: dict[str, Any]) -> list[dict[str, Any]]:
     """Read the run's CREATE-TIME work-item refs for node input injection.
 
@@ -172,22 +221,7 @@ def _node_input_work_item_refs(node_id: str, run_context: dict[str, Any]) -> lis
     ``modulo_work_item_refs_cap`` with the deterministic rank-ascending drop
     order (agent first, then derived, then caller, then array position).
     """
-    input_obj = run_context.get("input")
-    candidates: list[tuple[int, dict[str, Any]]] = []
-    malformed = 0
-    if isinstance(input_obj, dict):
-        raw = input_obj.get(WORK_ITEM_REFS_KEY)
-        if isinstance(raw, list):
-            for i, entry in enumerate(raw):
-                try:
-                    candidates.append((i, validate_ref_entry(entry)))
-                except (ValueError, TypeError) as exc:
-                    malformed += 1
-                    if malformed <= 3:
-                        _log.warning(
-                            "node_work_item_refs.validation_failed",
-                            extra={"node_id": node_id, "index": i, "reason": str(exc)},
-                        )
+    candidates = [(i, entry) for i, entry in enumerate(_validated_node_input_refs(node_id, run_context))]
     cap = work_item_refs_cap()
     ranked = sorted(
         range(len(candidates)),
@@ -204,10 +238,90 @@ def _node_input_work_item_refs(node_id: str, run_context: dict[str, Any]) -> lis
             ref=str(candidates[j][1].get("ref")),
         )
     kept_positions = sorted(ranked[len(candidates) - cap :]) if cap else []
-    refs = [candidates[j][1] for j in kept_positions]
-    if malformed:
-        notify_refs_event("malformed_entry", surface="node_input", node_id=node_id, count=malformed)
-    return refs
+    return [candidates[j][1] for j in kept_positions]
+
+
+# Artifact statuses that mark an attempt as completed-AND-committed: a
+# successful node artifact carries ``completed``; stub/side-effecting nodes
+# without a model backend carry ``executed``. Everything else (``skipped``,
+# ``failed``, ``blocked``, ``interrupted``, ``awaiting_human``) contributes
+# nothing to the ancestor injection supply.
+_COMPLETED_EMISSION_STATUSES = frozenset({"completed", "executed"})
+
+# Module-level counter event for the ancestor-assembly failure path. Written
+# through ``notify_refs_event`` (the refs telemetry channel) — NEVER into
+# ``outputs_json`` / ``node_telemetry_json`` (the Agent Return Contract
+# columns a failure marker would wedge (FAR-188 rule 2)).
+_ANCESTOR_REFS_ASSEMBLY_FAILED = "ancestor_refs_assembly_failed"
+
+
+def _fold_ancestor_emission_refs(state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Fold per-node work-item ref emissions out of accumulated run artifacts.
+
+    ``state["artifacts"]`` holds ONE entry per completed attempt — a reject or
+    correction re-run appends another entry under the SAME node_id — so the
+    fold over the accumulated entries is a UNION per node (the per-node dedupe
+    then happens downstream in the collector's (kind, ref) identity map,
+    meaning retried ancestors add nothing duplicate). Only completion statuses
+    contribute; a skipped / not-executed node has no matching artifact entry
+    and is simply absent as a key. Fail-open: malformed entries are skipped
+    outright, never raised.
+    """
+    completed_node_outputs: dict[str, list[dict[str, Any]]] = {}
+    artifacts = state.get("artifacts")
+    if not isinstance(artifacts, list):
+        return completed_node_outputs
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        if artifact.get("status") not in _COMPLETED_EMISSION_STATUSES:
+            continue
+        output = artifact.get("output")
+        if not isinstance(output, dict):
+            continue
+        raw = output.get("work_item_refs")
+        if not isinstance(raw, list):
+            continue
+        emissions = completed_node_outputs.setdefault(str(artifact.get("node_id")), [])
+        for entry in raw:
+            try:
+                emissions.append(validate_ref_entry(entry))
+            except (ValueError, TypeError):
+                continue
+    return completed_node_outputs
+
+
+def _node_ancestor_injected_work_item_refs(
+    node_id: str,
+    run_context: dict[str, Any],
+    state: dict[str, Any],
+    dag_ancestor_ids: frozenset[str] | None,
+) -> list[dict[str, Any]]:
+    """Compute the FULL injected refs set for a declaring node (FAR-795).
+
+    Create-time refs (validated, uncapped) plus the refs emitted by the
+    node's DAG ancestors (folded from the accumulated artifacts), through the
+    pure ``collect_injected_refs`` collector — one unified cap over the union,
+    deduped by (kind, ref). FAIL-OPEN: any unexpected assembly failure
+    degrades to an EMPTY injection (the node declares the refs variable, so an
+    empty list is the safe bound) plus this counter event — the node itself
+    never fails because of the injection. The target node's own id is never
+    in its ancestor set, so its own emissions can never be re-injected.
+    """
+    try:
+        return collect_injected_refs(
+            run_create_time_refs=_validated_node_input_refs(node_id, run_context),
+            dag_ancestor_ids=set(dag_ancestor_ids or ()),
+            completed_node_outputs=_fold_ancestor_emission_refs(state),
+            cap=work_item_refs_cap(),
+        )
+    except Exception:
+        _log.exception(
+            "node_work_item_refs.ancestor_assembly_failed",
+            extra={"node_id": node_id},
+        )
+        notify_refs_event(_ANCESTOR_REFS_ASSEMBLY_FAILED, surface="node_input", node_id=node_id)
+        return []
 
 
 def _normalize_required_team_id(gate_id: str, raw: Any) -> str | None:
@@ -3110,6 +3224,7 @@ def make_node_fn(
     timeout: float | None = None,
     max_input_length: int | None = None,
     token_budget: int | None = None,  # NOSONAR S1172 - API kwarg (graph_cache); budget enforced at executor level
+    dag_ancestor_ids: frozenset[str] | None = None,
 ) -> Any:
     """Return a decorated async node function for use in a StateGraph.
 
@@ -3217,12 +3332,21 @@ def make_node_fn(
         # is never mutated.
         scoped_state = dict(state)
         scoped_state["run_context"] = scoped_run_context
-        # FAR-794 slice 2b: declare-and-inject the run's create-time refs when
+        # FAR-794 slice 2b: declare-and-inject the run's refs when
         # THIS node's input schema declares ``work_item_refs`` — read-only at
         # node start, never failing the node (a read failure yields [], not a
         # raise), and capped deterministically by the unified refs cap.
+        # FAR-795: the injection is now the FULL set — create-time refs plus
+        # the refs emitted by this node's DAG ancestors (folded from the
+        # accumulated artifacts; skipped/failed attempts contribute per
+        # status), deduped and capped over the union by the pure collector.
+        # ``dag_ancestor_ids`` is frozen at compile time from graph_json
+        # (graph_cache); a None (unthreaded caller) degrades to create-time
+        # refs only, never to a raise.
         node_work_item_refs = (
-            _node_input_work_item_refs(node_id, run_context) if _node_declares_work_item_refs(node_def) else None
+            _node_ancestor_injected_work_item_refs(node_id, run_context, state, dag_ancestor_ids)
+            if _node_declares_work_item_refs(node_def)
+            else None
         )
         rendered_prompt, routing_mode = _render_agent_prompt(
             state=scoped_state,

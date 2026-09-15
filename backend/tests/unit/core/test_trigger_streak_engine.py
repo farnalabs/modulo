@@ -335,6 +335,7 @@ class TestMigrationBackfillGrace:
         # and FAR-802's 0229_add_workspace_inputs_count chains on top of 0228_drop_scalar_agent_command,
         # and 0230_token_families_refresh_grace chains on top of 0229_add_workspace_inputs_count,
         # and 0231_token_families_reuse_replay_count chains on top of 0230_token_families_refresh_grace,
+        # and 0232_seed_modulo_sentinel_organisation chains on top of 0231_token_families_reuse_replay_count,
         # and 0233_add_updated_at_audit_to_organisations chains on top of 0232_seed_modulo_sentinel_organisation,
         # and 0234_add_organisations_indexes chains on top of 0233_add_updated_at_audit_to_organisations,
         # and 0235_promote_organisations_json_to_jsonb chains on top of 0234_add_organisations_indexes,
@@ -342,11 +343,13 @@ class TestMigrationBackfillGrace:
         # and 0237_fix_token_family_org_nullable chains on top of 0236_add_organisations_constraints,
         # and FAR-801's 0238_workspace_input_drift_and_audit chains on top of 0237_fix_token_family_org_nullable,
         # and 0239_revert_organisations_audit_drift chains on top of 0238_workspace_input_drift_and_audit,
-        # and 0241_remove_organisations_audit_drift chains on top of
-        # 0240_reinstate_organisations_audit_columns, and 0242_pipeline_stdout_retention_config
-        # chains on top of 0241_remove_organisations_audit_drift, so it is now the single
-        # linear head of the chain.
-        assert heads == ["0242_pipeline_stdout_retention_config"], f"expected a single head, got {heads}"
+        # and 0240_reinstate_organisations_audit_columns chains on top of 0239_revert_organisations_audit_drift,
+        # and 0241_journey_dismissal (FAR-795) chains on top of 0240_reinstate_organisations_audit_columns,
+        # and 0242_org_mint_budget_usage (FAR-795) chains on top of 0241_journey_dismissal,
+        # and 0243_remove_organisations_audit_drift (FAR-811) chains on top of 0242_org_mint_budget_usage,
+        # and 0244_pipeline_stdout_retention_config (FAR-811) chains on top of
+        # 0243_remove_organisations_audit_drift, so it is now the single linear head of the chain.
+        assert heads == ["0244_pipeline_stdout_retention_config"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

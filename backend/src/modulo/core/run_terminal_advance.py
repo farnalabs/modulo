@@ -30,8 +30,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.db.crud.run import get_run
 from modulo.db.rls import set_rls_org
@@ -60,7 +61,10 @@ async def advance_journeys_from_stored_refs(
     roll back or fail the already-committed terminal write.
     """
     try:
-        from modulo.core.lifecycle_map.advancement import advance_journeys
+        from modulo.core.lifecycle_map.advancement import (
+            _canonicalise_and_dedupe,
+            advance_journeys,
+        )
 
         factory = async_sessionmaker(async_engine, expire_on_commit=False, autobegin=False)
         async with factory() as session, session.begin():
@@ -69,16 +73,27 @@ async def advance_journeys_from_stored_refs(
             if run is None:
                 _log.warning("run_terminal_advance.journeys_run_missing run=%s", run_id)
                 return
-            if not run.work_item_refs:
-                # Nothing to advance — but NOT a reason to skip the facts
-                # half (the orchestrator runs it unconditionally).
+            refs = list(run.work_item_refs or [])
+            # FAR-795 slice B: agent-sourced stored refs advance/mint ONLY
+            # behind the org flag (fail-closed). The raw writers have no
+            # finalize hook, so without this gate an agent-sourced entry on a
+            # RAW-TERMINALISED run would mint/advance its journey unconditioned.
+            canonical_agent = [
+                c
+                for c in _canonicalise_and_dedupe(
+                    [e for e in refs if isinstance(e, dict) and e.get("source") == "agent"]
+                )
+                if c.get("source") == "agent"
+            ]
+            refs = await _apply_agent_mint_gate(session, run.organisation_id, run_id, refs, canonical_agent)
+            if not refs:
                 return
             await advance_journeys(
                 session,
                 run.organisation_id,
                 run_id=run.id,
                 pipeline_id=run.pipeline_id,
-                refs=run.work_item_refs,
+                refs=refs,
                 status=status,
                 completed_at=run.completed_at,
                 run_created_at=run.created_at,
@@ -89,6 +104,57 @@ async def advance_journeys_from_stored_refs(
         raise
     except Exception:
         _log.warning("run_terminal_advance.journey_advance_failed run=%s", run_id, exc_info=True)
+
+
+async def _apply_agent_mint_gate(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: str | uuid.UUID,
+    refs: list[dict[str, Any]],
+    canonical_agent: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Apply the fail-closed agent-mint gate to *refs* (FAR-795 slice B).
+
+    When the org flag is OFF (or unknown → fail-closed), agent-sourced entries
+    are dropped and counted as suppressed; the surviving refs are returned for
+    advancement. When ON, only fresh agent mints (no pre-existing journey row,
+    row-existence probe fail-open) must clear the per-org budget before
+    advancing; a genuine over-spend drops the agent refs like the flag-OFF
+    path. Returns the refs to advance (may be empty — the caller then skips the
+    advance half; the orchestrator still runs the facts half unconditionally).
+    """
+    from modulo.core.lifecycle_map.advancement import (
+        agent_minting_enabled,
+        confirm_reported_refs,
+    )
+    from modulo.core.lifecycle_map.reconcile import (
+        record_refs_agent_mint_budget_exceeded,
+        record_refs_agent_mint_suppressed_by_flag,
+        record_refs_agent_minted,
+    )
+    from modulo.core.runtime_config.mint_budget import consume_agent_mint_budget
+
+    agent_minting = await agent_minting_enabled(session, org_id)
+    if not agent_minting:
+        if canonical_agent:
+            record_refs_agent_mint_suppressed_by_flag(len(canonical_agent))
+        return [e for e in refs if not (isinstance(e, dict) and e.get("source") == "agent")]
+    if not canonical_agent:
+        return refs
+    try:
+        confirmed, _unmatched = await confirm_reported_refs(session, org_id, canonical_agent)
+    except Exception:
+        _log.warning("run_terminal_advance.agent_mint_probe_failed run=%s", run_id, exc_info=True)
+        confirmed = []
+    fresh_agent_mints = len(canonical_agent) - len(confirmed)
+    if fresh_agent_mints <= 0:
+        return refs
+    budget_ok = await consume_agent_mint_budget(session, org_id, n=fresh_agent_mints)
+    if not budget_ok:
+        record_refs_agent_mint_budget_exceeded(fresh_agent_mints)
+        return [e for e in refs if not (isinstance(e, dict) and e.get("source") == "agent")]
+    record_refs_agent_minted(fresh_agent_mints)
+    return refs
 
 
 async def record_terminal_failed_fact(

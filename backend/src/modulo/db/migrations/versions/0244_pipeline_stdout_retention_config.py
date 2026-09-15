@@ -8,16 +8,16 @@ pipeline-level default for sandbox stdout retention, shaped as:
 
 NULL means "no pipeline override — inherit from the org ceiling only".
 
-Revision ID: 0242_pipeline_stdout_retention_config
-Revises: 0241_remove_organisations_audit_drift
+Revision ID: 0244_pipeline_stdout_retention_config
+Revises: 0243_remove_organisations_audit_drift
 Create Date: 2026-09-14
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0242_pipeline_stdout_retention_config"
-down_revision = "0241_remove_organisations_audit_drift"
+revision = "0244_pipeline_stdout_retention_config"
+down_revision = "0243_remove_organisations_audit_drift"
 branch_labels = None
 depends_on = None
 

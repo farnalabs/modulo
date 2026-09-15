@@ -17,9 +17,10 @@ from __future__ import annotations
 import base64
 import json
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import cast
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import ColumnElement, Select, String, and_, bindparam, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.lifecycle_refs import canonicalise_kind, canonicalise_ref
@@ -159,7 +160,7 @@ async def list_map_journeys(
             )
         )
 
-    query = select(Journey).where(or_(*conditions))
+    query = select(Journey).where(or_(*conditions), Journey.dismissed_at.is_(None))
     if kind is not None:
         query = query.where(Journey.kind == kind)
     if ref is not None:
@@ -226,6 +227,8 @@ async def get_map_journey(
         or_(*conditions),
         Journey.kind == kind,
         Journey.ref == ref,
+        # FAR-795 slice C: dismissed tombstones are invisible to the map UI.
+        Journey.dismissed_at.is_(None),
     )
     if owner_team_id is not None:
         query = query.where(Journey.owner_team_id == owner_team_id)
@@ -233,6 +236,56 @@ async def get_map_journey(
     if journey is None:
         return None
     return journey, _is_unattributed(journey, referenced)
+
+
+def _is_postgres(session: AsyncSession) -> bool:
+    """True when the session's bound engine speaks Postgres.
+
+    Dialect-detected at query-build time (never a static import) so the
+    SQLite unit-test path keeps the portable Python scan.
+    """
+    bind = session.sync_session.get_bind()
+    return getattr(bind.dialect, "name", "") == "postgresql"
+
+
+def _journey_refs_containment(journey: Journey) -> ColumnElement[bool]:
+    """JSONB containment predicate for the journey's canonical (kind, ref).
+
+    ``work_item_refs @> '[{"kind": K, "ref": R}]'::jsonb`` — the stored
+    entries are ``{"kind", "ref", "source", status?}`` (validate_ref_entry
+    shape), so a two-key containment template subset-matches EVERY entry shape
+    ever persisted. The default jsonb GIN operator class on
+    ``ix_runs_work_item_refs_gin`` (WHERE jsonb_array_length > 0) serves this
+    operator; a containment-in-an-array implies a non-empty array, so the
+    partial predicate is implied.
+
+    The bound value is a JSON *string* bound as TEXT and cast to jsonb inside
+    SQL. Binding it as a JSONB-typed parameter makes asyncpg double-encode the
+    string into a jsonb scalar (``'"[{…}]"'``), so the containment match
+    silently returns nothing; a parametrised ``CAST(:t AS jsonb)`` with a
+    TEXT-typed bindparam keeps the on-wire value a plain JSON string that
+    Postgres parses into the intended jsonb array.
+    """
+    template = json.dumps([{"kind": journey.kind, "ref": journey.ref}])
+    return cast(
+        ColumnElement[bool],
+        text("work_item_refs @> CAST(:t AS jsonb)").bindparams(bindparam("t", template, type_=String)),
+    )
+
+
+def _journey_runs_postgres_query(journey: Journey, *, limit: int) -> Select[tuple[Run]]:
+    """Scalable Postgres predicate walk for ``list_journey_runs``.
+
+    Translates the portable scan exactly: only refs-carrying runs, matched by
+    JSONB containment OR the canonical work-item-id anchor (when set), newest
+    first, SQL-side ``LIMIT``.
+    """
+    conditions: list[ColumnElement[bool]] = [Run.work_item_refs.isnot(None)]
+    if journey.canonical_work_item_id is not None:
+        conditions.append(or_(_journey_refs_containment(journey), Run.work_item_id == journey.canonical_work_item_id))
+    else:
+        conditions.append(_journey_refs_containment(journey))
+    return select(Run).where(*conditions).order_by(Run.completed_at.desc().nulls_last()).limit(limit)
 
 
 async def list_journey_runs(
@@ -245,23 +298,118 @@ async def list_journey_runs(
 
     A run touches the journey when its ``work_item_refs`` carries the journey's
     canonical (kind, ref) or its ``work_item_id`` equals the journey's canonical
-    id. JSONB containment is Postgres-only, so the refs match is done in Python
-    over the refs-carrying runs ordered by ``completed_at DESC``; the scan stops
-    once *limit* matches are collected. Runs may be purged — an empty result is
-    a valid "history lost to retention" outcome, not an error.
+    id. On Postgres the refs match is a JSONB containment predicate so the
+    partial GIN index ``ix_runs_work_item_refs_gin`` bounds the scan to
+    refs-carrying runs (an unbounded full-table walk on a user-facing path
+    otherwise); non-Postgres dialects (SQLite unit tests) fall back to the
+    portable Python scan with identical semantics. Runs may be purged — an
+    empty result is a valid "history lost to retention" outcome, not an error.
     """
+    if _is_postgres(session):
+        result = await session.execute(_journey_runs_postgres_query(journey, limit=limit))
+        return list(result.scalars())
+    # Portable fallback (SQLite unit tests): unbounded walk, Python filter.
     result = await session.execute(
         select(Run).where(Run.work_item_refs.isnot(None)).order_by(Run.completed_at.desc().nulls_last())
     )
     matched: list[Run] = []
     for run in result.scalars():
-        if run.work_item_id == journey.canonical_work_item_id:
+        if _run_matches_journey(run, journey):
             matched.append(run)
-        else:
-            for entry in run.work_item_refs or []:
-                if isinstance(entry, dict) and entry.get("kind") == journey.kind and entry.get("ref") == journey.ref:
-                    matched.append(run)
-                    break
         if len(matched) >= limit:
             break
     return matched
+
+
+def _run_matches_journey(run: Run, journey: Journey) -> bool:
+    """True when *run* touches *journey* under the portable (non-Postgres) scan.
+
+    Mirrors the Postgres JSONB containment predicate: an exact canonical
+    work-item-id anchor, or any ``work_item_refs`` entry carrying the journey's
+    (kind, ref).
+    """
+    if run.work_item_id == journey.canonical_work_item_id:
+        return True
+    for entry in run.work_item_refs or []:
+        if isinstance(entry, dict) and entry.get("kind") == journey.kind and entry.get("ref") == journey.ref:
+            return True
+    return False
+
+
+async def _fetch_journey(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    *,
+    kind: str,
+    ref: str,
+    dismissed: bool | None,
+) -> Journey | None:
+    """Fetch the single journey for (org, kind, ref), optionally filtering on
+    tombstone state.
+
+    ``dismissed=True`` matches only dismissed (tombstoned) rows,
+    ``dismissed=False`` matches only active rows, and ``dismissed=None`` ignores
+    the tombstone filter. Kind/ref are canonicalised before the lookup.
+    """
+    kind = canonicalise_kind(kind)
+    ref = canonicalise_ref(kind, ref)
+    filters: list[ColumnElement[bool]] = [
+        Journey.organisation_id == organisation_id,
+        Journey.kind == kind,
+        Journey.ref == ref,
+    ]
+    if dismissed is True:
+        filters.append(Journey.dismissed_at.is_not(None))
+    elif dismissed is False:
+        filters.append(Journey.dismissed_at.is_(None))
+    return (await session.execute(select(Journey).where(*filters))).scalar_one_or_none()
+
+
+async def dismiss_journey(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    *,
+    kind: str,
+    ref: str,
+    dismissed_by: uuid.UUID,
+    reason: str | None = None,
+) -> bool:
+    """Soft-dismiss (tombstone) the journey for (kind, ref) — operator action.
+
+    Sets ``dismissed_at`` / ``dismissed_by`` / ``reason`` on the EXISTING row.
+    A dismissed journey is invisible to every read path and is never re-minted
+    or re-advanced (the upsert predicates refuse it). Returns False when no
+    ACTIVE row matches (missing, or already dismissed — dismiss is idempotent
+    and never overwrites an existing tombstone's reason).
+    """
+    journey = await _fetch_journey(session, organisation_id, kind=kind, ref=ref, dismissed=False)
+    if journey is None:
+        return False
+    journey.dismissed_at = datetime.now(UTC)
+    journey.dismissed_by = dismissed_by
+    journey.reason = reason
+    return True
+
+
+async def restore_journey(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    *,
+    kind: str,
+    ref: str,
+) -> bool:
+    """Clear a tombstone — operator restore (the ONLY un-dismissal path).
+
+    Returns False when no DISMISSED row matches (missing, or already active —
+    restore is idempotent). Restoring makes the journey writable again: the
+    next mint/advance conflict arm passes the ``dismissed_at IS NULL``
+    predicate as usual. Nothing else is reset — latest evidence and
+    ``run_count`` are the finalise path's domain.
+    """
+    journey = await _fetch_journey(session, organisation_id, kind=kind, ref=ref, dismissed=True)
+    if journey is None:
+        return False
+    journey.dismissed_at = None
+    journey.dismissed_by = None
+    journey.reason = None
+    return True

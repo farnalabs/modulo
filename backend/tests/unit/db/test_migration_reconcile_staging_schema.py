@@ -60,6 +60,7 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and FAR-802's 0229_add_workspace_inputs_count chains off 0228_drop_scalar_agent_command,
 # and 0230_token_families_refresh_grace chains off 0229_add_workspace_inputs_count,
 # and 0231_token_families_reuse_replay_count chains off 0230_token_families_refresh_grace,
+# and 0232_seed_modulo_sentinel_organisation chains off 0231_token_families_reuse_replay_count,
 # and 0233_add_updated_at_audit_to_organisations chains off 0232_seed_modulo_sentinel_organisation,
 # and 0234_add_organisations_indexes chains off 0233_add_updated_at_audit_to_organisations,
 # and 0235_promote_organisations_json_to_jsonb chains off 0234_add_organisations_indexes,
@@ -68,10 +69,12 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and FAR-801's 0238_workspace_input_drift_and_audit chains off
 # 0237_fix_token_family_org_nullable, and 0239_revert_organisations_audit_drift
 # chains off 0238_workspace_input_drift_and_audit, and 0240_reinstate_organisations_audit_columns
-# chains off 0239_revert_organisations_audit_drift, and 0241_remove_organisations_audit_drift
-# chains off 0240_reinstate_organisations_audit_columns, and 0242_pipeline_stdout_retention_config
-# chains off 0241_remove_organisations_audit_drift as the chain head.
-_CHAIN_HEAD_MIGRATION = "0242_pipeline_stdout_retention_config"
+# chains off 0239_revert_organisations_audit_drift, and 0241_journey_dismissal (FAR-795)
+# chains off 0240_reinstate_organisations_audit_columns, and 0242_org_mint_budget_usage (FAR-795)
+# chains off 0241_journey_dismissal, and 0243_remove_organisations_audit_drift (FAR-811)
+# chains off 0242_org_mint_budget_usage, and 0244_pipeline_stdout_retention_config (FAR-811)
+# chains off 0243_remove_organisations_audit_drift as the chain head.
+_CHAIN_HEAD_MIGRATION = "0244_pipeline_stdout_retention_config"
 
 
 def _source(name: str) -> str:

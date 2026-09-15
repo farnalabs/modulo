@@ -646,6 +646,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/journeys/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Dismiss Journey
+         * @description Operator soft-dismiss (tombstone) a journey. Org-scoped, admin-gated.
+         */
+        post: operations["admin_dismiss_journey_api_v1_admin_org_journeys_dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/org/journeys/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Restore Journey
+         * @description Operator restore (un-dismiss) — the ONLY un-dismissal path (FAR-795).
+         *
+         *     A caller citation of a dismissed work item never un-dismisses it; an
+         *     operator restore clears the tombstone so the journey is mintable and
+         *     listed again.
+         */
+        post: operations["admin_restore_journey_api_v1_admin_org_journeys_restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/runs/storage": {
         parameters: {
             query?: never;
@@ -12599,12 +12643,37 @@ export interface components {
             /** Runs */
             runs?: components["schemas"]["JourneyRunHistoryItem"][];
         };
+        /** JourneyDismissRequest */
+        JourneyDismissRequest: {
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: string;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** JourneyDismissRestoreResponse */
+        JourneyDismissRestoreResponse: {
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: string;
+            /** Dismissed */
+            dismissed: boolean;
+        };
         /** JourneyListResponse */
         JourneyListResponse: {
             /** Items */
             items: components["schemas"]["JourneySummaryResponse"][];
             /** Next Cursor */
             next_cursor?: string | null;
+        };
+        /** JourneyRestoreRequest */
+        JourneyRestoreRequest: {
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: string;
         };
         /** JourneyRunHistoryItem */
         JourneyRunHistoryItem: {
@@ -19891,6 +19960,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_dismiss_journey_api_v1_admin_org_journeys_dismiss_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JourneyDismissRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JourneyDismissRestoreResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_restore_journey_api_v1_admin_org_journeys_restore_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JourneyRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JourneyDismissRestoreResponse"];
                 };
             };
             /** @description Validation Error */

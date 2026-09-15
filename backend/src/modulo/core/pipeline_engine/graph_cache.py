@@ -463,6 +463,48 @@ def _count_sandbox_nodes(nodes: list[dict[str, Any]]) -> bool:
     return sum(1 for n in nodes if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
 
 
+def _compute_dag_ancestor_ids(
+    node_ids: list[str],
+    edges: list[dict[str, Any]],
+) -> dict[str, frozenset[str]]:
+    """Compute each node's transitive DAG-ancestor id set (FAR-795).
+
+    Ancestors are computed over FORWARDING edges only — reject edges are
+    EXCLUDED: a reject edge is a correction kick-back that re-enters the same
+    logical flow (its source's own ancestors already flow to the reject
+    target through the re-run), not a new data dependency (matching
+    ``_group_forwarding_edges`` / the retry-wrapper adjacency above, which
+    also skip reject edges).
+
+    Cycle-safe: the closure is a BFS over the REVERSE forwarding adjacency
+    with a visited set, so a malformed cyclic graph can never loop forever (a
+    cycle simply makes its members mutual ancestors). The target node's own
+    id is NEVER in its own set. Pure over the graph_json — no I/O, computed
+    once per compile (cache-consistent: derives from the same topology the
+    struct hash covers).
+    """
+    reverse: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
+    for edge_def in edges:
+        if _get_edge_type(edge_def) == "reject":
+            continue
+        src = str(_get_edge_val(edge_def, "source", "source_node_id"))
+        tgt = str(_get_edge_val(edge_def, "target", "target_node_id"))
+        reverse.setdefault(tgt, []).append(src)
+        reverse.setdefault(src, [])
+    ancestry: dict[str, frozenset[str]] = {}
+    for node_id in node_ids:
+        seen: set[str] = set()
+        stack = list(reverse.get(node_id, []))
+        while stack:
+            current = stack.pop()
+            if current in seen or current == node_id:
+                continue
+            seen.add(current)
+            stack.extend(reverse.get(current, []))
+        ancestry[node_id] = frozenset(seen)
+    return ancestry
+
+
 def _make_node_fn(
     node_def: dict[str, Any],
     *,
@@ -470,6 +512,7 @@ def _make_node_fn(
     session_factory: Callable[..., Any] | None,
     single_sandbox_node: bool,
     pipeline_stdout_retention_config: dict[str, Any] | None = None,
+    dag_ancestor_ids: frozenset[str] | None = None,
 ) -> Any:
     """Build the LangGraph node function for a single node def (no graph add)."""
     node_id: str = str(node_def["id"])
@@ -512,6 +555,7 @@ def _make_node_fn(
                 timeout=timeout,
                 max_input_length=max_input_length,
                 token_budget=token_budget,
+                dag_ancestor_ids=dag_ancestor_ids,
             )
         if connector_binding:
             return make_connector_fn(node_def, timeout=timeout, session_factory=session_factory)
@@ -524,6 +568,7 @@ def _make_node_fn(
         timeout=timeout,
         max_input_length=max_input_length,
         token_budget=token_budget,
+        dag_ancestor_ids=dag_ancestor_ids,
     )
 
 
@@ -637,6 +682,7 @@ def _build_raw_node_fn(
     session_factory: Callable[..., Any] | None,
     single_sandbox_node: bool,
     pipeline_stdout_retention_config: dict[str, Any] | None = None,
+    dag_ancestor_ids: frozenset[str] | None = None,
 ) -> Any:
     """Return the raw (un-retry-wrapped) callable for a node def.
 
@@ -669,6 +715,7 @@ def _build_raw_node_fn(
         session_factory=session_factory,
         single_sandbox_node=single_sandbox_node,
         pipeline_stdout_retention_config=pipeline_stdout_retention_config,
+        dag_ancestor_ids=dag_ancestor_ids,
     )
 
 
@@ -966,6 +1013,14 @@ def build_graph_from_json(
     # can require it without re-deriving from the node's own def.
     single_sandbox_node = _count_sandbox_nodes(nodes)
 
+    # FAR-795: per-node DAG-ancestor id sets (over forwarding edges), frozen at
+    # compile time and threaded into the agent node fns so the node-start
+    # work_item_refs injection (node_runner ``make_node_fn``) can union the
+    # ancestors' emissions with the create-time refs through the pure
+    # ``collect_injected_refs`` collector. Derived purely from graph_json
+    # topology — cache-consistent with the struct hash.
+    dag_ancestors_by_node = _compute_dag_ancestor_ids([str(n["id"]) for n in nodes], edges)
+
     # Build EVERY node's raw callable first, then wrap each with the P5
     # retry/compensation wrapper. Wrapping after a full pass lets the wrapper
     # resolve OTHER nodes' raw fns (per-edge retry re-executes the SOURCE; a
@@ -981,6 +1036,7 @@ def build_graph_from_json(
             session_factory=session_factory,
             single_sandbox_node=single_sandbox_node,
             pipeline_stdout_retention_config=pipeline_stdout_retention_config,
+            dag_ancestor_ids=dag_ancestors_by_node.get(str(node_def["id"])),
         )
 
     # Node-id-to-def lookup for the retry wrapper (source fail-closed + retry config).
