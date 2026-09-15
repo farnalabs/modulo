@@ -541,6 +541,14 @@ export default {
       "modulo": "Modulo",
       "or_continue_with": "or continue with"
     },
+    "OrgLoginView": {
+      "sign_in_to_your_organisation": "Sign in to your organisation",
+      "organisation_not_found": "Organisation not found",
+      "organisation_slug_label": "Organisation name or slug",
+      "organisation_slug_placeholder": "e.g. acme-corp",
+      "organisation_slug_hint": "Enter your organisation's name or URL slug to continue.",
+      "continue": "Continue"
+    },
     "NotificationsPage": {
       "title": "Notifications",
       "level": "Level",
