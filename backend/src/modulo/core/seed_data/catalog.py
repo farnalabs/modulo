@@ -328,6 +328,16 @@ FLAGS: list[dict[str, str | None]] = [
         "depends_on": None,
     },
     {
+        "name": "sso_unrestricted_provisioning",
+        "description": (
+            "Allow SSO providers to auto-provision ANY authenticated identity into the "
+            "organisation (auto_provision=true with no allowed_domains). DANGEROUS: "
+            "self-service org join for every IdP account. Intentionally not plan-tier gated."
+        ),
+        "tier_id": "community",
+        "depends_on": None,
+    },
+    {
         "name": "webhook_notification_log",
         "description": "Webhook notification delivery log (admin delivery-log UI)",
         "tier_id": "community",

@@ -295,6 +295,23 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Per-user MCP API keys (keys operate as their creator's identity)",
         tier="community",
     ),
+    # �� Community tier - SSO unrestricted JIT provisioning (default OFF, FAR-855)
+    # ��
+    # Registered in ``DEFAULT_OFF_FLAGS`` (the ``mobile_sidebar_rail``
+    # two-mechanism precedent): only an explicit operator-level override (system
+    # ``set_override`` or an org ``feature_overrides`` entry) can enable it.
+    # When OFF, an SSO provider saved with ``auto_provision=true`` and an EMPTY
+    # ``allowed_domains`` list is (a) rejected by the admin API at save time and
+    # (b) FAILS CLOSED at sign-in - unknown identities are denied.
+    FeatureFlag(
+        name="sso_unrestricted_provisioning",
+        description=(
+            "Allow SSO providers to auto-provision ANY authenticated identity into the "
+            "organisation (auto_provision=true with no allowed_domains). DANGEROUS: "
+            "self-service org join for every IdP account. Intentionally not plan-tier gated."
+        ),
+        tier="community",
+    ),
     # ── Community tier — lifecycle map journeys display (default OFF, FAR-654) ──
     # Registered in ``DEFAULT_OFF_FLAGS`` (the ``mobile_sidebar_rail``
     # two-mechanism precedent): journey attribution display ships default-OFF
@@ -347,6 +364,7 @@ DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
         "lifecycle_map_journeys",
         "webhook_notification_log",
         "library_collection",
+        "sso_unrestricted_provisioning",
     }
 )
 
@@ -848,3 +866,30 @@ def get_registry() -> FeatureFlagRegistry:
     if _registry is None:
         _registry = FeatureFlagRegistry(current_tier="community")
     return _registry
+
+
+SSO_UNRESTRICTED_PROVISIONING_FLAG = "sso_unrestricted_provisioning"
+
+
+async def resolve_sso_unrestricted_provisioning(session: Any, *, org_id: uuid.UUID | None) -> bool:
+    """FAR-855: resolve the operator-level SSO unrestricted-provisioning flag.
+
+    This flag is NOT a plan-tier feature: it is default-OFF on every tier
+    (``DEFAULT_OFF_FLAGS``) and only an explicit operator-level override —
+    system ``FeatureFlagRegistry.set_override`` or an org
+    ``feature_overrides`` entry — can enable it. It gates the DANGEROUS
+    "anyone who authenticates" SSO join mode (``auto_provision=true`` with an
+    empty ``allowed_domains``).
+
+    SECURITY: fails CLOSED. Any error resolving the flag denies the
+    permissive mode, because flag resolution failing must never be the
+    thing that widens an auth boundary.
+    """
+    try:
+        registry = get_registry()
+        return bool(await registry.resolve_flag(SSO_UNRESTRICTED_PROVISIONING_FLAG, org_id=org_id))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("sso_unrestricted_provisioning flag read failed; failing closed")
+        return False
