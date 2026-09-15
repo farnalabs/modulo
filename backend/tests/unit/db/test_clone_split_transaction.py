@@ -102,6 +102,7 @@ def _make_source() -> _Row:
         graph_nodes_json=[{"id": _NODE_A, "node_type": "agent"}],
         default_autonomy_level="manual_approval",
         stale_run_timeout_minutes=30,
+        stdout_retention_config=None,
     )
 
 

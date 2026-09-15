@@ -3169,6 +3169,7 @@ class PipelineExecutor:
                 pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
                 pipeline_retry_policy=pipeline_retry_policy,
                 node_idempotency_key=_node_idempotency_key,
+                pipeline_stdout_retention_config=pipeline.stdout_retention_config,
             ),
             pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
             # Both the retry-aware topology hash (FAR-505) and the eval-def
@@ -4356,6 +4357,7 @@ class PipelineExecutor:
                 pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
                 pipeline_retry_policy=pipeline_retry_policy,
                 node_idempotency_key=idempotency_key,
+                pipeline_stdout_retention_config=snapshot.stdout_retention_config,
             ),
             pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
             graph_struct_hash=struct_hash_with_eval_defs(
