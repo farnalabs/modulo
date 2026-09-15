@@ -241,12 +241,6 @@ _AUDIT_CHAIN_COLUMNS: dict[str, frozenset[str]] = {
     "agents": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
     "connector_instances": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
     "scheduled_reports": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
-    # organisations: migrations 0233 (updated_at/deleted_by/updated_by) add the
-    # same audit columns the trigger-owned tables carry. The ORM deliberately
-    # does not model them (the Organisation model keeps created_by non-FK so the
-    # first org can exist before its first user), so they are DB-owned here too.
-    # permanent (documented repo divergence)
-    "organisations": frozenset({"updated_by", "deleted_by", "updated_at"}),
 }
 # Their FKs to accounts.id (same tables; deleted_at carries no FK).
 # permanent (documented repo divergence)
@@ -254,11 +248,6 @@ _AUDIT_CHAIN_FK_COLUMNS: dict[str, frozenset[str]] = {
     "agents": frozenset({"created_by", "updated_by", "deleted_by"}),
     "connector_instances": frozenset({"created_by", "updated_by", "deleted_by"}),
     "scheduled_reports": frozenset({"created_by", "updated_by", "deleted_by"}),
-    # organisations: migration 0236 adds fk_organisations_created_by (ON DELETE
-    # SET NULL). The ORM keeps created_by deliberately non-FK (bootstrap order),
-    # so the FK is DB-owned and not modelled — same as the sibling tables above.
-    # permanent (documented repo divergence)
-    "organisations": frozenset({"created_by"}),
 }
 
 

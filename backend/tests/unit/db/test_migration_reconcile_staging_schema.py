@@ -67,10 +67,12 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and 0236_add_organisations_constraints chains off 0235_promote_organisations_json_to_jsonb,
 # and 0237_fix_token_family_org_nullable chains off 0236_add_organisations_constraints,
 # and FAR-801's 0238_workspace_input_drift_and_audit chains off
-# 0237_fix_token_family_org_nullable,
-# and 0240_journey_dismissal (FAR-795) chains off 0238_workspace_input_drift_and_audit,
-# and 0241_org_mint_budget_usage (FAR-795) chains off 0240_journey_dismissal as the chain head.
-_CHAIN_HEAD_MIGRATION = "0241_org_mint_budget_usage"
+# 0237_fix_token_family_org_nullable, and 0239_revert_organisations_audit_drift
+# chains off 0238_workspace_input_drift_and_audit, and 0240_reinstate_organisations_audit_columns
+# chains off 0239_revert_organisations_audit_drift, and 0241_journey_dismissal (FAR-795)
+# chains off 0240_reinstate_organisations_audit_columns, and 0242_org_mint_budget_usage (FAR-795)
+# chains off 0241_journey_dismissal as the chain head.
+_CHAIN_HEAD_MIGRATION = "0242_org_mint_budget_usage"
 
 
 def _source(name: str) -> str:

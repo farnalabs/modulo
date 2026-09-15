@@ -342,10 +342,12 @@ class TestMigrationBackfillGrace:
         # and 0236_add_organisations_constraints chains on top of 0235_promote_organisations_json_to_jsonb,
         # and 0237_fix_token_family_org_nullable chains on top of 0236_add_organisations_constraints,
         # and FAR-801's 0238_workspace_input_drift_and_audit chains on top of 0237_fix_token_family_org_nullable,
-        # and 0240_journey_dismissal (FAR-795) chains on top of 0238_workspace_input_drift_and_audit,
-        # and 0241_org_mint_budget_usage (FAR-795) chains on top of 0240_journey_dismissal,
+        # and 0239_revert_organisations_audit_drift chains on top of 0238_workspace_input_drift_and_audit,
+        # and 0240_reinstate_organisations_audit_columns chains on top of 0239_revert_organisations_audit_drift,
+        # and 0241_journey_dismissal (FAR-795) chains on top of 0240_reinstate_organisations_audit_columns,
+        # and 0242_org_mint_budget_usage (FAR-795) chains on top of 0241_journey_dismissal,
         # so it is now the single linear head.
-        assert heads == ["0241_org_mint_budget_usage"], f"expected a single head, got {heads}"
+        assert heads == ["0242_org_mint_budget_usage"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
