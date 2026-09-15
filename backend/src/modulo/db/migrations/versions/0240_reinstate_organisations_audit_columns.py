@@ -20,36 +20,61 @@ Create Date: 2026-09-15
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 
 revision = "0240_reinstate_organisations_audit_columns"
 down_revision = "0239_revert_organisations_audit_drift"
 
 
+def _org_columns(bind) -> set[str]:
+    return {c["name"] for c in inspect(bind).get_columns("organisations")}
+
+
+def _org_fk_names(bind) -> set[str]:
+    return {fk["name"] for fk in inspect(bind).get_foreign_keys("organisations")}
+
+
 def upgrade() -> None:
-    op.add_column(
-        "organisations",
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.current_timestamp(),
-            onupdate=sa.func.current_timestamp(),
-            nullable=False,
-        ),
-    )
-    op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
-    op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
-    op.create_foreign_key(
-        "fk_organisations_created_by",
-        "organisations",
-        "accounts",
-        ["created_by"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    bind = op.get_bind()
+    existing_cols = _org_columns(bind)
+    existing_fks = _org_fk_names(bind)
+
+    if "updated_at" not in existing_cols:
+        op.add_column(
+            "organisations",
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.current_timestamp(),
+                onupdate=sa.func.current_timestamp(),
+                nullable=False,
+            ),
+        )
+    if "updated_by" not in existing_cols:
+        op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
+    if "deleted_by" not in existing_cols:
+        op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
+    if "fk_organisations_created_by" not in existing_fks:
+        op.create_foreign_key(
+            "fk_organisations_created_by",
+            "organisations",
+            "accounts",
+            ["created_by"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
-    op.drop_column("organisations", "deleted_by")
-    op.drop_column("organisations", "updated_by")
-    op.drop_column("organisations", "updated_at")
+    bind = op.get_bind()
+    existing_cols = _org_columns(bind)
+    existing_fks = _org_fk_names(bind)
+
+    if "fk_organisations_created_by" in existing_fks:
+        op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
+    if "deleted_by" in existing_cols:
+        op.drop_column("organisations", "deleted_by")
+    if "updated_by" in existing_cols:
+        op.drop_column("organisations", "updated_by")
+    if "updated_at" in existing_cols:
+        op.drop_column("organisations", "updated_at")
