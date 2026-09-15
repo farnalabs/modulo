@@ -4126,6 +4126,9 @@ export interface paths {
          *     ``stdout_artifact`` carries the FAR-811 full-stdout transcript pointer
          *     for sandbox nodes whose redacted stdout overflowed the inline retention
          *     cap (``None`` otherwise) — a pointer only, never the transcript body.
+         *
+         *     ``stderr_artifact`` carries the FAR-879 full-stderr transcript pointer
+         *     (parity with stdout_artifact).
          */
         get: operations["get_run_node_output_api_v1_runs__run_id__nodes__node_id__output_get"];
         put?: never;
@@ -4336,8 +4339,9 @@ export interface paths {
          *
          *     Also serves the FAR-811 full stdout transcript addressed by its synthetic
          *     ``<base>:full:<cap>`` attempt key (no row exists for that key — the pointer
-         *     is resolved from the node's telemetry), and falls back to the telemetry
-         *     pointer when a real row has no stdout pointer in its side-car list.
+         *     is resolved from the node's telemetry), and the FAR-879 full stderr
+         *     transcript addressed by ``<base>:full:stderr:<cap>``, and falls back to the
+         *     telemetry pointer when a real row has no pointer in its side-car list.
          */
         get: operations["get_run_artifact_api_v1_runs__run_id__nodes__node_id__attempts__attempt_key__artifacts__stream__get"];
         put?: never;
@@ -13917,6 +13921,10 @@ export interface components {
             output?: unknown;
             /** Stdout Artifact */
             stdout_artifact?: {
+                [key: string]: unknown;
+            } | null;
+            /** Stderr Artifact */
+            stderr_artifact?: {
                 [key: string]: unknown;
             } | null;
         };

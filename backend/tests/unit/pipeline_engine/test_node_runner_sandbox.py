@@ -27,6 +27,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _compute_sandbox_cost,
     _delta_ratio,
     _fetch_sandbox_log_tail,
+    _persist_full_stderr_artifact,
     _persist_full_stdout_artifact,
     _StallDetector,
     _wait_command_with_idle_watchdog,
@@ -1436,6 +1437,137 @@ def test_persist_full_stdout_artifact_propagates_cancelled_error(mock_get_store)
             attempt_key="a1",
             node_cap=2048,
             redacted_stdout="x" * 4096,
+        )
+
+
+# --- _persist_full_stderr_artifact direct unit tests (FAR-879 parity) ---
+
+
+def _fake_store_with_stderr_pointer() -> MagicMock:
+    store = MagicMock()
+    store.finalize.return_value = {
+        "rel_path": "org/run/node/key.stderr.zst",
+        "size_bytes": 4096,
+        "sha256": "abc123",
+        "compression": "zstd",
+    }
+    return store
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stderr_artifact_happy_path_returns_pointer(mock_get_store):
+    """FAR-879: a successful store write returns the stderr pointer with the
+    truncated: False / redacted: True flags and the full pre-truncation size."""
+    store = _fake_store_with_stderr_pointer()
+    mock_get_store.return_value = store
+    pointer = _persist_full_stderr_artifact(
+        org_id="org",
+        run_id="run",
+        node_id="node",
+        attempt_key="a1",
+        node_cap=2048,
+        redacted_stderr="x" * 4096,
+    )
+    assert pointer is not None
+    assert pointer["truncated"] is False
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stderr"
+    assert pointer["compression"] == "zstd"
+    assert pointer["size_bytes"] == 4096
+    assert pointer["sha256"] == "abc123"
+    assert pointer["rel_path"].endswith(".zst")
+    # The overflow key uses :full:stderr: to never collide with the stdout key.
+    store.append.assert_called_once_with("org", "run", "node", "a1:full:stderr:2048", "stderr", "x" * 4096)
+    store.finalize.assert_called_once_with("org", "run", "node", "a1:full:stderr:2048", "stderr")
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stderr_artifact_store_failure_returns_none(mock_get_store):
+    """A store failure must be non-fatal: return None so the caller keeps the
+    inline (truncated) behaviour with no stderr_artifact key (FAR-879)."""
+    store = MagicMock()
+    store.append.side_effect = RuntimeError("disk full")
+    mock_get_store.return_value = store
+    pointer = _persist_full_stderr_artifact(
+        org_id="org",
+        run_id="run",
+        node_id="node",
+        attempt_key="a1",
+        node_cap=2048,
+        redacted_stderr="x" * 4096,
+    )
+    assert pointer is None
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stderr_artifact_none_pointer_returns_none(mock_get_store):
+    """If finalize yields no pointer (store could not materialize the artifact),
+    return None rather than publishing a half-built envelope (FAR-879)."""
+    store = MagicMock()
+    store.finalize.return_value = None
+    mock_get_store.return_value = store
+    pointer = _persist_full_stderr_artifact(
+        org_id="org",
+        run_id="run",
+        node_id="node",
+        attempt_key="a1",
+        node_cap=2048,
+        redacted_stderr="x" * 4096,
+    )
+    assert pointer is None
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stderr_artifact_missing_attempt_key_returns_none(mock_get_store):
+    """Without an attempt key there is no stable overflow key to write under,
+    so skip the store write and return None (FAR-879)."""
+    store = _fake_store_with_stderr_pointer()
+    mock_get_store.return_value = store
+    pointer = _persist_full_stderr_artifact(
+        org_id="org",
+        run_id="run",
+        node_id="node",
+        attempt_key=None,
+        node_cap=2048,
+        redacted_stderr="x" * 4096,
+    )
+    assert pointer is None
+    store.append.assert_not_called()
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stderr_artifact_empty_redacted_stderr_returns_none(mock_get_store):
+    """Nothing to retain if the redacted transcript is empty; return None and do
+    not touch the store (FAR-879)."""
+    store = _fake_store_with_stderr_pointer()
+    mock_get_store.return_value = store
+    pointer = _persist_full_stderr_artifact(
+        org_id="org",
+        run_id="run",
+        node_id="node",
+        attempt_key="a1",
+        node_cap=2048,
+        redacted_stderr="",
+    )
+    assert pointer is None
+    store.append.assert_not_called()
+
+
+@patch("modulo.core.artifacts.store.get_store")
+def test_persist_full_stderr_artifact_propagates_cancelled_error(mock_get_store):
+    """A CancelledError during the store write must propagate (not be swallowed
+    into the non-fatal None path) so task cancellation is honoured (FAR-879)."""
+    store = MagicMock()
+    store.append.side_effect = asyncio.CancelledError()
+    mock_get_store.return_value = store
+    with pytest.raises(asyncio.CancelledError):
+        _persist_full_stderr_artifact(
+            org_id="org",
+            run_id="run",
+            node_id="node",
+            attempt_key="a1",
+            node_cap=2048,
+            redacted_stderr="x" * 4096,
         )
 
 

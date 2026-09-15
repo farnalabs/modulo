@@ -1120,6 +1120,7 @@ async def run_bundled_runner_node(
         _compute_sandbox_cost,
         _configure_stall_detector,
         _emit_script_span_event,
+        _persist_full_stderr_artifact,
         _persist_full_stdout_artifact,
         _read_org_stdout_retention_ceiling,
         _redact_raw_output,
@@ -1380,6 +1381,20 @@ async def run_bundled_runner_node(
                 redacted_stdout=_redact_raw_output(agent_stdout_raw),
             )
 
+        # FAR-879: stderr parity — persist the full redacted stderr transcript
+        # to the artifact store when it exceeds the inline retention cap.
+        _stderr_artifact: dict[str, Any] | None = None
+        stderr_truncated = stderr_len > stdout_cap
+        if stderr_truncated:
+            _stderr_artifact = _persist_full_stderr_artifact(
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                node_cap=stdout_cap,
+                redacted_stderr=_redact_raw_output(agent_stderr_raw),
+            )
+
         cost = _compute_sandbox_cost(elapsed, output_json)
         result = _shape_result(
             exit_code=exit_code,
@@ -1426,6 +1441,7 @@ async def run_bundled_runner_node(
                 stderr_length=stderr_len,
                 stdout_truncated=stdout_truncated,
                 stdout_artifact=_stdout_artifact if _stdout_artifact is not None else _UNSET,
+                stderr_artifact=_stderr_artifact if _stderr_artifact is not None else _UNSET,
                 attempt_key=attempt_key,
                 agent_status=agent_status,
                 agent_outcome=agent_outcome,

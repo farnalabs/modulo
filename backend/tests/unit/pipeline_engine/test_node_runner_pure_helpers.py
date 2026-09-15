@@ -769,6 +769,35 @@ class TestStdoutTruncatedEnvelopeKey:
         for view in (envelope["artifacts"][0]["output"], envelope["output"]):
             assert "stdout_artifact" not in view
 
+    def test_stderr_artifact_pointer_is_opt_in_extra_key(self) -> None:
+        """FAR-879: stderr_artifact surfaces on the envelope when provided."""
+        pointer = {
+            "rel_path": "org/run/node/key.stderr.zst",
+            "size_bytes": 8000,
+            "sha256": "e4f5g6",
+            "stream": "stderr",
+            "compression": "zstd",
+            "truncated": False,
+            "redacted": True,
+        }
+        envelope = _build_sandbox_node_envelope(
+            node_id="n1",
+            output=self._output(stderr_artifact=pointer),
+        )
+        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
+            assert view["stderr_artifact"]["truncated"] is False
+            assert view["stderr_artifact"]["redacted"] is True
+            assert view["stderr_artifact"]["size_bytes"] == 8000
+            assert view["stderr_artifact"]["sha256"] == "e4f5g6"
+            assert view["stderr_artifact"]["stream"] == "stderr"
+            assert view["stderr_artifact"]["rel_path"].endswith(".zst")
+
+    def test_stderr_artifact_absent_when_inline(self) -> None:
+        """FAR-879: no stderr_artifact key when no pointer is provided."""
+        envelope = _build_sandbox_node_envelope(node_id="n1", output=self._output())
+        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
+            assert "stderr_artifact" not in view
+
 
 # ---------------------------------------------------------------------------
 # FAR-792: per-node stdout retention must be reachable through REAL config paths
