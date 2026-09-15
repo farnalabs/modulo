@@ -501,11 +501,18 @@ def _resolve_stdout_cap(
         _resolve_stdout_cap as _resolve_shared_cap,
     )
 
-    # FAR-811: node > pipeline > org resolution.
+    # FAR-811: node > pipeline > org resolution.  Node-explicit settings always
+    # win — including a node that sets ONLY stdout_max_bytes without
+    # stdout_retention_mode: its explicit max_bytes must win, while the mode is
+    # inherited from the pipeline default (or the legacy "tail" default).
     _node_raw_mode = node_def.get("stdout_retention_mode")
+    _node_raw_max_bytes = node_def.get("stdout_max_bytes")
     if _node_raw_mode is not None:
         mode = _coerce_stdout_retention_mode(_node_raw_mode)
-        max_bytes = _coerce_stdout_max_bytes(node_def.get("stdout_max_bytes"))
+        max_bytes = _coerce_stdout_max_bytes(_node_raw_max_bytes)
+    elif _node_raw_max_bytes is not None:
+        mode = _coerce_stdout_retention_mode(pipeline_default.get("mode")) if pipeline_default is not None else "tail"
+        max_bytes = _coerce_stdout_max_bytes(_node_raw_max_bytes)
     elif pipeline_default is not None:
         mode = _coerce_stdout_retention_mode(pipeline_default.get("mode"))
         max_bytes = _coerce_stdout_max_bytes(pipeline_default.get("max_bytes"))

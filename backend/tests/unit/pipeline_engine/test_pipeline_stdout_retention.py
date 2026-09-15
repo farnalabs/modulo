@@ -184,3 +184,23 @@ class TestBuildSandboxNodeConfigPipelineDefault:
         node_def = self._base_node_def()
         config = self._build(node_def, pipeline_cfg=pipeline_cfg)
         assert config.pipeline_stdout_retention_config == pipeline_cfg
+
+    def test_node_max_bytes_only_wins_over_pipeline(self) -> None:
+        """Node that sets only stdout_max_bytes (no mode) keeps its explicit max_bytes.
+
+        FAR-811: node-explicit settings always win, so a node that sets
+        stdout_max_bytes without stdout_retention_mode must not have that value
+        discarded in favour of the pipeline default's max_bytes. The mode is
+        inherited from the pipeline default.
+        """
+        node_def = self._base_node_def(stdout_max_bytes=2048)
+        config = self._build(node_def, pipeline_cfg={"mode": "full", "max_bytes": 4096})
+        assert config.stdout_retention_mode == "full"
+        assert config.stdout_max_bytes == 2048
+
+    def test_node_max_bytes_only_no_pipeline_defaults_to_tail(self) -> None:
+        """Node that sets only stdout_max_bytes (no mode, no pipeline) is tail."""
+        node_def = self._base_node_def(stdout_max_bytes=2048)
+        config = self._build(node_def, pipeline_cfg=None)
+        assert config.stdout_retention_mode == "tail"
+        assert config.stdout_max_bytes == 2048

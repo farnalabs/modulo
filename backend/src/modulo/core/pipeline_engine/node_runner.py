@@ -8654,14 +8654,27 @@ def _build_sandbox_node_config(
     # FAR-811: pipeline-level default (node > pipeline > org ceiling).  When the
     # node did NOT explicitly set stdout_retention_mode (raw key absent from
     # node_def), the pipeline default's mode/max_bytes are inherited.  Node-
-    # explicit settings always win.
+    # explicit settings always win — including a node that sets ONLY
+    # stdout_max_bytes without stdout_retention_mode: its explicit max_bytes must
+    # win, while the mode is inherited from the pipeline default (or the legacy
+    # "tail" default when there is no pipeline default).
     _node_raw_mode = node_def.get("stdout_retention_mode")
+    _node_raw_max_bytes = node_def.get("stdout_max_bytes")
     if _node_raw_mode is not None:
-        # Node explicitly set its mode — node wins.
+        # Node explicitly set its mode — node wins on both mode and max_bytes.
         stdout_retention_mode = _coerce_stdout_retention_mode(_node_raw_mode)
-        stdout_max_bytes = _coerce_stdout_max_bytes(node_def.get("stdout_max_bytes"))
+        stdout_max_bytes = _coerce_stdout_max_bytes(_node_raw_max_bytes)
+    elif _node_raw_max_bytes is not None:
+        # Node set max_bytes but not mode — the node's explicit max_bytes still
+        # wins; mode inherits the pipeline default (or "tail" with no default).
+        stdout_retention_mode = (
+            _coerce_stdout_retention_mode(pipeline_stdout_retention_config.get("mode"))
+            if pipeline_stdout_retention_config is not None
+            else "tail"
+        )
+        stdout_max_bytes = _coerce_stdout_max_bytes(_node_raw_max_bytes)
     elif pipeline_stdout_retention_config is not None:
-        # Node didn't set mode — inherit from pipeline default.
+        # Node set neither — inherit both mode and max_bytes from the pipeline default.
         stdout_retention_mode = _coerce_stdout_retention_mode(
             pipeline_stdout_retention_config.get("mode"),
         )

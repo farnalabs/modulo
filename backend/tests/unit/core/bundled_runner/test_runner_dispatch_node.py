@@ -594,6 +594,21 @@ def test_resolve_stdout_cap_applies_org_ceiling(patch_node_runner) -> None:
     assert runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full", "stdout_max_bytes": 2048}) == 2048
 
 
+def test_resolve_stdout_cap_node_max_bytes_only_wins(patch_node_runner) -> None:
+    """FAR-811: a node that sets only stdout_max_bytes (no mode) keeps its value.
+
+    The explicit max_bytes must not be discarded for the pipeline default's
+    max_bytes; the mode is inherited from the pipeline default.
+    """
+    assert (
+        runner_dispatch._resolve_stdout_cap(
+            {"stdout_max_bytes": 2048},
+            pipeline_default={"mode": "full", "max_bytes": 4096},
+        )
+        == 2048
+    )
+
+
 async def test_run_stdout_full_retention_default_holds_whole_stream(patch_node_runner) -> None:
     """stdout_retention_mode="full" without stdout_max_bytes retains the whole
     stream (default 5MB cap) — no truncation flag for an under-cap stream."""
