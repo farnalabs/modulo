@@ -7,6 +7,21 @@ scenarios("../features/deployment/metadata.feature")
 
 @when("I GET /api/v1/deployment")
 def get_deployment_info(client, request):
+    # The deployment metadata endpoint is gated with ``system.config.manage``
+    # (FAR-880 RBAC sweep), which authenticates the principal (not just the org
+    # role). The shared BDD ``client`` fixture provides an org admin without the
+    # system-admin claim, so override ``get_current_user`` here — mirroring the
+    # pattern in tests/bdd/steps/test_monitor_config.py.
+    from modulo.auth.dependencies import get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal
+
+    client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="sysadmin@test",
+        organisation_id=None,
+        account_id=None,
+        org_role=None,
+        is_system_admin=True,
+    )
     resp = client.get("/api/v1/deployment")
     request.node._resp = resp
     request.node._body = resp.json()
