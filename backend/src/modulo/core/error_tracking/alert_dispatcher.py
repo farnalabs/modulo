@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.core.error_tracking.metrics import record_alert_delivery_failed
+from modulo.core.ssrf import pinned_async_client
 from modulo.db.models.account import Account
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.org_membership import OrgMembership
@@ -258,7 +259,22 @@ async def _dispatch_webhook(
 
     body = json.dumps(payload, separators=(",", ":")).encode()
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    try:
+        # SSRF-fail-closed: pinned_async_client validates webhook_url (DNS-resolved;
+        # private/metadata/loopback/CGNAT targets are refused) and pins the
+        # connection to the validated address, closing the DNS-rebinding window.
+        # A validation failure raises ValueError, which is treated as a failed
+        # delivery — never a raw-client fallback.
+        client = await pinned_async_client(webhook_url, timeout=15.0, connector_type="alert_webhook")
+    except (ValueError, RuntimeError) as exc:
+        record_alert_delivery_failed(str(alert.rule_id), "webhook")
+        _log.warning(
+            "alert.webhook_url_rejected",
+            extra={"rule_id": str(alert.rule_id), "error": str(exc)},
+        )
+        return
+
+    async with client:
         try:
             resp = await client.post(
                 webhook_url,
@@ -315,22 +331,32 @@ async def dispatch_alert_resolved(
         }
         body = json.dumps(payload, separators=(",", ":")).encode()
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(
-                    webhook_url,
-                    content=body,
-                    headers={"Content-Type": "application/json", "User-Agent": "Modulo-Error-Alert/1.0"},
-                )
-                if not resp.is_success:
-                    _log.warning(
-                        "alert.resolved_webhook_http_error",
-                        extra={"status": resp.status_code, "signal": signal},
-                    )
-        except httpx.RequestError as exc:
+            # SSRF-fail-closed: same validate+pin as _dispatch_webhook. Best-effort —
+            # a rejected webhook URL is logged, never propagated.
+            client = await pinned_async_client(webhook_url, timeout=15.0, connector_type="alert_webhook")
+        except (ValueError, RuntimeError) as exc:
             _log.warning(
-                "alert.resolved_webhook_request_failed",
+                "alert.resolved_webhook_url_rejected",
                 extra={"signal": signal, "error": str(exc)},
             )
+        else:
+            try:
+                async with client:
+                    resp = await client.post(
+                        webhook_url,
+                        content=body,
+                        headers={"Content-Type": "application/json", "User-Agent": "Modulo-Error-Alert/1.0"},
+                    )
+                    if not resp.is_success:
+                        _log.warning(
+                            "alert.resolved_webhook_http_error",
+                            extra={"status": resp.status_code, "signal": signal},
+                        )
+            except httpx.RequestError as exc:
+                _log.warning(
+                    "alert.resolved_webhook_request_failed",
+                    extra={"signal": signal, "error": str(exc)},
+                )
 
     _log.info(
         "alert.resolved",

@@ -143,3 +143,44 @@ def test_community_plan_in_app_rule_passes_tier_check(community_client: TestClie
     )
 
     assert resp.status_code != 402
+
+
+def test_create_webhook_url_private_ip_rejected(client: TestClient) -> None:
+    """SSRF-fail-closed: a loopback webhook_url must be rejected with 422."""
+    resp = client.post(
+        "/api/v1/errors/notification-rules",
+        json={
+            "name": "ssrf-rule",
+            "action_type": "webhook",
+            "webhook_url": "http://127.0.0.1:8080/hook",
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "webhook_url rejected" in resp.json()["detail"]
+
+
+def test_create_webhook_url_metadata_ip_rejected(client: TestClient) -> None:
+    """The cloud-metadata address must be refused before any DB write."""
+    resp = client.post(
+        "/api/v1/errors/notification-rules",
+        json={
+            "name": "ssrf-rule",
+            "action_type": "webhook",
+            "webhook_url": "http://169.254.169.254/latest/meta-data",
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "webhook_url rejected" in resp.json()["detail"]
+
+
+def test_update_webhook_url_private_ip_rejected(client: TestClient) -> None:
+    """SSRF-fail-closed: the update path validates a new webhook_url too."""
+    resp = client.put(
+        f"/api/v1/errors/notification-rules/{uuid.uuid4()}",
+        json={"webhook_url": "http://[::1]:9000/hook"},
+    )
+
+    assert resp.status_code == 422
+    assert "webhook_url rejected" in resp.json()["detail"]

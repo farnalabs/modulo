@@ -8,11 +8,12 @@ import logging
 import time
 from typing import Any
 
-import httpx
-
 from modulo.core.error_tracking.forwarders.base import BaseForwarder
+from modulo.core.ssrf import pinned_async_client
 
 _log = logging.getLogger(__name__)
+
+_CONNECTOR_TYPE = "error_forwarder"
 
 
 class LokiErrorForwarder(BaseForwarder):
@@ -80,7 +81,9 @@ class LokiErrorForwarder(BaseForwarder):
             if tenant_id:
                 headers["X-Scope-OrgID"] = tenant_id
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            # SSRF-fail-closed: push_url is tenant-supplied, so the pinned client
+            # both validates it and pins the connection to the validated address.
+            async with await pinned_async_client(push_url, timeout=15.0, connector_type=_CONNECTOR_TYPE) as client:
                 resp = await client.post(
                     push_url,
                     json=body,

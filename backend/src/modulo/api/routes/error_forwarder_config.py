@@ -370,6 +370,14 @@ async def configure_forwarder(
 
     _validate_config_or_raise(forwarder_type, req.config_json)
 
+    # SSRF gate (fail closed): validate the URL-bearing keys the caller is
+    # sending before any DB write. A pure enable/disable toggle
+    # (req.config_json is None) cannot change any URL, so there is nothing to
+    # bypass: the stored config was validated at its last write and the
+    # forwarder's own pinned-client check defends the dispatch side.
+    if req.config_json is not None:
+        await _validate_forwarder_urls(forwarder_type, req.config_json)
+
     try:
         async with session.begin():
             await set_rls_org(session, org_id)

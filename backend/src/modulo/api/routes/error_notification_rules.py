@@ -29,6 +29,7 @@ from modulo.api.models.error_notification_rule import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.feature_flags import PlanContext
+from modulo.core.ssrf import validate_outbound_url_async
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
 from modulo.db.rls import set_rls_org
 
@@ -142,6 +143,12 @@ async def create_notification_rule(
             detail="Webhook notification rules require the Team tier",
         )
 
+    # SSRF gate (fail closed): the webhook_url is tenant-supplied and will be
+    # fetched server-side by the alert dispatcher, so it is validated here in
+    # addition to the webhook dispatch site's own pinned-client check.
+    if req.webhook_url is not None:
+        await _validate_webhook_url(req.webhook_url)
+
     try:
         async with session.begin():
             await set_rls_org(session, org_id)
@@ -202,6 +209,17 @@ async def create_notification_rule(
         ) from exc
 
     return _serialize_rule(rule)
+
+
+async def _validate_webhook_url(url: str) -> None:
+    """SSRF-fail-closed: resolve webhook_url and refuse private/metadata targets."""
+    try:
+        await validate_outbound_url_async(url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"webhook_url rejected: {exc}",
+        ) from exc
 
 
 def _validate_webhook_tier_for_update(req: ErrorNotificationRuleUpdate, is_team: bool) -> None:
@@ -271,6 +289,10 @@ async def update_notification_rule(
 
     is_team = plan.feature_enabled("error_tracking")
     _validate_webhook_tier_for_update(req, is_team)
+    # SSRF gate (fail closed): same rule as create — validate any new webhook_url
+    # before it can be persisted.
+    if req.webhook_url is not None:
+        await _validate_webhook_url(req.webhook_url)
 
     try:
         async with session.begin():
