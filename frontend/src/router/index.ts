@@ -647,7 +647,7 @@ const router = createRouter({
  * are keyed by route *name*; the parent path is resolved to a route name
  * via manifestPathToName.
  */
-function hydrateManifestMeta(to: Parameters<Parameters<typeof router.beforeEach>[0]>[0]): void {
+export function hydrateManifestMeta(to: Parameters<Parameters<typeof router.beforeEach>[0]>[0]): void {
   const routeName = to.name
   if (typeof routeName !== 'string') return
 
@@ -673,7 +673,7 @@ function hydrateManifestMeta(to: Parameters<Parameters<typeof router.beforeEach>
  * real tier — the first navigation resolves *before* AppLayout.onMounted
  * kicks off `fetchPlan()`.
  */
-async function enforceRoleTierVisibility(
+export async function enforceRoleTierVisibility(
   to: Parameters<Parameters<typeof router.beforeEach>[0]>[0],
   token: string,
 ): Promise<{ name: string } | true> {
@@ -723,7 +723,7 @@ async function enforceRoleTierVisibility(
  * AB Test Models view is HARD-REPLACED by the batch-scoped compare flow.
  * The legacy view stays reachable only while the flag is OFF.
  */
-async function redirectAbTestIfBatchEnabled(
+export async function redirectAbTestIfBatchEnabled(
   to: Parameters<Parameters<typeof router.beforeEach>[0]>[0],
 ): Promise<{ name: string } | null> {
   if (to.name !== 'ab-test-models') return null
