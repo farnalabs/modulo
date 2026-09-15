@@ -57,6 +57,16 @@ org/`days` to keep the landing page fast.
   headline pass rate does not reflect guardrail-blocked runs.
 
 ## QA History
+- 2026-09-15: **improve-architecture (product-map walk)** — closed the dashboard
+  notifications-panel product-map gap: the `DashboardNotificationsPanel.vue` paging
+  controls ship static `data-testid`s (`panel-prev-page` / `panel-next-page`) on the
+  home page while the `/` manifest `elements:` inventory registered only its
+  `notifications-panel-toggle`, so the paging surface was invisible to Remy's docs
+  indexer / `/api/v1/manifest` (guarded by the reverse testid-coverage test
+  `test_mapped_route_elements_cover_owning_view_testids`, which only scans owned views).
+  Registered both buttons in the `/` inventory and wired
+  `components/DashboardNotificationsPanel.vue` into the guard as an owned view of the
+  dashboard, so the panel surface can no longer drift unguarded.
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for the home dashboard
