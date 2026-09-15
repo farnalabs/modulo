@@ -1023,14 +1023,19 @@ async def _scan_org_markers(
     now: datetime,
     fresh_window: float,
     stale_window: int,
+    scanned_slot: list[int],
 ) -> tuple[int, bool, list[_SweepOutcome]]:
     """Scan all marker-carrying runs for one org and apply sweep actions.
 
-    Returns ``(scanned_count, breach, committed_outcomes)``.  The caller is
+    ``scanned_slot`` is a mutable ``[int]`` accumulator owned by the caller: the
+    per-row scan count is written there as rows are classified (not merely on
+    return) so a mid-transaction failure still leaves the partial count visible
+    to the caller's ``except`` block (qa F5 — a failed org pass must report how
+    many rows it had already swept, never silently zero).  Returns
+    ``(scanned_count, breach, committed_outcomes)`` on success.  The caller is
     responsible for error handling — :class:`asyncio.CancelledError` is always
     re-raised; other exceptions propagate for the caller's ``except`` block.
     """
-    scanned = 0
     committed_outcomes: list[_SweepOutcome] = []
     async with factory() as session, session.begin():
         from modulo.db.rls import set_rls_org
@@ -1057,7 +1062,7 @@ async def _scan_org_markers(
             if not batch:
                 break
             for row in batch:
-                scanned += 1
+                scanned_slot[0] += 1
                 outcome = await _process_sweep_row(
                     session,
                     org_id,
@@ -1074,7 +1079,7 @@ async def _scan_org_markers(
             if len(batch) < SWEEP_CANDIDATE_BATCH:
                 break
         org_breach = await _assert_capacity_within_cap(session, org_id)
-    return scanned, org_breach, committed_outcomes
+    return scanned_slot[0], org_breach, committed_outcomes
 
 
 def _emit_sweep_outcomes(
@@ -1192,6 +1197,7 @@ async def reconcile_runner_dispatch_markers(
             ) from None
 
         for org_id in org_ids:
+            org_scanned_slot: list[int] = [0]
             try:
                 org_scanned, org_breach, committed_outcomes = await _scan_org_markers(
                     factory,
@@ -1202,12 +1208,17 @@ async def reconcile_runner_dispatch_markers(
                     now=now,
                     fresh_window=fresh_window,
                     stale_window=stale_window,
+                    scanned_slot=org_scanned_slot,
                 )
                 scanned += org_scanned
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 orgs_failed += 1
+                # qa F5: a failed org pass still reports the PARTIAL scan count —
+                # the rows it had already classified before the failure must not
+                # be silently dropped to zero on the raised RunnerMarkerSweepError.
+                scanned += org_scanned_slot[0]
                 # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run
                 # transaction holds a conflicting row lock.  Log at warning level
                 # with a distinctive event name so the sweep is visible in prod
