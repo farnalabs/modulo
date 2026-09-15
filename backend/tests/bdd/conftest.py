@@ -492,6 +492,7 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
     from modulo.api.dependencies import (
         _get_engine,
         _get_session_factory,
+        get_anonymous_plan_context,
         get_db_session,
         get_plan_context,
         get_system_db_session,
@@ -530,6 +531,7 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[_get_session_factory] = lambda: MagicMock()
     app.dependency_overrides[get_plan_context] = _override_plan_context
+    app.dependency_overrides[get_anonymous_plan_context] = _override_plan_context
     if principal_kwargs:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**principal_kwargs)
 
