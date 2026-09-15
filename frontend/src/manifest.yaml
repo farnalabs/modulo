@@ -2284,6 +2284,12 @@ elements:
       - testid: analytics-chart-empty
         type: element
         dynamic_testid: false
+      - testid: analytics-capacity-toggle
+        type: button
+        dynamic_testid: false
+      - testid: analytics-capacity-summary
+        type: element
+        dynamic_testid: false
       - testid: analytics-filter-bar
         type: element
         dynamic_testid: false

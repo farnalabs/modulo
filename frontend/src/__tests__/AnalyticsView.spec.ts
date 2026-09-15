@@ -20,6 +20,8 @@ import {
   useAnalyticsStore,
   serializeFilters,
   buildChartOption,
+  buildCapacityOverlayOption,
+  summarizeCapacity,
   computeTrendDelta,
   formatDeltaPercent,
   formatMeasureValue,
@@ -1027,5 +1029,110 @@ describe('AnalyticsView', () => {
     const lastQuery = (queryCalls.at(-1)?.[1] as { params: { query: Record<string, unknown> } } | undefined)?.params.query
     expect(lastQuery?.status).toBe('failed')
     wrapper.unmount()
+  })
+
+  it('renders the capacity overlay toggle button', async () => {
+    setupMocks(validResponse)
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="analytics-capacity-toggle"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('toggles the capacity overlay and shows summary cards', async () => {
+    const capacityBuckets: AnalyticsBucket[] = [
+      { date: '2026-08-01', count: 10, avg_queue_wait_ms: 500, capacity_failure_count: 2, avg_capacity_wait_ms: 1200, stall_count: 1, avg_final_idle_ms: 300 },
+      { date: '2026-08-02', count: 15, avg_queue_wait_ms: 300, capacity_failure_count: 0, avg_capacity_wait_ms: null, stall_count: 0, avg_final_idle_ms: 200 },
+    ]
+    setupMocks({ group_by: 'day', dimension: null, date_from: '2026-07-30', date_to: '2026-08-06', buckets: capacityBuckets })
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+
+    // Overlay is off by default — no summary cards
+    expect(wrapper.find('[data-testid="analytics-capacity-summary"]').exists()).toBe(false)
+
+    // Click the toggle to enable overlay
+    await wrapper.find('[data-testid="analytics-capacity-toggle"]').trigger('click')
+    await nextTick()
+
+    // Summary cards appear
+    const summary = wrapper.find('[data-testid="analytics-capacity-summary"]')
+    expect(summary.exists()).toBe(true)
+    expect(summary.text()).toContain('2') // total capacity failures
+    expect(summary.text()).toContain('1') // total stalls
+
+    // Chart title changes
+    expect(wrapper.find('[data-testid="analytics-chart"]').exists()).toBe(true)
+
+    // Click again to disable
+    await wrapper.find('[data-testid="analytics-capacity-toggle"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="analytics-capacity-summary"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+describe('buildCapacityOverlayOption', () => {
+  it('returns a 4-series ECharts option for queue-wait, capacity-wait, failures, and stalls', () => {
+    const buckets: AnalyticsBucket[] = [
+      { date: '2026-08-01', count: 5, avg_queue_wait_ms: 400, capacity_failure_count: 1, avg_capacity_wait_ms: 1000, stall_count: 0, avg_final_idle_ms: 100 },
+      { date: '2026-08-02', count: 8, avg_queue_wait_ms: 200, capacity_failure_count: 3, avg_capacity_wait_ms: 500, stall_count: 2, avg_final_idle_ms: 50 },
+    ]
+    const option = buildCapacityOverlayOption(buckets)
+    expect(option.series).toHaveLength(4)
+    const seriesNames = (option.series as { name: string }[]).map((s) => s.name)
+    expect(seriesNames).toContain('queue_wait_ms')
+    expect(seriesNames).toContain('capacity_wait_ms')
+    expect(seriesNames).toContain('capacity_failures')
+    expect(seriesNames).toContain('stalls')
+  })
+
+  it('returns null for fields that are absent in buckets', () => {
+    const buckets: AnalyticsBucket[] = [
+      { date: '2026-08-01', count: 5 },
+    ]
+    const option = buildCapacityOverlayOption(buckets)
+    const queueSeries = (option.series as { name: string; data: unknown[] }[]).find((s) => s.name === 'queue_wait_ms')
+    expect(queueSeries?.data).toEqual([null])
+  })
+})
+
+describe('summarizeCapacity', () => {
+  it('sums failures and stalls, computes weighted averages', () => {
+    const buckets: AnalyticsBucket[] = [
+      { date: '2026-08-01', count: 10, avg_queue_wait_ms: 500, capacity_failure_count: 2, avg_capacity_wait_ms: 1000, stall_count: 1, avg_final_idle_ms: 200 },
+      { date: '2026-08-02', count: 20, avg_queue_wait_ms: 300, capacity_failure_count: 4, avg_capacity_wait_ms: 500, stall_count: 3, avg_final_idle_ms: 100 },
+    ]
+    const summary = summarizeCapacity(buckets)
+    expect(summary.totalCapacityFailures).toBe(6)
+    expect(summary.totalStalls).toBe(4)
+    expect(summary.avgQueueWaitMs).toBeCloseTo(366.7, 0)
+    expect(summary.avgCapacityWaitMs).toBeCloseTo(666.7, 0)
+    expect(summary.avgFinalIdleMs).toBeCloseTo(133.3, 0)
+  })
+
+  it('returns null averages when no data', () => {
+    const summary = summarizeCapacity([])
+    expect(summary.totalCapacityFailures).toBe(0)
+    expect(summary.totalStalls).toBe(0)
+    expect(summary.avgQueueWaitMs).toBeNull()
+    expect(summary.avgCapacityWaitMs).toBeNull()
+    expect(summary.avgFinalIdleMs).toBeNull()
+  })
+})
+
+describe('aggregateByKey capacity fields', () => {
+  it('sums stall_count and capacity_failure_count, weights averages by count', () => {
+    const buckets: AnalyticsBucket[] = [
+      { date: '2026-08-01', key: 'a', count: 5, avg_queue_wait_ms: 200, capacity_failure_count: 1, avg_capacity_wait_ms: 1000, stall_count: 1, avg_final_idle_ms: 100 },
+      { date: '2026-08-01', key: 'a', count: 10, avg_queue_wait_ms: 400, capacity_failure_count: 3, avg_capacity_wait_ms: 500, stall_count: 2, avg_final_idle_ms: 200 },
+    ]
+    const result = aggregateByKey(buckets)
+    expect(result).toHaveLength(1)
+    expect(result[0].stall_count).toBe(3)
+    expect(result[0].capacity_failure_count).toBe(4)
+    expect(result[0].avg_queue_wait_ms).toBeCloseTo(333.3, 0)
+    expect(result[0].avg_capacity_wait_ms).toBeCloseTo(625, 0)
+    expect(result[0].avg_final_idle_ms).toBeCloseTo(166.7, 0)
   })
 })

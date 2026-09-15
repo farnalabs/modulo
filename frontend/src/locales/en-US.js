@@ -1317,7 +1317,13 @@ export default {
       "delta": "Delta",
       "delta_hint": "Current vs previous window",
       "stale_data_title": "Data may be stale",
-      "stale_data_detail": "Daily analytics facts for recent days are still being computed. Numbers for the latest days may be incomplete."
+      "stale_data_detail": "Daily analytics facts for recent days are still being computed. Numbers for the latest days may be incomplete.",
+      "capacity_overlay_toggle": "Capacity overlay",
+      "capacity_chart_title": "Capacity insights",
+      "capacity_avg_queue_wait": "Avg queue wait",
+      "capacity_failures": "Capacity failures",
+      "capacity_avg_wait": "Avg capacity wait",
+      "capacity_stalls": "Stalls"
     },
     "DashboardView": {
       "dashboard": "Dashboard",
