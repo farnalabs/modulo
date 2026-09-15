@@ -229,6 +229,43 @@ For model backends:
 my_provider = "my_plugin:build_my_backend"
 ```
 
+For custom eval functions:
+
+```toml
+[project.entry-points."modulo.evals"]
+my_eval = "my_plugin:build_my_eval"
+```
+
+```python
+# my_plugin/__init__.py
+def build_my_eval(config: dict) -> "EvalDefinition":
+    # Return an EvalDefinition (see modulo.core.eval_engine.EvalDefinition) or
+    # any consumer-defined eval object — the registry stores the builder result
+    # keyed by the entry-point name.
+    ...
+```
+
+For custom schema field types:
+
+```toml
+[project.entry-points."modulo.schema_types"]
+my_field = "my_plugin:build_my_field"
+```
+
+```python
+# my_plugin/__init__.py
+def build_my_field(config: dict) -> "SchemaField":
+    # Return a SchemaField or any consumer-defined field object — the registry
+    # stores the builder result keyed by the entry-point name.
+    ...
+```
+
+> Note: `backend/pyproject.toml` declares no `project.entry-points` table for
+> these groups — they are provided by third-party plugin packages, not by
+> Modulo core. In-tree builders register the same way by adding the matching
+> `[project.entry-points."modulo.evals"]` / `[project.entry-points."modulo.schema_types"]`
+> table to their own `pyproject.toml`.
+
 ### Step 4: Install
 
 Add your package to the deployment's dependencies (see [Installation](#installation)).

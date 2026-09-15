@@ -143,8 +143,13 @@ class PluginRegistry:
             ]
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("Failed to query entry points during plugin discovery")
+        except StopIteration:
+            # An exhausted entry-point query (e.g. a test mock with too few
+            # side_effects) surfaces here as StopIteration — propagate it so the
+            # real cause is not masked as a silent discovery failure.
+            raise
+        except (ImportError, importlib.metadata.PackageNotFoundError, ValueError) as exc:
+            logger.exception("Failed to query entry points during plugin discovery: %s", exc)
             return discovered
 
         for group, ep in entries:

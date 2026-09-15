@@ -639,10 +639,22 @@ def test_discover_plugins_swallows_entry_point_query_error():
     registry = PluginRegistry()
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=OSError("boom"),
+        side_effect=ValueError("boom"),
     ):
         discovered = registry.discover_plugins()
     assert discovered == []
+
+
+def test_discover_plugins_propagates_stop_iteration():
+    registry = PluginRegistry()
+    with (
+        patch(
+            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            side_effect=StopIteration("exhausted"),
+        ),
+        pytest.raises(StopIteration),
+    ):
+        registry.discover_plugins()
 
 
 def test_load_entry_point_failure_variants_are_skipped():
