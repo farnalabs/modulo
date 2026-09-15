@@ -9,7 +9,8 @@ Postgres path (dialect-detected containment, the same operator class the
 mixing run IS surfaced — never asserting only the empty side.
 
 Sessions run as the production ``modulo_app`` role with RLS org context set
-to ``test_org``, mirroring the REST route posture.
+to a dedicated ``journey_org`` (not the shared ``test_org``), mirroring the
+REST route posture while keeping seeded ``run_number`` values collision-free.
 """
 
 from __future__ import annotations
@@ -247,7 +248,7 @@ async def test_containment_query_respects_order_and_limit_on_postgres(
             snapshot_id=containment_snapshot,
             work_item_refs=_refs(kind="linear", ref="FAR-9"),
             completed_at=ts,
-            run_number=index + 1,
+            run_number=index + 10,
         )
 
     newest_first = await list_journey_runs(containment_session, journey=journey)
