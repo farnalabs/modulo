@@ -145,7 +145,7 @@
         </table>
       </div>
       <!-- Trend chart section -->
-      <div v-if="planStore.featureEnabled('dashboard_charts')" class="card p-4">
+      <div v-if="planStore.featureEnabled('dashboard_charts')" class="card p-4" data-testid="dashboard-run-activity">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-base font-semibold">{{ $t('views.DashboardView.run_activity') }}</h2>
         </div>
@@ -161,6 +161,14 @@
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.token_spend') }}</p>
             <Sparkline class="h-16 w-full" :data="trendSpendData" :labels="trendLabels" unit="$" color="hsl(var(--warning))" :show-y-axis="true" :show-x-ticks="true" />
+          </div>
+          <div>
+            <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.avg_approval_time') }}</p>
+            <Sparkline class="h-16 w-full" :data="trendHitlWaitMs" :labels="trendLabels" missing-data="carry-forward" unit="ms" color="hsl(var(--warning))" :show-y-axis="true" :show-x-ticks="true" />
+          </div>
+          <div>
+            <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.rejection_rate') }}</p>
+            <Sparkline class="h-16 w-full" :data="trendRejectionRate" :labels="trendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--destructive))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
         </div>
         <div v-else class="flex items-center justify-center py-12">
@@ -401,9 +409,11 @@ const trendsRaw = computed(() => dashboardStore.trends)
 const trendData = computed(() => {
   const tr = trendsRaw.value
   if (!tr) return []
-  const items: Array<{ date: string; run_count: number; eval_pass_rate: number | null; token_spend_usd: number }> = []
+  const items: Array<{ date: string; run_count: number; eval_pass_rate: number | null; token_spend_usd: number; avg_time_to_approve_ms: number | null; rejection_rate: number | null }> = []
   const evalMap = new Map(tr.eval_pass_rates.map(r => [r.date, r.pass_rate]))
   const spendMap = new Map(tr.token_spend.map(r => [r.date, r.total_spend_usd]))
+  const hitlMap = new Map(tr.hitl_volume.map(h => [h.date, h.avg_time_to_approve_ms]))
+  const rejectionMap = new Map(tr.rejection_trend.map(r => [r.date, r.rolling_rejection_rate]))
   // Build a combined series covering all dates
   for (const entry of tr.run_counts) {
     items.push({
@@ -411,6 +421,8 @@ const trendData = computed(() => {
       run_count: entry.run_count,
       eval_pass_rate: evalMap.get(entry.date) ?? null,
       token_spend_usd: spendMap.get(entry.date) ?? 0,
+      avg_time_to_approve_ms: hitlMap.get(entry.date) ?? null,
+      rejection_rate: rejectionMap.get(entry.date) ?? null,
     })
   }
   return items
@@ -419,6 +431,8 @@ const trendData = computed(() => {
 const trendRunCounts = computed(() => trendData.value.map(d => d.run_count))
 const trendEvalRates = computed((): Array<number | null> => trendData.value.map(d => d.eval_pass_rate))
 const trendSpendData = computed(() => trendData.value.map(d => d.token_spend_usd))
+const trendHitlWaitMs = computed((): Array<number | null> => trendData.value.map(d => d.avg_time_to_approve_ms))
+const trendRejectionRate = computed((): Array<number | null> => trendData.value.map(d => d.rejection_rate))
 const trendLabels = computed(() => trendData.value.map(d => d.date))
 
 onMounted(async () => {

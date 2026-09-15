@@ -30,6 +30,8 @@ interface TrendDay {
   run_count: number;
   eval_pass_rate: number | null;
   token_spend_usd: number;
+  avg_time_to_approve_ms: number | null;
+  rejection_rate: number | null;
 }
 
 interface RecentRun {

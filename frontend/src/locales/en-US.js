@@ -1369,7 +1369,9 @@ export default {
       "invalid_dashboard_data": "Received invalid dashboard data from server.",
       "invalid_trends_data": "Received invalid trends data from server.",
       "invalid_days_parameter": "Invalid days parameter: must be a positive integer.",
-      "failed_to_create_starter_pipeline": "Failed to create starter pipeline. Please try again."
+      "failed_to_create_starter_pipeline": "Failed to create starter pipeline. Please try again.",
+      "avg_approval_time": "Avg approval time",
+      "rejection_rate": "Rejection rate"
     },
     "AdminFeatureFlagsView": {
       "team_tier": "Team tier",
