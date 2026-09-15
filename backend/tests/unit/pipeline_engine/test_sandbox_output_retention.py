@@ -1398,3 +1398,74 @@ async def test_streaming_writer_under_cap_stdout_has_no_pointer(tmp_path):
     assert output["status"] == "completed"
     assert output["agent_stdout"] == under_cap_content
     assert "stdout_artifact" not in output, "under-cap success must not emit stdout_artifact"
+
+
+# ---------------------------------------------------------------------------
+# FAR-845: non-idle total-timeout path emits stdout_artifact pointer
+# ---------------------------------------------------------------------------
+
+
+async def test_total_timeout_over_cap_stdout_emits_artifact_pointer(tmp_path):
+    """FAR-845: when a non-idle total-timeout fires and the sandbox log
+    exceeds the retention cap, the failure marker carries a ``stdout_artifact``
+    pointer — the full redacted transcript was written to the artifact store.
+
+    Mirrors test_stall_over_cap_stdout_emits_artifact_pointer_on_marker but
+    triggers via total timeout (``_wait_command_with_idle_watchdog`` raises
+    ``TimeoutError``) instead of stall (``handle.wait`` raises
+    ``asyncio.TimeoutError``)."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    cap = 2048
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    over_cap_stdout = "x" * 4096
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=MagicMock(exit_code=0, stdout="", stderr=""))
+    handle.kill = AsyncMock()
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            raise OSError("no output.json")
+        return over_cap_stdout
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(over_cap_stdout)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    # Mock _wait_command_with_idle_watchdog to simulate a total timeout
+    # (the command was active, not stalled, but hit the wall-clock deadline).
+    _total_timeout_exc = TimeoutError("command exceeded total timeout of 30s")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._wait_command_with_idle_watchdog",
+            new=AsyncMock(side_effect=_total_timeout_exc),
+        ),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
+    pointer = marker.get("stdout_artifact")
+    assert pointer is not None, "over-cap total-timeout must attach stdout_artifact pointer"
+    assert pointer["truncated"] is False
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stdout"
+    assert pointer["size_bytes"] == 4096
+    assert pointer["compression"] == "zstd"
+    assert pointer["rel_path"].endswith(".zst")
