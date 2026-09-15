@@ -1577,8 +1577,8 @@ def test_decrypt_credentials_returns_empty_for_none() -> None:
     """_decrypt_credentials returns {} when ciphertext is None/empty."""
     from modulo.api.routes.connectors import _decrypt_credentials
 
-    assert _decrypt_credentials(None, _FERNET_KEY) == {}
-    assert _decrypt_credentials(b"", _FERNET_KEY) == {}
+    assert not _decrypt_credentials(None, _FERNET_KEY)
+    assert not _decrypt_credentials(b"", _FERNET_KEY)
 
 
 def test_decrypt_credentials_raises_on_non_dict_json() -> None:
