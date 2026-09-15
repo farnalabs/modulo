@@ -27,6 +27,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.middleware.sensitive_mask import SensitiveValue
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
 from modulo.core.ssrf import pinned_async_client, validate_outbound_url_async
 from modulo.db.crud.sso_provider import (
     create_provider,
@@ -36,6 +37,7 @@ from modulo.db.crud.sso_provider import (
     set_group_mappings,
     toggle_provider,
     update_provider,
+    validate_allowed_domains,
 )
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -63,6 +65,7 @@ class SsoProviderCreate(BaseModel):
     enabled: bool = True
     auto_provision: bool = True
     default_role: str = Field(default="runner", pattern=r"^(operator|runner)$")
+    allowed_domains: list[str] = Field(default_factory=list, max_length=50)
 
 
 class SsoProviderUpdate(BaseModel):
@@ -77,6 +80,7 @@ class SsoProviderUpdate(BaseModel):
     enabled: bool | None = None
     auto_provision: bool | None = None
     default_role: str | None = Field(default=None, pattern=r"^(operator|runner)$")
+    allowed_domains: list[str] | None = Field(default=None, max_length=50)
 
 
 class SsoProviderResponse(BaseModel):
@@ -94,10 +98,27 @@ class SsoProviderResponse(BaseModel):
     enabled: bool
     auto_provision: bool
     default_role: str
+    allowed_domains: list[str] = Field(default_factory=list)
     created_at: datetime
 
     model_config = {"from_attributes": True}
     updated_at: datetime
+
+    @field_validator("allowed_domains", mode="before")
+    @classmethod
+    def _coerce_allowed_domains_none(cls, value: object) -> list[str]:
+        """Rows constructed without a flush (and legacy rows) carry NULL; expose []."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                return []
+            return parsed if isinstance(parsed, list) else []
+        if isinstance(value, list):
+            return value
+        return []
 
     @field_validator("scopes", mode="before")
     @classmethod
@@ -130,6 +151,36 @@ class SsoProviderTestResult(BaseModel):
     success: bool
     message: str
     provider_info: dict[str, Any] | None = None
+
+
+_MSG_UNRESTRICTED_SSO_DISABLED = (
+    "Enabling SSO join for ANY authenticated identity (auto_provision=true with no allowed_domains) "
+    "is disabled by the sso_unrestricted_provisioning feature flag. Either set allowed_domains, or "
+    "enable that operator-level flag — it is dangerous: every IdP account could join this "
+    "organisation. Existing members and invited users are not affected."
+)
+
+
+def _sso_provider_is_unrestricted(provider: Any) -> bool:
+    """FAR-855 mode 3 detection: auto_provision with an EFFECTIVELY empty allowlist."""
+    domains = getattr(provider, "allowed_domains", None) or []
+    return bool(getattr(provider, "auto_provision", False)) and not any(str(d).strip() for d in domains)
+
+
+async def _reject_mode3_when_flag_off(provider: Any, *, org_id: uuid.UUID, session: AsyncSession) -> None:
+    """Fail CLOSED at save time when the dangerous mode-3 state isn't unlocked.
+
+    Raises HTTP 422 inside the caller's transaction so the write rolls back.
+    """
+    if not _sso_provider_is_unrestricted(provider):
+        return
+    flag_on = await resolve_sso_unrestricted_provisioning(session, org_id=org_id)
+    if not flag_on:
+        _log.warning(
+            "admin.sso.unrestricted_mode_rejected",
+            extra={"organisation_id": str(org_id), "provider_id": getattr(provider, "provider_id", None)},
+        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_MSG_UNRESTRICTED_SSO_DISABLED)
 
 
 @router.get("/providers")
@@ -181,6 +232,10 @@ async def create_provider_endpoint(
     system_session: AsyncSession = Depends(get_system_db_session),
 ) -> SsoProviderResponse:
     try:
+        normalized_allowed_domains = validate_allowed_domains(req.allowed_domains)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             provider = await create_provider(
@@ -195,6 +250,7 @@ async def create_provider_endpoint(
                 metadata_xml=req.metadata_xml,
                 entity_id=req.entity_id,
                 scopes=req.scopes,
+                allowed_domains=normalized_allowed_domains,
                 enabled=req.enabled,
                 auto_provision=req.auto_provision,
                 default_role=req.default_role,
@@ -203,6 +259,9 @@ async def create_provider_endpoint(
                 actor_user_id=current_user.account_id,
                 system_session=system_session,
             )
+            # Fail CLOSED before commit when the dangerous mode-3 state is not
+            # unlocked by the operator-level feature flag.
+            await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id, session=session)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
@@ -255,6 +314,11 @@ async def update_provider_endpoint(
     updates = req.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
+    if "allowed_domains" in updates:
+        try:
+            updates["allowed_domains"] = validate_allowed_domains(updates["allowed_domains"])
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     try:
         async with session.begin():
@@ -267,6 +331,10 @@ async def update_provider_endpoint(
                 fernet_key=settings.fernet_key,
                 **updates,
             )
+            # Validate the MERGED provider state (update + existing) so an
+            # auto_provision flip can't slip into dangerous mode 3.
+            if provider is not None:
+                await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id, session=session)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:

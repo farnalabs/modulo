@@ -74,6 +74,28 @@ async def create_invitation(
     return invitation, plaintext
 
 
+async def get_live_for_email(session: AsyncSession, *, org_id: uuid.UUID, email: str) -> Invitation | None:
+    """Look up a consumable (live) invitation by (organisation, email) — FAR-855.
+
+    Same liveness predicate as ``get_valid_by_token_hash``: un-consumed,
+    un-revoked, un-expired. Used by the SSO join gate to bridge an admin
+    invitation into the SSO login: a matching live invitation grants the
+    join and is then CAS-consumed via :func:`consume_invitation` (callers
+    MUST treat the row locked by ``with_for_update`` and consume it in the
+    same transaction, mirroring the accept-invite route).
+    """
+    result = await session.execute(
+        select(Invitation)
+        .where(
+            Invitation.organisation_id == org_id,
+            Invitation.email == email,
+            *_live_conditions(Invitation),
+        )
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
 async def has_live_for_email(session: AsyncSession, *, org_id: uuid.UUID, email: str) -> bool:
     """True when an un-consumed / un-revoked / un-expired invitation for this
     email already exists in the org (duplicate-invite guard)."""

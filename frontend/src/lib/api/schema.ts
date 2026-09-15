@@ -17263,6 +17263,8 @@ export interface components {
              * @default runner
              */
             default_role: string;
+            /** Allowed Domains */
+            allowed_domains?: string[];
         };
         /** SsoProviderResponse */
         SsoProviderResponse: {
@@ -17297,6 +17299,8 @@ export interface components {
             auto_provision: boolean;
             /** Default Role */
             default_role: string;
+            /** Allowed Domains */
+            allowed_domains?: string[];
             /**
              * Created At
              * Format: date-time
@@ -17343,6 +17347,8 @@ export interface components {
             auto_provision?: boolean | null;
             /** Default Role */
             default_role?: string | null;
+            /** Allowed Domains */
+            allowed_domains?: string[] | null;
         };
         /** SsoProvidersResponse */
         SsoProvidersResponse: {

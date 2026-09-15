@@ -17,6 +17,7 @@ from modulo.auth.jwt import CLIENT_KIND_BROWSER, create_access_token, create_ref
 from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
 from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 from modulo.auth.secret_storage import decode_stored_secret
+from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
 from modulo.core.ssrf import (
     derive_oidc_allowed_hosts,
     pinned_async_client,
@@ -25,11 +26,17 @@ from modulo.core.ssrf import (
     validate_outbound_url_preflight,
 )
 from modulo.db.crud.account import create_account, get_account_by_email, update_last_login
-from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
+from modulo.db.crud.invitations import consume_invitation, get_live_for_email
+from modulo.db.crud.org_membership import (
+    create_membership,
+    get_membership_by_account_and_org,
+    reactivate_membership,
+)
 from modulo.db.crud.sso_provider import get_enabled_saml_provider, get_provider_by_provider_id
 from modulo.db.crud.team_membership import add_team_member, get_membership_by_team_and_account, update_member_role
 from modulo.db.crud.token_family import create_family
 from modulo.db.models.account import Account
+from modulo.db.models.invitation import Invitation
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org
@@ -113,6 +120,9 @@ async def jit_provision_user(
     auth_provider: str,
     sso_subject: str,
     default_org_id: uuid.UUID | None = None,
+    *,
+    sso_provider: SsoProvider | None = None,
+    email_verified: bool = False,
 ) -> tuple[Account, uuid.UUID, str]:
     """Find or create an Account + OrgMembership for an SSO-authenticated identity.
 
@@ -120,6 +130,28 @@ async def jit_provision_user(
     ``create_account`` write so a zero-org deployment (env-path JIT, no provider
     org) raises a clean ``RuntimeError`` ("No organisation exists") instead of
     letting a raw RLS-scoped INSERT fail with a 500.
+
+    FAR-855 join gate (applies ONLY when ``sso_provider`` is a DB provider row —
+    the governed configuration surface; the env-var fallback keeps the legacy
+    behaviour and logs):
+    - ``auto_provision=false`` (DEFAULT): "invitation only" — the user must
+      already hold an ACTIVE membership in the org, or a valid pending
+      Invitation for (email, org) must exist and is consumed (CAS, granting
+      the role it specifies). Otherwise DENY.
+    - ``auto_provision=true`` + non-empty ``allowed_domains``: a VERIFIED
+      email domain in the EXACT (case-insensitive, no implicit subdomain)
+      allowlist auto-provisions with ``provider.default_role`` (fallback
+      ``settings.modulo_sso_default_role`` — closes FAR-839); otherwise
+      falls back to the invitation path. A pending invitation always wins
+      over the domain path so it grants the role it specifies.
+    - ``auto_provision=true`` + EMPTY ``allowed_domains``: "anyone who
+      authenticates" — DANGEROUS, gated behind the operator-level
+      ``sso_unrestricted_provisioning`` feature flag (default OFF; OFF fails
+      CLOSED at sign-in, keeping only existing members and invitations).
+    An existing membership's role is NEVER changed. Denial happens BEFORE any
+    Account/membership write so a denied identity leaves no orphan row, and
+    raises :class:`SsoProvisioningDeniedError` (a ``ValueError`` subclass) so the
+    SSO callback surfaces a clean 401 rather than a 500.
     """
     if default_org_id is not None:
         org_id = default_org_id
@@ -130,39 +162,233 @@ async def jit_provision_user(
             raise RuntimeError("No organisation exists — cannot JIT provision account")
         org_id = org.id
 
+    if sso_provider is None:
+        # Legacy env-var provider path: no DB row means no policy surface to
+        # configure allowed_domains/auto_provision against. Kept as-is with a
+        # loud log until env-var providers are migrated to DB rows.
+        _log.warning("sso.jit_policy_not_applicable", extra={"auth_provider": auth_provider})
+        account, org_role, _invitation_used = await _provision_membership(
+            session, settings, email, display_name, auth_provider, sso_subject, org_id
+        )
+        return account, org_id, org_role
+
+    # Pre-provision eligibility check: NOTHING is written below unless the
+    # identity is allowed to join (fail-closed — a denial leaves no orphan row).
+    existing = await get_account_by_email(session, email)
+    existing_membership = None
+    if existing is not None:
+        existing_membership = await get_membership_by_account_and_org(session, existing.id, org_id)
+    if existing_membership is not None and existing_membership.deactivated_at is None:
+        # Already a member (e.g. SCIM/admin-provisioned): never change their role.
+        account = await _upsert_sso_identity(session, settings, email, display_name, auth_provider, sso_subject)
+        return account, org_id, existing_membership.role
+
+    invitation = await get_live_for_email(session, org_id=org_id, email=email)
+
+    unlocked, mode = _sso_jit_mode_allows_auto(sso_provider, email, email_verified)
+    if unlocked and mode == "unrestricted":
+        # Mode 3 is DANGEROUS and gated behind the operator-level flag; OFF
+        # fails CLOSED here (falling back to member/invitation-only access).
+        unlocked = await resolve_sso_unrestricted_provisioning(session, org_id=org_id)
+        if not unlocked:
+            _log.info(
+                "sso.jit_unrestricted_flag_off",
+                extra={"organisation_id": str(org_id), "provider_id": sso_provider.provider_id},
+            )
+    if not unlocked and invitation is None:
+        # No self-service path (mode 1, or mode 2/3 whose gate did not match)
+        # and no pending invitation: fail closed before any write.
+        await _deny_join(sso_provider, org_id)
+
+    # A pending invitation always wins over the self-service path: it grants
+    # the membership/role it specifies (including reactivating a tombstoned
+    # member with that role). Consumption is the final CAS guard, in the same
+    # transaction (mirrors accept-invite: a lost race aborts the whole
+    # transaction) and only happens when the invitation actually granted or
+    # restored the join - an existing live member keeps their role and never
+    # burns an invitation.
+    account, org_role, invitation_used = await _provision_membership(
+        session,
+        settings,
+        email,
+        display_name,
+        auth_provider,
+        sso_subject,
+        org_id,
+        provider=sso_provider,
+        invitation=invitation,
+    )
+
+    if invitation is not None and invitation_used:
+        if not await consume_invitation(session, invitation):
+            # CAS lost the race — abort atomically, identical to accept-invite.
+            raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED)
+        await _audit_invite_consumed_fail_open(session, org_id, invitation.id)
+
+    return account, org_id, org_role
+
+
+class Constants:
+    """Small holder for user-facing SSO messages (kept near the join gate)."""
+
+    MSG_SSO_JOIN_DENIED = "You have not been invited to this organisation."
+
+
+class SsoProvisioningDeniedError(ValueError):
+    """FAR-855 join-gate denial.
+
+    Subclass of ``ValueError`` so the SSO callback routes map it to the
+    existing 401-with-detail error surface (never a 500) without any route
+    changes. The message is user-safe and reveals nothing beyond what the
+    login page already showed.
+    """
+
+
+def _sso_verified_domain(email: str) -> str | None:
+    """Return the lowercased domain part of ``email`` (after the LAST ``@``)."""
+    if "@" not in email:
+        return None
+    return email.rsplit("@", 1)[1].strip().lower() or None
+
+
+def _sso_jit_mode_allows_auto(provider: SsoProvider, email: str, email_verified: bool) -> tuple[bool, str]:
+    """Resolve the FAR-855 policy matrix for self-service (non-invitation) joins.
+
+    Returns ``(self_service_allowed, mode)`` where ``mode`` is one of
+     ``"invitation_only"``, ``"domain_allowlist"``, ``"unrestricted"``. Note the
+     invitation path is still consulted when this returns False — an invitation
+     grants the join even in the fail-closed states (mode 3 additionally
+     requires the operator-level ``sso_unrestricted_provisioning`` flag,
+     checked by the CALLER because it needs an async DB read).
+    """
+    mode = "invitation_only"
+    if not provider.auto_provision:
+        return False, mode
+
+    domain = _sso_verified_domain(email)
+    domains = [str(d).strip().lower() for d in (provider.allowed_domains or []) if str(d).strip()]
+    if domains:
+        mode = "domain_allowlist"
+        if domain and email_verified and domain in domains:
+            return True, mode
+        return False, mode
+
+    mode = "unrestricted"
+    return email_verified, mode
+
+
+async def _deny_join(provider: SsoProvider, org_id: uuid.UUID) -> None:
+    """Structured, PII-free denial log + fail-closed user-facing raise."""
+    _log.info(
+        "sso.jit_join_denied",
+        extra={
+            "provider_id": getattr(provider, "provider_id", None),
+            "provider_name": getattr(provider, "name", None),
+            "organisation_id": str(org_id),
+        },
+    )
+    raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED) from None
+
+
+async def _audit_invite_consumed_fail_open(session: AsyncSession, org_id: uuid.UUID, invitation_id: uuid.UUID) -> None:
+    """Record the SSO-consumed invitation; audit failure never fails the login."""
+    from modulo.core.audit_logger import append_audit_event
+
+    try:
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="invite_consumed",
+            resource_type="invitation",
+            resource_id=invitation_id,
+            payload_json={"invitation_id": str(invitation_id), "via": "sso"},
+        )
+    except Exception:
+        _log.warning("sso.jit_invite_audit_failed", exc_info=True)
+
+
+def _sso_default_role(provider: SsoProvider, settings: Settings) -> str:
+    """FAR-839: SSO join role = provider.default_role, else the app setting."""
+    return provider.default_role or settings.modulo_sso_default_role
+
+
+async def _upsert_sso_identity(
+    session: AsyncSession,
+    settings: Settings,
+    email: str,
+    display_name: str,
+    auth_provider: str,
+    sso_subject: str,
+) -> Account:
+    """Create the account for a JIT join, or bind the SSO identity to an existing one."""
     account = await get_account_by_email(session, email)
     if account is not None:
         account.sso_subject = sso_subject
         account.auth_provider = auth_provider
         await session.flush()
-    else:
-        account = await create_account(
-            session,
-            email=email,
-            display_name=display_name,
-            password_hash=None,
-            auth_provider=auth_provider,
-        )
-        account.sso_subject = sso_subject
-        await session.flush()
-        _log.info(
-            "sso.jit_provisioned",
-            extra={"email": email, "auth_provider": auth_provider, "sso_subject": sso_subject},
-        )
+        return account
+    account = await create_account(
+        session,
+        email=email,
+        display_name=display_name,
+        password_hash=None,
+        auth_provider=auth_provider,
+    )
+    account.sso_subject = sso_subject
+    await session.flush()
+    _log.info(
+        "sso.jit_provisioned",
+        extra={"email": email, "auth_provider": auth_provider, "sso_subject": sso_subject},
+    )
+    return account
 
+
+async def _provision_membership(
+    session: AsyncSession,
+    settings: Settings,
+    email: str,
+    display_name: str,
+    auth_provider: str,
+    sso_subject: str,
+    org_id: uuid.UUID,
+    *,
+    provider: SsoProvider | None = None,
+    invitation: Invitation | None = None,
+) -> tuple[Account, str, bool]:
+    """Legacy + gated provisioning core: upsert account, ensure membership.
+
+    ``invitation`` (FAR-855) grants the invitation's role — including
+    reactivating a tombstoned membership with that role (accept-invite
+    semantics). With ``provider`` present the role falls back to
+    ``provider.default_role`` then ``settings.modulo_sso_default_role``.
+    An existing LIVE membership is left untouched; a tombstoned one is
+    reactivated with the join role (an invitation to a deactivated member
+    must restore their access, mirroring accept-invite).
+
+    Returns ``(account, role, invitation_used)`` where ``invitation_used`` is
+    True only when the invitation actually granted the join (created the
+    membership or reactivated a tombstoned one) - the caller CAS-consumes the
+    invitation in exactly that case, so an existing live member never burns
+    one.
+    """
+    account = await _upsert_sso_identity(session, settings, email, display_name, auth_provider, sso_subject)
     existing = await get_membership_by_account_and_org(session, account.id, org_id)
-    if existing is None:
-        membership = await create_membership(
-            session,
-            account_id=account.id,
-            org_id=org_id,
-            role=settings.modulo_sso_default_role,
-        )
-        org_role = membership.role
-    else:
-        org_role = existing.role
+    if existing is not None and existing.deactivated_at is None:
+        return account, existing.role, False
 
-    return account, org_id, org_role
+    if invitation is not None:
+        role = invitation.org_role
+    elif provider is not None:
+        role = _sso_default_role(provider, settings)
+    else:
+        role = settings.modulo_sso_default_role
+
+    _log.info("sso.jit_membership")
+    if existing is not None and existing.deactivated_at is not None:
+        await reactivate_membership(session, existing, role)
+        return account, role, invitation is not None
+    membership = await create_membership(session, account_id=account.id, org_id=org_id, role=role)
+    return account, membership.role, invitation is not None
 
 
 # ---------------------------------------------------------------------------
@@ -497,6 +723,10 @@ async def oidc_process_callback(
             "oidc",
             sso_subject,
             default_org_id=default_org_id,
+            sso_provider=db_provider,
+            # FAR-855: a domain-allowlist join requires a VERIFIED email — the
+            # IdP's email_verified claim; a missing claim is NOT verified.
+            email_verified=bool(claims.get("email_verified")),
         )
     except RuntimeError as exc:
         raise ValueError(str(exc)) from None
@@ -897,6 +1127,8 @@ async def saml_process_response(
             "saml",
             sso_subject,
             default_org_id=default_org_id,
+            sso_provider=db_saml,
+            email_verified=True,
         )
     except RuntimeError as exc:
         raise ValueError(str(exc)) from None

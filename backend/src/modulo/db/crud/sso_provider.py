@@ -30,8 +30,49 @@ _UPDATABLE_SSO_FIELDS = frozenset(
         "name",
         "auto_provision",
         "default_role",
+        "allowed_domains",
     }
 )
+
+_MAX_ALLOWED_DOMAINS = 50
+_INVALID_DOMAIN_CHARS = "@/*"
+
+
+def validate_allowed_domains(domains: list[str] | None) -> list[str]:
+    """Normalise + validate the FAR-855 ``allowed_domains`` allowlist.
+
+    Normalisation: trim, lowercase, de-duplicate (order-preserving).
+    Validation: every entry must look like a bare registrable domain — no
+    ``@`` (that is an email, not a domain), no URL scheme, no path segment,
+    no wildcard (subdomain matching is deliberately NOT supported), and it
+    must contain at least one dot (``localhost``-style bare hosts would make
+    the allowlist meaningless). Raises ``ValueError`` naming the offending
+    entry; raises when every entry was invalid or the list exceeds
+    ``_MAX_ALLOWED_DOMAINS``. Returns the normalised list.
+    """
+    if domains is None:
+        return []
+    if len(domains) > _MAX_ALLOWED_DOMAINS:
+        msg = f"allowed_domains accepts at most {_MAX_ALLOWED_DOMAINS} domains"
+        raise ValueError(msg)
+    normalized: list[str] = []
+    for raw in domains:
+        domain = str(raw).strip().lower().rstrip(".")
+        if not domain:
+            raise ValueError(f"Invalid allowed_domains entry: {raw!r} (empty)")
+        if any(ch in domain for ch in _INVALID_DOMAIN_CHARS):
+            msg = (
+                f"Invalid allowed_domains entry: {domain!r} — provide a bare domain like "
+                "'example.com'; no @, URL scheme, path, or wildcard (subdomain matching "
+                "is not supported)"
+            )
+            raise ValueError(msg)
+        if "." not in domain:
+            raise ValueError(f"Invalid allowed_domains entry: {domain!r} — a registrable domain must contain a dot")
+        if domain not in normalized:
+            normalized.append(domain)
+    return normalized
+
 
 # Audit-record failure log message (best-effort audit — fail open, log loudly).
 _LOG_AUDIT_RECORD_FAILED = "Failed to record audit event for SSO provider %s"
@@ -134,6 +175,7 @@ async def create_provider(
     metadata_xml: str | None = None,
     entity_id: str | None = None,
     scopes: list[str] | None = None,
+    allowed_domains: list[str] | None = None,
     enabled: bool = True,
     auto_provision: bool = True,
     default_role: str = "runner",
@@ -143,6 +185,7 @@ async def create_provider(
     provider_id: str | None = None,
     system_session: AsyncSession | None = None,
 ) -> SsoProvider:
+    normalized_allowed_domains = validate_allowed_domains(allowed_domains)
     result = await session.execute(
         select(SsoProvider).where(SsoProvider.name == name, SsoProvider.organisation_id == org_id).with_for_update()
     )
@@ -192,6 +235,7 @@ async def create_provider(
         metadata_xml=metadata_xml,
         entity_id=entity_id,
         scopes=json.dumps(scopes) if scopes else None,
+        allowed_domains=normalized_allowed_domains,
         enabled=enabled,
         auto_provision=auto_provision,
         default_role=default_role,

@@ -485,3 +485,50 @@ class TestSetGroupMappings:
             from modulo.db.crud.sso_provider import set_group_mappings
 
             assert await set_group_mappings(mock_session, _PROVIDER_ID, [], org_id=_ORG_ID) is None
+
+
+class TestValidateAllowedDomains:
+    """FAR-855: the ``allowed_domains`` normaliser/validator."""
+
+    def test_none_returns_empty_list(self) -> None:
+        from modulo.db.crud.sso_provider import validate_allowed_domains
+
+        assert not validate_allowed_domains(None)
+
+    def test_normalises_trims_and_dedupes(self) -> None:
+        from modulo.db.crud.sso_provider import validate_allowed_domains
+
+        assert validate_allowed_domains(["  CORP.Example.COM ", "corp.example.com", "example.org."]) == [
+            "corp.example.com",
+            "example.org",
+        ]
+
+    def test_rejects_more_than_max_domains(self) -> None:
+        from modulo.db.crud.sso_provider import validate_allowed_domains
+
+        with pytest.raises(ValueError, match="at most 50 domains"):
+            validate_allowed_domains([f"d{i}.example.com" for i in range(51)])
+
+    def test_rejects_empty_entry(self) -> None:
+        from modulo.db.crud.sso_provider import validate_allowed_domains
+
+        with pytest.raises(ValueError, match="empty"):
+            validate_allowed_domains(["   "])
+
+    def test_rejects_email_like_entry(self) -> None:
+        from modulo.db.crud.sso_provider import validate_allowed_domains
+
+        with pytest.raises(ValueError, match="no @, URL scheme"):
+            validate_allowed_domains(["@example.com"])
+
+    def test_rejects_wildcard_entry(self) -> None:
+        from modulo.db.crud.sso_provider import validate_allowed_domains
+
+        with pytest.raises(ValueError, match="no @, URL scheme"):
+            validate_allowed_domains(["*.example.com"])
+
+    def test_rejects_dotless_entry(self) -> None:
+        from modulo.db.crud.sso_provider import validate_allowed_domains
+
+        with pytest.raises(ValueError, match="must contain a dot"):
+            validate_allowed_domains(["localhost"])
