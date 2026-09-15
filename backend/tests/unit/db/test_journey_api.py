@@ -21,6 +21,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Table, select
+from sqlalchemy.dialects import postgresql as pg_dialect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -32,7 +33,9 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.lifecycle_map.advancement import advance_journeys, confirm_reported_refs
 from modulo.core.lifecycle_map.journeys import (
     _is_unattributed,
+    _journey_runs_postgres_query,
     decode_cursor,
+    dismiss_journey,
     encode_cursor,
     get_map_journey,
     list_journey_runs,
@@ -597,6 +600,94 @@ class TestJourneyRunHistory:
 
         runs = await list_journey_runs(session, journey=journey)
         assert [r.id for r in runs] == [completed.id, never_completed.id]
+
+    async def test_sparse_history_matches_one_among_many_unrelated(self, session: AsyncSession) -> None:
+        """A journey touched by one run among many is returned, unaffected by
+        unrelated refs — the containment predicate must not widen or narrow."""
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        journey = await _seed_journey(session, kind="jira", ref="PAY-77", map_id=_MAP)
+        # 4 unrelated runs (different kind, different ref) + the mixing run.
+        await _seed_run(session, kind="jira", ref="PAY-40", completed_at=datetime(2026, 1, 1, tzinfo=UTC))
+        await _seed_run(session, kind="github_issue", ref="a/b#5", completed_at=datetime(2026, 1, 2, tzinfo=UTC))
+        await _seed_run(session, kind="jira", ref="PAY-7", completed_at=datetime(2026, 1, 3, tzinfo=UTC))
+        await _seed_run(session, kind="linear", ref="FAR-1", completed_at=datetime(2026, 1, 4, tzinfo=UTC))
+        mixing = await _seed_run(session, kind="jira", ref="PAY-77", completed_at=datetime(2026, 1, 5, tzinfo=UTC))
+
+        runs = await list_journey_runs(session, journey=journey)
+        assert [r.id for r in runs] == [mixing.id]
+
+    async def test_containment_subset_entry_shape_matches(self, session: AsyncSession) -> None:
+        """Stored entries carry extra keys (``source``, ``status``) and may sit
+        in mid-array position — the Postgres containment template (kind+ref
+        only) is a SUBSET predicate, so richer entries must still match."""
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        journey = await _seed_journey(session, kind="jira", ref="PAY-77", map_id=_MAP)
+        richer = await _seed_run(
+            session,
+            completed_at=datetime(2026, 1, 3, tzinfo=UTC),
+            work_item_refs=[
+                {"kind": "linear", "ref": "FAR-1", "source": "caller"},
+                {"kind": "jira", "ref": "PAY-77", "source": "agent", "status": "done"},
+            ],
+        )
+        # Same kind+ref but a THIRD extra key the template doesn't name —
+        # containment is about the SET of keys present, so this matches too.
+        third_key = await _seed_run(
+            session,
+            completed_at=datetime(2026, 1, 4, tzinfo=UTC),
+            work_item_refs=[{"kind": "jira", "ref": "PAY-77", "source": "derived", "note": "unrelated"}],
+        )
+        # A ref with only the journey KIND but a different ref must NOT match.
+        await _seed_run(
+            session,
+            completed_at=datetime(2026, 1, 5, tzinfo=UTC),
+            work_item_refs=[{"kind": "jira", "ref": "PAY-88", "source": "derived"}],
+        )
+
+        runs = await list_journey_runs(session, journey=journey)
+        assert [r.id for r in runs] == [third_key.id, richer.id]
+
+    async def test_postgres_query_compiles_containment_without_unresolved_binds(self, session: AsyncSession) -> None:
+        """The Postgres path compiles to jsonb containment (the GIN-served
+        operator), with EVERY placeholder bound — compiling against the real
+        postgres dialect raises on any unresolved parameter (FAR-191 class of
+        bug: a raw jsonb template injected with its binds unbound fails on
+        EVERY execution)."""
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        journey = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+
+        compiled = _journey_runs_postgres_query(journey, limit=20).compile(dialect=pg_dialect.dialect())
+        sql = str(compiled)
+        assert "@>" in sql
+        assert "IS NOT NULL" in sql
+        assert "work_item_id" in sql  # canonical anchor OR-branch present
+        assert "completed_at" in sql
+        assert "NULLS LAST" in sql.upper()
+        assert "LIMIT" in sql
+
+    async def test_dismissed_journey_is_excluded_entirely_via_detail_gate(self, session: AsyncSession) -> None:
+        """Slice C dismissed-run exclusion still holds on the run-history path:
+        dismissing removes the journey from detail (the 404 gate that guards
+        run history) even though the runs query itself has no dismissal
+        filter — dismissal hides the journey, not the runs."""
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        journey = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+        run = await _seed_run(session, completed_at=datetime(2026, 1, 3, tzinfo=UTC))
+
+        runs = await list_journey_runs(session, journey=journey)
+        assert [r.id for r in runs] == [run.id]
+
+        assert await dismiss_journey(session, _ORG, kind=journey.kind, ref=journey.ref, dismissed_by=_ACCOUNT)
+        await session.flush()
+        assert await get_map_journey(session, map_id=_MAP, kind=journey.kind, ref=journey.ref) is None
 
 
 # ---------------------------------------------------------------------------
