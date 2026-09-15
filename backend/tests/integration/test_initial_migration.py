@@ -135,7 +135,7 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     "saved_views": frozenset({"filters", "columns"}),
     "scheduled_reports": frozenset({"config_json", "recipient_config"}),
     "schema_versions": frozenset({"definition_json"}),
-    "sso_providers": frozenset({"group_mappings"}),
+    "sso_providers": frozenset({"group_mappings", "allowed_domains"}),
     "system_config": frozenset({"value"}),
     "teams": frozenset({"notification_endpoints", "settings"}),
     "triggers": frozenset({"config_json"}),
