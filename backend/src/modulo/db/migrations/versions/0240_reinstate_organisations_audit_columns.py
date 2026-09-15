@@ -1,55 +1,40 @@
-"""Reinstate organisations audit columns + created_by FK dropped by 0239.
+"""Retain organisations audit columns + created_by FK (no-op fix of 0240).
 
-Migration 0239_revert_organisations_audit_drift erroneously dropped the
-updated_at/updated_by/deleted_by columns (added by 0233) and the
-fk_organisations_created_by FK (added by 0236) on the grounds that the
-Organisation ORM model did not declare them. That premise was wrong: the
-Organisation model DOES declare these columns/FK (see
-src/modulo/db/models/organisation.py), so dropping them produced schema drift
-vs the ORM and broke every query that touches organisations at runtime
-(UndefinedColumnError: column organisations.updated_at does not exist).
+PR #530 added updated_at/updated_by/deleted_by (0233) and the
+fk_organisations_created_by FK (0236) to the organisations table. This
+migration was originally written to RE-ADD those columns/FK because it was
+assumed 0239_revert_organisations_audit_drift had dropped them.
 
-This migration restores the columns/FK so the migrated schema matches the ORM
-metadata again. It chains on top of 0239 (the erroneous revert is retained as
-history, not undone, because it has already been applied to live databases).
+That assumption was wrong on two counts:
+* 0239 is itself a no-op (it retains the 0233/0236 columns/FK, which the
+  Organisation ORM model declared after PR #553);
+* the columns/FK are therefore already present after 0233/0236 run.
+
+The original RE-ADD produced a DuplicateColumn failure on a fresh database
+("column updated_at of relation organisations already exists") and broke every
+CI run that boots the schema from scratch (break-glass deploy gate, schema
+freshness). Because 0240 never completed successfully, no database has it
+recorded in alembic_version, so turning it into a no-op is safe: 0233/0236
+already provide the intended schema and the migration chain stays linear.
 
 Revision ID: 0240_reinstate_organisations_audit_columns
 Revises: 0239_revert_organisations_audit_drift
 Create Date: 2026-09-15
 """
 
-import sqlalchemy as sa
-from alembic import op
-
 revision = "0240_reinstate_organisations_audit_columns"
 down_revision = "0239_revert_organisations_audit_drift"
 
 
 def upgrade() -> None:
-    op.add_column(
-        "organisations",
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.current_timestamp(),
-            onupdate=sa.func.current_timestamp(),
-            nullable=False,
-        ),
-    )
-    op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
-    op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
-    op.create_foreign_key(
-        "fk_organisations_created_by",
-        "organisations",
-        "accounts",
-        ["created_by"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    # No-op: the organisations updated_at/updated_by/deleted_by columns (added
+    # by 0233) and the fk_organisations_created_by FK (added by 0236) are already
+    # part of the migrated schema. Re-adding them here caused a DuplicateColumn
+    # failure on fresh databases; retaining them (and doing nothing) keeps the
+    # schema correct without breaking the migration chain.
+    pass
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
-    op.drop_column("organisations", "deleted_by")
-    op.drop_column("organisations", "updated_by")
-    op.drop_column("organisations", "updated_at")
+    # No-op: nothing was added in upgrade, so there is nothing to revert.
+    pass
