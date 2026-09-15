@@ -172,11 +172,13 @@ class StreamingArtifactWriter:
                 # (sha256/size_bytes must equal the on-disk artifact).
                 chunk_bytes = self._truncate_to_utf8_boundary(chunk_bytes, remaining)
 
-        self._hasher.update(chunk_bytes)
-        self._bytes_written += len(chunk_bytes)
-
         # Decode back to str for the store's text-oriented append.
         text = chunk_bytes.decode("utf-8", errors="replace")
+
+        # Persist FIRST; only advance the incremental hash / byte count AFTER
+        # the append succeeds. A mid-stream append failure (swallowed per-chunk
+        # by the drain loop's try/except) must NOT leave finalize() advertising
+        # a sha256 / size_bytes that does not match the on-disk artifact.
         self._store.append(
             self._org_id,
             self._run_id,
@@ -185,6 +187,9 @@ class StreamingArtifactWriter:
             self._stream,
             text,
         )
+
+        self._hasher.update(chunk_bytes)
+        self._bytes_written += len(chunk_bytes)
 
     # ── helpers ────────────────────────────────────────────────────────
 

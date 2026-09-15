@@ -1477,6 +1477,97 @@ async def test_streaming_writer_under_cap_stdout_has_no_pointer(tmp_path):
     assert "stdout_artifact" not in output, "under-cap success must not emit stdout_artifact"
 
 
+async def test_streaming_writer_finalize_is_source_of_stdout_artifact_prove_the_fix(tmp_path):
+    """FAR-844 prove-the-fix: on the success path the ``stdout_artifact`` pointer
+    must originate from the streaming writer's ``finalize()`` — NOT the one-shot
+    ``_persist_full_stdout_artifact`` fallback.
+
+    The two implementations emit an OBSERVABLE-IDENTICAL pointer (same content,
+    same overflow key, same zstd envelope), so a value-only assertion passes on
+    ``origin/main`` WITHOUT the FAR-844 wiring. The existing
+    ``test_streaming_writer_success_path_over_cap_emits_full_artifact`` is
+    exactly this: 4096 bytes is under the 512KB drain window, so the unchanged
+    fallback produces the same ``size_bytes=4096, truncated=False`` pointer. Here
+    we spy on ``StreamingArtifactWriter.finalize`` to prove the STREAMING path
+    actually ran. On main the streaming writer is never constructed, so
+    ``finalize`` is never called and this test fails — making the feature's
+    behavioural delta real, not coincidental."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+
+    cap = 2048
+    over_cap_content = "y" * 4096
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="tail")
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return over_cap_content
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(over_cap_content)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    # Spy on the streaming writer's finalize. The spy is a PLAIN function (a
+    # descriptor) so it binds ``self`` when accessed on the instance; it records
+    # that the streaming path was exercised and delegates to the real finalize so
+    # the REAL pointer is still returned.
+    finalize_record: dict[str, Any] = {}
+    _real_finalize = StreamingArtifactWriter.finalize
+
+    def _spy_finalize(self):
+        ptr = _real_finalize(self)
+        finalize_record["called"] = True
+        finalize_record["ptr"] = ptr
+        return ptr
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        # Shrink only the retention cap; the drain window stays at the import-time
+        # _MAX_DRAIN_WINDOW (512KB), so the full 4096-byte log is drained and
+        # stdout_truncated fires — which is the branch that prefers the streaming
+        # writer's finalize() over the fallback.
+        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch.object(StreamingArtifactWriter, "finalize", new=_spy_finalize),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["stdout_truncated"] is True
+    pointer = output.get("stdout_artifact")
+    assert pointer is not None, "over-cap success path must emit stdout_artifact"
+
+    # PROVE the streaming path ran: the writer finalized and its return became
+    # the advertised envelope pointer. On origin/main the streaming writer is
+    # never constructed, so finalize is never called and this assertion fails.
+    assert finalize_record.get("called") is True, (
+        "StreamingArtifactWriter.finalize must be the source of stdout_artifact"
+    )
+    assert pointer["size_bytes"] == finalize_record["ptr"]["size_bytes"]
+    assert pointer["sha256"] == finalize_record["ptr"]["sha256"]
+
+
 # ---------------------------------------------------------------------------
 # FAR-845: non-idle total-timeout path emits stdout_artifact pointer
 # ---------------------------------------------------------------------------
