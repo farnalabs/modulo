@@ -34,6 +34,10 @@ class TestValidateStdoutRetentionConfig:
     def test_none_passes_through(self) -> None:
         assert validate_stdout_retention_config(None) is None
 
+    def test_empty_dict_normalizes_to_none(self) -> None:
+        # "Set to {} to clear (no pipeline override)" — documented clear op.
+        assert validate_stdout_retention_config({}) is None
+
     def test_valid_full_with_max_bytes(self) -> None:
         result = validate_stdout_retention_config({"mode": "full", "max_bytes": 2048})
         assert result == {"mode": "full", "max_bytes": 2048}

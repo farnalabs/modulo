@@ -51,12 +51,18 @@ def validate_stdout_retention_config(v: Any) -> dict[str, Any] | None:
 
     Shape: ``{"mode": "tail"|"full", "max_bytes": <positive int>}`` or None.
     None means no pipeline override. ``max_bytes`` is optional (defaults to
-    the code-level full-mode default when absent).
+    the code-level full-mode default when absent). An empty dict ``{}`` is the
+    documented "clear" operation and normalizes to None (no pipeline override).
     """
     if v is None:
         return None
     if not isinstance(v, dict):
         raise ValueError(_STDOUT_RETENTION_CONFIG_ERROR_MSG)
+    if not v:
+        # Empty dict is the documented clear operation — normalize to None so a
+        # client following the field/schema description gets a successful clear
+        # instead of a 422 for the missing 'mode' key.
+        return None
     mode = v.get("mode")
     if mode not in ("tail", "full"):
         raise ValueError(_STDOUT_RETENTION_CONFIG_ERROR_MSG)
