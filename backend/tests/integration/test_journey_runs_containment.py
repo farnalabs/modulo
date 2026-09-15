@@ -54,16 +54,20 @@ async def _seed_run(
     snapshot_id: uuid.UUID,
     work_item_refs: list[dict[str, Any]],
     completed_at: datetime,
-    run_number: int,
 ) -> Run:
+    # A deterministic, collision-free run_number for the shared session org:
+    # other integration tests commit runs against test_org, so a hardcoded
+    # run_number (e.g. 1) collides with uq_runs_org_run_number. Derive it from
+    # the run id (matches test_guardrail_correction._create_feedback_record).
+    run_id = uuid.uuid4()
     run = Run(
-        id=uuid.uuid4(),
+        id=run_id,
         organisation_id=org_id,
         pipeline_id=pipeline_id,
         snapshot_id=snapshot_id,
         trigger_type="manual",
         status="complete",
-        run_number=run_number,
+        run_number=(int(run_id.int) % 1_000_000) + 1,
         input_hash="a" * 64,
         langgraph_thread_id=f"{org_id}:{uuid.uuid4()}",
         work_item_refs=work_item_refs,
@@ -105,7 +109,6 @@ async def test_containment_predicate_surfaces_the_mixing_run(
         snapshot_id=test_snapshot,
         work_item_refs=_refs(kind="jira", ref="PAY-77"),
         completed_at=datetime(2026, 6, 1, tzinfo=UTC),
-        run_number=1,
     )
     newer_rich = await _seed_run(
         app_role_rls_session,
@@ -117,7 +120,6 @@ async def test_containment_predicate_surfaces_the_mixing_run(
             _refs(kind="jira", ref="PAY-77", source="agent", status="done")[0],
         ],
         completed_at=datetime(2026, 6, 2, tzinfo=UTC),
-        run_number=2,
     )
     # Unrelated refs — enough to prove the predicate never widens.
     await _seed_run(
@@ -127,7 +129,6 @@ async def test_containment_predicate_surfaces_the_mixing_run(
         snapshot_id=test_snapshot,
         work_item_refs=_refs(kind="jira", ref="PAY-40"),
         completed_at=datetime(2026, 6, 3, tzinfo=UTC),
-        run_number=3,
     )
     await _seed_run(
         app_role_rls_session,
@@ -136,7 +137,6 @@ async def test_containment_predicate_surfaces_the_mixing_run(
         snapshot_id=test_snapshot,
         work_item_refs=_refs(kind="github_issue", ref="a/b#5"),
         completed_at=datetime(2026, 6, 4, tzinfo=UTC),
-        run_number=4,
     )
 
     runs = await list_journey_runs(app_role_rls_session, journey=journey)
@@ -176,7 +176,6 @@ async def test_containment_query_respects_order_and_limit_on_postgres(
             snapshot_id=test_snapshot,
             work_item_refs=_refs(kind="linear", ref="FAR-9"),
             completed_at=ts,
-            run_number=index + 1,
         )
 
     newest_first = await list_journey_runs(app_role_rls_session, journey=journey)

@@ -231,6 +231,12 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # exactly those rows; deliberately kept after upgrade (dropped only by
         # the downgrade), never mapped by the ORM.
         "_migration_0191_repoint_state",
+        # FAR-795 per-org agent-mint budget tally (migration 0242): one row per
+        # (organisation_id, window_start), written/updated by runtime raw SQL in
+        # core/runtime_config/mint_budget.py (compare-and-spend against the
+        # budget cap). Deliberately not an ORM model — the only access path is
+        # the atomic UPSERT in mint_budget.py, so the migration owns the table.
+        "org_mint_budget_usage",
     }
 )
 
