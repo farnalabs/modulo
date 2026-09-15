@@ -327,7 +327,7 @@ def test_entry_point_errors_recorded_on_load_failure():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[fail_ep], []],
+        side_effect=[[fail_ep], [], [], []],
     ):
         registry.discover_plugins()
     assert registry.entry_point_errors == {"pkg-broken": "Failed to load entry point broken_con"}
@@ -555,7 +555,7 @@ def test_load_entry_point_uses_metadata_defaults():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[bare_ep], []],
+        side_effect=[[bare_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
 
@@ -577,7 +577,7 @@ def test_discover_plugins_returns_deep_copies():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[mock_ep], []],
+        side_effect=[[mock_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
 
@@ -607,7 +607,7 @@ def test_entry_point_error_cleared_on_successful_reload():
     with (
         patch(
             "modulo.core.plugin_registry.importlib.metadata.entry_points",
-            side_effect=[[fail_ep], [], [ok_ep], []],
+            side_effect=[[fail_ep], [], [], [], [ok_ep], [], [], []],
         ),
         patch("modulo.core.plugin_registry.importlib.metadata.metadata", return_value=object()),
     ):
@@ -639,10 +639,22 @@ def test_discover_plugins_swallows_entry_point_query_error():
     registry = PluginRegistry()
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=OSError("boom"),
+        side_effect=ValueError("boom"),
     ):
         discovered = registry.discover_plugins()
     assert discovered == []
+
+
+def test_discover_plugins_propagates_stop_iteration():
+    registry = PluginRegistry()
+    with (
+        patch(
+            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            side_effect=StopIteration("exhausted"),
+        ),
+        pytest.raises(StopIteration),
+    ):
+        registry.discover_plugins()
 
 
 def test_load_entry_point_failure_variants_are_skipped():
@@ -656,7 +668,7 @@ def test_load_entry_point_failure_variants_are_skipped():
         )
         with patch(
             "modulo.core.plugin_registry.importlib.metadata.entry_points",
-            side_effect=[[fail_ep], []],
+            side_effect=[[fail_ep], [], [], []],
         ):
             discovered = registry.discover_plugins()
         assert discovered == []
@@ -672,7 +684,7 @@ def test_discover_plugins_connector_entry_point():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[mock_ep], []],
+        side_effect=[[mock_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
 
@@ -693,13 +705,79 @@ def test_discover_plugins_backend_entry_point():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[], [mock_ep]],
+        side_effect=[[], [mock_ep], [], []],
     ):
         discovered = registry.discover_plugins()
 
     assert len(discovered) == 1
     assert "model_backend" in discovered[0].capabilities
     assert registry.has_model_backend("my_demo_backend")
+
+
+def test_discover_plugins_eval_entry_point():
+    """Discovering a ``modulo.evals`` entry point registers the eval builder."""
+    registry = PluginRegistry()
+    eval_builder = lambda config: {"eval": "stub"}  # noqa: E731
+    mock_ep = _make_mock_entry_point(
+        "modulo.evals",
+        "my_demo_eval",
+        load_result=eval_builder,
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[], [], [mock_ep], []],
+    ):
+        discovered = registry.discover_plugins()
+
+    assert len(discovered) == 1
+    assert discovered[0].PLUGIN_ID == "pkg-demo"
+    assert "eval" in discovered[0].capabilities
+
+
+def test_discover_plugins_schema_type_entry_point():
+    """Discovering a ``modulo.schema_types`` entry point registers the schema builder."""
+    registry = PluginRegistry()
+    schema_builder = lambda config: {"type": "stub"}  # noqa: E731
+    mock_ep = _make_mock_entry_point(
+        "modulo.schema_types",
+        "my_demo_schema_type",
+        load_result=schema_builder,
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[], [], [], [mock_ep]],
+    ):
+        discovered = registry.discover_plugins()
+
+    assert len(discovered) == 1
+    assert discovered[0].PLUGIN_ID == "pkg-demo"
+    assert "schema_type" in discovered[0].capabilities
+
+
+def test_discover_plugins_eval_and_schema_type_merge():
+    """Eval and schema-type entry points from the same dist merge their capabilities."""
+    registry = PluginRegistry()
+    ep1 = _make_mock_entry_point(
+        "modulo.evals",
+        "e1",
+        dist_name="pkg-x",
+        load_result=lambda config: {"name": "e1"},
+    )
+    ep2 = _make_mock_entry_point(
+        "modulo.schema_types",
+        "s1",
+        dist_name="pkg-x",
+        load_result=lambda config: {"name": "s1"},
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[], [], [ep1], [ep2]],
+    ):
+        registry.discover_plugins()
+
+    plugins = registry.list_plugins()
+    assert "pkg-x" in plugins
+    assert plugins["pkg-x"].capabilities == {"eval", "schema_type"}
 
 
 def test_discover_plugins_both_groups():
@@ -709,7 +787,7 @@ def test_discover_plugins_both_groups():
     ep2 = _make_mock_entry_point("modulo.model_backends", "b1", dist_name="pkg-b", load_result=_build_stub_backend)
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[ep1], [ep2]],
+        side_effect=[[ep1], [ep2], [], []],
     ):
         discovered = registry.discover_plugins()
 
@@ -725,7 +803,7 @@ def test_discover_plugins_duplicate_plugin_id():
     ep2 = _make_mock_entry_point("modulo.model_backends", "b1", dist_name="pkg-x", load_result=_build_stub_backend)
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[ep1], [ep2]],
+        side_effect=[[ep1], [ep2], [], []],
     ):
         registry.discover_plugins()
 
@@ -759,7 +837,7 @@ def test_discover_plugins_entry_point_load_failure():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[fail_ep], []],
+        side_effect=[[fail_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
     assert discovered == []

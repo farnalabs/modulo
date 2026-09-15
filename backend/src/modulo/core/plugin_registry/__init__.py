@@ -1,12 +1,17 @@
 """Plugin Registry — discovery, registration, and health-checking for third-party plugins.
 
-Plugins extend Modulo with additional connector types and model backend providers
-via standard Python ``importlib.metadata.entry_points`` (setuptools entry points).
+Plugins extend Modulo with additional connector types, model backend providers,
+custom eval functions, and custom schema field types via standard
+Python ``importlib.metadata.entry_points`` (setuptools entry points).
 
 Entry point groups:
     - ``modulo.connectors`` — provides ``(config, creds) -> ConnectorBase`` builders
     - ``modulo.model_backends`` — provides ``(api_key, model_id, **default_params)``
       ``-> ModelBackendBase`` builders
+    - ``modulo.evals`` — provides ``(config) -> EvalDefinition`` builders
+      for custom eval types
+    - ``modulo.schema_types`` — provides ``(config) -> SchemaField`` builders
+      for custom schema field types
 
 Usage:
     registry = PluginRegistry()
@@ -43,9 +48,13 @@ __all__ = [
 
 _ENTRY_POINT_CONNECTORS = "modulo.connectors"
 _ENTRY_POINT_MODEL_BACKENDS = "modulo.model_backends"
+_ENTRY_POINT_EVALS = "modulo.evals"
+_ENTRY_POINT_SCHEMA_TYPES = "modulo.schema_types"
 _ENTRY_POINT_GROUPS: tuple[str, ...] = (
     _ENTRY_POINT_CONNECTORS,
     _ENTRY_POINT_MODEL_BACKENDS,
+    _ENTRY_POINT_EVALS,
+    _ENTRY_POINT_SCHEMA_TYPES,
 )
 
 _HLTH_LOADED = "Loaded"
@@ -56,6 +65,8 @@ _HLTH_UNKNOWN_PLUGIN = "Unknown plugin"
 
 _CAP_CONNECTOR = "connector_type"
 _CAP_MODEL_BACKEND = "model_backend"
+_CAP_EVAL = "eval"
+_CAP_SCHEMA_TYPE = "schema_type"
 
 
 class PluginNotFoundError(KeyError):
@@ -113,6 +124,8 @@ class PluginRegistry:
         self._entry_point_errors: dict[str, str] = {}
         self._connector_builders: dict[str, Callable[..., ConnectorBase]] = {}
         self._backend_builders: dict[str, Callable[..., ModelBackendBase]] = {}
+        self._eval_builders: dict[str, Callable[..., Any]] = {}
+        self._schema_type_builders: dict[str, Callable[..., Any]] = {}
 
     # ------------------------------------------------------------------
     # Discovery
@@ -130,8 +143,13 @@ class PluginRegistry:
             ]
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("Failed to query entry points during plugin discovery")
+        except StopIteration:
+            # An exhausted entry-point query (e.g. a test mock with too few
+            # side_effects) surfaces here as StopIteration — propagate it so the
+            # real cause is not masked as a silent discovery failure.
+            raise
+        except (ImportError, importlib.metadata.PackageNotFoundError, ValueError) as exc:
+            logger.exception("Failed to query entry points during plugin discovery: %s", exc)
             return discovered
 
         for group, ep in entries:
@@ -200,6 +218,14 @@ class PluginRegistry:
                 self._backend_builders[ep.name] = builder
                 manifest.capabilities.add(_CAP_MODEL_BACKEND)
                 logger.debug("Registered model backend '%s' from plugin %s", ep.name, plugin_id)
+            elif group == _ENTRY_POINT_EVALS:
+                self._eval_builders[ep.name] = builder
+                manifest.capabilities.add(_CAP_EVAL)
+                logger.debug("Registered eval function '%s' from plugin %s", ep.name, plugin_id)
+            elif group == _ENTRY_POINT_SCHEMA_TYPES:
+                self._schema_type_builders[ep.name] = builder
+                manifest.capabilities.add(_CAP_SCHEMA_TYPE)
+                logger.debug("Registered schema type '%s' from plugin %s", ep.name, plugin_id)
 
             self._plugins[plugin_id] = manifest
             self._health[plugin_id] = PluginHealth(ok=True, detail=_HLTH_LOADED)

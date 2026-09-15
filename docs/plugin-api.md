@@ -22,17 +22,12 @@ Plugins are **discovered at startup**: all builder functions are loaded from ins
 
 ### Entry point groups
 
-| Group | Purpose | Builder signature |
-|---|---|---|
-| `modulo.connectors` | Third-party connector types | `(config: dict, creds: dict) -> ConnectorBase` |
-| `modulo.model_backends` | Third-party model backends | `(api_key: str, model_id: str, **params) -> ModelBackendBase` |
-
-### Future groups (documented, not yet implemented)
-
-| Group | Purpose | Status |
-|---|---|---|
-| `modulo.evals` | Custom eval functions | v1 |
-| `modulo.schema_types` | Custom schema field types | v1 |
+| Group | Purpose | Builder signature | Status |
+|---|---|---|---|
+| `modulo.connectors` | Third-party connector types | `(config: dict, creds: dict) -> ConnectorBase` | Implemented |
+| `modulo.model_backends` | Third-party model backends | `(api_key: str, model_id: str, **params) -> ModelBackendBase` | Implemented |
+| `modulo.evals` | Custom eval functions | `(config: dict) -> Any` | Implemented |
+| `modulo.schema_types` | Custom schema field types | `(config: dict) -> Any` | Implemented |
 
 ## Plugin Registry reference
 
@@ -233,6 +228,43 @@ For model backends:
 [project.entry-points."modulo.model_backends"]
 my_provider = "my_plugin:build_my_backend"
 ```
+
+For custom eval functions:
+
+```toml
+[project.entry-points."modulo.evals"]
+my_eval = "my_plugin:build_my_eval"
+```
+
+```python
+# my_plugin/__init__.py
+def build_my_eval(config: dict) -> "EvalDefinition":
+    # Return an EvalDefinition (see modulo.core.eval_engine.EvalDefinition) or
+    # any consumer-defined eval object — the registry stores the builder result
+    # keyed by the entry-point name.
+    ...
+```
+
+For custom schema field types:
+
+```toml
+[project.entry-points."modulo.schema_types"]
+my_field = "my_plugin:build_my_field"
+```
+
+```python
+# my_plugin/__init__.py
+def build_my_field(config: dict) -> "SchemaField":
+    # Return a SchemaField or any consumer-defined field object — the registry
+    # stores the builder result keyed by the entry-point name.
+    ...
+```
+
+> Note: `backend/pyproject.toml` declares no `project.entry-points` table for
+> these groups — they are provided by third-party plugin packages, not by
+> Modulo core. In-tree builders register the same way by adding the matching
+> `[project.entry-points."modulo.evals"]` / `[project.entry-points."modulo.schema_types"]`
+> table to their own `pyproject.toml`.
 
 ### Step 4: Install
 
