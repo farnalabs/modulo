@@ -3714,8 +3714,9 @@ export default {
       "dismiss_this_notification": "Dismiss this notification",
       "review_later": "Review Later",
       "just_now": "just now",
-      "lapsed_hitl": "No longer awaiting review \u2014 the gate lapsed and the run was cancelled.",
-      "lapsed_hitl_view_run": "View run"
+      "view": "View",
+      "awaiting_hitl": "Awaiting your review \u2014 a human-in-the-loop gate is open for this run.",
+      "awaiting_hitl_view_run": "View run"
     },
     "NodeCategoryEditor": {
       "message_circle": "Message Circle",

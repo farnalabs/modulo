@@ -36,7 +36,7 @@
       </div>
       <template v-else>
         <div v-if="reviewLaterError" class="px-4 py-1 text-xs text-destructive" role="alert">{{ reviewLaterError }}</div>
-        <div class="space-y-2">
+        <div class="max-h-[400px] overflow-y-auto space-y-2">
           <NotificationCard
             v-for="n in notifications"
             :key="n.id"
@@ -90,7 +90,7 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useStorage } from '@vueuse/core';
 import type { NotificationResponse } from "../lib/api/notifications";
-import { fetchNotifications, reviewLater } from "../lib/api/notifications";
+import { fetchNotifications, reviewLater, fetchUnreadCount } from "../lib/api/notifications";
 import { registerHandler } from "../stores/syncRegistry";
 import NotificationCard from "./NotificationCard.vue";
 import { formatApiError } from "../lib/api/formatError";
@@ -112,14 +112,26 @@ function toggleCollapsed() {
   collapsed.value = !collapsed.value;
 }
 
-function onDismissed(id: string) {
+// The unread badge must reflect the severity-filtered unread count
+// (warning+), not the raw count of all active notifications. Use the
+// existing dedicated endpoint rather than the paginated list total.
+async function refreshUnreadCount() {
+  try {
+    unreadCount.value = await fetchUnreadCount();
+  } catch {
+    unreadCount.value = 0;
+  }
+}
+
+async function onDismissed(id: string) {
   notifications.value = notifications.value.filter((n) => n.id !== id);
   total.value = Math.max(0, total.value - 1);
-  if (unreadCount.value > 0) unreadCount.value--;
   // If page is now empty and not the first page, go back one
   if (notifications.value.length === 0 && page.value > 1) {
     page.value--;
-    void loadPage();
+    await loadPage();
+  } else {
+    await refreshUnreadCount();
   }
 }
 
@@ -129,10 +141,11 @@ async function onReviewLater(id: string) {
     await reviewLater(id);
     notifications.value = notifications.value.filter((n) => n.id !== id);
     total.value = Math.max(0, total.value - 1);
-    if (unreadCount.value > 0) unreadCount.value--;
     if (notifications.value.length === 0 && page.value > 1) {
       page.value--;
-      void loadPage();
+      await loadPage();
+    } else {
+      await refreshUnreadCount();
     }
   } catch (e: unknown) {
     reviewLaterError.value = e instanceof Error ? e.message : "Failed to dismiss notification";
@@ -177,8 +190,8 @@ async function loadPage() {
     });
     notifications.value = result.items;
     total.value = result.total;
-    // unreadCount: count active notifications not yet loaded (rough approximation)
-    unreadCount.value = result.total;
+    // Badge reflects the severity-filtered unread count, not the raw total.
+    await refreshUnreadCount();
   } catch (e: unknown) {
     error.value = formatApiError(e);
   } finally {

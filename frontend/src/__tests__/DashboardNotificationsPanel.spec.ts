@@ -2,15 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 
-const { mockFetchNotifications, mockReviewLater, mockRegisterHandler } = vi.hoisted(() => ({
+const { mockFetchNotifications, mockReviewLater, mockFetchUnreadCount, mockRegisterHandler } = vi.hoisted(() => ({
   mockFetchNotifications: vi.fn(),
   mockReviewLater: vi.fn(),
+  mockFetchUnreadCount: vi.fn(),
   mockRegisterHandler: vi.fn(() => vi.fn()),
 }))
 
 vi.mock('../lib/api/notifications', () => ({
   fetchNotifications: mockFetchNotifications,
   reviewLater: mockReviewLater,
+  fetchUnreadCount: mockFetchUnreadCount,
 }))
 
 vi.mock('../stores/syncRegistry', () => ({
@@ -45,13 +47,14 @@ function makeNotifications(count: number) {
   }))
 }
 
-async function mountAndExpand(notifications: unknown[] = [], total = 0, _unreadCount = 0) {
+async function mountAndExpand(notifications: unknown[] = [], total = 0, unreadCount = 0) {
   mockFetchNotifications.mockResolvedValue({
     items: notifications,
     total,
     page: 1,
     page_size: 10,
   })
+  mockFetchUnreadCount.mockResolvedValue(unreadCount)
   const wrapper = mount(DashboardNotificationsPanel)
   await flushPromises()
   await nextTick()
@@ -67,6 +70,7 @@ async function mountAndExpand(notifications: unknown[] = [], total = 0, _unreadC
 describe('DashboardNotificationsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockFetchUnreadCount.mockResolvedValue(0)
   })
 
   it('always renders the "View all notifications" link when expanded', async () => {
@@ -140,11 +144,33 @@ describe('DashboardNotificationsPanel', () => {
       page: 1,
       page_size: 10,
     })
+    mockFetchUnreadCount.mockResolvedValue(3)
     const wrapper = mount(DashboardNotificationsPanel)
     await flushPromises()
     await nextTick()
 
     const badge = wrapper.find('[role="status"]')
     expect(badge.exists()).toBe(true)
+  })
+
+  it('uses the severity-filtered unread-count endpoint for the badge, not the raw total of active notifications', async () => {
+    const notifications = makeNotifications(12)
+    // 12 active notifications in total, but only 2 are warning+ (the unread-count endpoint)
+    mockFetchNotifications.mockResolvedValue({
+      items: notifications,
+      total: 12,
+      page: 1,
+      page_size: 10,
+    })
+    mockFetchUnreadCount.mockResolvedValue(2)
+    const wrapper = mount(DashboardNotificationsPanel)
+    await flushPromises()
+    await nextTick()
+
+    // Badge reflects the severity-filtered unread count (2), not the raw total (12)
+    expect(mockFetchUnreadCount).toHaveBeenCalled()
+    const badge = wrapper.find('[role="status"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('2')
   })
 })

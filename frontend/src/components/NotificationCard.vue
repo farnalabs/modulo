@@ -17,9 +17,9 @@
       <p class="mt-0.5 text-sm font-medium leading-snug text-foreground">{{ notification.title }}</p>
       <p v-if="showBody" class="mt-0.5 line-clamp-3 text-xs text-muted-foreground">{{ notification.body }}</p>
 
-      <!-- Lapsed HITL affordance -->
+      <!-- HITL awaiting affordance -->
       <div
-        v-if="isLapsedHitl"
+        v-if="isHitlAwaiting"
         class="mt-2 flex items-center gap-2 rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground"
         role="status"
         aria-live="polite"
@@ -29,7 +29,7 @@
           <line x1="12" y1="8" x2="12" y2="12"/>
           <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        <span>{{ $t('components.NotificationCard.lapsed_hitl') }}</span>
+        <span>{{ $t('components.NotificationCard.awaiting_hitl') }}</span>
       </div>
 
       <div class="mt-2 flex items-center gap-2">
@@ -38,7 +38,7 @@
           :to="notification.action_url"
           class="text-xs font-medium text-primary hover:underline"
         >
-          {{ isLapsedHitl ? $t('components.NotificationCard.lapsed_hitl_view_run') : 'View' }}
+          {{ isHitlAwaiting ? $t('components.NotificationCard.awaiting_hitl_view_run') : $t('components.NotificationCard.view') }}
         </router-link>
       </div>
     </div>
@@ -113,14 +113,14 @@ const scopeLabel = computed(() => props.notification.scope_label);
 const relativeTime = computed(() => formatRelativeTime(props.notification.created_at));
 
 /**
- * Detect lapsed HITL notifications: category starts with "hitl." and the
- * notification title contains "HITL review" or "review needed" — indicating
- * it was an awaiting notification whose gate has since lapsed.
- * We show a lapsed affordance when the category is hitl.awaiting (the original
- * review request) because the only way a user sees this is if the gate expired
- * and the run was cancelled. The notification is immutable (not retracted).
+ * HITL awaiting notifications (category === "hitl.awaiting") signal an open
+ * human-in-the-loop gate for the linked run. The backend never retracts or
+ * status-flips these notifications on gate resume, so we cannot reliably tell
+ * from the notification alone whether the gate has since lapsed. We therefore
+ * show a neutral "awaiting your review" affordance (never a "lapsed" claim),
+ * which is accurate for every hitl.awaiting notification the user can see.
  */
-const isLapsedHitl = computed(() => {
+const isHitlAwaiting = computed(() => {
   const cat = props.notification.category || "";
   return cat === "hitl.awaiting";
 });
