@@ -2192,3 +2192,28 @@ class TestSsoJoinGate:
         mocks.create.assert_awaited_once()
         mocks.consume.assert_not_awaited()
         mocks.flag.assert_not_awaited()
+
+    async def test_env_path_existing_live_member_keeps_role(self) -> None:
+        """Legacy env-var provider: an existing live member is left untouched."""
+        stack, mocks = self._gate_mocks()
+        account = SimpleNamespace(id=uuid.uuid4(), email="member@example.com", sso_subject=None, auth_provider="oidc")
+        with stack:
+            mocks.get_acct.return_value = account
+            mocks.membership.return_value = SimpleNamespace(role="operator", deactivated_at=None)
+
+            _account, org_id, role = await self._join(_override(), _mock_session(), None, "member@example.com")
+
+        assert org_id == self.ORG_ID
+        assert role == "operator"
+        mocks.create.assert_not_awaited()
+        mocks.consume.assert_not_awaited()
+
+    async def test_mode2_email_without_at_sign_is_denied(self) -> None:
+        """A malformed email has no verifiable domain, so the allowlist cannot match."""
+        from modulo.auth.sso import SsoProvisioningDeniedError
+
+        stack, mocks = self._gate_mocks()
+        provider = _gate_provider(auto_provision=True, allowed_domains=["corp.example.com"])
+        with stack, pytest.raises(SsoProvisioningDeniedError):
+            await self._join(_override(), _mock_session(), provider, "not-an-email")
+        mocks.create.assert_not_awaited()

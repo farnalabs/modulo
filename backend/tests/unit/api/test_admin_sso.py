@@ -201,6 +201,20 @@ class TestListProviders:
         assert serialized["created_at"] == _NOW.isoformat().replace("+00:00", "Z")
         assert serialized["client_secret"] == "••••••"
 
+    def test_response_coerces_allowed_domains_json_string(self) -> None:
+        from modulo.api.routes.admin_sso import SsoProviderResponse
+
+        provider = _make_mock_provider(allowed_domains=json.dumps(["example.com"]))
+        response = SsoProviderResponse.model_validate(provider)
+        assert response.allowed_domains == ["example.com"]
+
+    def test_response_coerces_malformed_allowed_domains_string_to_empty(self) -> None:
+        from modulo.api.routes.admin_sso import SsoProviderResponse
+
+        provider = _make_mock_provider(allowed_domains="not-json")
+        response = SsoProviderResponse.model_validate(provider)
+        assert response.allowed_domains == []
+
 
 class TestCreateProvider:
     URL = "/api/v1/admin/sso/providers"
@@ -273,6 +287,41 @@ class TestCreateProvider:
         )
         assert resp.status_code == 422
 
+    def test_create_rejects_unrestricted_mode_when_flag_off(self, client: TestClient) -> None:
+        # FAR-855 mode 3: auto_provision=true + empty allowed_domains is denied
+        # at save time (422) while the operator flag is OFF.
+        mock_provider = _make_mock_provider(auto_provision=True, allowed_domains=[])
+        with (
+            patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)),
+            patch(
+                "modulo.api.routes.admin_sso.resolve_sso_unrestricted_provisioning",
+                new=AsyncMock(return_value=False),
+            ),
+        ):
+            resp = client.post(
+                self.URL,
+                json={
+                    "provider_type": "oidc",
+                    "name": "Open SSO",
+                    "client_id": "test-client-id",
+                    "client_secret": "test-secret",
+                    "discovery_url": "https://example.com/.well-known/openid-configuration",
+                    "auto_provision": True,
+                },
+            )
+        assert resp.status_code == 422
+
+    def test_create_rejects_invalid_allowed_domains(self, client: TestClient) -> None:
+        resp = client.post(
+            self.URL,
+            json={
+                "provider_type": "oidc",
+                "name": "Bad SSO",
+                "allowed_domains": ["@example.com"],
+            },
+        )
+        assert resp.status_code == 422
+
 
 class TestUpdateProvider:
     URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010"
@@ -294,6 +343,10 @@ class TestUpdateProvider:
     def test_400_on_empty_body(self, client: TestClient) -> None:
         resp = client.put(self.URL, json={})
         assert resp.status_code == 400
+
+    def test_update_rejects_invalid_allowed_domains(self, client: TestClient) -> None:
+        resp = client.put(self.URL, json={"allowed_domains": ["localhost"]})
+        assert resp.status_code == 422
 
 
 class TestDeleteProvider:
