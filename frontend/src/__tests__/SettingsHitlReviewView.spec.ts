@@ -634,9 +634,7 @@ describe('SettingsHitlReviewView', () => {
     // The briefing sits above the approve/reject controls in the actions column.
     const actionsColumn = briefing.element.parentElement
     expect(actionsColumn?.textContent).toContain('Approve')
-    // Details collapsed until toggled.
-    expect(wrapper!.find('[data-testid="hitl-briefing-details"]').exists()).toBe(false)
-    await wrapper!.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    // FAR-858: details are now open by default — no toggle needed.
     expect(wrapper!.find('[data-testid="hitl-briefing-details"]').exists()).toBe(true)
     expect(wrapper!.find('[data-testid="hitl-briefing-details"]').text()).toContain('Comment Generator')
   })
