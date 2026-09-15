@@ -156,7 +156,6 @@
         :description="$t('views.variantBatch.notFoundDescription')"
       />
     </template>
-  </div>
 
   <div class="page-wide mt-8 border-t pt-6">
     <div class="mb-3 flex items-center justify-between">
@@ -210,6 +209,7 @@
         </table>
       </div>
     </template>
+  </div>
   </div>
 </template>
 
