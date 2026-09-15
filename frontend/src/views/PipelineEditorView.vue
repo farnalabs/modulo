@@ -2003,7 +2003,10 @@ async function loadParamSets() {
     const resp = await api.GET('/api/v1/parameter-schemas/{schema_id}/sets', {
       params: { path: { schema_id: schema.id } },
     })
-    if (resp.data) paramSets.value = (resp.data as any) ?? []
+    if (resp.data) {
+      const data = resp.data as any
+      paramSets.value = Array.isArray(data) ? data : (data.items ?? [])
+    }
   } catch (e) {
     console.warn('Failed to load param sets:', e)
   }
