@@ -241,6 +241,11 @@ _AUDIT_CHAIN_COLUMNS: dict[str, frozenset[str]] = {
     "agents": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
     "connector_instances": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
     "scheduled_reports": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
+    # organisations: migration 0233/0236 added updated_at/updated_by/deleted_by
+    # and the fk_organisations_created_by FK; #560 reverted the ORM to NOT
+    # declare them (DB-owned audit columns, like the tables above), so the
+    # migrated DB legitimately carries them without an ORM counterpart.
+    "organisations": frozenset({"updated_at", "updated_by", "deleted_by"}),
 }
 # Their FKs to accounts.id (same tables; deleted_at carries no FK).
 # permanent (documented repo divergence)
@@ -248,6 +253,7 @@ _AUDIT_CHAIN_FK_COLUMNS: dict[str, frozenset[str]] = {
     "agents": frozenset({"created_by", "updated_by", "deleted_by"}),
     "connector_instances": frozenset({"created_by", "updated_by", "deleted_by"}),
     "scheduled_reports": frozenset({"created_by", "updated_by", "deleted_by"}),
+    "organisations": frozenset({"created_by"}),
 }
 
 
