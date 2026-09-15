@@ -2767,9 +2767,6 @@ elements:
         type: element
         dynamic_testid: false
     /notifications:
-      - testid: notifications-apply-filters
-        type: button
-        dynamic_testid: false
       - testid: notifications-reset-filters
         type: button
         dynamic_testid: false

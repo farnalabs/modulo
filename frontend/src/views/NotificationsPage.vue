@@ -26,7 +26,6 @@
       @update:filter="handleFilterUpdate"
     >
       <template #after>
-        <Button type="button" data-testid="notifications-apply-filters" @click="applyFilters">{{ $t('views.NotificationsPage.apply_filters') }}</Button>
         <button type="button" data-testid="notifications-reset-filters" class="rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
@@ -89,7 +88,6 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from "../components/shared/LoadingSpinner.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
-import Button from 'primevue/button'
 import EmptyState from "../components/shared/EmptyState.vue";
 
 const { t } = useI18n();
@@ -100,7 +98,7 @@ const pageSize = ref(20);
 
 const filterLevel = ref("");
 const filterScope = ref("");
-const filterStatus = ref("");
+const filterStatus = ref("active");
 
 function handleFilterUpdate(key: string, value: string) {
   if (key === 'level') filterLevel.value = value
@@ -135,15 +133,16 @@ watch(data, (d) => {
   }
 }, { immediate: true })
 
-function applyFilters() {
+// Auto-apply filters on any change
+watch([filterLevel, filterScope, filterStatus], () => {
   page.value = 1;
   void loadNotifications();
-}
+});
 
 function resetFilters() {
   filterLevel.value = "";
   filterScope.value = "";
-  filterStatus.value = "";
+  filterStatus.value = "active";
   page.value = 1;
   void loadNotifications();
 }
