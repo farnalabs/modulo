@@ -3339,6 +3339,12 @@ elements:
       - testid: hitl-briefing-description-fallback
         type: element
         dynamic_testid: false
+      - testid: hitl-briefing-subject
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-consequences
+        type: element
+        dynamic_testid: false
       - testid: hitl-briefing-details
         type: element
         dynamic_testid: false
@@ -3931,6 +3937,12 @@ elements:
         type: element
         dynamic_testid: false
       - testid: hitl-briefing-description-fallback
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-subject
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-consequences
         type: element
         dynamic_testid: false
       - testid: hitl-briefing-details
