@@ -304,6 +304,106 @@ def _remap_fk(
     return remapped
 
 
+# ── Import helpers (extracted to reduce _do_import complexity) ──────────────
+
+
+async def _find_existing_by_name(
+    session: Any,
+    model_cls: Any,
+    org_id: uuid.UUID,
+    name_field: str,
+    name_val: str,
+) -> Any:
+    """Look up an existing entity by name field, optionally scoped to org."""
+    stmt: Any = select(model_cls)
+    if hasattr(model_cls, "organisation_id"):
+        stmt = stmt.where(model_cls.organisation_id == org_id)
+    stmt = stmt.where(getattr(model_cls, name_field) == name_val)
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def _resolve_unique_name(
+    session: Any,
+    model_cls: Any,
+    org_id: uuid.UUID,
+    name_field: str,
+    name_val: str,
+) -> str:
+    """Find an available '_imported' suffixed name for the rename strategy."""
+    max_attempts = 10000
+    base = f"{name_val}_imported"
+    new_name = base
+    counter = 2
+    while counter <= max_attempts:
+        chk: Any = select(model_cls)
+        if hasattr(model_cls, "organisation_id"):
+            chk = chk.where(model_cls.organisation_id == org_id)
+        chk = chk.where(getattr(model_cls, name_field) == new_name)
+        if (await session.execute(chk)).scalars().first() is None:
+            return new_name
+        new_name = f"{base}_{counter}"
+        counter += 1
+    msg = f"Could not find available name for '{name_val}' after {max_attempts} attempts"
+    raise SystemExit(msg)
+
+
+async def _import_row(
+    session: Any,
+    model_cls: Any,
+    org_id: uuid.UUID,
+    table_name: str,
+    row: dict[str, Any],
+    name_field: str | None,
+    name_val: str | None,
+    existing: Any,
+    strategy: ConflictStrategy,
+    id_map: dict[str, str],
+    counts: dict[str, int],
+    skip_cols: set[str],
+) -> None:
+    """Import a single row: skip, rename, overwrite, or create."""
+    old_id = row.get("id")
+    old_id_str = str(old_id) if old_id is not None else None
+
+    # ── skip ──
+    if existing is not None and strategy == "skip":
+        if old_id_str:
+            id_map[old_id_str] = str(existing.id)
+        counts["skipped"] += 1
+        return
+
+    # ── rename ──
+    if existing is not None and strategy == "rename" and name_val and name_field:
+        row[name_field] = await _resolve_unique_name(session, model_cls, org_id, name_field, name_val)
+        existing = None
+
+    # ── build row data ──
+    row_data = _remap_fk(row, table_name=table_name, id_map=id_map)
+    row_data.pop("organisation_id", None)
+    row_data.pop("id", None)
+    for col in skip_cols:
+        row_data.pop(col, None)
+
+    # ── write ──
+    async with session.begin_nested():
+        if existing is not None and strategy == "overwrite":
+            for col, val in row_data.items():
+                if hasattr(existing, col):
+                    setattr(existing, col, val)
+            if old_id_str:
+                id_map[old_id_str] = str(existing.id)
+            counts["overwritten"] += 1
+        else:
+            if hasattr(model_cls, "organisation_id"):
+                row_data["organisation_id"] = org_id
+            obj = model_cls(**row_data)
+            session.add(obj)
+            await session.flush()
+            if old_id_str:
+                id_map[old_id_str] = str(obj.id)
+            counts["created"] += 1
+
+
 async def _do_import(
     bundle: dict[str, Any],
     org_id: uuid.UUID,
@@ -321,70 +421,26 @@ async def _do_import(
 
                 for row in tqdm(rows, desc=f"  {table_name}", unit="row", leave=False):
                     try:
-                        old_id = row.get("id")
-                        old_id_str = str(old_id) if old_id is not None else None
                         name_val: str | None = row.get(name_field) if name_field else None
 
                         existing = None
                         if name_val and name_field:
-                            stmt: Any = select(model_cls)
-                            if hasattr(model_cls, "organisation_id"):
-                                stmt = stmt.where(model_cls.organisation_id == org_id)
-                            stmt = stmt.where(getattr(model_cls, name_field) == name_val)
-                            existing = (await session.execute(stmt)).scalars().first()
+                            existing = await _find_existing_by_name(session, model_cls, org_id, name_field, name_val)
 
-                        if existing is not None:
-                            if strategy == "skip":
-                                if old_id_str:
-                                    id_map[old_id_str] = str(existing.id)
-                                counts["skipped"] += 1
-                                continue
-
-                            if strategy == "rename" and name_val and name_field:
-                                max_attempts = 10000
-                                base = f"{name_val}_imported"
-                                new_name = base
-                                counter = 2
-                                while counter <= max_attempts:
-                                    chk_stmt: Any = select(model_cls)
-                                    if hasattr(model_cls, "organisation_id"):
-                                        chk_stmt = chk_stmt.where(model_cls.organisation_id == org_id)
-                                    chk_stmt = chk_stmt.where(getattr(model_cls, name_field) == new_name)
-                                    chk = (await session.execute(chk_stmt)).scalars().first()
-                                    if chk is None:
-                                        break
-                                    new_name = f"{base}_{counter}"
-                                    counter += 1
-                                else:
-                                    raise SystemExit(
-                                        f"Could not find available name for '{name_val}' after {max_attempts} attempts"
-                                    )
-                                row[name_field] = new_name
-                                existing = None
-
-                        row_data = _remap_fk(row, table_name, id_map)
-                        row_data.pop("organisation_id", None)
-                        row_data.pop("id", None)
-                        for col in skip_cols:
-                            row_data.pop(col, None)
-
-                        async with session.begin_nested():
-                            if existing is not None and strategy == "overwrite":
-                                for col, val in row_data.items():
-                                    if hasattr(existing, col):
-                                        setattr(existing, col, val)
-                                if old_id_str:
-                                    id_map[old_id_str] = str(existing.id)
-                                counts["overwritten"] += 1
-                            else:
-                                if hasattr(model_cls, "organisation_id"):
-                                    row_data["organisation_id"] = org_id
-                                obj = model_cls(**row_data)
-                                session.add(obj)
-                                await session.flush()
-                                if old_id_str:
-                                    id_map[old_id_str] = str(obj.id)
-                                counts["created"] += 1
+                        await _import_row(
+                            session,
+                            model_cls,
+                            org_id,
+                            table_name,
+                            row,
+                            name_field,
+                            name_val,
+                            existing,
+                            strategy,
+                            id_map,
+                            counts,
+                            skip_cols,
+                        )
 
                     except asyncio.CancelledError:
                         raise
