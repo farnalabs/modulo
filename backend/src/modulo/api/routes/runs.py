@@ -47,7 +47,7 @@ from modulo.core.dispatch import dispatch_run
 from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
-from modulo.core.node_output_split import node_return, node_stdout_artifact, node_telemetry
+from modulo.core.node_output_split import node_return, node_stderr_artifact, node_stdout_artifact, node_telemetry
 from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error, sanitize_error_text
 from modulo.core.pipeline_engine.event_broker import get_registry
@@ -2105,6 +2105,7 @@ class NodeOutputResponse(BaseModel):
     node_id: str
     output: Any = None
     stdout_artifact: dict[str, Any] | None = None
+    stderr_artifact: dict[str, Any] | None = None
 
 
 @router.get("/{run_id}/nodes/{node_id}/output")
@@ -2130,6 +2131,9 @@ async def get_run_node_output(
     ``stdout_artifact`` carries the FAR-811 full-stdout transcript pointer
     for sandbox nodes whose redacted stdout overflowed the inline retention
     cap (``None`` otherwise) — a pointer only, never the transcript body.
+
+    ``stderr_artifact`` carries the FAR-879 full-stderr transcript pointer
+    (parity with stdout_artifact).
     """
     try:
         async with session.begin():
@@ -2176,20 +2180,33 @@ async def get_run_node_output(
     outputs = blobs.outputs or {}
     telemetry = blobs.telemetry or {}
     stdout_artifact = node_stdout_artifact(telemetry, outputs, node_id)
+    stderr_artifact = node_stderr_artifact(telemetry, outputs, node_id)
     node_output = node_return(outputs, telemetry, node_id)
     if node_output is None:
         node_meta = node_telemetry(telemetry, outputs, node_id)
         if isinstance(node_meta, dict):
             derived = {key: node_meta[key] for key in ("status", "summary") if key in node_meta}
             masked = _mask_output_value(derived)
-            return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked, stdout_artifact=stdout_artifact)
+            return NodeOutputResponse(
+                run_id=run_id,
+                node_id=node_id,
+                output=masked,
+                stdout_artifact=stdout_artifact,
+                stderr_artifact=stderr_artifact,
+            )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Node {node_id} not found in run outputs",
         )
 
     masked = _mask_output_value(node_output)
-    return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked, stdout_artifact=stdout_artifact)
+    return NodeOutputResponse(
+        run_id=run_id,
+        node_id=node_id,
+        output=masked,
+        stdout_artifact=stdout_artifact,
+        stderr_artifact=stderr_artifact,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3344,6 +3361,29 @@ async def _stdout_pointer_from_telemetry(
     return node_stdout_artifact(blobs.telemetry or {}, blobs.outputs or {}, node_id)
 
 
+async def _stderr_pointer_from_telemetry(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+) -> dict[str, Any] | None:
+    """Resolve a node's FAR-879 full-stderr transcript pointer from telemetry.
+
+    Reads the run's reassembled blobs and returns the persisted ``stderr_artifact``
+    pointer, or ``None`` when the node has no stored stderr transcript.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
+    except SQLAlchemyError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        return None
+    if blobs is None:
+        return None
+    return node_stderr_artifact(blobs.telemetry or {}, blobs.outputs or {}, node_id)
+
+
 @router.get("/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream}")
 @handle_db_errors("runs.get_run_artifact")
 async def get_run_artifact(
@@ -3362,8 +3402,9 @@ async def get_run_artifact(
 
     Also serves the FAR-811 full stdout transcript addressed by its synthetic
     ``<base>:full:<cap>`` attempt key (no row exists for that key — the pointer
-    is resolved from the node's telemetry), and falls back to the telemetry
-    pointer when a real row has no stdout pointer in its side-car list.
+    is resolved from the node's telemetry), and the FAR-879 full stderr
+    transcript addressed by ``<base>:full:stderr:<cap>``, and falls back to the
+    telemetry pointer when a real row has no pointer in its side-car list.
     """
     if stream not in ("stdout", "stderr"):
         raise HTTPException(
@@ -3420,9 +3461,13 @@ async def get_run_artifact(
 
     # FAR-811 fallback: a synthetic ":full:" attempt key has no row at all
     # (the transcript exists only in the artifact store) — the pointer lives
-    # in the node's telemetry instead.
-    if pointer is None and stream == "stdout" and base_attempt_key is not None:
-        pointer = await _stdout_pointer_from_telemetry(session, principal, run_id, node_id)
+    # in the node's telemetry instead.  FAR-879: same pattern for stderr's
+    # ":full:stderr:" synthetic key.
+    if pointer is None and base_attempt_key is not None:
+        if stream == "stdout":
+            pointer = await _stdout_pointer_from_telemetry(session, principal, run_id, node_id)
+        elif stream == "stderr":
+            pointer = await _stderr_pointer_from_telemetry(session, principal, run_id, node_id)
 
     if pointer is None:
         raise HTTPException(

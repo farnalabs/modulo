@@ -1378,6 +1378,7 @@ async def _retain_raw_output_marker(
     payload: str | bytes | None = None,
     max_artifact_bytes: int = _MAX_ARTIFACT_LOG,
     stdout_artifact: dict[str, Any] | None = None,
+    stderr_artifact: dict[str, Any] | None = None,
 ) -> None:
     """Single builder + persist for a raw-output retention marker (FAR-188).
 
@@ -1433,6 +1434,8 @@ async def _retain_raw_output_marker(
         marker["delivery_done"] = True
     if stdout_artifact is not None:
         marker["stdout_artifact"] = stdout_artifact
+    if stderr_artifact is not None:
+        marker["stderr_artifact"] = stderr_artifact
     await _persist_raw_output_marker(
         session_factory,
         run_id=run_id,
@@ -6101,6 +6104,10 @@ class _SandboxNodeOutput(NamedTuple):
     # ({rel_path, size_bytes, sha256, stream, compression, truncated: False,
     # redacted: True}). Absent (default) = today's inline-only behaviour.
     stdout_artifact: Any = _UNSET
+    # FAR-879: stdout parity — when the redacted stderr exceeds the retention
+    # cap, a pointer to the FULL redacted stderr transcript in the artifact
+    # store is surfaced here. Absent (default) = no stderr artifact.
+    stderr_artifact: Any = _UNSET
     attempt_key: str | None = None
     changed_files: Any = _UNSET
     pr_url: Any = _UNSET
@@ -6190,6 +6197,8 @@ def _build_sandbox_node_envelope(
         inner["stdout_truncated"] = True
     if output.stdout_artifact is not _UNSET:
         inner["stdout_artifact"] = output.stdout_artifact
+    if output.stderr_artifact is not _UNSET:
+        inner["stderr_artifact"] = output.stderr_artifact
     if output.changed_files is not _UNSET:
         inner["changed_files"] = output.changed_files
     if output.pr_url is not _UNSET:
@@ -6470,6 +6479,57 @@ def _persist_full_stdout_artifact(
         "size_bytes": pointer.get("size_bytes"),
         "sha256": pointer.get("sha256"),
         "stream": "stdout",
+        "compression": pointer.get("compression"),
+        "truncated": False,
+        "redacted": True,
+    }
+
+
+def _persist_full_stderr_artifact(
+    *,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    attempt_key: str | None,
+    node_cap: int,
+    redacted_stderr: str,
+) -> dict[str, Any] | None:
+    """FAR-879: write the full redacted stderr transcript to the artifact store
+    when it exceeds the retention cap, returning an envelope pointer.
+
+    Best-effort and non-fatal: any store failure returns None and the caller
+    keeps today's inline (truncated) behaviour. The transcript is written under
+    a ``:full:stderr:<cap>``-suffixed attempt key so it never collides with (or
+    doubles) the stdout artifact key pattern or the FAR-582 live side-car
+    writer's per-attempt stream files. The returned pointer mirrors the
+    artifact-store pointer contract plus the FAR-811 flags
+    ``truncated: False`` / ``redacted: True`` (the stored content is the
+    pre-truncation REDACTED transcript, full length).
+    """
+    if not attempt_key or not redacted_stderr:
+        return None
+    try:
+        from modulo.core.artifacts.store import get_store
+
+        store = get_store()
+        overflow_key = f"{attempt_key}:full:stderr:{node_cap}"
+        store.append(org_id, run_id, node_id, overflow_key, "stderr", redacted_stderr)
+        pointer = store.finalize(org_id, run_id, node_id, overflow_key, "stderr")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.stderr_artifact_write_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+        )
+        return None
+    if pointer is None:
+        return None
+    return {
+        "rel_path": pointer.get("rel_path"),
+        "size_bytes": pointer.get("size_bytes"),
+        "sha256": pointer.get("sha256"),
+        "stream": "stderr",
         "compression": pointer.get("compression"),
         "truncated": False,
         "redacted": True,
@@ -7864,6 +7924,18 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     node_cap=_stdout_cap,
                     redacted_stdout=_redacted_for_artifact,
                 )
+            # FAR-879: stderr parity — persist the full redacted stderr
+            # transcript on the stall/timeout path too.
+            _stall_stderr_artifact: dict[str, Any] | None = None
+            if _stderr_len > _stdout_cap:
+                _stall_stderr_artifact = _persist_full_stderr_artifact(
+                    org_id=org_id,
+                    run_id=run_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    node_cap=_stdout_cap,
+                    redacted_stderr=_redact_raw_output(agent_stderr_raw),
+                )
             await _retain_raw_output_marker(
                 session_factory,
                 run_id=run_id,
@@ -7882,6 +7954,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 delivery_sentinel=delivery_sentinel,
                 max_artifact_bytes=_stdout_cap,
                 stdout_artifact=_stall_stdout_artifact,
+                stderr_artifact=_stall_stderr_artifact,
             )
             if watchdog.budget_killed:
                 # FAR-296 Phase 3b-3: the platform-side resource-cap killer
@@ -8276,6 +8349,22 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     redacted_stdout=_redact_raw_output(agent_stdout_raw),
                 )
 
+        # FAR-879: stderr parity — persist the full redacted stderr transcript
+        # to the artifact store when it exceeds the inline retention cap,
+        # mirroring the stdout path above. Best-effort: a store failure keeps
+        # today's inline (truncated) behaviour with no pointer key.
+        _stderr_artifact: dict[str, Any] | None = None
+        stderr_truncated = _stderr_len > _stdout_cap
+        if stderr_truncated:
+            _stderr_artifact = _persist_full_stderr_artifact(
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                node_cap=_stdout_cap,
+                redacted_stderr=_redact_raw_output(agent_stderr_raw),
+            )
+
         return _build_sandbox_node_envelope(
             node_id=node_id,
             output=_SandboxNodeOutput(
@@ -8294,6 +8383,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 stderr_length=_stderr_len,
                 stdout_truncated=stdout_truncated,
                 stdout_artifact=_stdout_artifact if _stdout_artifact is not None else _UNSET,
+                stderr_artifact=_stderr_artifact if _stderr_artifact is not None else _UNSET,
                 attempt_key=attempt_key,
                 agent_status=agent_status,
                 agent_outcome=agent_outcome,
@@ -8469,6 +8559,20 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     node_cap=_stdout_cap,
                     redacted_stdout=_redact_raw_output(agent_stdout_raw),
                 )
+        # FAR-879: stderr parity on the exception path — mirror the stdout
+        # artifact logic above. The same ``locals()`` guard applies: when the
+        # exception fires before the drain populates agent_stderr_raw, the
+        # guard short-circuits.
+        _exc_stderr_artifact: dict[str, Any] | None = None
+        if _stderr_len > _stdout_cap and "agent_stderr_raw" in locals():
+            _exc_stderr_artifact = _persist_full_stderr_artifact(
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                node_cap=_stdout_cap,
+                redacted_stderr=_redact_raw_output(agent_stderr_raw),
+            )
         return _build_sandbox_node_envelope(
             node_id=node_id,
             output=_SandboxNodeOutput(
@@ -8484,6 +8588,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 stderr_length=_stderr_len,
                 stdout_truncated=_stdout_len > _stdout_cap,
                 stdout_artifact=_exc_stdout_artifact if _exc_stdout_artifact is not None else _UNSET,
+                stderr_artifact=_exc_stderr_artifact if _exc_stderr_artifact is not None else _UNSET,
                 attempt_key=attempt_key,
                 error_type=_exc_type,
                 error_message=_exc_msg,

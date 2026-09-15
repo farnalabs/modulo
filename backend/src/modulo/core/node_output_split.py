@@ -39,6 +39,7 @@ __all__ = [
     "SPLITTABLE_NODE_TYPES",
     "extend_node_type_map_from_edges",
     "node_return",
+    "node_stderr_artifact",
     "node_stdout_artifact",
     "node_telemetry",
     "resolve_node_contract_output",
@@ -92,6 +93,7 @@ TELEMETRY_FIELDS = frozenset(
         "agent_stderr",
         "stdout_length",
         "stderr_length",
+        "stderr_artifact",
         "stall_reason",
         "sandbox_id",
         "sandbox_log_tail",
@@ -252,6 +254,26 @@ def node_stdout_artifact(telemetry_json: Any, outputs_json: Any, node_id: str) -
     telemetry = node_telemetry(telemetry_json, outputs_json, node_id)
     if isinstance(telemetry, dict):
         pointer = telemetry.get("stdout_artifact")
+        if isinstance(pointer, dict):
+            return pointer
+    return None
+
+
+def node_stderr_artifact(telemetry_json: Any, outputs_json: Any, node_id: str) -> dict[str, Any] | None:
+    """The persisted full-stderr transcript pointer for *node_id*, or ``None``.
+
+    Sandbox nodes whose redacted stderr exceeds the inline retention cap hand
+    the full transcript to the artifact store under a ``:full:stderr:<cap>``-
+    suffixed attempt key and record its envelope pointer as ``stderr_artifact``
+    on the node's telemetry (``_persist_full_stderr_artifact``, FAR-879). This
+    returns that pointer dict verbatim from whichever source the node's
+    telemetry lives in -- P1+ rows read ``node_telemetry_json`` directly,
+    legacy rows fall back to the derived inner ``output`` envelope.
+    Returns ``None`` for nodes with no stored transcript.
+    """
+    telemetry = node_telemetry(telemetry_json, outputs_json, node_id)
+    if isinstance(telemetry, dict):
+        pointer = telemetry.get("stderr_artifact")
         if isinstance(pointer, dict):
             return pointer
     return None

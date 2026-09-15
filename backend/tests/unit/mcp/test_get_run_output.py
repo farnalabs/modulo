@@ -384,3 +384,101 @@ class TestGetRunOutputSuccess:
         assert result["field"] == "run_id"
         # Validation fails before any session is opened.
         mock_session.assert_not_called()
+
+    # --- FAR-879: stderr_artifact parity ---
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_returns_stderr_artifact_pointer_when_present(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        run_id = uuid.uuid4()
+        stderr_pointer = {
+            "rel_path": f"{_PLACEHOLDER_ORG_ID}/{run_id}/node1/artifacts_stderr.zst",
+            "size_bytes": 8192,
+            "sha256": "1" * 64,
+            "stream": "stderr",
+            "compression": "zstd",
+            "truncated": False,
+            "redacted": True,
+        }
+        mock_get_run.return_value = _make_mock_run(
+            outputs_json={"node1": {"result": "hello"}},
+            node_telemetry_json={"node1": {"stderr_artifact": stderr_pointer}},
+        )
+
+        result = await get_run_output(run_id=str(run_id), node_id="node1")
+
+        assert result["output"] == {"result": "hello"}
+        assert result["stderr_artifact"] == stderr_pointer
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_stderr_artifact_is_none_when_no_transcript_stored(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        run_id = uuid.uuid4()
+        mock_get_run.return_value = _make_mock_run(
+            outputs_json={"node1": {"result": "hello"}},
+            node_telemetry_json={"node1": {"status": "completed", "summary": "ok"}},
+        )
+
+        result = await get_run_output(run_id=str(run_id), node_id="node1")
+
+        assert result["output"] == {"result": "hello"}
+        assert result["stderr_artifact"] is None
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_both_artifact_pointers_returned_independently(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """stdout_artifact and stderr_artifact are independent; one can be present
+        while the other is None."""
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        run_id = uuid.uuid4()
+        stdout_ptr = {
+            "rel_path": "org/run/node/stdout.zst",
+            "size_bytes": 1000,
+            "sha256": "a" * 64,
+            "stream": "stdout",
+            "compression": "zstd",
+            "truncated": False,
+            "redacted": True,
+        }
+        mock_get_run.return_value = _make_mock_run(
+            outputs_json={"node1": {"result": "hello"}},
+            node_telemetry_json={"node1": {"stdout_artifact": stdout_ptr}},
+            # No stderr_artifact in telemetry
+        )
+
+        result = await get_run_output(run_id=str(run_id), node_id="node1")
+
+        assert result["stdout_artifact"] == stdout_ptr
+        assert result["stderr_artifact"] is None

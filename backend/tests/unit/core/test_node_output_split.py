@@ -23,6 +23,7 @@ from modulo.core.node_output_split import (
     TELEMETRY_FIELDS,
     extend_node_type_map_from_edges,
     node_return,
+    node_stderr_artifact,
     node_stdout_artifact,
     node_telemetry,
     split_node_output,
@@ -591,6 +592,64 @@ def test_node_stdout_artifact_ignores_non_dict_pointer() -> None:
 
 def test_node_stdout_artifact_missing_node_returns_none() -> None:
     assert node_stdout_artifact({"other": {"stdout_artifact": _stdout_pointer()}}, {}, "n1") is None
+
+
+# ---------------------------------------------------------------------------
+# node_stderr_artifact -- FAR-879 full-stderr pointer accessor
+# ---------------------------------------------------------------------------
+
+
+def _stderr_pointer() -> dict[str, Any]:
+    return {
+        "rel_path": "00000000-0000-0000-0000-000000000001/run-1/n1/a.stderr.zst",
+        "size_bytes": 8192,
+        "sha256": "1" * 64,
+        "stream": "stderr",
+        "compression": "zstd",
+        "truncated": False,
+        "redacted": True,
+    }
+
+
+def test_node_stderr_artifact_pure_row_returns_stored_pointer_verbatim() -> None:
+    pointer = _stderr_pointer()
+    telemetry = {"n1": {"status": "completed", "stderr_artifact": pointer}}
+    assert node_stderr_artifact(telemetry, {}, "n1") is pointer
+
+
+def test_node_stderr_artifact_legacy_envelope_extracts_pointer() -> None:
+    pointer = _stderr_pointer()
+    inner = {"status": "completed", "stderr_artifact": pointer, "output_json": {"ok": 1}}
+    outputs = {"n1": {"artifacts": [{"node_id": "n1", "status": "completed", "output": inner}], "output": inner}}
+    assert node_stderr_artifact(None, outputs, "n1") == pointer
+
+
+def test_node_stderr_artifact_none_when_absent() -> None:
+    assert node_stderr_artifact({"n1": {"status": "completed"}}, {}, "n1") is None
+    assert node_stderr_artifact(None, {"n1": {"output": {"status": "completed"}}}, "n1") is None
+
+
+def test_node_stderr_artifact_ignores_non_dict_pointer() -> None:
+    assert node_stderr_artifact({"n1": {"stderr_artifact": "just-a-log-line"}}, {}, "n1") is None
+    assert node_stderr_artifact({"n1": {"stderr_artifact": None}}, {}, "n1") is None
+
+
+def test_node_stderr_artifact_missing_node_returns_none() -> None:
+    assert node_stderr_artifact({"other": {"stderr_artifact": _stderr_pointer()}}, {}, "n1") is None
+
+
+def test_node_stderr_artifact_and_stdout_artifact_coexist() -> None:
+    """Both pointers can live on the same node telemetry independently."""
+    stdout_ptr = _stdout_pointer()
+    stderr_ptr = _stderr_pointer()
+    telemetry = {"n1": {"stdout_artifact": stdout_ptr, "stderr_artifact": stderr_ptr}}
+    assert node_stdout_artifact(telemetry, {}, "n1") is stdout_ptr
+    assert node_stderr_artifact(telemetry, {}, "n1") is stderr_ptr
+
+
+def test_stderr_artifact_in_telemetry_fields() -> None:
+    """stderr_artifact is in TELEMETRY_FIELDS so the split preserves it."""
+    assert "stderr_artifact" in TELEMETRY_FIELDS
 
 
 # ---------------------------------------------------------------------------
