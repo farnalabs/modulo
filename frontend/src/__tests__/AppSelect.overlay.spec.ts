@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import AppSelect from './AppSelect.vue'
-import FilterBar from './FilterBar.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import Select from 'primevue/select'
 
 describe('AppSelect', () => {
