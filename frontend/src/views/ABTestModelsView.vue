@@ -19,237 +19,237 @@
       { label: 'AB Test', to: '/variants/ab-test' },
     ]" />
     <div class="page-wide">
-    <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="error" :message="error" />
-    <template v-else>
-      <PageHeader
-        :title="$t('views.variantCreator.title')"
-        :subtitle="$t('views.variantCreator.subtitle')"
-      />
+      <LoadingSpinner v-if="loading" />
+      <ErrorAlert v-else-if="error" :message="error" />
+      <template v-else>
+        <PageHeader
+          :title="$t('views.variantCreator.title')"
+          :subtitle="$t('views.variantCreator.subtitle')"
+        />
 
-      <div class="mb-6 flex flex-wrap items-center gap-4">
-        <label class="flex items-center gap-2 text-sm">
-          <span class="text-muted-foreground">{{ $t('views.variantCreator.pipeline') }}</span>
-          <Select
-            v-model="selectedPipelineId"
-            :placeholder="$t('views.variantCreator.select_a_pipeline')"
-            data-testid="variant-builder-pipeline-select"
-            :aria-label="$t('views.variantCreator.aria_pipeline')"
-            class="min-w-[280px]"
-            :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
-            option-label="label"
-            option-value="value"
-          >
-            <template #option="{ option }">
-              <span :data-value="option.value">{{ option.label }}</span>
-            </template>
-          </Select>
-        </label>
-
-        <label class="flex items-center gap-2 text-sm">
-          <span class="text-muted-foreground">{{ $t('views.variantCreator.comparison_name') }}</span>
-          <input
-            v-model="comparisonName"
-            data-testid="variant-builder-name"
-            type="text"
-            :placeholder="$t('views.variantCreator.comparison_name_placeholder')"
-            class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-        </label>
-      </div>
-
-      <template v-if="selectedPipelineId">
-        <EmptyState
-          v-if="snapshots.length === 0"
-          :title="$t('views.variantCreator.no_snapshots')"
-          :description="$t('views.variantCreator.no_snapshots_hint')"
-        >
-          <Button
-            as="router-link"
-            :to="`/pipelines/${selectedPipelineId}/editor`"
-            type="button"
-            data-testid="variant-builder-create-snapshot"
-          >
-            {{ $t('views.variantCreator.create_snapshot') }}
-          </Button>
-        </EmptyState>
-
-        <section v-else class="space-y-4 rounded-lg border bg-card p-6">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <h2 class="text-base font-semibold tracking-tight">
-                {{ $t('views.variantCreator.variants_title') }}
-              </h2>
-              <p class="text-xs text-muted-foreground">
-                {{ $t('views.variantCreator.advanced_overrides_note') }}
-              </p>
-            <div class="flex items-center gap-3">
-              <span class="sr-only" id="variant-builder-headroom-label">{{ $t('views.variantCreator.variants_title') }}</span>
-              <output
-                data-testid="variant-builder-headroom"
-                aria-labelledby="variant-builder-headroom-label"
-                class="text-xs text-muted-foreground"
-              >
-                {{ $t('views.variantCreator.headroom', { used: variants.length, max: MAX_VARIANTS }) }}
-              </output>
-              <Button
-                :disabled="variants.length >= MAX_VARIANTS"
-                size="small"
-                type="button"
-                data-testid="variant-builder-add"
-                class="px-3 py-1.5"
-                @click="addVariant"
-              >
-                {{ $t('views.variantCreator.add_variant') }}
-              </Button>
-            </div>
-          </div>
-
-          <div class="overflow-x-auto">
-            <table class="w-full text-left text-sm">
-              <thead>
-                <tr class="border-b text-xs uppercase text-muted-foreground">
-                  <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.label') }}</th>
-                  <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.snapshot') }}</th>
-                  <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.model_backend') }}</th>
-                  <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.prompt_version') }}</th>
-                  <th class="py-2 font-medium text-right">{{ $t('views.variantCreator.actions') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="(v, i) in variants"
-                  :key="v.id"
-                  class="border-b align-top hover:bg-muted/30"
-                >
-                  <td class="py-2 pr-3">
-                    <input
-                      v-model="v.label"
-                      :data-testid="`variant-builder-label-${i}`"
-                      type="text"
-                      :placeholder="$t('views.variantCreator.label_placeholder')"
-                      :aria-label="`${t('views.variantCreator.label')} ${i + 1}`"
-                      class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    />
-                    <p v-if="rowError(i)" class="mt-1 text-xs text-destructive" role="alert">
-                      {{ rowError(i) }}
-                    </p>
-                  </td>
-                  <td class="py-2 pr-3">
-                    <Select
-                      v-model="v.snapshotId"
-                      :placeholder="$t('views.variantCreator.select_snapshot')"
-                      :data-testid="`variant-builder-snapshot-${i}`"
-                      :aria-label="$t('views.variantCreator.aria_snapshot')"
-                      class="w-full"
-                      :options="snapshotOptions"
-                      option-label="label"
-                      option-value="value"
-                    >
-                      <template #option="{ option }">
-                        <span :data-value="option.value">{{ option.label }}</span>
-                      </template>
-                    </Select>
-                  </td>
-                  <td class="py-2 pr-3">
-                    <Select
-                      v-model="v.modelBackendId"
-                      :placeholder="$t('views.variantCreator.select_model')"
-                      :data-testid="`variant-builder-model-${i}`"
-                      :aria-label="$t('views.variantCreator.aria_model_backend')"
-                      class="w-full"
-                      :options="modelBackendOptions"
-                      option-label="label"
-                      option-value="value"
-                    >
-                      <template #option="{ option }">
-                        <span :data-value="option.value">{{ option.label }}</span>
-                      </template>
-                    </Select>
-                  </td>
-                  <td class="py-2 pr-3">
-                    <Select
-                      v-model="v.promptVersion"
-                      :placeholder="$t('views.variantCreator.select_prompt_version')"
-                      :data-testid="`variant-builder-prompt-${i}`"
-                      :aria-label="$t('views.variantCreator.aria_prompt_version')"
-                      class="w-full"
-                      :options="promptVersionOptions"
-                      option-label="label"
-                      option-value="value"
-                    >
-                      <template #option="{ option }">
-                        <span :data-value="option.value">{{ option.label }}</span>
-                      </template>
-                    </Select>
-                  </td>
-                  <td class="py-2 text-right whitespace-nowrap">
-                    <button
-                      type="button"
-                      :data-testid="`variant-builder-duplicate-${i}`"
-                      :disabled="variants.length >= MAX_VARIANTS"
-                      class="mr-2 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                      :aria-label="$t('views.variantCreator.duplicate')"
-                      @click="duplicateVariant(i)"
-                    >
-                      {{ $t('views.variantCreator.duplicate') }}
-                    </button>
-                    <button
-                      type="button"
-                      :data-testid="`variant-builder-remove-${i}`"
-                      class="text-xs text-destructive hover:underline"
-                      :aria-label="$t('views.variantCreator.remove')"
-                      @click="removeVariant(i)"
-                    >
-                      {{ $t('views.variantCreator.remove') }}
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <output
-            v-if="variants.length < 2"
-            data-testid="variant-builder-min-two"
-            aria-labelledby="variant-builder-min-two-label"
-            class="text-sm text-muted-foreground"
-          >
-            <span class="sr-only" id="variant-builder-min-two-label">{{ $t('views.variantCreator.aria_min_variants') }}</span>
-            {{ $t('views.variantCreator.min_two_hint') }}
-          </output>
-
-          <ErrorAlert
-            v-if="fireError"
-            :message="fireError"
-            data-testid="variant-builder-fire-error"
-            class="mb-3"
-          />
-
-          <div class="flex flex-wrap items-center gap-3 pt-2">
-            <Button
-              :disabled="!canFire || firing"
-              data-testid="variant-builder-fire"
-              type="button"
-              class="px-5 py-2"
-              @click="openFireDialog"
+        <div class="mb-6 flex flex-wrap items-center gap-4">
+          <label class="flex items-center gap-2 text-sm">
+            <span class="text-muted-foreground">{{ $t('views.variantCreator.pipeline') }}</span>
+            <Select
+              v-model="selectedPipelineId"
+              :placeholder="$t('views.variantCreator.select_a_pipeline')"
+              data-testid="variant-builder-pipeline-select"
+              :aria-label="$t('views.variantCreator.aria_pipeline')"
+              class="min-w-[280px]"
+              :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
+              option-label="label"
+              option-value="value"
             >
-              <span v-if="firing" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              {{ firing ? $t('views.variantCreator.firing') : $t('views.variantCreator.fire_comparison') }}
-            </Button>
-            <span v-if="canFire" class="text-xs text-muted-foreground">
-              {{ $t('views.variantCreator.fires_n_runs', { count: variants.length }) }}
-            </span>
-          </div>
-        </section>
-      </template>
+              <template #option="{ option }">
+                <span :data-value="option.value">{{ option.label }}</span>
+              </template>
+            </Select>
+          </label>
 
-      <EmptyState
-        v-else-if="!loading && pipelines.length === 0"
-        :title="$t('views.variantCreator.no_pipelines')"
-        :description="$t('views.variantCreator.no_pipelines_hint')"
-      />
-    </template>
-  </div>
+          <label class="flex items-center gap-2 text-sm">
+            <span class="text-muted-foreground">{{ $t('views.variantCreator.comparison_name') }}</span>
+            <input
+              v-model="comparisonName"
+              data-testid="variant-builder-name"
+              type="text"
+              :placeholder="$t('views.variantCreator.comparison_name_placeholder')"
+              class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+        </div>
+
+        <template v-if="selectedPipelineId">
+          <EmptyState
+            v-if="snapshots.length === 0"
+            :title="$t('views.variantCreator.no_snapshots')"
+            :description="$t('views.variantCreator.no_snapshots_hint')"
+          >
+            <Button
+              as="router-link"
+              :to="`/pipelines/${selectedPipelineId}/editor`"
+              type="button"
+              data-testid="variant-builder-create-snapshot"
+            >
+              {{ $t('views.variantCreator.create_snapshot') }}
+            </Button>
+          </EmptyState>
+
+          <section v-else class="space-y-4 rounded-lg border bg-card p-6">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <h2 class="text-base font-semibold tracking-tight">
+                  {{ $t('views.variantCreator.variants_title') }}
+                </h2>
+                <p class="text-xs text-muted-foreground">
+                  {{ $t('views.variantCreator.advanced_overrides_note') }}
+                </p>
+              <div class="flex items-center gap-3">
+                <span class="sr-only" id="variant-builder-headroom-label">{{ $t('views.variantCreator.variants_title') }}</span>
+                <output
+                  data-testid="variant-builder-headroom"
+                  aria-labelledby="variant-builder-headroom-label"
+                  class="text-xs text-muted-foreground"
+                >
+                  {{ $t('views.variantCreator.headroom', { used: variants.length, max: MAX_VARIANTS }) }}
+                </output>
+                <Button
+                  :disabled="variants.length >= MAX_VARIANTS"
+                  size="small"
+                  type="button"
+                  data-testid="variant-builder-add"
+                  class="px-3 py-1.5"
+                  @click="addVariant"
+                >
+                  {{ $t('views.variantCreator.add_variant') }}
+                </Button>
+              </div>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-sm">
+                <thead>
+                  <tr class="border-b text-xs uppercase text-muted-foreground">
+                    <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.label') }}</th>
+                    <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.snapshot') }}</th>
+                    <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.model_backend') }}</th>
+                    <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.prompt_version') }}</th>
+                    <th class="py-2 font-medium text-right">{{ $t('views.variantCreator.actions') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="(v, i) in variants"
+                    :key="v.id"
+                    class="border-b align-top hover:bg-muted/30"
+                  >
+                    <td class="py-2 pr-3">
+                      <input
+                        v-model="v.label"
+                        :data-testid="`variant-builder-label-${i}`"
+                        type="text"
+                        :placeholder="$t('views.variantCreator.label_placeholder')"
+                        :aria-label="`${t('views.variantCreator.label')} ${i + 1}`"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      />
+                      <p v-if="rowError(i)" class="mt-1 text-xs text-destructive" role="alert">
+                        {{ rowError(i) }}
+                      </p>
+                    </td>
+                    <td class="py-2 pr-3">
+                      <Select
+                        v-model="v.snapshotId"
+                        :placeholder="$t('views.variantCreator.select_snapshot')"
+                        :data-testid="`variant-builder-snapshot-${i}`"
+                        :aria-label="$t('views.variantCreator.aria_snapshot')"
+                        class="w-full"
+                        :options="snapshotOptions"
+                        option-label="label"
+                        option-value="value"
+                      >
+                        <template #option="{ option }">
+                          <span :data-value="option.value">{{ option.label }}</span>
+                        </template>
+                      </Select>
+                    </td>
+                    <td class="py-2 pr-3">
+                      <Select
+                        v-model="v.modelBackendId"
+                        :placeholder="$t('views.variantCreator.select_model')"
+                        :data-testid="`variant-builder-model-${i}`"
+                        :aria-label="$t('views.variantCreator.aria_model_backend')"
+                        class="w-full"
+                        :options="modelBackendOptions"
+                        option-label="label"
+                        option-value="value"
+                      >
+                        <template #option="{ option }">
+                          <span :data-value="option.value">{{ option.label }}</span>
+                        </template>
+                      </Select>
+                    </td>
+                    <td class="py-2 pr-3">
+                      <Select
+                        v-model="v.promptVersion"
+                        :placeholder="$t('views.variantCreator.select_prompt_version')"
+                        :data-testid="`variant-builder-prompt-${i}`"
+                        :aria-label="$t('views.variantCreator.aria_prompt_version')"
+                        class="w-full"
+                        :options="promptVersionOptions"
+                        option-label="label"
+                        option-value="value"
+                      >
+                        <template #option="{ option }">
+                          <span :data-value="option.value">{{ option.label }}</span>
+                        </template>
+                      </Select>
+                    </td>
+                    <td class="py-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        :data-testid="`variant-builder-duplicate-${i}`"
+                        :disabled="variants.length >= MAX_VARIANTS"
+                        class="mr-2 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                        :aria-label="$t('views.variantCreator.duplicate')"
+                        @click="duplicateVariant(i)"
+                      >
+                        {{ $t('views.variantCreator.duplicate') }}
+                      </button>
+                      <button
+                        type="button"
+                        :data-testid="`variant-builder-remove-${i}`"
+                        class="text-xs text-destructive hover:underline"
+                        :aria-label="$t('views.variantCreator.remove')"
+                        @click="removeVariant(i)"
+                      >
+                        {{ $t('views.variantCreator.remove') }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <output
+              v-if="variants.length < 2"
+              data-testid="variant-builder-min-two"
+              aria-labelledby="variant-builder-min-two-label"
+              class="text-sm text-muted-foreground"
+            >
+              <span class="sr-only" id="variant-builder-min-two-label">{{ $t('views.variantCreator.aria_min_variants') }}</span>
+              {{ $t('views.variantCreator.min_two_hint') }}
+            </output>
+
+            <ErrorAlert
+              v-if="fireError"
+              :message="fireError"
+              data-testid="variant-builder-fire-error"
+              class="mb-3"
+            />
+
+            <div class="flex flex-wrap items-center gap-3 pt-2">
+              <Button
+                :disabled="!canFire || firing"
+                data-testid="variant-builder-fire"
+                type="button"
+                class="px-5 py-2"
+                @click="openFireDialog"
+              >
+                <span v-if="firing" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                {{ firing ? $t('views.variantCreator.firing') : $t('views.variantCreator.fire_comparison') }}
+              </Button>
+              <span v-if="canFire" class="text-xs text-muted-foreground">
+                {{ $t('views.variantCreator.fires_n_runs', { count: variants.length }) }}
+              </span>
+            </div>
+          </section>
+        </template>
+
+        <EmptyState
+          v-else-if="!loading && pipelines.length === 0"
+          :title="$t('views.variantCreator.no_pipelines')"
+          :description="$t('views.variantCreator.no_pipelines_hint')"
+        />
+      </template>
+    </div>
 
   <Dialog
     v-if="showFireDialog"
