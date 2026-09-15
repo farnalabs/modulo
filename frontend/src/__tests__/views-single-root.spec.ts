@@ -1,65 +1,22 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import path from 'path'
+import { parse } from '@vue/compiler-sfc'
 
 /**
  * Guard test: every routed view must have exactly one root element in its
  * <template>. AppLayout.vue wraps <router-view> in <transition name="page"
  * mode="out-in"> which requires a single root element — multiple roots break
  * the transition and leave the next page blank (FAR-852).
+ *
+ * We parse the SFC with @vue/compiler-sfc rather than a hand-rolled regex. A
+ * regex like /<template>([\s\S]*?)<\/template>/ stops at the FIRST </template>,
+ * which is the closer of a nested <template v-if>/<template v-else> block — so a
+ * second root element after a nested template block is invisible to the guard
+ * (and it mis-handles `>` inside attribute values). Parsing the real template
+ * AST makes the count correct.
  */
 const viewsDir = path.resolve(__dirname, '../views')
-
-/**
- * Count the number of top-level root elements inside a <template> block.
- * Skips HTML comments. Handles self-closing and normal open/close tags.
- * Tracks depth so nested elements inside a root don't inflate the count.
- */
-function countRootElements(templateContent: string): number {
-  const cleaned = templateContent.replace(/<!--[\s\S]*?-->/g, '')
-  let depth = 0
-  let rootCount = 0
-  let i = 0
-
-  while (i < cleaned.length) {
-    if (cleaned[i] !== '<') {
-      i++
-      continue
-    }
-
-    // Closing tag at depth 0 shouldn't happen in well-formed template,
-    // but decrement depth if it does
-    if (cleaned[i + 1] === '/') {
-      const closeMatch = cleaned.slice(i).match(/^<\/([a-zA-Z][a-zA-Z0-9-]*)/)
-      if (closeMatch) {
-        depth = Math.max(0, depth - 1)
-        i += closeMatch[0].length
-        continue
-      }
-      i++
-      continue
-    }
-
-    // Opening tag (or self-closing)
-  const openMatch = cleaned.slice(i).match(/^<([a-zA-Z][a-zA-Z0-9-]*)/)
-      if (openMatch) {
-        // Check if self-closing (ends with />)
-        const selfClosing = cleaned.slice(i).match(/^<[^>]*\/>/)
-      if (depth === 0) {
-        rootCount++
-      }
-      if (!selfClosing) {
-        depth++
-      }
-      i += openMatch[0].length
-      continue
-    }
-
-    i++
-  }
-
-  return rootCount
-}
 
 describe('routed views must have a single root element (FAR-852 guard)', () => {
   const viewFiles = fs.readdirSync(viewsDir).filter((f) => f.endsWith('.vue'))
@@ -67,13 +24,37 @@ describe('routed views must have a single root element (FAR-852 guard)', () => {
   for (const file of viewFiles) {
     it(`${file} has exactly one root template element`, () => {
       const content = fs.readFileSync(path.join(viewsDir, file), 'utf-8')
-      const templateMatch = content.match(/<template>([\s\S]*?)<\/template>/)
-      if (!templateMatch) {
+      const { descriptor, errors } = parse(content, { filename: file })
+      if (errors.length) {
+        throw new Error(`Failed to parse ${file}: ${errors.map((e) => e.message).join('; ')}`)
+      }
+      const templateAst = descriptor.template?.ast
+      if (!templateAst) {
         // No template block (script-only component) — skip
         return
       }
-      const rootCount = countRootElements(templateMatch[1])
-      expect(rootCount).toBe(1)
+      // NodeTypes.ELEMENT === 1. Root-level comments / text / interpolations are
+      // ignored; only element nodes count as a "root". A nested <template v-if>
+      // that lives inside the single root is part of that root's subtree and is
+      // correctly NOT counted as a separate root.
+      const rootElements = templateAst.children.filter((n) => n.type === 1)
+      expect(rootElements.length).toBe(1)
     })
   }
+
+  it('flags a view whose template has a second root after a nested template (regression for the old regex guard)', () => {
+    const malicious = `
+<template>
+  <div>
+    <template v-if="x">hi</template>
+  </div>
+  <div>SECOND ROOT</div>
+</template>
+<script setup lang="ts"></script>
+`
+    const { descriptor, errors } = parse(malicious, { filename: 'regression.vue' })
+    expect(errors).toHaveLength(0)
+    const rootElements = descriptor.template!.ast!.children.filter((n) => n.type === 1)
+    expect(rootElements.length).toBe(2)
+  })
 })
