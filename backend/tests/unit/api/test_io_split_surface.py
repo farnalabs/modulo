@@ -273,3 +273,144 @@ class TestIoRoundTrip:
         telemetry = body["node_telemetry"]["planner"]
         assert telemetry["credentials"]["api_key"] == SENSITIVE_VALUE_MASK
         assert telemetry["credentials"]["public"] == "visible"
+
+
+class TestIoLogTotals:
+    """FAR-870: /io endpoint returns true total log lengths across all nodes."""
+
+    def _get_io(self, client: TestClient, run: MagicMock) -> dict[str, Any]:
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
+        assert resp.status_code == 200
+        return resp.json()
+
+    def test_total_length_equals_true_length_when_inline_truncated(
+        self, client: TestClient, mock_session: AsyncMock
+    ) -> None:
+        """Sandbox node: inline agent_stdout is capped but stdout_length is the real count."""
+        full_stdout = "x" * 213_324  # true full length
+        capped_stdout = "x" * 20_000  # what was actually stored inline
+        full_stderr = "e" * 50_000
+        capped_stderr = "e" * 10_000
+        run = _make_run(
+            outputs_json={"sandbox-node": {"result": "done"}},
+            node_telemetry_json={
+                "sandbox-node": {
+                    "status": "completed",
+                    "summary": "completed",
+                    "agent_stdout": capped_stdout,
+                    "agent_stderr": capped_stderr,
+                    "stdout_length": len(full_stdout),
+                    "stderr_length": len(full_stderr),
+                    "stdout_truncated": True,
+                }
+            },
+        )
+
+        body = self._get_io(client, run)
+
+        assert body["stdout_total_length"] == 213_324
+        assert body["stderr_total_length"] == 50_000
+
+    def test_total_length_sums_across_multiple_nodes(self, client: TestClient, mock_session: AsyncMock) -> None:
+        """Multiple nodes: totals are the sum of each node's true length."""
+        run = _make_run(
+            outputs_json={
+                "node-a": {"result": "a"},
+                "node-b": {"result": "b"},
+            },
+            node_telemetry_json={
+                "node-a": {
+                    "status": "completed",
+                    "agent_stdout": "short",
+                    "stdout_length": 100_000,  # true length, inline is 5
+                },
+                "node-b": {
+                    "status": "completed",
+                    "agent_stdout": "also short",
+                    "stdout_length": 50_000,
+                },
+            },
+        )
+
+        body = self._get_io(client, run)
+
+        assert body["stdout_total_length"] == 150_000
+
+    def test_total_length_falls_back_to_inline_when_no_telemetry(
+        self, client: TestClient, mock_session: AsyncMock
+    ) -> None:
+        """Legacy node without telemetry: derive from inline content length."""
+        run = _make_run(
+            outputs_json={"legacy-node": "hello world"},
+            node_telemetry_json=None,
+        )
+
+        body = self._get_io(client, run)
+
+        assert body["stdout_total_length"] == 11  # len("hello world")
+
+    def test_total_length_zero_when_no_nodes(self, client: TestClient, mock_session: AsyncMock) -> None:
+        """Empty run: totals are 0."""
+        run = _make_run(outputs_json=None, node_telemetry_json=None)
+
+        body = self._get_io(client, run)
+
+        assert body["stdout_total_length"] == 0
+        assert body["stderr_total_length"] == 0
+
+    def test_total_length_counts_stderr_from_telemetry(self, client: TestClient, mock_session: AsyncMock) -> None:
+        """Stderr total comes from stderr_length in telemetry, not inline content."""
+        run = _make_run(
+            outputs_json={"node1": {"result": "ok"}},
+            node_telemetry_json={
+                "node1": {
+                    "status": "completed",
+                    "agent_stderr": "tiny",
+                    "stderr_length": 80_000,
+                }
+            },
+        )
+
+        body = self._get_io(client, run)
+
+        assert body["stderr_total_length"] == 80_000
+        # stdout has no length key and no inline stdout -> 0
+        assert body["stdout_total_length"] == 0
+
+    def test_total_length_mixed_legacy_and_new_shape_nodes(self, client: TestClient, mock_session: AsyncMock) -> None:
+        """Mix of P1 (telemetry) and legacy (envelope) nodes."""
+        envelope = {
+            "artifacts": [
+                {
+                    "node_id": "legacy",
+                    "status": "completed",
+                    "output": {
+                        "status": "completed",
+                        "summary": "legacy node",
+                        "agent_stdout": "legacy log line",
+                    },
+                }
+            ],
+            "output": {"status": "completed", "summary": "legacy node"},
+        }
+        run = _make_run(
+            outputs_json={"legacy": envelope, "new-node": {"result": "ok"}},
+            node_telemetry_json={
+                "new-node": {
+                    "status": "completed",
+                    "agent_stdout": "new log",
+                    "stdout_length": 200_000,
+                }
+            },
+        )
+
+        body = self._get_io(client, run)
+
+        # Legacy node: the inner output envelope (status/summary) has no
+        # agent_stdout or stdout_length, so it contributes 0.  New node:
+        # stdout_length = 200_000 is the true pre-truncation count.
+        assert body["stdout_total_length"] == 200_000
