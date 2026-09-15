@@ -54,14 +54,22 @@ run_semgrep.py WARNING: semgrep did NOT complete on Windows.
 ========================================================================"""
 
 
-def _get_changed_py_files() -> list[str]:
-    """Return relative paths of changed .py files under backend/src/.
+def _get_changed_py_files() -> tuple[list[str], str | None]:
+    """Return changed .py files under backend/src/ and any git failure reason.
 
     Checks both staged (index) and unstaged (working tree) changes so we
     catch everything the developer is touching, regardless of whether they
     ``git add``-ed first.
+
+    Returns ``(files, git_error)``: ``git_error`` is ``None`` on success, or a
+    non-empty reason string when a ``git diff`` invocation failed. A failed
+    ``git diff`` (bare repo, permission error, corrupt index, or an initial
+    commit where ``HEAD`` does not yet exist) yields no output; without the
+    error surfaced, the hook would silently scan zero files and pass - a
+    second silent fail-open path. The caller warns loudly on ``git_error``.
     """
     files: set[str] = set()
+    git_error: str | None = None
     for diff_flag in ("--cached", ""):
         cmd = [
             "git",
@@ -78,16 +86,27 @@ def _get_changed_py_files() -> list[str]:
             text=True,
             check=False,
         )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            git_error = stderr or f"{' '.join(cmd)} exited {result.returncode}"
+            continue
         for raw_line in result.stdout.splitlines():
             stripped = raw_line.strip()
             if stripped.endswith(".py") and stripped.startswith("backend/src/"):
                 files.add(stripped)
-    return sorted(files)
+    return sorted(files), git_error
 
 
 def _run_windows() -> int:
     """Run semgrep on changed files only (scoped, no baseline)."""
-    changed = _get_changed_py_files()
+    changed, git_error = _get_changed_py_files()
+    if git_error is not None:
+        # Never silently skip: if we cannot determine the changed files, warn
+        # loudly (still exit 0 - fail-open on TOOL, never on FINDINGS).
+        print(
+            _SEMGREP_WARN.format(reason=f"git change detection failed: {git_error}"),
+            file=sys.stderr,
+        )
     if not changed:
         return 0
 
