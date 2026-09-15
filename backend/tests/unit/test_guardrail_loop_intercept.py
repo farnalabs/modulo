@@ -892,7 +892,9 @@ async def test_load_guardrails_returns_empty_on_exception():
 
 async def test_persist_audit_returns_when_no_factory():
     # Should return without error when no factory is provided
-    result = await li.persist_loop_interception_audit(None, org_id=uuid.uuid4(), run_id=uuid.uuid4(), node_id="n1", records=[])
+    result = await li.persist_loop_interception_audit(
+        None, org_id=uuid.uuid4(), run_id=uuid.uuid4(), node_id="n1", records=[]
+    )
     assert result is None
 
 
