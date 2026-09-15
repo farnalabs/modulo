@@ -36,6 +36,7 @@ from modulo.api.routes.pipelines import (
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
@@ -102,6 +103,24 @@ def _minimal_edge(
         "target_node_id": str(target_id),
         "edge_type": edge_type,
     }
+
+
+def _orm_edge(**extra: Any) -> PipelineEdge:
+    """Build a real ORM ``PipelineEdge`` row — the shape ``get_pipeline_graph`` returns."""
+    edge = PipelineEdge()
+    edge.id = uuid.uuid4()
+    edge.source_node_id = uuid.uuid4()
+    edge.target_node_id = uuid.uuid4()
+    edge.edge_type = "normal"
+    edge.hitl_gate_config = None
+    edge.condition_expression = None
+    edge.source_port = "out"
+    edge.target_port = "in"
+    edge.retry = None
+    edge.on_failure_target = None
+    for key, value in extra.items():
+        setattr(edge, key, value)
+    return edge
 
 
 # ---------------------------------------------------------------------------
@@ -468,3 +487,337 @@ class TestGetGraphEndpointNever422:
         ):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# FAR-874 hardening: data-loss, secret-leak, edge-fallback, tier-3, non-dict
+# ---------------------------------------------------------------------------
+
+
+class TestDataLossRegression:
+    """Tier-3 fallback must preserve all stored fields, not truncate to id/type/position."""
+
+    def test_tier3_node_preserves_distinctive_fields(self) -> None:
+        """A node that fails BOTH strict and lenient validation must still
+        carry every stored field the model declares (label, template_id, etc.)
+        in the returned object."""
+        nid = uuid.uuid4()
+        # agent_id="not-a-uuid" fails Pydantic UUID coercion in BOTH strict
+        # and lenient mode (legacy_read only skips model-level validators, not
+        # field-level type coercion) — so this hits the tier-3 fallback.
+        nodes = [
+            {
+                "id": str(nid),
+                "node_type": "agent",
+                "position": {"x": 42, "y": 7},
+                "agent_id": "not-a-uuid",
+                "label": "DISTINCTIVE_LABEL_SENTINEL",
+                "template_id": "DISTINCTIVE_TEMPLATE_SENTINEL",
+                "agent_prompt": "do something important",
+                "env_vars": {"MY_VAR": "keep_me"},
+            }
+        ]
+        resp = _graph_response(nodes, [])
+        assert len(resp.nodes) == 1
+        node = resp.nodes[0]
+        # The fallback must preserve stored fields
+        assert str(node.id) == str(nid)
+        assert node.node_type == "agent"
+        assert node.label == "DISTINCTIVE_LABEL_SENTINEL"
+        assert node.template_id == "DISTINCTIVE_TEMPLATE_SENTINEL"
+        assert node.agent_prompt == "do something important"
+        assert node.env_vars == {"MY_VAR": "keep_me"}
+        # Must report node_validation_failed (tier-3), not node_legacy_data (tier-2)
+        issues = [i for i in resp.validation_issues if i.node_id == str(nid)]
+        assert len(issues) == 1
+        assert issues[0].code == "node_validation_failed"
+
+    def test_tier3_endpoint_preserves_fields(self, client: TestClient) -> None:
+        """Same as above but through the GET /graph endpoint."""
+        nid = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(nid),
+                "node_type": "agent",
+                "position": {"x": 1, "y": 2},
+                "agent_id": "not-a-uuid",
+                "label": "ENDPOINT_LABEL",
+                "template_id": "ENDPOINT_TEMPLATE",
+            }
+        ]
+        pipeline = _make_mock_pipeline(nodes)
+
+        with (
+            patch("modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
+            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
+        assert resp.status_code == 200
+        body = resp.json()
+        node = body["nodes"][0]
+        assert node["label"] == "ENDPOINT_LABEL"
+        assert node["template_id"] == "ENDPOINT_TEMPLATE"
+        assert node["agent_id"] == "not-a-uuid"
+        assert any(i["code"] == "node_validation_failed" for i in body["validation_issues"])
+
+
+class TestSecretNonLeak:
+    """validation_issues messages must never contain env_vars / secrets."""
+
+    def test_env_vars_not_in_validation_issues(self) -> None:
+        """A node whose env_vars contains a sentinel that fails validation
+        must NOT have that sentinel appear in the validation_issues messages."""
+        sentinel = "SK-1234567890ABCDEF_SECRET_KEY_LEAK"
+        nid = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(nid),
+                "node_type": "agent",
+                "position": {"x": 0, "y": 0},
+                "agent_id": "not-a-uuid",
+                "env_vars": {"OPENAI_API_KEY": sentinel},
+            }
+        ]
+        resp = _graph_response(nodes, [])
+        # The sentinel must NOT appear in any validation issue message
+        for issue in resp.validation_issues:
+            assert sentinel not in issue.message
+        # The sentinel IS in the node data (preserved by the fix) — verify the test is not vacuous
+        node = resp.nodes[0]
+        assert node.env_vars == {"OPENAI_API_KEY": sentinel}
+
+    def test_env_vars_not_in_endpoint_validation_issues(self, client: TestClient) -> None:
+        """Same check through the GET /graph endpoint — the sentinel must not
+        appear in validation_issues messages."""
+        sentinel = "PK-LEAK_TEST_987654321"
+        nid = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(nid),
+                "node_type": "agent",
+                "position": {"x": 0, "y": 0},
+                "agent_id": "not-a-uuid",
+                "env_vars": {"SECRET_TOKEN": sentinel},
+            }
+        ]
+        pipeline = _make_mock_pipeline(nodes)
+
+        with (
+            patch("modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
+            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
+        assert resp.status_code == 200
+        body = resp.json()
+        for issue in body["validation_issues"]:
+            assert sentinel not in issue["message"]
+
+    def test_connector_binding_not_in_issue_message(self) -> None:
+        """connector_binding values must not leak into validation_issues messages."""
+        nid = uuid.uuid4()
+        secret_instance = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        nodes = [
+            {
+                "id": str(nid),
+                "node_type": "agent",
+                "position": {"x": 0, "y": 0},
+                "agent_id": "not-a-uuid",
+                "connector_binding": {"type": "github", "instance_id": secret_instance},
+            }
+        ]
+        resp = _graph_response(nodes, [])
+        for issue in resp.validation_issues:
+            assert secret_instance not in issue.message
+
+
+class TestEdgeFallbackPreservesConfig:
+    """Edge fallback must preserve hitl_gate_config and condition_expression."""
+
+    def test_edge_hitl_gate_config_preserved(self) -> None:
+        """An edge with hitl_gate_config that fails validation must still
+        return its gate config in the fallback."""
+        src, tgt = uuid.uuid4(), uuid.uuid4()
+        gate_config = {
+            "label": "Human Review",
+            "description": "Must review before merge - long enough description",
+            "claim_expiry_minutes": 60,
+        }
+        edge = {
+            "id": str(uuid.uuid4()),
+            "source_node_id": str(src),
+            "target_node_id": str(tgt),
+            "edge_type": "INVALID_EDGE_TYPE",
+            "hitl_gate_config": gate_config,
+            "condition_expression": "state.approved == true",
+        }
+        resp = _graph_response([], [edge])
+        assert len(resp.edges) == 1
+        returned = resp.edges[0]
+        # hitl_gate_config is preserved (raw dict from model_construct)
+        assert returned.hitl_gate_config is not None
+        assert returned.hitl_gate_config["label"] == "Human Review"
+        assert returned.condition_expression == "state.approved == true"
+        assert any(i.code == "edge_validation_failed" for i in resp.validation_issues)
+
+
+class TestTier3Reachability:
+    """Confirm a test actually reaches node_validation_failed (tier-3)."""
+
+    def test_tier3_reached_on_invalid_uuid(self) -> None:
+        """An agent node with agent_id='not-a-uuid' fails both strict and
+        lenient validation, reaching tier-3 (node_validation_failed)."""
+        nid = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(nid),
+                "node_type": "agent",
+                "position": {"x": 0, "y": 0},
+                "agent_id": "not-a-uuid",
+            }
+        ]
+        resp = _graph_response(nodes, [])
+        issues = [i for i in resp.validation_issues if i.node_id == str(nid)]
+        assert len(issues) == 1
+        assert issues[0].code == "node_validation_failed"
+        # Must NOT be tier-2 (node_legacy_data)
+        assert issues[0].code != "node_legacy_data"
+
+    def test_tier2_reached_on_missing_composite_ref(self) -> None:
+        """Sanity: a composite without composite_ref reaches tier-2 (lenient
+        passes), NOT tier-3."""
+        nid = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(nid),
+                "node_type": "composite",
+                "position": {"x": 0, "y": 0},
+            }
+        ]
+        resp = _graph_response(nodes, [])
+        issues = [i for i in resp.validation_issues if i.node_id == str(nid)]
+        assert len(issues) == 1
+        assert issues[0].code == "node_legacy_data"
+
+
+class TestNonDictNodeEntry:
+    """A nodes list containing a non-dict must not raise."""
+
+    def test_string_in_nodes_list(self) -> None:
+        nodes: list[Any] = ["not-a-dict", 42, None]
+        resp = _graph_response(nodes, [])  # type: ignore[arg-type]
+        # Non-dict entries are skipped; no crash
+        assert not resp.nodes
+
+    def test_string_in_nodes_list_mixed_with_valid(self) -> None:
+        nid = uuid.uuid4()
+        nodes: list[Any] = ["garbage", _minimal_node(nid, "agent")]
+        resp = _graph_response(nodes, [])  # type: ignore[arg-type]
+        assert len(resp.nodes) == 1
+        assert resp.nodes[0].id == nid
+
+
+class TestNonDictEdgeEntry:
+    """An edges list containing a non-dict must not raise.
+
+    Symmetric with ``TestNonDictNodeEntry``: a malformed (non-dict) entry in
+    the stored edges array previously reached ``edge_dict.get("id")`` and
+    raised ``AttributeError`` -> HTTP 500, breaking the "graph read never
+    fails" contract (FAR-874).
+    """
+
+    def test_string_in_edges_list(self) -> None:
+        edges: list[Any] = ["not-a-dict", 42, None]
+        resp = _graph_response([], edges)  # type: ignore[arg-type]
+        # Non-dict entries are skipped; no crash
+        assert not resp.edges
+
+    def test_string_in_edges_list_mixed_with_valid(self) -> None:
+        src, tgt = uuid.uuid4(), uuid.uuid4()
+        edges: list[Any] = ["garbage", _minimal_edge(src, tgt)]
+        resp = _graph_response([], edges)  # type: ignore[arg-type]
+        assert len(resp.edges) == 1
+        assert resp.edges[0].source_node_id == src
+        assert resp.edges[0].target_node_id == tgt
+
+    def test_non_dict_edge_entry_reports_issue(self) -> None:
+        """The skipped non-dict entry is surfaced as a warning issue so the
+        malformed stored data is not silently dropped."""
+        edges: list[Any] = ["garbage"]
+        resp = _graph_response([], edges)  # type: ignore[arg-type]
+        assert not resp.edges
+        issues = [i for i in resp.validation_issues if i.code == "edge_invalid_entry"]
+        assert len(issues) == 1
+        assert issues[0].severity == "warning"
+
+    def test_string_in_edges_list_endpoint(self, client: TestClient) -> None:
+        """Same as above but through the GET /graph endpoint: a non-dict edge
+        entry must yield 200, not a 500."""
+        src, tgt = uuid.uuid4(), uuid.uuid4()
+        nodes = [_minimal_node(src, "agent"), _minimal_node(tgt, "agent")]
+        edges: list[Any] = ["not-a-dict", _minimal_edge(src, tgt)]
+        pipeline = _make_mock_pipeline(nodes)
+
+        with (
+            patch(
+                "modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, edges)
+            ),
+            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["edges"]) == 1
+        assert any(i["code"] == "edge_invalid_entry" for i in body["validation_issues"])
+
+    def test_orm_edge_object_is_not_skipped(self) -> None:
+        """``get_pipeline_graph`` returns ORM rows, not dicts — a real edge must
+        survive the read (regression guard for ``.get`` on an ORM row)."""
+        edge = _orm_edge()
+        resp = _graph_response([], [edge])
+        assert len(resp.edges) == 1
+        assert resp.edges[0].id == edge.id
+        assert resp.edges[0].source_node_id == edge.source_node_id
+        assert not any(i.code == "edge_invalid_entry" for i in resp.validation_issues)
+
+    def test_orm_edge_failing_validation_is_preserved(self) -> None:
+        """An ORM edge whose hitl_gate_config fails the current schema must be
+        returned through the fallback (preserving stored fields), not dropped."""
+        edge = _orm_edge(hitl_gate_config={"label": "x"})
+        resp = _graph_response([], [edge])
+        assert len(resp.edges) == 1
+        assert resp.edges[0].hitl_gate_config == {"label": "x"}
+        assert any(i.code == "edge_validation_failed" for i in resp.validation_issues)
+
+
+class TestBrokenButRealisticGraph:
+    """Composite node with composite_ref: None + an edge pointing at it."""
+
+    def test_composite_none_ref_with_edge(self) -> None:
+        """A composite with composite_ref=None (broken but stored) plus an
+        edge pointing at it returns 200 with issues."""
+        composite_id = uuid.uuid4()
+        agent_id = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(composite_id),
+                "node_type": "composite",
+                "position": {"x": 0, "y": 0},
+                "composite_ref": None,
+            },
+            _minimal_node(agent_id, "agent"),
+        ]
+        edges = [_minimal_edge(composite_id, agent_id)]
+        resp = _graph_response(nodes, edges)
+        assert len(resp.nodes) == 2
+        assert len(resp.edges) == 1
+        # Composite must have a validation issue
+        composite_issues = [i for i in resp.validation_issues if i.node_id == str(composite_id)]
+        assert composite_issues
+        # Edge must be valid
+        assert not any(i.code == "edge_validation_failed" for i in resp.validation_issues)
