@@ -100,6 +100,24 @@ __all__ = [
     "mark_unhealthy",
     "register_connector_type",
     "register_model_backend",
+    # --- Plugin registry public API for the modulo.evals / modulo.schema_types
+    #     entry-point groups (FAR-795 follow-on). These builder/query methods +
+    #     properties are the load-bearing public contract for the two newly
+    #     wired entry-point groups (discover_plugins registers plugin builders
+    #     into the backing dicts; external plugin authors call build_eval /
+    #     build_schema_field / has_eval / has_schema_field and read eval_types /
+    #     schema_field_types). No in-tree prod call site exists yet (the
+    #     consumers land in later feature slices), so vulture cannot see them —
+    #     whitelisted as framework-contract symbols alongside
+    #     register_connector_type / register_model_backend.
+    "build_eval",
+    "build_schema_field",
+    "register_eval",
+    "register_schema_type",
+    "has_eval",
+    "has_schema_field",
+    "eval_types",
+    "schema_field_types",
     "check_access",
     "get_and_clear_permission_decision",
     "clear_all_overrides",
