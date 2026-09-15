@@ -714,6 +714,46 @@ def test_discover_plugins_backend_entry_point():
     assert registry.has_model_backend("my_demo_backend")
 
 
+def test_discover_plugins_eval_entry_point():
+    """Discovering a ``modulo.evals`` entry point registers the eval builder."""
+    registry = PluginRegistry()
+    eval_builder = lambda config: {"eval": "stub"}  # noqa: E731
+    mock_ep = _make_mock_entry_point(
+        "modulo.evals",
+        "my_demo_eval",
+        load_result=eval_builder,
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[], [], [mock_ep], []],
+    ):
+        discovered = registry.discover_plugins()
+
+    assert len(discovered) == 1
+    assert discovered[0].PLUGIN_ID == "pkg-demo"
+    assert "eval" in discovered[0].capabilities
+
+
+def test_discover_plugins_schema_type_entry_point():
+    """Discovering a ``modulo.schema_types`` entry point registers the schema builder."""
+    registry = PluginRegistry()
+    schema_builder = lambda config: {"type": "stub"}  # noqa: E731
+    mock_ep = _make_mock_entry_point(
+        "modulo.schema_types",
+        "my_demo_schema_type",
+        load_result=schema_builder,
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[], [], [], [mock_ep]],
+    ):
+        discovered = registry.discover_plugins()
+
+    assert len(discovered) == 1
+    assert discovered[0].PLUGIN_ID == "pkg-demo"
+    assert "schema_type" in discovered[0].capabilities
+
+
 def test_discover_plugins_both_groups():
     """Discovering from both entry-point groups populates connectors and backends."""
     registry = PluginRegistry()
