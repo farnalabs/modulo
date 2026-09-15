@@ -12154,8 +12154,11 @@ export interface components {
         };
         /** GraphValidationIssue */
         GraphValidationIssue: {
-            /** Severity */
-            severity: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "error" | "warning" | "info";
             /** Code */
             code: string;
             /** Message */

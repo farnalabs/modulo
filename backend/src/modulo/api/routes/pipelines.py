@@ -130,6 +130,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 
+# Shared context dict passed to Pydantic model_validate() when re-validating
+# STORED data on graph READs.  The ``legacy_read`` flag skips per-type
+# validators that may have been tightened since the data was saved, so legacy
+# graphs stay readable even if a later model revision made the write path
+# stricter.  Imported by pipeline_apply.py for the same leniency on the
+# CLI-side current-graph normalisation.
+LEGACY_READ_CONTEXT: dict[str, bool] = {"legacy_read": True}
+
 # DoS guard: reject graphs larger than these limits before any DB work.
 _MAX_GRAPH_NODES = 500
 _MAX_GRAPH_EDGES = 1000
@@ -286,6 +294,21 @@ def _graph_validation_issue(severity: str, code: str, message: str, node_id: str
         message=message,
         node_id=node_id,
     )
+
+
+def _safe_validation_errors(exc: ValidationError) -> list[dict[str, Any]]:
+    """Return Pydantic error dicts stripped of secrets (input, ctx, url).
+
+    Pydantic v2 error dicts carry an ``input`` key holding the offending value.
+    For model-level validators the input is the ENTIRE node/edge dict — which
+    may contain ``env_vars`` (API keys), ``connector_binding``, and
+    ``workspace_inputs``.  Stripping ``input``, ``ctx``, and ``url`` prevents
+    secret leakage into ``validation_issues`` messages and log lines.
+    """
+    return [
+        {k: v for k, v in err.items() if k not in ("input", "ctx", "url")}
+        for err in exc.errors(include_url=False, include_input=False)
+    ]
 
 
 async def _deny_hitl_gate(
@@ -1245,7 +1268,7 @@ class PipelineGraphEdge(BaseModel):
 
 
 class GraphValidationIssue(BaseModel):
-    severity: str
+    severity: Literal["error", "warning", "info"]
     code: str
     message: str
     node_id: str | None = None
@@ -1295,9 +1318,11 @@ def _graph_response(
     issues: list[GraphValidationIssue] = list(validation_issues or [])
 
     # --- nodes: validate per-node; never fail the read ---
-    _read_ctx = {"legacy_read": True}
     valid_nodes: list[PipelineGraphNode] = []
     for node_dict in nodes:
+        if not isinstance(node_dict, dict):
+            logger.warning("Graph read: skipping non-dict node entry: %r", type(node_dict).__name__)
+            continue
         raw_node_id = node_dict.get("id")
         node_id = str(raw_node_id) if raw_node_id is not None else "unknown"
         try:
@@ -1307,7 +1332,7 @@ def _graph_response(
             # Second attempt: lenient validation (FAR-874) — skip type-specific
             # validators that may have been tightened since the data was saved.
             try:
-                lenient = PipelineGraphNode.model_validate(node_dict, context=_read_ctx)
+                lenient = PipelineGraphNode.model_validate(node_dict, context=LEGACY_READ_CONTEXT)
                 valid_nodes.append(lenient)
                 logger.info(
                     "Graph read: node %s has legacy data that passes lenient "
@@ -1329,28 +1354,32 @@ def _graph_response(
             except ValidationError as exc:
                 # Even lenient validation failed — use model_construct
                 # passthrough so the read never 422s.
+                safe_errors = _safe_validation_errors(exc)
                 logger.warning(
                     "Graph read: node %s failed all validation (%s); including raw data with warning.",
                     node_id,
-                    exc.errors(include_url=False),
+                    safe_errors,
                 )
                 issues.append(
                     GraphValidationIssue(
                         severity="warning",
                         code="node_validation_failed",
-                        message=(f"Node {node_id} failed validation: {exc.errors(include_url=False)}"),
+                        message=(f"Node {node_id} failed validation: {safe_errors}"),
                         node_id=node_id,
                     )
                 )
                 try:
-                    fallback = PipelineGraphNode.model_construct(
-                        id=uuid.UUID(str(node_dict["id"])) if node_dict.get("id") else uuid.uuid4(),
-                        node_type=node_dict.get("node_type", "agent"),
-                        position=GraphPosition(
-                            x=node_dict.get("position", {}).get("x", 0),
-                            y=node_dict.get("position", {}).get("y", 0),
-                        ),
-                    )
+                    # Preserve all stored fields so the read never silently
+                    # truncates node data (CRITICAL data-loss fix).  Only coerce
+                    # the fields that genuinely need type coercion (id, position);
+                    # every other key the model declares is kept as-is from the
+                    # raw dict.  Unknown keys (future schema additions) are
+                    # dropped and logged.
+                    fallback_fields = {k: v for k, v in node_dict.items() if k in PipelineGraphNode.model_fields}
+                    fallback_fields["id"] = uuid.UUID(str(node_dict["id"])) if node_dict.get("id") else uuid.uuid4()
+                    pos_raw = node_dict.get("position") or {}
+                    fallback_fields["position"] = GraphPosition(x=pos_raw.get("x", 0), y=pos_raw.get("y", 0))
+                    fallback = PipelineGraphNode.model_construct(**fallback_fields)
                     valid_nodes.append(fallback)
                 except Exception:
                     logger.warning(
@@ -1361,32 +1390,39 @@ def _graph_response(
     # --- edges: validate per-edge; never fail the read ---
     # Gate-description enforcement must stay write-scoped (FAR-613) — legacy
     # pipelines whose gate descriptions predate the minimum stay readable.
+    # Edges only need 2 tiers (strict + lenient) because PipelineGraphEdge has
+    # no per-type validators — unlike nodes, where each node_type runs a
+    # dedicated validator that may have been tightened since the data was saved.
     valid_edges: list[PipelineGraphEdge] = []
     for edge_dict in edges:
         raw_edge_id = edge_dict.get("id")
         edge_id = str(raw_edge_id) if raw_edge_id is not None else "unknown"
         try:
-            valid_edges.append(PipelineGraphEdge.model_validate(edge_dict, context=_read_ctx))
+            valid_edges.append(PipelineGraphEdge.model_validate(edge_dict, context=LEGACY_READ_CONTEXT))
         except ValidationError as exc:
+            safe_errors = _safe_validation_errors(exc)
             logger.warning(
                 "Graph read: edge %s failed Pydantic validation (%s); including raw data with warning.",
                 edge_id,
-                exc.errors(include_url=False),
+                safe_errors,
             )
             issues.append(
                 GraphValidationIssue(
                     severity="warning",
                     code="edge_validation_failed",
-                    message=(f"Edge {edge_id} failed validation: {exc.errors(include_url=False)}"),
+                    message=(f"Edge {edge_id} failed validation: {safe_errors}"),
                 )
             )
             try:
-                fallback_edge = PipelineGraphEdge.model_construct(
-                    id=uuid.UUID(str(edge_dict["id"])) if edge_dict.get("id") else uuid.uuid4(),
-                    source_node_id=uuid.UUID(str(edge_dict["source_node_id"])),
-                    target_node_id=uuid.UUID(str(edge_dict["target_node_id"])),
-                    edge_type=edge_dict.get("edge_type", "normal"),
-                )
+                # Preserve all stored fields (hitl_gate_config,
+                # condition_expression, etc.) — same approach as the node
+                # fallback: filter to model-declared fields, coerce only the
+                # IDs, and model_construct the rest.
+                fallback_fields = {k: v for k, v in edge_dict.items() if k in PipelineGraphEdge.model_fields}
+                fallback_fields["id"] = uuid.UUID(str(edge_dict["id"])) if edge_dict.get("id") else uuid.uuid4()
+                fallback_fields["source_node_id"] = uuid.UUID(str(edge_dict["source_node_id"]))
+                fallback_fields["target_node_id"] = uuid.UUID(str(edge_dict["target_node_id"]))
+                fallback_edge = PipelineGraphEdge.model_construct(**fallback_fields)
                 valid_edges.append(fallback_edge)
             except Exception:
                 logger.warning(

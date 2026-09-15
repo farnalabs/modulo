@@ -48,17 +48,20 @@ def normalize_current_graph(payload: dict[str, Any]) -> dict[str, Any]:
 
     Validated with the API models using the READ context (legacy_read) so a
     legacy stored gate description does not fail the fetch — the read path on
-    the server uses the same context. The hash-parity guarantee holds because
-    the desired side is normalised through the same models (write context).
+    the server uses the same context.  Nodes also use the read context so that
+    legacy nodes the API read tolerates do not fail the CLI apply/drift path.
+    The hash-parity guarantee holds because the desired side is normalised
+    through the same models (write context).
     """
-    from modulo.api.routes.pipelines import PipelineGraphEdge, PipelineGraphNode
+    from modulo.api.routes.pipelines import LEGACY_READ_CONTEXT, PipelineGraphEdge, PipelineGraphNode
 
     return {
         "nodes": [
-            PipelineGraphNode.model_validate(node).model_dump(mode="json") for node in payload.get("nodes") or []
+            PipelineGraphNode.model_validate(node, context=LEGACY_READ_CONTEXT).model_dump(mode="json")
+            for node in payload.get("nodes") or []
         ],
         "edges": [
-            PipelineGraphEdge.model_validate(edge, context={"legacy_read": True}).model_dump(mode="json")
+            PipelineGraphEdge.model_validate(edge, context=LEGACY_READ_CONTEXT).model_dump(mode="json")
             for edge in payload.get("edges") or []
         ],
     }
