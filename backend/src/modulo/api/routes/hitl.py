@@ -487,8 +487,14 @@ async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
 # ---------------------------------------------------------------------------
 
 
-class AnswerValidationError(HTTPException):
-    """422 raised when a choice answer fails validation against the response contract."""
+class AnswerValidationErrorHTTP(HTTPException):
+    """422 raised when a choice answer fails validation against the response contract.
+
+    Named ``...HTTP`` to stay unambiguous against the shared
+    ``hitl_answer_validation.AnswerValidationError`` (a ``ValueError``) — the
+    two coexist in this module's imports, so a bare ``AnswerValidationError``
+    would grep ambiguously.
+    """
 
     def __init__(self, detail: str) -> None:
         super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
@@ -508,7 +514,7 @@ async def _validate_choice_answer(
     expected by the REST layer.
 
     Returns the validated answer dict, or None when no answer is provided.
-    Raises ``AnswerValidationError`` (422) when the answer is present but
+    Raises ``AnswerValidationErrorHTTP`` (422) when the answer is present but
     invalid: missing ``kind``/``option_id``, unknown kind, or unknown
     option_id.
     """
@@ -521,7 +527,7 @@ async def _validate_choice_answer(
             answer=answer,
         )
     except SharedValidationError as exc:
-        raise AnswerValidationError(str(exc)) from exc
+        raise AnswerValidationErrorHTTP(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
