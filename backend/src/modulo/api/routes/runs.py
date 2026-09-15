@@ -1632,6 +1632,15 @@ class RunIOResponse(BaseModel):
     fixture_map: dict[str, str] | None = None
     #: node_id -> human label from the snapshot graph (frontend UUID hygiene).
     node_labels: dict[str, str] = Field(default_factory=dict)
+    #: FAR-870: true total character length of all stdout across all nodes
+    #: (pre-truncation). Derived from per-node ``stdout_length`` in telemetry
+    #: when present (sandbox nodes store the true length here even when the
+    #: inline ``agent_stdout`` is capped); falls back to ``len(agent_stdout)``
+    #: for nodes without telemetry.
+    stdout_total_length: int = 0
+    #: FAR-870: true total character length of all stderr across all nodes
+    #: (pre-truncation). Derived analogously from ``stderr_length`` / ``agent_stderr``.
+    stderr_total_length: int = 0
 
     def build_fixture_map(self) -> dict[str, str]:
         return _build_fixture_map(self.input_payload, self.outputs_json)
@@ -1740,6 +1749,50 @@ class FixtureExportResponse(BaseModel):
     fixture_map: dict[str, str]
 
 
+def _compute_log_totals(
+    normalized_telemetry: dict[str, Any] | None,
+    normalized_outputs: dict[str, Any] | None,
+) -> tuple[int, int]:
+    """FAR-870: derive the true total stdout/stderr character lengths across all nodes.
+
+    For each node, prefer the ``stdout_length`` / ``stderr_length`` value stored
+    in telemetry (the sandbox runner always records the pre-truncation character
+    count here, even when the inline ``agent_stdout`` is capped). Fall back to
+    ``len(str(…))`` of the inline content for nodes without telemetry or
+    missing length keys (non-sandbox nodes, legacy rows).
+
+    Legacy inner-output envelopes carry ``agent_stdout`` / ``agent_stderr`` but
+    NOT ``stdout_length`` -- the fallback derives the length from the inline
+    content in that case.  A null inline value contributes 0 rather than the
+    literal ``"None"`` (``str(None)`` would otherwise add phantom characters).
+    """
+    stdout_total = 0
+    stderr_total = 0
+    all_node_ids = set(normalized_telemetry or {}) | set(normalized_outputs or {})
+    for node_id in all_node_ids:
+        tele = (normalized_telemetry or {}).get(node_id)
+        if isinstance(tele, dict):
+            stdout_len = tele.get("stdout_length")
+            stderr_len = tele.get("stderr_length")
+            if stdout_len is not None:
+                stdout_total += int(stdout_len or 0)
+            elif "agent_stdout" in tele:
+                stdout_total += len(str(tele["agent_stdout"] or ""))
+            if stderr_len is not None:
+                stderr_total += int(stderr_len or 0)
+            elif "agent_stderr" in tele:
+                stderr_total += len(str(tele["agent_stderr"] or ""))
+        else:
+            # No telemetry: derive from inline content length.
+            out = (normalized_outputs or {}).get(node_id)
+            if isinstance(out, dict):
+                stdout_total += len(str(out.get("agent_stdout") or ""))
+                stderr_total += len(str(out.get("agent_stderr") or ""))
+            elif isinstance(out, str):
+                stdout_total += len(out)
+    return stdout_total, stderr_total
+
+
 def _build_run_io_response(run: Run, node_labels: dict[str, str], blobs: RunBlobs) -> RunIOResponse:
     """Normalise, mask, and package a run's IO into a RunIOResponse.
 
@@ -1760,6 +1813,9 @@ def _build_run_io_response(run: Run, node_labels: dict[str, str], blobs: RunBlob
     masked_telemetry = _mask_output_value(normalized_telemetry)
     masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
 
+    # FAR-870: derive true total character lengths from pre-truncation telemetry.
+    stdout_total, stderr_total = _compute_log_totals(normalized_telemetry, normalized_outputs)
+
     resp = RunIOResponse(
         run_id=run.id,
         run_number=run.run_number,
@@ -1768,6 +1824,8 @@ def _build_run_io_response(run: Run, node_labels: dict[str, str], blobs: RunBlob
         outputs_json=masked_outputs,
         node_telemetry=masked_telemetry,
         node_labels=node_labels,
+        stdout_total_length=stdout_total,
+        stderr_total_length=stderr_total,
     )
     resp.fixture_map = resp.build_fixture_map()
     return resp

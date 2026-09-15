@@ -16108,6 +16108,16 @@ export interface components {
             node_labels?: {
                 [key: string]: string;
             };
+            /**
+             * Stdout Total Length
+             * @default 0
+             */
+            stdout_total_length: number;
+            /**
+             * Stderr Total Length
+             * @default 0
+             */
+            stderr_total_length: number;
         };
         /** RunResponse */
         RunResponse: {
