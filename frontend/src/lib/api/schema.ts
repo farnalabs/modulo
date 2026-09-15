@@ -12432,6 +12432,11 @@ export interface components {
             condition?: string | null;
             /** @description Eval-reference condition: references an eval definition by name with threshold and operator. Evaluated after eval-before-interrupt runs. If the condition evaluates to true (e.g., score < threshold with operator lt), the gate fires. If false, execution continues without interrupting. */
             eval_condition?: components["schemas"]["EvalCondition"] | null;
+            /**
+             * Subject Path
+             * @description JMESPath expression naming the field under review in the run state.  Resolved against the same root the gate condition evaluates against (the merged state dict).  The resolved value is bounded and redacted identically to artifacts before persistence.
+             */
+            subject_path?: string | null;
         };
         /** HousekeepingCategory */
         HousekeepingCategory: {
