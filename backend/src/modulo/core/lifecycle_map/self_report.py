@@ -15,9 +15,9 @@ structured output:
 
 Entries are ``{kind, ref, status?}``. The ``status`` is optional and must be
 one of ``"done"`` / ``"attempted"``. The parser treats every reported entry as
-an ADVISORY OPERATOR CLAIM: provenance is forced to ``"reported"``, so a
-reported claim can only confirm or match an existing journey row keyed by the
-same canonical ``(org, kind, ref)`` — it can NEVER mint one. Minting is owned
+an ADVISORY OPERATOR CLAIM and stamps it ``source="agent"`` (rank 0) — so a
+self-reported claim can only confirm or match an existing journey row keyed by
+the same canonical ``(org, kind, ref)`` — it can NEVER mint one. Minting is owned
 by the create-time ``INSERT ... ON CONFLICT DO NOTHING`` path in
 ``modulo.db.crud.run`` (FAR-142).
 
@@ -35,12 +35,13 @@ from modulo.db.lifecycle_refs import (
     canonicalise_kind,
     canonicalise_ref,
 )
-from modulo.db.lifecycle_refs import (
-    REPORTED_SOURCE as _REPORTED_SOURCE,
-)
 from modulo.settings import work_item_refs_cap
 
 _REF_KEYS: frozenset[str] = frozenset({"work_item_refs", "modulo.work_item_refs", "touched_work_items"})
+
+# The advisory self-report claim is stamped ``agent`` (rank 0) directly by the
+# parser — matching the persisted ``caller``/``derived``/``agent`` vocabulary.
+_ADVISORY_CLAIM_SOURCE = "agent"
 
 
 def parse_self_report_refs(merged_outputs: dict[str, Any]) -> list[dict[str, Any]]:
@@ -115,7 +116,8 @@ def validate_and_normalise_reported_refs(
 
     * a non-dict, a blank/missing ``kind`` or ``ref``, or a canonicalisation
       failure is counted as ``malformed`` and skipped;
-    * ``source`` is forced to ``"reported"`` (advisory operator claim);
+    * ``source`` is stamped with the advisory-claim provenance ``"agent"``
+      (rank 0) — a self-report claim can only confirm, never mint or upgrade;
     * an optional ``status`` is kept only when it is one of ``{"done",
       "attempted"}``, otherwise dropped;
     * duplicates of an already-seen ``(kind, ref, source)`` triple are
@@ -151,7 +153,7 @@ def validate_and_normalise_reported_refs(
             counters["malformed"] += 1
             continue
 
-        key = (kind, ref, _REPORTED_SOURCE)
+        key = (kind, ref, _ADVISORY_CLAIM_SOURCE)
         if key in seen:
             continue
         seen.add(key)
@@ -160,7 +162,7 @@ def validate_and_normalise_reported_refs(
             counters["capped"] += 1
             continue
 
-        normalised: dict[str, Any] = {"kind": kind, "ref": ref, "source": _REPORTED_SOURCE}
+        normalised: dict[str, Any] = {"kind": kind, "ref": ref, "source": _ADVISORY_CLAIM_SOURCE}
         status = raw.get("status")
         if isinstance(status, str) and status in _VALID_STATUSES:
             normalised["status"] = status

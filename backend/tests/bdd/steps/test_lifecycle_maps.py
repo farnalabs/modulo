@@ -751,7 +751,7 @@ def self_report_with_stage_id(
         patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
         patch(
             "modulo.api.routes.lifecycle_maps.confirm_reported_refs",
-            new=AsyncMock(return_value=([{"kind": kind, "ref": ref, "source": "reported"}], 0)),
+            new=AsyncMock(return_value=([{"kind": kind, "ref": ref, "source": "agent"}], 0)),
         ),
         patch("modulo.api.routes.lifecycle_maps.advance_journeys", new=_fake_advance),
     ):

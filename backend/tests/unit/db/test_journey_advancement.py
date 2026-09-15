@@ -808,9 +808,8 @@ class TestFinalizeJourneyHook:
         # emissions it can attribute to a node — check the base fields with the
         # stamp allowed present.
         claimed = [r for r in refs if r.get("kind") == "github_pr" and r.get("ref") == "456"]
-        # FAR-794 persisted invariant: the confirmed legacy ``reported``
-        # claim is normalised to ``agent`` at the confirm boundary — the
-        # stored run refs never carry ``reported``.
+        # FAR-794/FAR-795: the self-report claim is stamped ``agent`` by the
+        # parser — the stored run refs never carry a legacy alias.
         assert claimed[0]["source"] == "agent"
         assert claimed[0]["status"] == "done"
         assert {"kind": "github_pr", "ref": "123", "source": "derived"} in refs

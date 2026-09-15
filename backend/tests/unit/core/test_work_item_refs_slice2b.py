@@ -32,7 +32,7 @@ from modulo.core.trigger_engine import (
     _RateLimitState,
     _WebhookDelivery,
 )
-from modulo.db.lifecycle_refs import REPORTED_SOURCE, WORK_ITEM_REFS_KEY, validate_ref_entry
+from modulo.db.lifecycle_refs import WORK_ITEM_REFS_KEY, validate_ref_entry
 from modulo.db.models.trigger import Trigger
 from modulo.settings import work_item_refs_cap
 
@@ -136,12 +136,12 @@ class TestNodeEmissionSources:
         assert entries[1]["source_node_id"] == "node-b"
         assert "source_node_id" not in entries[2]  # caller refs are never stamped
 
-    def test_resolve_effective_refs_confirmed_reported_gets_node_stamp(self) -> None:
+    def test_resolve_effective_refs_confirmed_agent_gets_node_stamp(self) -> None:
         run = MagicMock()
         run.organisation_id = uuid.uuid4()
         run.work_item_refs = [_ref("jira", "X-1", "caller")]
         merged = {"node-a": {"output": {"work_item_refs": [_ref("jira", "X-9", "agent")]}}}
-        confirmed = [_ref("jira", "X-9", "reported")]
+        confirmed = [_ref("jira", "X-9", "agent")]
         with (
             patch(
                 "modulo.core.cost_controller.finalize._confirm_reported_refs",
@@ -155,9 +155,8 @@ class TestNodeEmissionSources:
         assert len(resolution.confirmed) == 1
         assert resolution.cap_dropped == 0
         by_ref = {str(r["ref"]): r for r in resolution.effective}
-        # FAR-794 persisted invariant: the stored source is ``agent`` — the
-        # legacy ``reported`` marker is normalised at the confirm boundary,
-        # never persisted.
+        # FAR-794: the stored source is ``agent`` — the parser-stamped claim is
+        # stamped with its node id and persisted as-is.
         assert by_ref["X-9"]["source"] == "agent"
         assert by_ref["X-9"]["source_node_id"] == "node-a"
         assert by_ref["X-1"]["source"] == "caller"  # wire untouched
@@ -180,7 +179,7 @@ class TestNodeEmissionSources:
 
 
 # ---------------------------------------------------------------------------
-# confirm-gate normalisation — the persisted-source invariant (FAR-794)
+# confirm gate + persisted-source invariant (FAR-794/FAR-795)
 # ---------------------------------------------------------------------------
 
 
@@ -193,32 +192,31 @@ def _session_with_journey(found: bool) -> MagicMock:
     return session
 
 
-class TestConfirmReportedRefsNormalisation:
-    async def test_the_confirm_gate_still_matches_legacy_reported_claims(self) -> None:
-        # (b) the gate itself is untouched: the EXISTS match keys on
-        # (org, kind, ref) — a legacy ``reported`` claim that has a journey
-        # row still confirms. The gate output keeps the raw canonicalised
-        # claim; the normalisation happens at the merge boundary.
-        entries = [_ref("jira", "FAR-1", REPORTED_SOURCE)]
+class TestConfirmReportedRefs:
+    async def test_the_confirm_gate_matches_agent_claims_by_identity(self) -> None:
+        # The EXISTS match keys on (org, kind, ref) only — an advisory
+        # ``agent`` claim that has a journey row still confirms. The gate
+        # output keeps the raw canonicalised claim. (Inverted from FAR-794's
+        # legacy-``reported`` window: the parser stamps ``agent`` directly.)
+        entries = [_ref("jira", "FAR-1", "agent")]
         confirmed = await _confirm_reported_refs(_session_with_journey(True), uuid.uuid4(), entries)
-        assert confirmed == [{"kind": "jira", "ref": "FAR-1", "source": REPORTED_SOURCE}]
+        assert confirmed == [{"kind": "jira", "ref": "FAR-1", "source": "agent"}]
 
-    async def test_unmatched_claim_is_dropped_and_never_normalised(self) -> None:
-        entries = [_ref("jira", "GHOST", REPORTED_SOURCE)]
+    async def test_unmatched_agent_claim_is_dropped(self) -> None:
+        entries = [_ref("jira", "GHOST", "agent")]
         confirmed = await _confirm_reported_refs(_session_with_journey(False), uuid.uuid4(), entries)
         assert not confirmed
         # The unconfirmed claim keeps its raw shape (it is never persisted).
-        assert entries == [{"kind": "jira", "ref": "GHOST", "source": REPORTED_SOURCE}]
+        assert entries == [{"kind": "jira", "ref": "GHOST", "source": "agent"}]
 
-    def test_stored_effective_list_never_carries_reported(self) -> None:
-        # (a) the persisted invariant end-to-end through the resolver: a
-        # confirmed legacy ``reported`` claim is normalised to ``agent``
-        # BEFORE anything reaches ``run.work_item_refs``.
+    def test_stored_effective_list_carries_only_agent_claims(self) -> None:
+        # The persisted invariant end-to-end through the resolver: a confirmed
+        # agent claim reaches ``run.work_item_refs`` exactly as parsed.
         run = MagicMock()
         run.organisation_id = uuid.uuid4()
         run.work_item_refs = []
         merged = {"node-a": {"output": {"work_item_refs": [_ref("jira", "X-9", "agent")]}}}
-        confirmed = [_ref("jira", "X-9", REPORTED_SOURCE)]
+        confirmed = [_ref("jira", "X-9", "agent")]
         with (
             patch(
                 "modulo.core.cost_controller.finalize._confirm_reported_refs",
@@ -230,15 +228,14 @@ class TestConfirmReportedRefsNormalisation:
 
             resolution = asyncio.run(_resolve_effective_refs(MagicMock(), run, merged))
         assert resolution.effective
-        assert all(e.get("source") != REPORTED_SOURCE for e in resolution.effective)
+        assert all(e.get("source") == "agent" for e in resolution.confirmed)
         assert resolution.confirmed[0]["source"] == "agent"
 
-    def test_reported_is_accepted_on_read_paths(self) -> None:
-        # (c) ``reported`` stays accepted on READ paths — the default
-        # ``_READ_ACCEPTED_SOURCES`` vocabulary keeps tolerating
-        # pre-normalisation rows; only the intake/merge boundary normalises.
-        entry = validate_ref_entry({"kind": "github_pr", "ref": "#456", "source": "reported"})
-        assert entry == {"kind": "github_pr", "ref": "456", "source": "reported"}
+    def test_reported_is_rejected_on_every_path(self) -> None:
+        # (c) Inverted (FAR-795): the legacy ``reported`` alias is GONE — the
+        # default vocabulary rejects it, and there is no read-side tolerance.
+        with pytest.raises(ValueError, match="'source' must be one of"):
+            validate_ref_entry({"kind": "github_pr", "ref": "#456", "source": "reported"})
 
 
 # ---------------------------------------------------------------------------
