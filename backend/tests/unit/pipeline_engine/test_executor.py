@@ -1548,10 +1548,13 @@ async def test_interrupt_persists_fire_time_context_on_the_gate_row():
         "pipeline_name",
         "subject",
         "consequences",
+        "response_contract",
     }
     assert context["pipeline_name"] == "PR Reviewer"
     # The synthetic payload carries no condition_result member — no evidence.
     assert context["condition_result"] is None
+    # FAR-860: the gate config declares no response_contract here.
+    assert context["response_contract"] is None
 
 
 async def test_interrupt_threads_matched_condition_result_into_the_context():

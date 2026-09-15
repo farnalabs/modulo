@@ -47,6 +47,12 @@ from modulo.api.dependencies import (
     pg_connection_string,
     require_permission,
 )
+from modulo.api.hitl_answer_validation import (
+    AnswerValidationError as SharedValidationError,
+)
+from modulo.api.hitl_answer_validation import (
+    validate_hitl_answer,
+)
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
@@ -506,13 +512,6 @@ async def _validate_choice_answer(
     invalid: missing ``kind``/``option_id``, unknown kind, or unknown
     option_id.
     """
-    from modulo.api.hitl_answer_validation import (
-        AnswerValidationError as SharedValidationError,
-    )
-    from modulo.api.hitl_answer_validation import (
-        validate_hitl_answer,
-    )
-
     try:
         return await validate_hitl_answer(
             session,
