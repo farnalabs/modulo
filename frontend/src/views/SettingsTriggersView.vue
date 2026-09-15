@@ -819,104 +819,150 @@ function confirmDelete(trigger: TriggerItem) {
   deleteDialogOpen.value = true
 }
 
+// ---------------------------------------------------------------------------
+// saveTrigger decomposition — helpers extracted to keep the orchestrator thin
+// ---------------------------------------------------------------------------
+
+/** Parse a JSON string; returns the parsed object or an i18n error key on failure. */
+function parseJsonOrError(
+  value: string,
+  errorKey: string,
+): Record<string, unknown> | string {
+  if (!value) return {}
+  try {
+    return JSON.parse(value) as Record<string, unknown>
+  } catch {
+    return errorKey
+  }
+}
+
+/** Validate form fields before save; returns an i18n error key or '' on success. */
+function validateTriggerForm(): string {
+  if (!form.value.pipeline_id) {
+    return 'views.SettingsTriggersView.please_select_a_pipeline'
+  }
+  if (!editingId.value && !form.value.trigger_type) {
+    return 'views.SettingsTriggersView.please_select_a_trigger_type'
+  }
+  const triggerType = editingId.value ? editingType.value : form.value.trigger_type
+  if (triggerType === 'ongoing') {
+    // FAR-158: the ongoing spend limit is REQUIRED (backend rejects None).
+    if (!form.value.daily_spend_limit || Number(form.value.daily_spend_limit) <= 0) {
+      return 'views.SettingsTriggersView.daily_spend_limit_required'
+    }
+    if (!form.value.max_concurrent_runs || form.value.max_concurrent_runs < 1 || form.value.max_concurrent_runs > 20) {
+      return 'views.SettingsTriggersView.target_runs_invalid'
+    }
+  }
+  return ''
+}
+
+/** Build the config_json payload for the given trigger type. Returns an i18n error key on invalid JSON. */
+function buildConfigJson(triggerType: string): Record<string, unknown> | string {
+  const configJson: Record<string, unknown> = {}
+
+  if (triggerType === 'webhook') {
+    if (form.value.webhook_url) configJson.url = form.value.webhook_url
+    if (form.value.webhook_method) configJson.method = form.value.webhook_method
+    if (form.value.webhook_headers) {
+      const result = parseJsonOrError(form.value.webhook_headers, 'views.SettingsTriggersView.headers_must_be_valid_json')
+      if (typeof result === 'string') return result
+      configJson.headers = result
+    }
+  }
+
+  if (triggerType === 'polling') {
+    if (!form.value.poll_interval || form.value.poll_interval < 60) {
+      return 'views.SettingsTriggersView.poll_interval_seconds_too_low'
+    }
+    if (form.value.connector_instance_id) configJson.connector_instance_id = form.value.connector_instance_id
+    if (form.value.poll_query) configJson.poll_query = form.value.poll_query
+    configJson.poll_interval_seconds = form.value.poll_interval
+    if (form.value.condition_expression) configJson.condition_expression = form.value.condition_expression
+  }
+
+  if (triggerType === 'cron' && form.value.input_template) {
+    const result = parseJsonOrError(form.value.input_template, 'views.SettingsTriggersView.input_template_must_be_valid_json')
+    if (typeof result === 'string') return result
+    configJson.input_template = result
+  }
+
+  if (triggerType === 'agent_signal') {
+    if (form.value.signal_source_pipeline) configJson.source_pipeline_id = form.value.signal_source_pipeline
+    if (form.value.signal_source_node) configJson.source_node_id = form.value.signal_source_node
+  }
+
+  if (triggerType === 'ongoing') {
+    configJson.scan_interval_seconds = form.value.ongoing_scan_interval || 60
+    if (form.value.input_template) {
+      const result = parseJsonOrError(form.value.input_template, 'views.SettingsTriggersView.input_template_must_be_valid_json')
+      if (typeof result === 'string') return result
+      configJson.input_template = result
+    }
+    if (form.value.snapshot_id) configJson.snapshot_id = form.value.snapshot_id
+  }
+
+  return configJson
+}
+
+/** Build the PUT body for updating an existing trigger. */
+function buildUpdateBody(triggerType: string, configJson: Record<string, unknown>): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    active: form.value.active,
+    config_json: Object.keys(configJson).length > 0 ? configJson : undefined,
+    // max_concurrent_runs was previously never sent on PUT — send it now
+    // so an edited target persists (FAR-158).
+    max_concurrent_runs: form.value.max_concurrent_runs,
+  }
+  if (triggerType === 'ongoing') {
+    body.daily_spend_limit = form.value.daily_spend_limit
+  }
+  if (triggerType === 'cron') {
+    if (form.value.cron_expression) body.cron_expression = form.value.cron_expression
+    body.cron_timezone = form.value.cron_timezone || 'UTC'
+  }
+  return body
+}
+
+/** Build the POST body for creating a new trigger. */
+function buildCreateBody(triggerType: string, configJson: Record<string, unknown>): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    trigger_type: triggerType,
+    active: form.value.active,
+    config_json: configJson,
+  }
+  if (triggerType === 'ongoing') {
+    body.max_concurrent_runs = form.value.max_concurrent_runs
+    body.daily_spend_limit = form.value.daily_spend_limit
+  }
+  if (triggerType === 'cron') {
+    if (form.value.cron_expression) body.cron_expression = form.value.cron_expression
+    body.cron_timezone = form.value.cron_timezone || 'UTC'
+  }
+  return body
+}
+
 async function saveTrigger() {
   formError.value = null
 
-  if (!form.value.pipeline_id) {
-    formError.value = t('views.SettingsTriggersView.please_select_a_pipeline')
-    return
-  }
-
-  if (!editingId.value && !form.value.trigger_type) {
-    formError.value = t('views.SettingsTriggersView.please_select_a_trigger_type')
+  const validationError = validateTriggerForm()
+  if (validationError) {
+    formError.value = t(validationError)
     return
   }
 
   const triggerType = editingId.value ? editingType.value : form.value.trigger_type
-
-  if (triggerType === 'ongoing') {
-    // FAR-158: the ongoing spend limit is REQUIRED (backend rejects None).
-    if (!form.value.daily_spend_limit || Number(form.value.daily_spend_limit) <= 0) {
-      formError.value = t('views.SettingsTriggersView.daily_spend_limit_required')
-      return
-    }
-    if (!form.value.max_concurrent_runs || form.value.max_concurrent_runs < 1 || form.value.max_concurrent_runs > 20) {
-      formError.value = t('views.SettingsTriggersView.target_runs_invalid')
-      return
-    }
+  const configResult = buildConfigJson(triggerType)
+  if (typeof configResult === 'string') {
+    formError.value = t(configResult)
+    return
   }
 
   try {
-    const configJson: Record<string, unknown> = {}
-
-    if (triggerType === 'webhook') {
-      if (form.value.webhook_url) configJson.url = form.value.webhook_url
-      if (form.value.webhook_method) configJson.method = form.value.webhook_method
-      if (form.value.webhook_headers) {
-        try {
-          configJson.headers = JSON.parse(form.value.webhook_headers)
-        } catch {
-          formError.value = t('views.SettingsTriggersView.headers_must_be_valid_json')
-          return
-        }
-      }
-    }
-
-    if (triggerType === 'polling') {
-      if (!form.value.poll_interval || form.value.poll_interval < 60) {
-        formError.value = t('views.SettingsTriggersView.poll_interval_seconds_too_low')
-        return
-      }
-      if (form.value.connector_instance_id) configJson.connector_instance_id = form.value.connector_instance_id
-      if (form.value.poll_query) configJson.poll_query = form.value.poll_query
-      configJson.poll_interval_seconds = form.value.poll_interval
-      if (form.value.condition_expression) configJson.condition_expression = form.value.condition_expression
-    }
-
-    if (triggerType === 'cron' && form.value.input_template) {
-      try {
-        configJson.input_template = JSON.parse(form.value.input_template)
-      } catch {
-        formError.value = t('views.SettingsTriggersView.input_template_must_be_valid_json')
-        return
-      }
-    }
-
-    if (triggerType === 'agent_signal') {
-      if (form.value.signal_source_pipeline) configJson.source_pipeline_id = form.value.signal_source_pipeline
-      if (form.value.signal_source_node) configJson.source_node_id = form.value.signal_source_node
-    }
-
-    if (triggerType === 'ongoing') {
-      configJson.scan_interval_seconds = form.value.ongoing_scan_interval || 60
-      if (form.value.input_template) {
-        try {
-          configJson.input_template = JSON.parse(form.value.input_template)
-        } catch {
-          formError.value = t('views.SettingsTriggersView.input_template_must_be_valid_json')
-          return
-        }
-      }
-      if (form.value.snapshot_id) configJson.snapshot_id = form.value.snapshot_id
-    }
-
     saving.value = true
 
     if (editingId.value) {
-      const body: Record<string, unknown> = {
-        active: form.value.active,
-        config_json: Object.keys(configJson).length > 0 ? configJson : undefined,
-        // max_concurrent_runs was previously never sent on PUT — send it now
-        // so an edited target persists (FAR-158).
-        max_concurrent_runs: form.value.max_concurrent_runs,
-      }
-      if (triggerType === 'ongoing') {
-        body.daily_spend_limit = form.value.daily_spend_limit
-      }
-      if (triggerType === 'cron') {
-        if (form.value.cron_expression) body.cron_expression = form.value.cron_expression
-        body.cron_timezone = form.value.cron_timezone || 'UTC'
-      }
+      const body = buildUpdateBody(triggerType, configResult)
       const { error: err } = await api.PUT('/api/v1/triggers/{trigger_id}', {
         params: { path: { trigger_id: editingId.value } },
         body: body as any,
@@ -926,19 +972,7 @@ async function saveTrigger() {
         return
       }
     } else {
-      const body: Record<string, unknown> = {
-        trigger_type: triggerType,
-        active: form.value.active,
-        config_json: configJson,
-      }
-      if (triggerType === 'ongoing') {
-        body.max_concurrent_runs = form.value.max_concurrent_runs
-        body.daily_spend_limit = form.value.daily_spend_limit
-      }
-      if (triggerType === 'cron') {
-        if (form.value.cron_expression) body.cron_expression = form.value.cron_expression
-        body.cron_timezone = form.value.cron_timezone || 'UTC'
-      }
+      const body = buildCreateBody(triggerType, configResult)
       const { error: err } = await api.POST('/api/v1/pipelines/{pipeline_id}/triggers', {
         params: { path: { pipeline_id: form.value.pipeline_id } },
         body: body as any,
