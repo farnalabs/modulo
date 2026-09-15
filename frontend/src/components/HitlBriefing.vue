@@ -54,6 +54,56 @@ const conditionResult = computed<ConditionResult | null>(() => {
   return expression && value ? { expression, value } : null
 })
 
+/**
+ * FAR-859: the thing under review — resolved at gate-fire time against the
+ * run state. Rendered FIRST, above artifacts, as the reviewer's primary focus.
+ */
+const subject = computed(() => asString(ctx.value?.subject))
+
+/**
+ * FAR-859: approve/reject consequences — where the run goes next.
+ */
+interface ConsequenceTarget {
+  node_id: string
+  label: string | null
+}
+
+interface Consequences {
+  approve?: ConsequenceTarget
+  reject?: ConsequenceTarget
+}
+
+const consequences = computed<Consequences | null>(() => {
+  const raw = ctx.value?.consequences
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const entry = raw as Record<string, unknown>
+  const result: Consequences = {}
+  if (entry.approve && typeof entry.approve === 'object' && !Array.isArray(entry.approve)) {
+    const a = entry.approve as Record<string, unknown>
+    result.approve = { node_id: asString(a.node_id) ?? '', label: asString(a.label) }
+  }
+  if (entry.reject && typeof entry.reject === 'object' && !Array.isArray(entry.reject)) {
+    const r = entry.reject as Record<string, unknown>
+    result.reject = { node_id: asString(r.node_id) ?? '', label: asString(r.label) }
+  }
+  return result.approve || result.reject ? result : null
+})
+
+const consequenceSummary = computed(() => {
+  if (!consequences.value) return null
+  const parts: string[] = []
+  const c = consequences.value
+  if (c.approve) {
+    const name = c.approve.label || c.approve.node_id
+    parts.push(t('components.HitlBriefing.consequence_approve', { target: name }))
+  }
+  if (c.reject) {
+    const name = c.reject.label || c.reject.node_id
+    parts.push(t('components.HitlBriefing.consequence_reject', { target: name }))
+  }
+  return parts.length > 0 ? parts.join('; ') : null
+})
+
 const sourceNode = computed(() => {
   const id = asString(ctx.value?.source_node_id)
   const label = asString(ctx.value?.source_node_label)
@@ -84,7 +134,9 @@ const artifacts = computed<ArtifactEntry[]>(() => {
 const hasDetails = computed(
   () =>
     Boolean(
-      trigger.value ||
+      subject.value ||
+        consequences.value ||
+        trigger.value ||
         condition.value ||
         conditionResult.value ||
         sourceNode.value ||
@@ -109,6 +161,23 @@ const hasDetails = computed(
     </p>
     <p v-else data-testid="hitl-briefing-description-fallback" class="text-sm italic text-muted-foreground">
       {{ $t('components.HitlBriefing.no_description') }}
+    </p>
+    <!-- FAR-859: subject rendered FIRST — the thing the reviewer is deciding on. -->
+    <div
+      v-if="subject"
+      data-testid="hitl-briefing-subject"
+      class="mt-2 rounded border border-primary/20 bg-primary/5 p-2"
+    >
+      <dt class="text-xs font-semibold text-muted-foreground">{{ $t('components.HitlBriefing.subject') }}</dt>
+      <dd class="mt-1 break-all font-mono text-sm text-foreground">{{ subject }}</dd>
+    </div>
+    <!-- FAR-859: consequences summary — one-line routing information. -->
+    <p
+      v-if="consequenceSummary"
+      data-testid="hitl-briefing-consequences"
+      class="mt-2 text-xs text-muted-foreground"
+    >
+      {{ consequenceSummary }}
     </p>
     <template v-if="hasDetails">
       <button

@@ -4055,6 +4055,7 @@ def make_hitl_gate_fn(
     condition_expr: str | None = hitl_gate_config.get("condition")
     eval_condition_raw: dict[str, Any] | None = hitl_gate_config.get("eval_condition")
     required_team_id: str | None = _normalize_required_team_id(gate_id, hitl_gate_config.get("required_team_id"))
+    subject_path: str | None = hitl_gate_config.get("subject_path")
 
     async def _hitl_gate(state: dict[str, Any]) -> dict[str, Any]:
         # --- Resume check — always first so condition/evals aren't re-evaluated. ---
@@ -4126,6 +4127,23 @@ def make_hitl_gate_fn(
         hitl_gates.append(hitl_gate_config)
         state["_hitl_gates"] = hitl_gates
 
+        # FAR-859: resolve subject_path against the SAME state root the
+        # condition evaluates against (failure-isolated — a bad path or
+        # unresolvable value yields None).
+        resolved_subject: str | None = None
+        if subject_path:
+            try:
+                compiled_subject = compile_jmespath(subject_path)
+                subject_value = compiled_subject.search(state)
+                if subject_value is not None:
+                    resolved_subject = serialize_value(subject_value)
+            except Exception:
+                _log.debug(
+                    "hitl_gate.subject_path_resolution_failed",
+                    extra={"gate_id": gate_id, "subject_path": subject_path},
+                    exc_info=True,
+                )
+
         # State mutations before the interrupt are persisted by the checkpointer.
         decision = interrupt(
             {
@@ -4137,6 +4155,10 @@ def make_hitl_gate_fn(
                 # FAR-688: the matched condition value ({"expression", "value"},
                 # redacted + bounded) or None when the gate has no condition.
                 "condition_result": condition_result,
+                # FAR-859: the resolved subject under review, bounded +
+                # redacted by the builder. None when subject_path is absent
+                # or unresolvable.
+                "subject": resolved_subject,
             }
         )
         return await _hitl_gate({**state, "_hitl_decision": decision})

@@ -3310,7 +3310,10 @@ export default {
       "artifacts": "Relevant output",
       "artifacts_empty": "No matching node output was captured for this gate.",
       "show_details": "Show details",
-      "hide_details": "Hide details"
+      "hide_details": "Hide details",
+      "subject": "What you are deciding",
+      "consequence_approve": "Approve → continues to {target}",
+      "consequence_reject": "Reject → routes to {target}"
     },
     "Sparkline": {
       "no_data": "No data",
