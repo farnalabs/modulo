@@ -355,6 +355,103 @@ async def test_put_cancelled_error_propagates():
         )
 
 
+# ── Journey dismiss / restore endpoints (FAR-795 slice C) ─────────────────
+
+
+@pytest.mark.anyio
+async def test_journey_dismiss_success_emits_audit_event(client_admin, mock_session):
+    with (
+        patch.object(admin_routes, "dismiss_journey", new=AsyncMock(return_value=True)),
+        patch.object(admin_routes, "_record_org_audit", new=AsyncMock()) as audit,
+    ):
+        resp = await client_admin.post(
+            "/api/v1/admin/org/journeys/dismiss",
+            json={"kind": "github_pr", "ref": "123", "reason": "spam citation"},
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {"kind": "github_pr", "ref": "123", "dismissed": True}
+    audit.assert_awaited_once()
+    args, kwargs = audit.call_args
+    assert args[2] == "org.journey_dismissed"
+    payload = args[3]
+    assert payload["kind"] == "github_pr"
+    assert payload["ref"] == "123"
+    assert payload["reason"] == "spam citation"
+    assert not kwargs
+
+
+@pytest.mark.anyio
+async def test_journey_dismiss_missing_row_returns_404(client_admin):
+    with patch.object(admin_routes, "dismiss_journey", new=AsyncMock(return_value=False)):
+        resp = await client_admin.post(
+            "/api/v1/admin/org/journeys/dismiss",
+            json={"kind": "github_pr", "ref": "404"},
+        )
+    assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_journey_dismiss_forbidden_for_operator(client_operator):
+    resp = await client_operator.post(
+        "/api/v1/admin/org/journeys/dismiss",
+        json={"kind": "github_pr", "ref": "123"},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_journey_restore_success_emits_audit_event(client_admin, mock_session):
+    with (
+        patch.object(admin_routes, "restore_journey", new=AsyncMock(return_value=True)),
+        patch.object(admin_routes, "_record_org_audit", new=AsyncMock()) as audit,
+    ):
+        resp = await client_admin.post(
+            "/api/v1/admin/org/journeys/restore",
+            json={"kind": "github_pr", "ref": "123"},
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {"kind": "github_pr", "ref": "123", "dismissed": False}
+    audit.assert_awaited_once()
+    args, kwargs = audit.call_args
+    assert args[2] == "org.journey_restored"
+    payload = args[3]
+    assert payload == {"kind": "github_pr", "ref": "123"}
+    assert not kwargs
+
+
+@pytest.mark.anyio
+async def test_journey_restore_active_or_missing_returns_404(client_admin):
+    with patch.object(admin_routes, "restore_journey", new=AsyncMock(return_value=False)):
+        resp = await client_admin.post(
+            "/api/v1/admin/org/journeys/restore",
+            json={"kind": "github_pr", "ref": "123"},
+        )
+    assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_journey_restore_forbidden_for_operator(client_operator):
+    resp = await client_operator.post(
+        "/api/v1/admin/org/journeys/restore",
+        json={"kind": "github_pr", "ref": "123"},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_journey_dismiss_db_error_maps_503(client_admin, mock_session):
+    with patch.object(
+        admin_routes,
+        "dismiss_journey",
+        new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")),
+    ):
+        resp = await client_admin.post(
+            "/api/v1/admin/org/journeys/dismiss",
+            json={"kind": "github_pr", "ref": "123"},
+        )
+    assert resp.status_code == 503
+
+
 # ── PUT audit-event fire-and-forget branches (flag write already committed) ─
 
 

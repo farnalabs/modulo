@@ -1,20 +1,24 @@
-"""Reinstate organisations audit columns + created_by FK if missing (idempotent).
+"""Reinstate organisations audit columns + created_by FK dropped by 0239.
 
-Migration 0239_revert_organisations_audit_drift was originally written to DROP
-the updated_at/updated_by/deleted_by columns (added by 0233) and the
-fk_organisations_created_by FK (added by 0236), on the grounds that the
+Migration 0239_revert_organisations_audit_drift erroneously dropped the
+updated_at/updated_by/deleted_by columns (added by 0233) and the
+fk_organisations_created_by FK (added by 0236) on the grounds that the
 Organisation ORM model did not declare them. That premise was wrong: the
 Organisation model DOES declare these columns/FK (see
-src/modulo/db/models/organisation.py), so 0239 was reworked into a no-op that
-*retains* them.
+src/modulo/db/models/organisation.py), so dropping them produced schema drift
+vs the ORM and broke every query that touches organisations at runtime
+(UndefinedColumnError: column organisations.updated_at does not exist).
 
-This migration guarantees the columns/FK end up present on every database the
-chain runs against. On a fresh DB the columns/FK already exist (0233/0236 added
-them and 0239 retained them), so re-adding them would fail the whole chain with
-``column organisations.updated_at already exists`` / a duplicate FK — which is
-exactly the BDD pre-deploy failure this migration caused. On a database whose
-earlier 0239 actually dropped them, this migration restores them. Existence
-checks keep the migration correct for both a fresh and an already-applied DB.
+This migration restores the columns/FK so the migrated schema matches the ORM
+metadata again. It chains on top of 0239 (the erroneous revert is retained as
+history, not undone, because it has already been applied to live databases).
+
+The add operations are idempotent (guarded by information_schema checks): on a
+fresh database the columns/FK already exist because migration 0233_add_updated_at
+and 0236_add_organisations_constraints create them, and 0239 is a no-op, so this
+migration must not re-create them (that raised DuplicateColumn on a clean DB).
+On a live database where the originally-applied 0239 physically dropped them,
+this migration adds them back.
 
 Revision ID: 0240_reinstate_organisations_audit_columns
 Revises: 0239_revert_organisations_audit_drift
@@ -23,24 +27,41 @@ Create Date: 2026-09-15
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy import inspect
+from sqlalchemy import text
 
 revision = "0240_reinstate_organisations_audit_columns"
 down_revision = "0239_revert_organisations_audit_drift"
 
-_TABLE = "organisations"
-_FK_NAME = "fk_organisations_created_by"
+
+def _column_exists(conn, table: str, column: str) -> bool:
+    return (
+        conn.execute(
+            text("SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :column"),
+            {"table": table, "column": column},
+        ).scalar()
+        is not None
+    )
+
+
+def _fk_exists(conn, table: str, fk_name: str) -> bool:
+    return (
+        conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.table_constraints "
+                "WHERE table_name = :table "
+                "AND constraint_name = :fk AND constraint_type = 'FOREIGN KEY'"
+            ),
+            {"table": table, "fk": fk_name},
+        ).scalar()
+        is not None
+    )
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    insp = inspect(bind)
-    existing_cols = {c["name"] for c in insp.get_columns(_TABLE)}
-    existing_fks = {fk["name"] for fk in insp.get_foreign_keys(_TABLE)}
-
-    if "updated_at" not in existing_cols:
+    conn = op.get_bind()
+    if not _column_exists(conn, "organisations", "updated_at"):
         op.add_column(
-            _TABLE,
+            "organisations",
             sa.Column(
                 "updated_at",
                 sa.DateTime(timezone=True),
@@ -49,14 +70,14 @@ def upgrade() -> None:
                 nullable=False,
             ),
         )
-    if "updated_by" not in existing_cols:
-        op.add_column(_TABLE, sa.Column("updated_by", sa.Uuid(), nullable=True))
-    if "deleted_by" not in existing_cols:
-        op.add_column(_TABLE, sa.Column("deleted_by", sa.Uuid(), nullable=True))
-    if _FK_NAME not in existing_fks:
+    if not _column_exists(conn, "organisations", "updated_by"):
+        op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
+    if not _column_exists(conn, "organisations", "deleted_by"):
+        op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
+    if not _fk_exists(conn, "organisations", "fk_organisations_created_by"):
         op.create_foreign_key(
-            _FK_NAME,
-            _TABLE,
+            "fk_organisations_created_by",
+            "organisations",
             "accounts",
             ["created_by"],
             ["id"],
@@ -65,16 +86,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    insp = inspect(bind)
-    existing_fks = {fk["name"] for fk in insp.get_foreign_keys(_TABLE)}
-    existing_cols = {c["name"] for c in insp.get_columns(_TABLE)}
-
-    if _FK_NAME in existing_fks:
-        op.drop_constraint(_FK_NAME, _TABLE, type_="foreignkey")
-    if "deleted_by" in existing_cols:
-        op.drop_column(_TABLE, "deleted_by")
-    if "updated_by" in existing_cols:
-        op.drop_column(_TABLE, "updated_by")
-    if "updated_at" in existing_cols:
-        op.drop_column(_TABLE, "updated_at")
+    conn = op.get_bind()
+    if _fk_exists(conn, "organisations", "fk_organisations_created_by"):
+        op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
+    if _column_exists(conn, "organisations", "deleted_by"):
+        op.drop_column("organisations", "deleted_by")
+    if _column_exists(conn, "organisations", "updated_by"):
+        op.drop_column("organisations", "updated_by")
+    if _column_exists(conn, "organisations", "updated_at"):
+        op.drop_column("organisations", "updated_at")
