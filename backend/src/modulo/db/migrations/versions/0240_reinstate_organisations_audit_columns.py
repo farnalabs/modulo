@@ -1,38 +1,97 @@
-"""No-op: organisations audit columns + created_by FK are retained by 0239.
+"""Reinstate organisations audit columns + created_by FK dropped by 0239.
 
-Migration 0233_add_updated_at_audit_to_organisations added the
-updated_at/updated_by/deleted_by columns and 0236_add_organisations_constraints
-added the fk_organisations_created_by FK to organisations. Migration
-0239_revert_organisations_audit_drift was originally written to DROP those
-columns/FK, but was reworked into a no-op that RETURNS them, because the
-Organisation ORM model (PR #553, commit b341e13a1) declares them and dropping
-them produces schema drift vs the ORM.
+Migration 0239_revert_organisations_audit_drift erroneously dropped the
+updated_at/updated_by/deleted_by columns (added by 0233) and the
+fk_organisations_created_by FK (added by 0236) on the grounds that the
+Organisation ORM model did not declare them. That premise was wrong: the
+Organisation model DOES declare these columns/FK (see
+src/modulo/db/models/organisation.py), so dropping them produced schema drift
+vs the ORM and broke every query that touches organisations at runtime
+(UndefinedColumnError: column organisations.updated_at does not exist).
 
-Because 0239 is a no-op that retains the columns/FK, this migration must also
-be a no-op: attempting to re-add updated_at/updated_by/deleted_by or recreate
-fk_organisations_created_by raises DuplicateColumn / duplicate-object errors on
-a fresh (from-base) migration run, which breaks the BDD full suite, the Bundled
-Runner harness, and the break-glass deploy gate. The columns/FK are already
-present in the intended schema after 0233 + 0236 + 0239, so there is nothing to
-reinstate.
+This migration restores the columns/FK so the migrated schema matches the ORM
+metadata again. It chains on top of 0239 (the erroneous revert is retained as
+history, not undone, because it has already been applied to live databases).
+
+The add operations are idempotent (guarded by information_schema checks): on a
+fresh database the columns/FK already exist because migration 0233_add_updated_at
+and 0236_add_organisations_constraints create them, and 0239 is a no-op, so this
+migration must not re-create them (that raised DuplicateColumn on a clean DB).
+On a live database where the originally-applied 0239 physically dropped them,
+this migration adds them back.
 
 Revision ID: 0240_reinstate_organisations_audit_columns
 Revises: 0239_revert_organisations_audit_drift
 Create Date: 2026-09-15
 """
 
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy import text
+
 revision = "0240_reinstate_organisations_audit_columns"
 down_revision = "0239_revert_organisations_audit_drift"
 
 
+def _column_exists(conn, table: str, column: str) -> bool:
+    return (
+        conn.execute(
+            text("SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :column"),
+            {"table": table, "column": column},
+        ).scalar()
+        is not None
+    )
+
+
+def _fk_exists(conn, table: str, fk_name: str) -> bool:
+    return (
+        conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.table_constraints "
+                "WHERE table_name = :table "
+                "AND constraint_name = :fk AND constraint_type = 'FOREIGN KEY'"
+            ),
+            {"table": table, "fk": fk_name},
+        ).scalar()
+        is not None
+    )
+
+
 def upgrade() -> None:
-    # No-op: the updated_at/updated_by/deleted_by columns (added by 0233) and
-    # the fk_organisations_created_by FK (added by 0236) are retained by the
-    # no-op 0239, so they already exist in the migrated schema. Re-adding them
-    # would raise DuplicateColumn / duplicate-object on a fresh migration run.
-    pass
+    conn = op.get_bind()
+    if not _column_exists(conn, "organisations", "updated_at"):
+        op.add_column(
+            "organisations",
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.current_timestamp(),
+                onupdate=sa.func.current_timestamp(),
+                nullable=False,
+            ),
+        )
+    if not _column_exists(conn, "organisations", "updated_by"):
+        op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
+    if not _column_exists(conn, "organisations", "deleted_by"):
+        op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
+    if not _fk_exists(conn, "organisations", "fk_organisations_created_by"):
+        op.create_foreign_key(
+            "fk_organisations_created_by",
+            "organisations",
+            "accounts",
+            ["created_by"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:
-    # No-op: nothing was added in upgrade, so there is nothing to revert.
-    pass
+    conn = op.get_bind()
+    if _fk_exists(conn, "organisations", "fk_organisations_created_by"):
+        op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
+    if _column_exists(conn, "organisations", "deleted_by"):
+        op.drop_column("organisations", "deleted_by")
+    if _column_exists(conn, "organisations", "updated_by"):
+        op.drop_column("organisations", "updated_by")
+    if _column_exists(conn, "organisations", "updated_at"):
+        op.drop_column("organisations", "updated_at")
