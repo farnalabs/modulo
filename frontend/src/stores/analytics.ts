@@ -31,6 +31,12 @@ export interface AnalyticsBucket {
   total_tokens?: number | null;
   avg_duration_ms?: number | null;
   success_rate?: number | null;
+  /** FAR-876: capacity-observability fields already returned by the backend. */
+  stall_count?: number;
+  capacity_failure_count?: number;
+  avg_capacity_wait_ms?: number | null;
+  avg_queue_wait_ms?: number | null;
+  avg_final_idle_ms?: number | null;
 }
 
 export interface AnalyticsResponse {
@@ -335,7 +341,21 @@ export function measureValue(
  * count (mirroring the backend's own duration weighting in bucket_rows).
  */
 export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
-  const groups = new Map<string, AnalyticsBucket & { durSum: number; durN: number; rateSum: number; rateN: number }>();
+  const groups = new Map<
+    string,
+    AnalyticsBucket & {
+      durSum: number;
+      durN: number;
+      rateSum: number;
+      rateN: number;
+      capWaitSum: number;
+      capWaitN: number;
+      queueWaitSum: number;
+      queueWaitN: number;
+      idleSum: number;
+      idleN: number;
+    }
+  >();
   for (const b of buckets) {
     const groupKey = b.key ?? "";
     let g = groups.get(groupKey);
@@ -344,10 +364,18 @@ export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
         date: b.date,
         key: b.key ?? null,
         count: 0,
+        stall_count: 0,
+        capacity_failure_count: 0,
         durSum: 0,
         durN: 0,
         rateSum: 0,
         rateN: 0,
+        capWaitSum: 0,
+        capWaitN: 0,
+        queueWaitSum: 0,
+        queueWaitN: 0,
+        idleSum: 0,
+        idleN: 0,
       };
       groups.set(groupKey, g);
     }
@@ -366,6 +394,20 @@ export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
       g.rateSum += b.success_rate * b.count;
       g.rateN += b.count;
     }
+    g.stall_count = (g.stall_count ?? 0) + (b.stall_count ?? 0);
+    g.capacity_failure_count = (g.capacity_failure_count ?? 0) + (b.capacity_failure_count ?? 0);
+    if (typeof b.avg_capacity_wait_ms === "number" && (b.capacity_failure_count ?? 0) > 0) {
+      g.capWaitSum += b.avg_capacity_wait_ms * (b.capacity_failure_count ?? 0);
+      g.capWaitN += b.capacity_failure_count ?? 0;
+    }
+    if (typeof b.avg_queue_wait_ms === "number" && b.count > 0) {
+      g.queueWaitSum += b.avg_queue_wait_ms * b.count;
+      g.queueWaitN += b.count;
+    }
+    if (typeof b.avg_final_idle_ms === "number" && b.count > 0) {
+      g.idleSum += b.avg_final_idle_ms * b.count;
+      g.idleN += b.count;
+    }
   }
   return [...groups.values()].map((g) => ({
     date: g.date,
@@ -375,6 +417,11 @@ export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
     total_tokens: g.total_tokens,
     avg_duration_ms: g.durN > 0 ? g.durSum / g.durN : null,
     success_rate: g.rateN > 0 ? g.rateSum / g.rateN : null,
+    stall_count: g.stall_count ?? 0,
+    capacity_failure_count: g.capacity_failure_count ?? 0,
+    avg_capacity_wait_ms: g.capWaitN > 0 ? Math.round((g.capWaitSum / g.capWaitN) * 10) / 10 : null,
+    avg_queue_wait_ms: g.queueWaitN > 0 ? Math.round((g.queueWaitSum / g.queueWaitN) * 10) / 10 : null,
+    avg_final_idle_ms: g.idleN > 0 ? Math.round((g.idleSum / g.idleN) * 10) / 10 : null,
   }));
 }
 
@@ -427,6 +474,104 @@ export function buildChartOption(
         itemStyle: dimensioned ? { borderRadius: [3, 3, 0, 0] } : undefined,
       },
     ],
+  };
+}
+
+/** ECharts option for the capacity overlay (queue-wait, capacity failures, stalls). */
+export function buildCapacityOverlayOption(
+  series: AnalyticsBucket[],
+): Record<string, unknown> {
+  const buckets = isDimensioned(series) ? aggregateByKey(series) : series;
+  const labels = buckets.map((b) => formatBucketDate(b.date));
+  return {
+    tooltip: { trigger: "axis" },
+    legend: { show: true, bottom: 0, textStyle: { fontSize: 11 } },
+    grid: { left: 8, right: 16, top: 24, bottom: 36, containLabel: true },
+    xAxis: { type: "category", data: labels },
+    yAxis: [
+      { type: "value", name: "ms", position: "left" },
+      { type: "value", name: "count", position: "right", splitLine: { show: false } },
+    ],
+    series: [
+      {
+        name: "queue_wait_ms",
+        type: "line",
+        smooth: true,
+        connectNulls: false,
+        yAxisIndex: 0,
+        data: buckets.map((b) => b.avg_queue_wait_ms ?? null),
+        itemStyle: { color: "#f59e0b" },
+      },
+      {
+        name: "capacity_wait_ms",
+        type: "line",
+        smooth: true,
+        connectNulls: false,
+        yAxisIndex: 0,
+        data: buckets.map((b) => b.avg_capacity_wait_ms ?? null),
+        itemStyle: { color: "#ef4444" },
+      },
+      {
+        name: "capacity_failures",
+        type: "bar",
+        yAxisIndex: 1,
+        data: buckets.map((b) => b.capacity_failure_count ?? 0),
+        itemStyle: { color: "#ef4444", opacity: 0.3 },
+      },
+      {
+        name: "stalls",
+        type: "bar",
+        yAxisIndex: 1,
+        data: buckets.map((b) => b.stall_count ?? 0),
+        itemStyle: { color: "#6366f1", opacity: 0.3 },
+      },
+    ],
+  };
+}
+
+/**
+ * Summarise capacity fields across a bucket array for a summary card.
+ * Returns total failures/stalls and weighted averages for wait times.
+ */
+export interface CapacitySummary {
+  totalCapacityFailures: number;
+  totalStalls: number;
+  avgQueueWaitMs: number | null;
+  avgCapacityWaitMs: number | null;
+  avgFinalIdleMs: number | null;
+}
+
+export function summarizeCapacity(buckets: AnalyticsBucket[]): CapacitySummary {
+  let totalCapacityFailures = 0;
+  let totalStalls = 0;
+  let queueWaitSum = 0;
+  let queueWaitN = 0;
+  let capWaitSum = 0;
+  let capWaitN = 0;
+  let idleSum = 0;
+  let idleN = 0;
+  for (const b of buckets) {
+    totalCapacityFailures += b.capacity_failure_count ?? 0;
+    totalStalls += b.stall_count ?? 0;
+    if (typeof b.avg_queue_wait_ms === "number" && b.count > 0) {
+      queueWaitSum += b.avg_queue_wait_ms * b.count;
+      queueWaitN += b.count;
+    }
+    if (typeof b.avg_capacity_wait_ms === "number" && (b.capacity_failure_count ?? 0) > 0) {
+      capWaitSum += b.avg_capacity_wait_ms * (b.capacity_failure_count ?? 0);
+      capWaitN += b.capacity_failure_count ?? 0;
+    }
+    if (typeof b.avg_final_idle_ms === "number" && b.count > 0) {
+      idleSum += b.avg_final_idle_ms * b.count;
+      idleN += b.count;
+    }
+  }
+  return {
+    totalCapacityFailures,
+    totalStalls,
+    avgQueueWaitMs: queueWaitN > 0 ? Math.round((queueWaitSum / queueWaitN) * 10) / 10 : null,
+    avgCapacityWaitMs: capWaitN > 0 ? Math.round((capWaitSum / capWaitN) * 10) / 10 : null,
+    avgFinalIdleMs: idleN > 0 ? Math.round((idleSum / idleN) * 10) / 10 : null,
   };
 }
 
@@ -510,6 +655,7 @@ export const useAnalyticsStore = defineStore("analytics", () => {
   const error = ref<string | ProblemDetail | null>(null);
   const flagOff = ref(false);
   const earliestAvailableDate = ref<string | null>(null);
+  const showCapacityOverlay = ref(false);
 
   const buckets = computed(() => results.value?.buckets ?? []);
   const factsStale = computed(() => Boolean(results.value?.facts_stale));
@@ -522,6 +668,7 @@ export const useAnalyticsStore = defineStore("analytics", () => {
         (b.total_tokens != null && b.total_tokens > 0),
     ),
   );
+  const capacitySummary = computed(() => summarizeCapacity(buckets.value));
   const groupBy = computed(() => {
     if (filters.value.dateFrom && filters.value.dateTo) {
       return filters.value.groupBy;
@@ -650,6 +797,8 @@ export const useAnalyticsStore = defineStore("analytics", () => {
     factsFreshnessHours,
     hasData,
     groupBy,
+    showCapacityOverlay,
+    capacitySummary,
     setFilters,
     setMeasure,
     resetFilters,

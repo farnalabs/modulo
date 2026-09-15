@@ -70,8 +70,52 @@
 
         <div v-else class="space-y-4">
           <div class="card p-4">
-            <h2 class="mb-3 text-base font-semibold">{{ $t('views.AnalyticsView.chart_title') }}</h2>
-            <AnalyticsChart :series="store.buckets" :measure="store.measure" :group-by="store.groupBy" :dimension="store.filters.dimension" />
+            <div class="mb-3 flex items-center justify-between">
+              <h2 class="text-base font-semibold">{{ chartTitle }}</h2>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-muted"
+                :aria-pressed="store.showCapacityOverlay"
+                data-testid="analytics-capacity-toggle"
+                @click="store.showCapacityOverlay = !store.showCapacityOverlay"
+              >
+                <span class="inline-block h-2 w-2 rounded-full bg-amber-400" aria-hidden="true"></span>
+                {{ $t('views.AnalyticsView.capacity_overlay_toggle') }}
+              </button>
+            </div>
+
+            <!-- Capacity summary cards -->
+            <div
+              v-if="store.showCapacityOverlay && store.hasData"
+              class="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+              data-testid="analytics-capacity-summary"
+              aria-live="polite"
+            >
+              <div class="rounded-lg border border-border p-3">
+                <p class="text-xs text-muted-foreground">{{ $t('views.AnalyticsView.capacity_avg_queue_wait') }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">{{ formatCapacityMs(store.capacitySummary.avgQueueWaitMs) }}</p>
+              </div>
+              <div class="rounded-lg border border-border p-3">
+                <p class="text-xs text-muted-foreground">{{ $t('views.AnalyticsView.capacity_failures') }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">{{ store.capacitySummary.totalCapacityFailures.toLocaleString() }}</p>
+              </div>
+              <div class="rounded-lg border border-border p-3">
+                <p class="text-xs text-muted-foreground">{{ $t('views.AnalyticsView.capacity_avg_wait') }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">{{ formatCapacityMs(store.capacitySummary.avgCapacityWaitMs) }}</p>
+              </div>
+              <div class="rounded-lg border border-border p-3">
+                <p class="text-xs text-muted-foreground">{{ $t('views.AnalyticsView.capacity_stalls') }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">{{ store.capacitySummary.totalStalls.toLocaleString() }}</p>
+              </div>
+            </div>
+
+            <AnalyticsChart
+              :series="store.buckets"
+              :measure="store.measure"
+              :group-by="store.groupBy"
+              :dimension="store.filters.dimension"
+              :show-overlay="store.showCapacityOverlay"
+            />
           </div>
 
           <div class="card p-4" data-testid="analytics-table">
@@ -151,6 +195,12 @@ interface TableRow {
 }
 
 const errorMessage = computed(() => (store.error ? formatApiError(store.error) : ""));
+
+const chartTitle = computed(() =>
+  store.showCapacityOverlay
+    ? t("views.AnalyticsView.capacity_chart_title")
+    : t("views.AnalyticsView.chart_title"),
+);
 
 const currentMeasureLabel = computed(() => {
   const measure = store.measure;
@@ -251,6 +301,13 @@ function arrowClass(direction: TrendDirection): string {
   if (direction === "up") return "text-success";
   if (direction === "down") return "text-destructive";
   return "text-muted-foreground";
+}
+
+function formatCapacityMs(value: number | null): string {
+  if (value == null) return "\u2014";
+  if (value >= 60000) return `${(value / 60000).toFixed(1)}m`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}s`;
+  return `${Math.round(value)}ms`;
 }
 
 onMounted(async () => {

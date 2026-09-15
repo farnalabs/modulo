@@ -1,5 +1,5 @@
 <template>
-  <div class="h-72 w-full" data-testid="analytics-chart">
+  <div class="w-full" :class="showOverlay ? 'h-[28rem]' : 'h-72'" data-testid="analytics-chart">
     <component
       :is="ChartRenderer"
       v-if="series.length > 0"
@@ -21,7 +21,12 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent } from "vue";
 import { useI18n } from "vue-i18n";
-import { buildChartOption, type AnalyticsBucket, type AnalyticsMeasure } from "../../stores/analytics";
+import {
+  buildChartOption,
+  buildCapacityOverlayOption,
+  type AnalyticsBucket,
+  type AnalyticsMeasure,
+} from "../../stores/analytics";
 import { errorCodeLabel } from "../../utils/runUtils";
 
 const props = defineProps<{
@@ -29,6 +34,7 @@ const props = defineProps<{
   measure: AnalyticsMeasure;
   groupBy: string;
   dimension?: string | null;
+  showOverlay?: boolean;
 }>();
 
 const { t } = useI18n();
@@ -40,12 +46,14 @@ const ChartRenderer = defineAsyncComponent(async () => {
 });
 
 const chartOption = computed(() =>
-  buildChartOption(
-    props.series,
-    props.measure,
-    props.groupBy,
-    props.dimension,
-    (key) => errorCodeLabel(key, t),
-  ),
+  props.showOverlay
+    ? buildCapacityOverlayOption(props.series)
+    : buildChartOption(
+        props.series,
+        props.measure,
+        props.groupBy,
+        props.dimension,
+        (key) => errorCodeLabel(key, t),
+      ),
 );
 </script>
