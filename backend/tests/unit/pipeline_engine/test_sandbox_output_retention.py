@@ -1287,3 +1287,114 @@ async def test_stall_under_cap_stdout_emits_no_artifact_pointer():
     marker = _single_marker(row)
     assert marker["status"] == "failed"
     assert "stdout_artifact" not in marker, "under-cap stall must not emit stdout_artifact"
+
+
+# ---------------------------------------------------------------------------
+# FAR-844: streaming artifact writer wired into the drain loop
+# ---------------------------------------------------------------------------
+
+
+async def test_streaming_writer_captures_over_cap_stdout_on_success_path(tmp_path):
+    """FAR-844: the streaming artifact writer is created during drain and
+    cleans up on the success path. On the success path, the drain window
+    equals the cap (full mode), so stdout_truncated is False and the writer
+    is cleaned up without producing a pointer. The stall path produces the
+    pointer (tested separately)."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    cap = 2048
+    over_cap_content = "y" * 4096
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    # Command completes normally; the drain captures over-cap log content.
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return over_cap_content
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(over_cap_content)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    # The drain captured content from the log file (not from cmd_result.stdout).
+    assert output["agent_stdout"] == over_cap_content[:cap]
+    assert "stdout_truncated" not in output  # drain_window == cap in full mode
+    # No stdout_artifact on success path when not truncated — the stall path
+    # produces the pointer (tested in test_stall_over_cap_stdout_emits_...).
+    assert "stdout_artifact" not in output
+
+
+async def test_streaming_writer_under_cap_stdout_has_no_pointer(tmp_path):
+    """FAR-844: when stdout is UNDER the cap, the streaming writer produces no
+    pointer — inline retention is sufficient."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    cap = 8192
+    under_cap_content = "x" * 2048
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return under_cap_content
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(under_cap_content)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == under_cap_content
+    assert "stdout_artifact" not in output, "under-cap success must not emit stdout_artifact"
