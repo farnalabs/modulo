@@ -103,12 +103,11 @@ class TestValidateRefEntry:
             "source": "derived",
         }
 
-    def test_preserves_reported_source(self) -> None:
-        assert validate_ref_entry({"kind": "linear", "ref": "FAR-1", "source": "reported"}) == {
-            "kind": "linear",
-            "ref": "FAR-1",
-            "source": "reported",
-        }
+    def test_rejects_legacy_reported_source(self) -> None:
+        """The legacy ``reported`` alias was dropped (FAR-795): the validator
+        rejects it on every path."""
+        with pytest.raises(ValueError, match="'source' must be one of"):
+            validate_ref_entry({"kind": "linear", "ref": "FAR-1", "source": "reported"})
 
     def test_preserves_optional_status(self) -> None:
         assert validate_ref_entry({"kind": "linear", "ref": "FAR-1", "source": "derived", "status": "done"}) == {

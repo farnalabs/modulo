@@ -228,24 +228,24 @@ class TestValidateRefEntryIntakePolicy:
         with pytest.raises(ValueError, match="force_source must be one of"):
             validate_ref_entry({"kind": "feature", "ref": "1"}, force_source="reported")
 
-    def test_default_accepts_read_vocabulary(self) -> None:
-        for source in ("caller", "derived", "agent", "reported"):
+    def test_default_accepts_persisted_vocabulary(self) -> None:
+        for source in ("caller", "derived", "agent"):
             entry = validate_ref_entry({"kind": "feature", "ref": "1", "source": source})
             assert entry["source"] == source
 
-    def test_normalise_reported_maps_to_agent(self) -> None:
-        entry = validate_ref_entry(
-            {"kind": "feature", "ref": "1", "source": "reported"},
-            normalise_reported=True,
-        )
-        assert entry["source"] == "agent"
+    def test_default_rejects_legacy_reported_source(self) -> None:
+        """The legacy ``reported`` alias was dropped (FAR-795): no path accepts
+        it, and no path normalises it — the value can never be persisted."""
+        with pytest.raises(ValueError, match="'source' must be one of"):
+            validate_ref_entry({"kind": "feature", "ref": "1", "source": "reported"})
 
-    def test_normalise_reported_leaves_other_sources(self) -> None:
-        entry = validate_ref_entry(
-            {"kind": "feature", "ref": "1", "source": "caller"},
-            normalise_reported=True,
-        )
-        assert entry["source"] == "caller"
+    def test_normalise_reported_is_no_longer_tolerated(self) -> None:
+        """The migration-normalisation window is gone: the
+        ``normalise_reported`` parameter itself was removed — the keyword no
+        longer exists, and a stored-style entry carrying ``reported`` is
+        simply invalid, not mapped to ``agent``."""
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            validate_ref_entry({"kind": "feature", "ref": "1", "source": "reported"}, normalise_reported=True)  # type: ignore[call-arg]
 
     def test_extra_keys_are_stripped(self) -> None:
         """Only {kind, ref, source, status?} may be asserted — the engine owns

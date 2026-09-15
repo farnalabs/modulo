@@ -1072,8 +1072,8 @@ class TestSelfReportConfirmAdvance:
         await _seed_org(session)
         await _seed_journey(session, kind="github_issue", ref="a/b#5")
         reported = [
-            {"kind": "github_issue", "ref": "a/b#5", "source": "reported"},
-            {"kind": "github_issue", "ref": "never-seen", "source": "reported"},
+            {"kind": "github_issue", "ref": "a/b#5", "source": "agent"},
+            {"kind": "github_issue", "ref": "never-seen", "source": "agent"},
         ]
 
         confirmed, unmatched = await confirm_reported_refs(session, _ORG, reported)
@@ -1083,7 +1083,7 @@ class TestSelfReportConfirmAdvance:
 
     async def test_confirm_matches_none_when_no_journey_row(self, session: AsyncSession) -> None:
         await _seed_org(session)
-        reported = [{"kind": "github_issue", "ref": "a/b#5", "source": "reported"}]
+        reported = [{"kind": "github_issue", "ref": "a/b#5", "source": "agent"}]
 
         confirmed, unmatched = await confirm_reported_refs(session, _ORG, reported)
 
@@ -1108,7 +1108,7 @@ class TestSelfReportConfirmAdvance:
             _ORG,
             run_id=None,
             pipeline_id=None,
-            refs=[{"kind": "github_issue", "ref": "a/b#5", "source": "reported"}],
+            refs=[{"kind": "github_issue", "ref": "a/b#5", "source": "agent"}],
             status="complete",
             completed_at=now,
             run_created_at=now,
@@ -1120,18 +1120,15 @@ class TestSelfReportConfirmAdvance:
         # so the assertions below read the persisted row.
         await session.refresh(journey)
         assert journey.latest_status == "complete"
-        # FAR-794 persisted-source invariant: the legacy ``reported`` claim
-        # keeps matching but is normalised to ``agent`` at the write — it is
-        # never persisted as ``reported``.
         assert journey.latest_provenance == "agent"
         assert journey.run_count == 1
         # No backing run -> the prior run id is preserved, never cleared.
         assert journey.latest_terminal_run_id == prior_run
 
-    async def test_advance_normalises_reported_provenance_on_persist(self, session: AsyncSession) -> None:
-        """FAR-794: a legacy ``source="reported"`` ref is accepted as the
-        confirm/match input marker, but the journey row's persisted
-        ``latest_provenance`` is normalised to ``agent`` — never ``reported``."""
+    async def test_advance_drops_legacy_reported_source(self, session: AsyncSession) -> None:
+        """Inverted regression (FAR-795): the legacy ``source="reported"``
+        alias is no longer part of the vocabulary — the ref validator rejects
+        the entry, so advance drops it and the journey row is untouched."""
         await _seed_org(session)
         journey = await _seed_journey(session, kind="github_issue", ref="a/b#5")
 
@@ -1147,10 +1144,10 @@ class TestSelfReportConfirmAdvance:
             run_created_at=now,
         )
 
-        assert advanced == 1
+        assert advanced == 0
         await session.flush()
         await session.refresh(journey)
-        assert journey.latest_provenance == "agent"
+        assert journey.latest_status != "complete"
 
     async def test_advance_with_no_run_never_mints(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -1160,7 +1157,7 @@ class TestSelfReportConfirmAdvance:
         # endpoint never reaches it by confirming first: here we only advance
         # confirmed entries, so nothing is written.
         confirmed, unmatched = await confirm_reported_refs(
-            session, _ORG, [{"kind": "github_issue", "ref": "ghost", "source": "reported"}]
+            session, _ORG, [{"kind": "github_issue", "ref": "ghost", "source": "agent"}]
         )
         assert confirmed == []
         assert unmatched == 1
@@ -1274,7 +1271,7 @@ class TestSelfReportRoute:
                 "modulo.api.routes.lifecycle_maps.confirm_reported_refs",
                 new=AsyncMock(
                     return_value=(
-                        [{"kind": "github_issue", "ref": "a/b#5", "source": "reported"}],
+                        [{"kind": "github_issue", "ref": "a/b#5", "source": "agent"}],
                         1,
                     )
                 ),
@@ -1423,8 +1420,8 @@ class TestSelfReportRouteReal:
             async with maker() as s, s.begin():
                 journey = (await s.execute(select(Journey))).scalar_one()
             assert journey.latest_status == "complete"
-            # FAR-794: the self-report confirm path persists ``agent`` — the
-            # legacy ``reported`` marker is normalised at the journey write.
+            # FAR-794/FAR-795: the self-report confirm path persists ``agent``
+            # — the advisory claim is stamped ``agent`` by the parser.
             assert journey.latest_provenance == "agent"
             assert journey.run_count == 1
             assert journey.latest_terminal_run_id is None  # no backing run

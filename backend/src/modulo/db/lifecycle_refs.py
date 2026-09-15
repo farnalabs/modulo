@@ -61,13 +61,13 @@ _WORK_ITEM_NAMESPACE = uuid.UUID("b2f3d4a6-0b1c-4f00-9c1e-8c9f2a1b4d6e")
 
 # Provenance vocabulary (FAR-794 slice 2a). ``caller`` = an authenticated
 # API/MCP param; ``derived`` = engine extraction from a webhook/cron payload;
-# ``agent`` = a node's own emission (or a legacy ``reported`` claim normalised
-# at the intake/merge boundary). ``reported`` is legacy vocabulary: accepted on
-# ALL read paths so pre-normalisation rows never fail, but normalised to
-# ``agent`` at every intake/merge boundary.
+# ``agent`` = a node's own emission (or a workflow's advisory self-report
+# claim, normalised at the parser). The legacy ``reported`` value is NO LONGER
+# accepted: every read/write path validates against ``_VALID_SOURCES``, and
+# stored rows were rewritten to ``agent`` by migration 0222. A snapshot or
+# replay payload still carrying ``source: reported`` is rejected/dropped by
+# the validator.
 _VALID_SOURCES: frozenset[str] = frozenset({"caller", "derived", "agent"})
-REPORTED_SOURCE = "reported"
-_READ_ACCEPTED_SOURCES: frozenset[str] = _VALID_SOURCES | {REPORTED_SOURCE}
 _VALID_STATUSES: frozenset[str] = frozenset({"done", "attempted"})
 
 # Provenance rank: ``agent < derived < caller``. Journey provenance only ever
@@ -165,9 +165,8 @@ def canonicalise_ref(kind: Any, ref: Any) -> str:
 def validate_ref_entry(
     entry: Any,
     *,
-    allowed_sources: frozenset[str] = _READ_ACCEPTED_SOURCES,
+    allowed_sources: frozenset[str] = _VALID_SOURCES,
     force_source: str | None = None,
-    normalise_reported: bool = False,
 ) -> dict[str, Any]:
     """Validate + canonicalise a ref entry dict (shape-only, FAR-794 slice 2a).
 
@@ -180,14 +179,12 @@ def validate_ref_entry(
     Policy parameters:
 
     * *allowed_sources* — the source vocabulary this call accepts. Defaults to
-      the READ set (``caller``/``derived``/``agent``/legacy ``reported``) so
-      every read path keeps accepting pre-normalisation rows.
+      the full persisted vocabulary (``caller``/``derived``/``agent``); the
+      legacy ``reported`` value is invalid on every path.
     * *force_source* — ENGINE-ASSIGNED provenance: when set, the wire
       ``source`` value is ignored entirely (never trusted) and every returned
       entry carries *force_source*. No vocabulary error is raised for the wire
       value — callers count unknown submissions separately.
-    * *normalise_reported* — when True (intake/merge boundary), a legacy
-      ``reported`` source is normalised to ``agent`` instead of being kept.
     """
     if not isinstance(entry, dict):
         raise ValueError(f"work-item ref entry must be a dict, got {type(entry).__name__}")
@@ -200,11 +197,8 @@ def validate_ref_entry(
         if force_source not in _VALID_SOURCES:
             raise ValueError(f"force_source must be one of {sorted(_VALID_SOURCES)}, got {force_source!r}")
         source = force_source
-    else:
-        if source == REPORTED_SOURCE and normalise_reported:
-            source = "agent"
-        if source not in allowed_sources:
-            raise ValueError(f"work-item ref 'source' must be one of {sorted(allowed_sources)}, got {source!r}")
+    elif source not in allowed_sources:
+        raise ValueError(f"work-item ref 'source' must be one of {sorted(allowed_sources)}, got {source!r}")
     status = entry.get("status")
     if status is not None and status not in _VALID_STATUSES:
         raise ValueError(f"work-item ref 'status' must be one of {sorted(_VALID_STATUSES)}, got {status!r}")

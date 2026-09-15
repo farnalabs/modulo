@@ -112,7 +112,7 @@ def _journey_row() -> MagicMock:
     j.ref = "FAR-100"
     j.canonical_work_item_id = uuid.uuid4()
     j.latest_status = "complete"
-    j.latest_provenance = "reported"
+    j.latest_provenance = "agent"
     j.run_count = 2
     j.latest_terminal_run_id = uuid.uuid4()
     j.updated_at = _NOW

@@ -2531,8 +2531,7 @@ class TestAdvanceJourneysExplicitStage:
         """A workflow self-report with stage_id (and no pipeline_id) must write
         the journey's map_id/stage_id/position — the external-stage path that
         was dead on main (pipeline resolution was skipped for pipeline_id=None).
-        The legacy ``reported`` claim keeps matching but persists as ``agent``
-        (FAR-794 normalised provenance)."""
+        The self-report claim carries ``agent`` provenance (FAR-794/FAR-795)."""
         engine = create_async_engine(
             "sqlite+aiosqlite://",
             connect_args={"check_same_thread": False},
@@ -2556,7 +2555,7 @@ class TestAdvanceJourneysExplicitStage:
                     _ORG_ID,
                     run_id=None,
                     pipeline_id=None,
-                    refs=[{"kind": "github_pr", "ref": "#123", "source": "reported"}],
+                    refs=[{"kind": "github_pr", "ref": "#123", "source": "agent"}],
                     status="complete",
                     completed_at=now,
                     run_created_at=now,
@@ -2571,8 +2570,8 @@ class TestAdvanceJourneysExplicitStage:
             assert journey.map_id == _MAP_ID
             assert journey.map_version == 1
             assert journey.latest_status == "complete"
-            # FAR-794: the legacy ``reported`` marker keeps matching but is
-            # normalised to ``agent`` at the journey write — never persisted.
+            # FAR-794: the self-report claim persists as ``agent`` — never a
+            # legacy alias.
             assert journey.latest_provenance == "agent"
         finally:
             await engine.dispose()
@@ -2604,7 +2603,7 @@ class TestAdvanceJourneysExplicitStage:
                     _ORG_ID,
                     run_id=None,
                     pipeline_id=uuid.UUID("00000000-0000-0000-0000-00000000000e"),
-                    refs=[{"kind": "github_pr", "ref": "#123", "source": "reported"}],
+                    refs=[{"kind": "github_pr", "ref": "#123", "source": "agent"}],
                     status="complete",
                     completed_at=now,
                     run_created_at=now,
@@ -2639,7 +2638,7 @@ class TestAdvanceJourneysExplicitStage:
                     _ORG_ID,
                     run_id=None,
                     pipeline_id=None,
-                    refs=[{"kind": "github_pr", "ref": "#123", "source": "reported"}],
+                    refs=[{"kind": "github_pr", "ref": "#123", "source": "agent"}],
                     status="complete",
                     completed_at=now,
                     run_created_at=now,
@@ -2652,6 +2651,40 @@ class TestAdvanceJourneysExplicitStage:
             assert journey.map_id is None
             assert journey.position is None
             assert journey.latest_status == "complete"
+        finally:
+            await engine.dispose()
+
+    async def test_legacy_reported_source_is_dropped_not_matched(self) -> None:
+        """Inverted regression (FAR-795): an entry still carrying the legacy
+        ``source: "reported"`` alias is REJECTED by the ref validator, so the
+        advance call drops it entirely — the journey is never matched, never
+        minted, and its stored state is untouched."""
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        try:
+            await _seed_external_stage_fixtures(engine, stage_id="merge", position=7)
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                now = datetime.now(UTC)
+                advanced = await advance_journeys(
+                    s,
+                    _ORG_ID,
+                    run_id=None,
+                    pipeline_id=None,
+                    refs=[{"kind": "github_pr", "ref": "#123", "source": "reported"}],
+                    status="complete",
+                    completed_at=now,
+                    run_created_at=now,
+                )
+                assert advanced == 0
+                await s.flush()
+
+            journey = await _fetch_seeded_journey(engine)
+            assert journey.latest_status != "complete"
+            assert journey.latest_provenance != "reported"
         finally:
             await engine.dispose()
 

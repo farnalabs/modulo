@@ -105,9 +105,6 @@ from modulo.db.lifecycle_refs import (
     canonicalise_ref,
     notify_refs_event,
 )
-from modulo.db.lifecycle_refs import (
-    REPORTED_SOURCE as _REPORTED_SOURCE,
-)
 from modulo.db.models.agent import Agent
 from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.journey import Journey
@@ -1364,18 +1361,14 @@ async def _confirm_reported_refs(
 ) -> list[dict[str, Any]]:
     """Self-report is ADVISORY — keep only refs with an existing journey row.
 
-    A reported claim (``source="reported"``) can only CONFIRM / MATCH an
+    A self-reported claim (``source="agent"``) can only CONFIRM / MATCH an
     existing journey keyed by the same canonical ``(org, kind, ref)``; it can
     NEVER mint one (minting is owned by the create-time
     ``INSERT ... ON CONFLICT DO NOTHING`` path in ``modulo.db.crud.run``).
-    The match itself keys on ``(org, kind, ref)`` only, so the legacy
-    ``source="reported"`` marker keeps working as the confirm gate's input.
-    ``entries`` are already canonicalised (kind/ref/source="reported") by
+    The match itself keys on ``(org, kind, ref)`` only and is source-agnostic;
+    ``entries`` are already canonicalised (kind/ref/source="agent") by
     ``validate_and_normalise_reported_refs``. Org-scoped SELECT EXISTS per
-    entry — the caller owns RLS context. Legacy ``reported`` claims are
-    normalised to ``agent`` by the CALLER (``_resolve_effective_refs``, the
-    merge boundary) AFTER this gate matched — the gate itself stays
-    marker-agnostic beyond TRUTHFUL acceptance.
+    entry — the caller owns RLS context.
     """
     confirmed: list[dict[str, Any]] = []
     for entry in entries:
@@ -1398,13 +1391,13 @@ def _merge_effective_refs(
     confirmed: list[dict[str, Any]],
     org_id: uuid.UUID,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Create-stamped refs first, then confirmed reported refs (dedup + unified cap).
+    """Create-stamped refs first, then confirmed agent claims (dedup + unified cap).
 
     FAR-794 slice 2b: the combined list is capped at the unified
     ``modulo_work_item_refs_cap`` setting (ONE constant for self-report
-    normalisation, node-input injection and this merge). A reported (kind, ref)
-    that duplicates a create-stamped entry is collapsed (first occurrence wins —
-    the derived stamp predates the reported claim).
+    normalisation, node-input injection and this merge). An agent claim
+    (kind, ref) that duplicates a create-stamped entry is collapsed (first
+    occurrence wins — the derived stamp predates the reported claim).
 
     Cap drop order is DETERMINISTIC: ``source`` rank ascending (agent first,
     then derived, then caller — the 2a rank map), then the entry's array
@@ -1564,7 +1557,7 @@ def _stamp_node_sources(
     remaining = list(attributed)
     consumed: set[int] = set()
     for entry in effective:
-        if entry.get("source") not in (_REPORTED_SOURCE, "agent"):
+        if entry.get("source") != "agent":
             continue
         for i, (kind, ref, node_id) in enumerate(remaining):
             if i in consumed:
@@ -1584,29 +1577,19 @@ async def _resolve_effective_refs(
 
     Parses the self-report refs from ``merged_outputs`` (the parse covers both
     the top-level key and the FAR-125 node-keyed emission placement),
-    normalises the reported claims, confirms them against existing journey
-    rows (ADVISORY — a reported claim can only MATCH, never mint), and merges
-    the create-stamped refs with the confirmed reported refs (dedup, unified
-    cap with the deterministic rank-ascending drop order). The engine then
-    stamps ``source_node_id`` on the confirmed agent refs whose emitting node
-    is identifiable. Confirmed legacy ``reported`` claims are normalised to
-    ``agent`` at the confirm boundary (after the gate matched), so the
+    stamps each parsed claim with the advisory ``source="agent"`` provenance,
+    confirms them against existing journey rows (ADVISORY — a claimed ref can
+    only MATCH, never mint), and merges the create-stamped refs with the
+    confirmed agent claims (dedup, unified cap with the deterministic
+    rank-ascending drop order). The engine then stamps ``source_node_id`` on
+    the confirmed agent refs whose emitting node is identifiable. The
     effective list the run persists carries only ``caller``/``derived``/
-    ``agent`` sources.
+    ``agent`` sources — the legacy ``reported`` value was dropped in
+    FAR-795: a payload entry claiming it is rejected by the validator.
     """
     raw = parse_self_report_refs(merged_outputs)
     reported, counters = validate_and_normalise_reported_refs(raw)
     confirmed = await _confirm_reported_refs(session, run.organisation_id, reported)
-    # FAR-794 persisted-source invariant: confirmed legacy ``reported``
-    # claims are normalised to ``agent`` at the merge boundary — AFTER the
-    # confirm gate matched, BEFORE anything is persisted. Stored sources
-    # are only ``caller``/``derived``/``agent``; ``reported`` stays
-    # accepted on read paths only. The dicts are freshly built by
-    # ``validate_and_normalise_reported_refs`` (or supplied by the gate),
-    # so in-place normalisation is safe; unconfirmed claims are never
-    # persisted, so their raw ``reported`` marker is harmless.
-    for entry in confirmed:
-        entry["source"] = "agent"
     effective, cap_dropped = _merge_effective_refs(run.work_item_refs, confirmed, run.organisation_id)
     _stamp_node_sources(effective, _collect_node_emission_sources(merged_outputs))
     return _JourneyResolution(
@@ -1660,11 +1643,11 @@ async def _advance_journeys_on_terminal(
             resolution = await _resolve_effective_refs(session, run, merged_outputs)
             # Agent-sourced never advance or mint at finalise — advance_journeys
             # receives ONLY the mintable caller/derived entries and the
-            # confirmed (pre-existing) self-report claims. Those claims are
-            # normalised to ``agent`` at the confirm boundary (FAR-794
-            # persisted-invariant), so they are selected by identity here, not
-            # by source rank: an unconfirmed / storage-only agent emission
-            # must still never advance.
+            # confirmed (pre-existing) self-report claims. Those claims carry
+            # ``source="agent"`` from the parser (FAR-794 persisted-invariant),
+            # so they are selected by identity here, not by source rank: an
+            # unconfirmed / storage-only agent emission must still never
+            # advance.
             confirmed_ids = {id(entry) for entry in resolution.confirmed}
             mint_or_advance = [
                 entry

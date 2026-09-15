@@ -156,9 +156,11 @@ class TestValidateRefEntry:
         entry = validate_ref_entry({"kind": "GitHub Issue", "ref": "https://github.com/a/b/pull/5"})
         assert entry == {"kind": "github_issue", "ref": "a/b#5", "source": "derived"}
 
-    def test_canonicalises_valid_entry_with_source_and_status(self) -> None:
-        entry = validate_ref_entry({"kind": "jira", "ref": "far-1", "source": "reported", "status": "done"})
-        assert entry == {"kind": "jira", "ref": "FAR-1", "source": "reported", "status": "done"}
+    def test_rejects_legacy_reported_source(self) -> None:
+        """The legacy ``reported`` alias was dropped (FAR-795): the validator
+        rejects it on every path."""
+        with pytest.raises(ValueError, match="'source' must be one of"):
+            validate_ref_entry({"kind": "jira", "ref": "far-1", "source": "reported", "status": "done"})
 
     def test_omits_status_when_not_provided(self) -> None:
         entry = validate_ref_entry({"kind": "linear", "ref": "FAR-1", "source": "derived"})
