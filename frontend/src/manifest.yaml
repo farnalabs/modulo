@@ -896,6 +896,12 @@ elements:
       - testid: notifications-panel-toggle
         type: button
         dynamic_testid: false
+      - testid: panel-prev-page
+        type: button
+        dynamic_testid: false
+      - testid: panel-next-page
+        type: button
+        dynamic_testid: false
       - testid: sparkline
         type: element
         dynamic_testid: false
