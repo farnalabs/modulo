@@ -163,7 +163,7 @@ class TestListPipelines:
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=ProgrammingError("table missing", {}, None))
         result = await list_pipelines(session, page=1, page_size=20)
-        assert result.items == []
+        assert not result.items
         assert result.total == 0
 
     async def test_cursor_path(self) -> None:
@@ -173,7 +173,7 @@ class TestListPipelines:
             mock_paginator_cls.return_value = mock_pag
             mock_pag.paginate = AsyncMock(return_value=MagicMock(items=[], total=0, next_cursor=None, has_more=False))
             result = await list_pipelines(session, cursor="abc", page=1, page_size=20)
-            assert result.items == []
+            assert not result.items
 
 
 # ---------------------------------------------------------------------------
