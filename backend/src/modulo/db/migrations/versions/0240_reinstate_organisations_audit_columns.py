@@ -13,12 +13,12 @@ This migration restores the columns/FK so the migrated schema matches the ORM
 metadata again. It chains on top of 0239 (the erroneous revert is retained as
 history, not undone, because it has already been applied to live databases).
 
-Idempotency: the reinstatement uses server-side ``ADD COLUMN IF NOT EXISTS`` and
-a guarded ``ADD CONSTRAINT`` (DO-block over ``information_schema``), so applying
-the chain from an empty database — where 0233 already created these columns and
-0239 is a no-op — is a no-op rather than raising ``DuplicateColumn``. On a live
-DB that actually ran a dropping 0239 the columns/FK are absent and get
-reinstated here.
+The add operations are idempotent (guarded by information_schema checks): on a
+fresh database the columns/FK already exist because migration 0233_add_updated_at
+and 0236_add_organisations_constraints create them, and 0239 is a no-op, so this
+migration must not re-create them (that raised DuplicateColumn on a clean DB).
+On a live database where the originally-applied 0239 physically dropped them,
+this migration adds them back.
 
 Revision ID: 0240_reinstate_organisations_audit_columns
 Revises: 0239_revert_organisations_audit_drift
@@ -27,64 +27,71 @@ Create Date: 2026-09-15
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import text
 
 revision = "0240_reinstate_organisations_audit_columns"
 down_revision = "0239_revert_organisations_audit_drift"
 
 
-def upgrade() -> None:
-    """Reinstate the organisations audit columns + created_by FK if missing.
+def _column_exists(conn, table: str, column: str) -> bool:
+    return (
+        conn.execute(
+            text("SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :column"),
+            {"table": table, "column": column},
+        ).scalar()
+        is not None
+    )
 
-    Server-side idempotent DDL: Postgres itself decides whether each object
-    already exists, so the migration is safe to re-apply on top of 0233's
-    columns (fresh DB) and still reinstates them on a DB where 0239 dropped them.
-    """
-    op.execute(
-        sa.text(
-            "ALTER TABLE organisations "
-            "ADD COLUMN IF NOT EXISTS updated_at "
-            "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL"
-        )
+
+def _fk_exists(conn, table: str, fk_name: str) -> bool:
+    return (
+        conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.table_constraints "
+                "WHERE table_name = :table "
+                "AND constraint_name = :fk AND constraint_type = 'FOREIGN KEY'"
+            ),
+            {"table": table, "fk": fk_name},
+        ).scalar()
+        is not None
     )
-    op.execute(sa.text("ALTER TABLE organisations ADD COLUMN IF NOT EXISTS updated_by UUID"))
-    op.execute(sa.text("ALTER TABLE organisations ADD COLUMN IF NOT EXISTS deleted_by UUID"))
-    op.execute(
-        sa.text(
-            "DO $$ "
-            "BEGIN "
-            "IF NOT EXISTS ("
-            "SELECT 1 FROM information_schema.table_constraints "
-            "WHERE table_schema = 'public' AND table_name = 'organisations' "
-            "AND constraint_type = 'FOREIGN KEY' "
-            "AND constraint_name = 'fk_organisations_created_by'"
-            ") THEN "
-            "ALTER TABLE organisations "
-            "ADD CONSTRAINT fk_organisations_created_by "
-            "FOREIGN KEY (created_by) REFERENCES accounts(id) ON DELETE SET NULL; "
-            "END IF; "
-            "END $$"
+
+
+def upgrade() -> None:
+    conn = op.get_bind()
+    if not _column_exists(conn, "organisations", "updated_at"):
+        op.add_column(
+            "organisations",
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.current_timestamp(),
+                onupdate=sa.func.current_timestamp(),
+                nullable=False,
+            ),
         )
-    )
+    if not _column_exists(conn, "organisations", "updated_by"):
+        op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
+    if not _column_exists(conn, "organisations", "deleted_by"):
+        op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
+    if not _fk_exists(conn, "organisations", "fk_organisations_created_by"):
+        op.create_foreign_key(
+            "fk_organisations_created_by",
+            "organisations",
+            "accounts",
+            ["created_by"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:
-    """Drop the reinstated columns/FK (idempotent)."""
-    op.execute(
-        sa.text(
-            "DO $$ "
-            "BEGIN "
-            "IF EXISTS ("
-            "SELECT 1 FROM information_schema.table_constraints "
-            "WHERE table_schema = 'public' AND table_name = 'organisations' "
-            "AND constraint_type = 'FOREIGN KEY' "
-            "AND constraint_name = 'fk_organisations_created_by'"
-            ") THEN "
-            "ALTER TABLE organisations DROP CONSTRAINT fk_organisations_created_by; "
-            "END IF; "
-            "END $$"
-        )
-    )
-    for col in ("deleted_by", "updated_by", "updated_at"):
-        # Column names are a fixed literal whitelist (no user input), so inline
-        # them directly — DDL identifiers cannot be passed as bind parameters.
-        op.execute(sa.text(f"ALTER TABLE organisations DROP COLUMN IF EXISTS {col}"))
+    conn = op.get_bind()
+    if _fk_exists(conn, "organisations", "fk_organisations_created_by"):
+        op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
+    if _column_exists(conn, "organisations", "deleted_by"):
+        op.drop_column("organisations", "deleted_by")
+    if _column_exists(conn, "organisations", "updated_by"):
+        op.drop_column("organisations", "updated_by")
+    if _column_exists(conn, "organisations", "updated_at"):
+        op.drop_column("organisations", "updated_at")
