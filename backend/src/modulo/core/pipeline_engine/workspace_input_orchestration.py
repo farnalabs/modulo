@@ -282,6 +282,228 @@ def _derive_github_clone_host(base_url: str) -> str:
     return netloc
 
 
+async def _resolve_url_from_connector_input(
+    inp: dict[str, Any],
+    session_factory: Any | None,
+) -> str:
+    """Derive the clone URL from a connector instance when no explicit URL.
+
+    Reads the ``ConnectorInstance`` row via the session factory and
+    extracts the clone URL.  Raises :class:`ProvisioningError` on any
+    failure (missing connector, unsupported type, transient errors).
+    """
+    dest: str = inp.get("dest", "")
+    connector_id_raw: Any = inp.get("connector_instance_id")
+
+    if connector_id_raw is None:
+        raise ProvisioningError(
+            f"workspace_input dest={dest!r} has no url and no connector_instance_id",
+            error_code=_CODE_INPUT_RESOLUTION_FAILED,
+            retryable=False,
+        )
+    if session_factory is None:
+        raise ProvisioningError(
+            f"workspace_input dest={dest!r} has no url but a connector_instance_id "
+            "requires a session_factory to derive the clone URL",
+            error_code=_CODE_INPUT_RESOLUTION_FAILED,
+            retryable=False,
+        )
+
+    connector_instance_id = (
+        uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, uuid.UUID) else connector_id_raw
+    )
+    try:
+        async with session_factory() as session, session.begin():
+            resolved_url = await _derive_url_from_connector(session, connector_instance_id)
+    except ProvisioningError:
+        raise
+    except Exception as exc:
+        if _is_transient_error(exc):
+            raise ProvisioningError(
+                f"workspace_input dest={dest!r}: transient error deriving URL from connector: {exc}",
+                error_code=_CODE_INPUT_RESOLUTION_FAILED,
+                retryable=True,
+            ) from exc
+        raise ProvisioningError(
+            f"workspace_input dest={dest!r}: unexpected error deriving URL from connector: {exc}",
+            error_code=_CODE_INPUT_RESOLUTION_FAILED,
+            retryable=False,
+        ) from exc
+    if not resolved_url:
+        raise ProvisioningError(
+            f"workspace_input dest={dest!r}: connector {connector_id_raw} did not provide a clone URL",
+            error_code=_CODE_INPUT_RESOLUTION_FAILED,
+            retryable=False,
+        )
+    return resolved_url
+
+
+async def _resolve_sha_for_input(
+    url: str,
+    ref: dict[str, Any] | None,
+    dest: str,
+    max_retries: int,
+) -> str:
+    """Resolve a ref to a commit SHA, using ``git ls-remote`` for mutable refs.
+
+    SHA-kind refs return immediately; branch/tag refs go through
+    ``_resolve_ref_with_retry``.  Raises :class:`ProvisioningError` on
+    resolution failure.
+    """
+    from modulo.core.pipeline_engine.workspace_inputs import RefResolutionError
+
+    ref_kind: str = (ref or {}).get("kind", "branch")
+    ref_value: str = (ref or {}).get("value", "main")
+
+    if ref_kind == "sha" and _is_sha(ref_value):
+        return ref_value.strip()
+
+    try:
+        return await _resolve_ref_with_retry(
+            url,
+            ref_kind,
+            ref_value,
+            max_retries=max_retries,
+        )
+    except RefResolutionError as exc:
+        raise ProvisioningError(
+            f"workspace_input dest={dest!r}: ref resolution failed: {exc}",
+            error_code=_CODE_INPUT_RESOLUTION_FAILED,
+            retryable=False,
+        ) from exc
+    except Exception as exc:
+        if _is_transient_error(exc):
+            raise ProvisioningError(
+                f"workspace_input dest={dest!r}: transient network error during ref resolution: {exc}",
+                error_code=_CODE_INPUT_RESOLUTION_FAILED,
+                retryable=True,
+            ) from exc
+        raise ProvisioningError(
+            f"workspace_input dest={dest!r}: unexpected error during ref resolution: {exc}",
+            error_code=_CODE_INPUT_RESOLUTION_FAILED,
+            retryable=False,
+        ) from exc
+
+
+async def _resolve_credential_scripts_for_input(
+    session_factory: Any,
+    connector_instance_id: uuid.UUID,
+    host: str,
+    dest: str,
+    org_id: str,
+    http_client: Any | None,
+) -> tuple[str, str]:
+    """Resolve clone credentials and build provisioning scripts.
+
+    Performs tenancy validation (FAR-801), credential resolution,
+    read-only assertion, and script generation.  Returns
+    ``(credential_setup_script, credential_teardown_script)``.
+
+    Raises :class:`ProvisioningError` on any failure.
+    """
+    from modulo.core.pipeline_engine.workspace_input_credentials import (
+        CredentialResolutionError,
+        resolve_clone_credential,
+    )
+
+    # --- Tenancy check (FAR-801) ---
+    # Validate the connector instance belongs to the same org as the run.
+    # An RLS-scoped query against the ConnectorInstance table enforces this;
+    # fail CLOSED on mismatch.
+    try:
+        from sqlalchemy import select as _sa_select
+
+        from modulo.db.models.connector_instance import ConnectorInstance
+
+        async with session_factory() as _tenancy_session, _tenancy_session.begin():
+            _ci_row = (
+                await _tenancy_session.execute(
+                    _sa_select(ConnectorInstance.id).where(
+                        ConnectorInstance.id == connector_instance_id,
+                        ConnectorInstance.organisation_id == org_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if _ci_row is None:
+                raise ProvisioningError(
+                    f"workspace_input dest={dest!r}: connector instance "
+                    f"{connector_instance_id} not found in current org "
+                    "(tenancy check failed)",
+                    error_code="sandbox.input_credential_failed",
+                    retryable=False,
+                )
+    except ProvisioningError:
+        raise
+    except Exception as exc:
+        if _is_transient_error(exc):
+            raise ProvisioningError(
+                f"workspace_input dest={dest!r}: transient error during tenancy check: {exc}",
+                error_code="sandbox.input_credential_failed",
+                retryable=True,
+            ) from exc
+        raise ProvisioningError(
+            f"workspace_input dest={dest!r}: unexpected error during tenancy check: {exc}",
+            error_code="sandbox.input_credential_failed",
+            retryable=False,
+        ) from exc
+
+    # --- Credential resolution ---
+    try:
+        async with session_factory() as session, session.begin():
+            cred = await resolve_clone_credential(
+                session,
+                connector_instance_id=connector_instance_id,
+                host=host,
+            )
+    except CredentialResolutionError as exc:
+        raise ProvisioningError(
+            f"workspace_input dest={dest!r}: credential resolution failed: {exc}",
+            error_code=_CODE_INPUT_CREDENTIAL_FAILED,
+            retryable=False,
+        ) from exc
+    except Exception as exc:
+        if _is_transient_error(exc):
+            raise ProvisioningError(
+                f"workspace_input dest={dest!r}: transient error during credential resolution: {exc}",
+                error_code=_CODE_INPUT_CREDENTIAL_FAILED,
+                retryable=True,
+            ) from exc
+        raise ProvisioningError(
+            f"workspace_input dest={dest!r}: unexpected error during credential resolution: {exc}",
+            error_code=_CODE_INPUT_CREDENTIAL_FAILED,
+            retryable=False,
+        ) from exc
+
+    # --- Read-only assertion + script building ---
+    cred_setup = ""
+    cred_teardown = ""
+    if cred is not None:
+        from modulo.core.pipeline_engine.workspace_input_credentials import (
+            assert_clone_credential_is_read_only,
+            build_provisioning_credential_scripts,
+        )
+
+        if http_client is not None:
+            try:
+                await assert_clone_credential_is_read_only(
+                    cred,
+                    http_client=http_client,
+                )
+            except CredentialResolutionError as exc:
+                raise ProvisioningError(
+                    f"workspace_input dest={dest!r}: credential is not read-only: {exc}",
+                    error_code="sandbox.input_credential_failed",
+                    retryable=False,
+                ) from exc
+
+        cred_setup, cred_teardown = build_provisioning_credential_scripts(
+            cred=cred,
+            host=host,
+        )
+
+    return cred_setup, cred_teardown
+
+
 async def resolve_managed_inputs_host_side(
     workspace_inputs: list[dict[str, Any]],
     *,
@@ -309,12 +531,6 @@ async def resolve_managed_inputs_host_side(
     Credentials are re-read at clone time inside the sandbox (the snapshot
     stores the connector instance id only — supports rotation).
     """
-    from modulo.core.pipeline_engine.workspace_input_credentials import (
-        CredentialResolutionError,
-        resolve_clone_credential,
-    )
-    from modulo.core.pipeline_engine.workspace_inputs import RefResolutionError
-
     resolved: list[ResolvedInput] = []
     for inp in workspace_inputs:
         url: str = inp.get("url", "")
@@ -322,83 +538,14 @@ async def resolve_managed_inputs_host_side(
         ref: dict[str, Any] | None = inp.get("ref")
         connector_id_raw: Any = inp.get("connector_instance_id")
 
-        # --- (0) Derive URL from connector when no explicit URL ---
+        # (0) Derive URL from connector when no explicit URL
         if not url:
-            if connector_id_raw is None:
-                raise ProvisioningError(
-                    f"workspace_input dest={dest!r} has no url and no connector_instance_id",
-                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
-                    retryable=False,
-                )
-            if session_factory is None:
-                raise ProvisioningError(
-                    f"workspace_input dest={dest!r} has no url but a connector_instance_id "
-                    "requires a session_factory to derive the clone URL",
-                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
-                    retryable=False,
-                )
+            url = await _resolve_url_from_connector_input(inp, session_factory)
 
-            connector_instance_id = (
-                uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, uuid.UUID) else connector_id_raw
-            )
-            try:
-                async with session_factory() as session, session.begin():
-                    url = await _derive_url_from_connector(session, connector_instance_id)
-            except ProvisioningError:
-                raise
-            except Exception as exc:
-                if _is_transient_error(exc):
-                    raise ProvisioningError(
-                        f"workspace_input dest={dest!r}: transient error deriving URL from connector: {exc}",
-                        error_code=_CODE_INPUT_RESOLUTION_FAILED,
-                        retryable=True,
-                    ) from exc
-                raise ProvisioningError(
-                    f"workspace_input dest={dest!r}: unexpected error deriving URL from connector: {exc}",
-                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
-                    retryable=False,
-                ) from exc
-            if not url:
-                raise ProvisioningError(
-                    f"workspace_input dest={dest!r}: connector {connector_id_raw} did not provide a clone URL",
-                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
-                    retryable=False,
-                )
+        # (1) Resolve ref → SHA
+        resolved_sha = await _resolve_sha_for_input(url, ref, dest, max_retries)
 
-        # --- (1) Resolve ref → SHA ---
-        ref_kind: str = (ref or {}).get("kind", "branch")
-        ref_value: str = (ref or {}).get("value", "main")
-
-        if ref_kind == "sha" and _is_sha(ref_value):
-            resolved_sha = ref_value.strip()
-        else:
-            try:
-                resolved_sha = await _resolve_ref_with_retry(
-                    url,
-                    ref_kind,
-                    ref_value,
-                    max_retries=max_retries,
-                )
-            except RefResolutionError as exc:
-                raise ProvisioningError(
-                    f"workspace_input dest={dest!r}: ref resolution failed: {exc}",
-                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
-                    retryable=False,
-                ) from exc
-            except Exception as exc:
-                if _is_transient_error(exc):
-                    raise ProvisioningError(
-                        f"workspace_input dest={dest!r}: transient network error during ref resolution: {exc}",
-                        error_code=_CODE_INPUT_RESOLUTION_FAILED,
-                        retryable=True,
-                    ) from exc
-                raise ProvisioningError(
-                    f"workspace_input dest={dest!r}: unexpected error during ref resolution: {exc}",
-                    error_code=_CODE_INPUT_RESOLUTION_FAILED,
-                    retryable=False,
-                ) from exc
-
-        # --- (2) Resolve clone credential (host-side) ---
+        # (2) Resolve clone credential (host-side)
         cred_setup = ""
         cred_teardown = ""
         host = _extract_host_from_url(url)
@@ -407,106 +554,14 @@ async def resolve_managed_inputs_host_side(
             connector_instance_id = (
                 uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, uuid.UUID) else connector_id_raw
             )
-            # FAR-801 tenancy: validate the connector instance belongs to
-            # the same org as the run.  An RLS-scoped query against the
-            # ConnectorInstance table enforces this; fail CLOSED on
-            # mismatch (raise ProvisioningError → sandbox.input_credential_failed).
-            try:
-                from sqlalchemy import select as _sa_select
-
-                from modulo.db.models.connector_instance import ConnectorInstance
-
-                async with session_factory() as _tenancy_session, _tenancy_session.begin():
-                    # FAR-801 tenancy: enforce the connector belongs to THIS org
-                    # explicitly (not just via RLS on the caller's session) so the
-                    # check is correct regardless of session scope — a system /
-                    # bypass-RLS session must NOT admit a cross-org connector.
-                    _ci_row = (
-                        await _tenancy_session.execute(
-                            _sa_select(ConnectorInstance.id).where(
-                                ConnectorInstance.id == connector_instance_id,
-                                ConnectorInstance.organisation_id == org_id,
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if _ci_row is None:
-                        raise ProvisioningError(
-                            f"workspace_input dest={dest!r}: connector instance "
-                            f"{connector_instance_id} not found in current org "
-                            "(tenancy check failed)",
-                            error_code="sandbox.input_credential_failed",
-                            retryable=False,
-                        )
-            except ProvisioningError:
-                raise
-            except Exception as exc:
-                if _is_transient_error(exc):
-                    raise ProvisioningError(
-                        f"workspace_input dest={dest!r}: transient error during tenancy check: {exc}",
-                        error_code="sandbox.input_credential_failed",
-                        retryable=True,
-                    ) from exc
-                raise ProvisioningError(
-                    f"workspace_input dest={dest!r}: unexpected error during tenancy check: {exc}",
-                    error_code="sandbox.input_credential_failed",
-                    retryable=False,
-                ) from exc
-
-            try:
-                async with session_factory() as session, session.begin():
-                    cred = await resolve_clone_credential(
-                        session,
-                        connector_instance_id=connector_instance_id,
-                        host=host,
-                    )
-            except CredentialResolutionError as exc:
-                raise ProvisioningError(
-                    f"workspace_input dest={dest!r}: credential resolution failed: {exc}",
-                    error_code=_CODE_INPUT_CREDENTIAL_FAILED,
-                    retryable=False,
-                ) from exc
-            except Exception as exc:
-                if _is_transient_error(exc):
-                    raise ProvisioningError(
-                        f"workspace_input dest={dest!r}: transient error during credential resolution: {exc}",
-                        error_code=_CODE_INPUT_CREDENTIAL_FAILED,
-                        retryable=True,
-                    ) from exc
-                raise ProvisioningError(
-                    f"workspace_input dest={dest!r}: unexpected error during credential resolution: {exc}",
-                    error_code=_CODE_INPUT_CREDENTIAL_FAILED,
-                    retryable=False,
-                ) from exc
-
-            if cred is not None:
-                # --- (2a) Assert credential is read-only (least privilege) ---
-                # The assertion requires an http_client to probe GitHub token
-                # scope.  When no client is provided (e.g. the legacy E2B path),
-                # we skip the assertion — callers that provide an http_client
-                # enforce the check.  SSH credentials are always accepted by the
-                # assertion without a probe.
-                from modulo.core.pipeline_engine.workspace_input_credentials import (
-                    assert_clone_credential_is_read_only,
-                    build_provisioning_credential_scripts,
-                )
-
-                if http_client is not None:
-                    try:
-                        await assert_clone_credential_is_read_only(
-                            cred,
-                            http_client=http_client,
-                        )
-                    except CredentialResolutionError as exc:
-                        raise ProvisioningError(
-                            f"workspace_input dest={dest!r}: credential is not read-only: {exc}",
-                            error_code="sandbox.input_credential_failed",
-                            retryable=False,
-                        ) from exc
-
-                cred_setup, cred_teardown = build_provisioning_credential_scripts(
-                    cred=cred,
-                    host=host,
-                )
+            cred_setup, cred_teardown = await _resolve_credential_scripts_for_input(
+                session_factory,
+                connector_instance_id,
+                host,
+                dest,
+                org_id,
+                http_client,
+            )
 
         resolved.append(
             ResolvedInput(
