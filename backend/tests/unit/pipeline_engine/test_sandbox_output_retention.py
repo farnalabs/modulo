@@ -1287,3 +1287,552 @@ async def test_stall_under_cap_stdout_emits_no_artifact_pointer():
     marker = _single_marker(row)
     assert marker["status"] == "failed"
     assert "stdout_artifact" not in marker, "under-cap stall must not emit stdout_artifact"
+
+
+# ---------------------------------------------------------------------------
+# FAR-844: streaming artifact writer wired into the drain loop
+# ---------------------------------------------------------------------------
+
+
+async def test_streaming_writer_captures_over_cap_stdout_on_success_path(tmp_path):
+    """FAR-844: the streaming artifact writer is created during drain and
+    cleans up on the success path. On the success path, the drain window
+    equals the cap (full mode), so stdout_truncated is False and the writer
+    is cleaned up without producing a pointer. The stall path produces the
+    pointer (tested separately)."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    cap = 2048
+    over_cap_content = "y" * 4096
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    # Command completes normally; the drain captures over-cap log content.
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return over_cap_content
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(over_cap_content)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    # The drain captured content from the log file (not from cmd_result.stdout).
+    assert output["agent_stdout"] == over_cap_content[:cap]
+    assert "stdout_truncated" not in output  # drain_window == cap in full mode
+    # No stdout_artifact on success path when not truncated — the stall path
+    # produces the pointer (tested in test_stall_over_cap_stdout_emits_...).
+    assert "stdout_artifact" not in output
+
+
+async def test_streaming_writer_success_path_over_cap_emits_full_artifact(tmp_path):
+    """FAR-844 review fix: on the success path, when the captured stdout exceeds
+    the retention cap (``stdout_truncated`` is True), the streaming writer must
+    store the FULL redacted transcript it was fed during drain — NOT cap its own
+    output at the retention cap and silently drop the tail. The emitted pointer
+    must advertise the writer's REAL truncation state (honest ``truncated`` flag)
+    rather than a hardcoded ``False``.
+
+    The drain window normally equals the retention cap, which keeps the drained
+    content under the cap and makes ``stdout_truncated`` False. This test
+    decouples them (small cap, large drain window) so the over-cap branch is
+    actually exercised: with the bug (writer capped at ``_stdout_cap``) the
+    artifact would hold only ``cap`` bytes and claim ``truncated: False``; the
+    fix keeps the full ``len(over_cap_content)`` bytes and reports ``truncated:
+    False`` honestly (the writer is uncapped)."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    cap = 2048  # small retention cap
+    over_cap_content = "y" * 4096  # raw > cap -> stdout_truncated True
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="tail")
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return over_cap_content
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(over_cap_content)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        # Shrink only the retention cap; the drain window stays at the import-time
+        # _MAX_DRAIN_WINDOW (512KB), so the full 4096-byte log is drained and the
+        # over-cap branch fires.
+        patch(
+            "modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG",
+            new=cap,
+        ),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["stdout_truncated"] is True
+    # The streaming writer is uncapped: it captured the FULL transcript, not a
+    # 2048-byte truncated head.
+    pointer = output.get("stdout_artifact")
+    assert pointer is not None, "over-cap success path must emit stdout_artifact via the streaming writer"
+    assert pointer["size_bytes"] == 4096, "streaming writer must store the full transcript (not capped)"
+    assert pointer["truncated"] is False, "uncapped writer stores full content -> not truncated"
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stdout"
+    assert pointer["compression"] == "zstd"
+    assert pointer["rel_path"].endswith(".zst")
+
+
+async def test_streaming_writer_under_cap_stdout_has_no_pointer(tmp_path):
+    """FAR-844: when stdout is UNDER the cap, the streaming writer produces no
+    pointer — inline retention is sufficient."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    cap = 8192
+    under_cap_content = "x" * 2048
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return under_cap_content
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(under_cap_content)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == under_cap_content
+    assert "stdout_artifact" not in output, "under-cap success must not emit stdout_artifact"
+
+
+async def test_streaming_writer_finalize_is_source_of_stdout_artifact_prove_the_fix(tmp_path):
+    """FAR-844 prove-the-fix: on the success path the ``stdout_artifact`` pointer
+    must originate from the streaming writer's ``finalize()`` — NOT the one-shot
+    ``_persist_full_stdout_artifact`` fallback.
+
+    The two implementations emit an OBSERVABLE-IDENTICAL pointer (same content,
+    same overflow key, same zstd envelope), so a value-only assertion passes on
+    ``origin/main`` WITHOUT the FAR-844 wiring. The existing
+    ``test_streaming_writer_success_path_over_cap_emits_full_artifact`` is
+    exactly this: 4096 bytes is under the 512KB drain window, so the unchanged
+    fallback produces the same ``size_bytes=4096, truncated=False`` pointer. Here
+    we spy on ``StreamingArtifactWriter.finalize`` to prove the STREAMING path
+    actually ran. On main the streaming writer is never constructed, so
+    ``finalize`` is never called and this test fails — making the feature's
+    behavioural delta real, not coincidental."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+
+    cap = 2048
+    over_cap_content = "y" * 4096
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="tail")
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return over_cap_content
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(over_cap_content)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    # Spy on the streaming writer's finalize. The spy is a PLAIN function (a
+    # descriptor) so it binds ``self`` when accessed on the instance; it records
+    # that the streaming path was exercised and delegates to the real finalize so
+    # the REAL pointer is still returned.
+    finalize_record: dict[str, Any] = {}
+    _real_finalize = StreamingArtifactWriter.finalize
+
+    def _spy_finalize(self):
+        ptr = _real_finalize(self)
+        finalize_record["called"] = True
+        finalize_record["ptr"] = ptr
+        return ptr
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        # Shrink only the retention cap; the drain window stays at the import-time
+        # _MAX_DRAIN_WINDOW (512KB), so the full 4096-byte log is drained and
+        # stdout_truncated fires — which is the branch that prefers the streaming
+        # writer's finalize() over the fallback.
+        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch.object(StreamingArtifactWriter, "finalize", new=_spy_finalize),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["stdout_truncated"] is True
+    pointer = output.get("stdout_artifact")
+    assert pointer is not None, "over-cap success path must emit stdout_artifact"
+
+    # PROVE the streaming path ran: the writer finalized and its return became
+    # the advertised envelope pointer. On origin/main the streaming writer is
+    # never constructed, so finalize is never called and this assertion fails.
+    assert finalize_record.get("called") is True, (
+        "StreamingArtifactWriter.finalize must be the source of stdout_artifact"
+    )
+    assert pointer["size_bytes"] == finalize_record["ptr"]["size_bytes"]
+    assert pointer["sha256"] == finalize_record["ptr"]["sha256"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-845: non-idle total-timeout path emits stdout_artifact pointer
+# ---------------------------------------------------------------------------
+
+
+async def test_total_timeout_over_cap_stdout_emits_artifact_pointer(tmp_path):
+    """FAR-845: when a non-idle total-timeout fires and the sandbox log
+    exceeds the retention cap, the failure marker carries a ``stdout_artifact``
+    pointer — the full redacted transcript was written to the artifact store.
+
+    Mirrors test_stall_over_cap_stdout_emits_artifact_pointer_on_marker but
+    triggers via total timeout (``_wait_command_with_idle_watchdog`` raises
+    ``TimeoutError``) instead of stall (``handle.wait`` raises
+    ``asyncio.TimeoutError``)."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    cap = 2048
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    over_cap_stdout = "x" * 4096
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=MagicMock(exit_code=0, stdout="", stderr=""))
+    handle.kill = AsyncMock()
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            raise OSError("no output.json")
+        return over_cap_stdout
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(over_cap_stdout)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    # Mock _wait_command_with_idle_watchdog to simulate a total timeout
+    # (the command was active, not stalled, but hit the wall-clock deadline).
+    _total_timeout_exc = TimeoutError("command exceeded total timeout of 30s")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._wait_command_with_idle_watchdog",
+            new=AsyncMock(side_effect=_total_timeout_exc),
+        ),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
+    pointer = marker.get("stdout_artifact")
+    assert pointer is not None, "over-cap total-timeout must attach stdout_artifact pointer"
+    assert pointer["truncated"] is False
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stdout"
+    assert pointer["size_bytes"] == 4096
+    assert pointer["compression"] == "zstd"
+    assert pointer["rel_path"].endswith(".zst")
+
+
+async def test_far844_exc_path_streaming_writer_finalize_emits_pointer(tmp_path):
+    """FAR-844 coverage: on the generic exception path with over-cap stdout,
+    the streaming writer (created during drain) is finalised and its pointer is
+    attached as _exc_stdout_artifact rather than falling through to the
+    one-shot fallback."""
+    import modulo.core.pipeline_engine.node_runner as _nr
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    store = LocalArtifactStore(tmp_path)
+    cap = 2048  # small retention cap so over-cap stdout triggers the exc path
+    big = "z" * (700_000)
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=big)
+    row = _FakeRunRow()
+
+    def _factory():
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_factory)
+
+    def _boom(output_json):
+        raise RuntimeError("injected generic exception on success path")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch.object(_nr, "_is_sandbox_session_lost_echo", _boom),
+    ):
+        result = await fn(_run_state())
+
+    artifacts = result["artifacts"]
+    assert artifacts[0]["output"]["status"] == "failed"
+    pointer = artifacts[0]["output"].get("stdout_artifact")
+    assert pointer is not None, "exc path must attach streaming writer pointer"
+    assert pointer["truncated"] is False
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stdout"
+
+
+# ---------------------------------------------------------------------------
+# FAR-844 streaming-writer failure-branch coverage (SonarCloud new-code gate)
+# ---------------------------------------------------------------------------
+
+
+async def test_far844_streaming_writer_init_failure_logs_and_falls_back(tmp_path):
+    """FAR-844: if the streaming artifact writer cannot be constructed, the
+    failure is logged (``sandbox_agent.streaming_writer_init_failed``) and the
+    run falls back to the one-shot ``_persist_full_stdout_artifact`` rather than
+    crashing."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+
+    cap = 2048
+    log_content = "z" * 700_000
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    row = _FakeRunRow()
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("modulo.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
+        patch.object(StreamingArtifactWriter, "__init__", side_effect=RuntimeError("boom-init")),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    # fallback still produced a pointer
+    assert result["output"].get("stdout_artifact") is not None
+
+
+async def test_far844_drain_write_failure_logs(tmp_path):
+    """FAR-844: a write failure mid-drain is logged
+    (``sandbox_agent.streaming_writer_write_failed``) and the run continues
+    (the fallback persists the full transcript)."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+
+    cap = 2048
+    log_content = "z" * 700_000
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    row = _FakeRunRow()
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("modulo.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
+        patch.object(StreamingArtifactWriter, "write", side_effect=RuntimeError("boom-write")),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert result["output"].get("stdout_artifact") is not None
+
+
+async def test_far844_success_finalize_failure_logs_and_falls_back(tmp_path):
+    """FAR-844: a finalize failure on the success path is logged
+    (``sandbox_agent.streaming_writer_finalize_failed``) and the run falls back
+    to the one-shot persist."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+
+    cap = 2048
+    log_content = "z" * 700_000
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    row = _FakeRunRow()
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("modulo.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
+        patch.object(StreamingArtifactWriter, "finalize", side_effect=RuntimeError("boom-finalize")),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert result["output"].get("stdout_artifact") is not None
+
+
+async def test_far844_exc_finalize_and_teardown_cleanup_failure_logs(tmp_path):
+    """FAR-844: on the generic exception path, a streaming-writer finalize
+    failure (``sandbox_agent.streaming_writer_finalize_failed``) and the later
+    teardown cleanup failure (``sandbox_agent.streaming_writer_cleanup_failed``)
+    are both logged and do not crash the run."""
+    import modulo.core.pipeline_engine.node_runner as _nr
+    from modulo.core.artifacts.store import LocalArtifactStore
+    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+
+    cap = 2048
+    log_content = "z" * 700_000
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    row = _FakeRunRow()
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    def _boom(output_json):
+        raise RuntimeError("injected generic exception on success path")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("modulo.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
+        patch.object(_nr, "_is_sandbox_session_lost_echo", _boom),
+        patch.object(StreamingArtifactWriter, "finalize", side_effect=RuntimeError("boom-finalize")),
+        patch.object(StreamingArtifactWriter, "cleanup", side_effect=RuntimeError("boom-cleanup")),
+    ):
+        result = await fn(_run_state())
+
+    assert result["artifacts"][0]["output"]["status"] == "failed"
+    assert result["artifacts"][0]["output"].get("stdout_artifact") is not None
+
+
+async def test_far844_stall_cleanup_failure_logs(tmp_path):
+    """FAR-844: on the stall path, a streaming-writer cleanup failure before the
+    stall artifact is written is logged (``sandbox_agent.streaming_writer_cleanup_failed``)
+    and the stall marker still carries a stdout_artifact pointer."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+
+    cap = 2048
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
+    row = _FakeRunRow()
+    fn = make_sandbox_agent_fn(node_def, session_factory=lambda: _RetentionSession(row))
+
+    over_cap_stdout = "x" * 4096
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.TimeoutError)
+    handle.kill = AsyncMock()
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            raise OSError("no output.json")
+        return over_cap_stdout
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(over_cap_stdout)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch.object(StreamingArtifactWriter, "cleanup", side_effect=RuntimeError("boom-cleanup")),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
+    assert marker.get("stdout_artifact") is not None

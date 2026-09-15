@@ -192,6 +192,11 @@ class LocalArtifactStore:
     ) -> Path:
         self._validate_path_component("attempt_key", attempt_key)
         encoded_key = _encode_segment(attempt_key)
+        # NOSONAR S2083 - path-traversal sink: attempt_key is first rejected by
+        # _validate_path_component (no "..", "/", "\", or absolute path) and then
+        # percent-encoded by _encode_segment, so the assembled segment can never
+        # escape the per-run node directory. The same key also feeds read_bytes,
+        # which re-validates every segment and asserts containment inside the root.
         return self._node_dir(org_id, run_id, node_id) / f"{encoded_key}.{stream}{_SUFFIX_RAW}"
 
     def _zst_path(

@@ -74,6 +74,7 @@ from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTE
 if TYPE_CHECKING:
     from e2b import AsyncSandbox
 
+    from modulo.core.artifacts.streaming import StreamingArtifactWriter
     from modulo.core.artifacts.writer import ArtifactWriter
 
 from modulo.core.capability_scope import filter_run_context_scope
@@ -5524,6 +5525,9 @@ class _SandboxWatchdog:
         # FAR-582: optional artifact writer for full stdout/stderr side-car files.
         # Assigned post-construction to keep __init__ param count under 13 (S107).
         self._artifact_writer: "ArtifactWriter | None" = None  # noqa: UP037
+        # FAR-844: optional streaming artifact writer for incremental stdout
+        # capture during drain. Assigned post-construction like _artifact_writer.
+        self._streaming_writer: "StreamingArtifactWriter | None" = None  # noqa: UP037
 
     @property
     def budget_killed(self) -> bool:
@@ -5654,6 +5658,17 @@ class _SandboxWatchdog:
         if new:
             self._drained_chunks.append(new)
             self._drained_len += len(new)
+            # FAR-844: feed new bytes to the streaming writer for incremental
+            # artifact capture. The writer enforces the byte cap and computes
+            # SHA256 incrementally — no full-string assembly needed.
+            if self._streaming_writer is not None:
+                try:
+                    self._streaming_writer.write(new)
+                except Exception:
+                    _log.debug(
+                        "sandbox_agent.streaming_writer_write_failed",
+                        extra={"node_id": self._node_id},
+                    )
             self.stream_chunk(new, "stdout")
             # Actual agent-log growth is real progress: refresh the
             # output channel (always active, the strict-mode signal),
@@ -6481,6 +6496,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     # terminal/exception paths that finalize artifacts can never hit
     # UnboundLocalError when provisioning fails before they are assigned.
     _artifact_writer: "ArtifactWriter | None" = None  # noqa: UP037 — quotes needed: no `from __future__ import annotations`
+    # FAR-844: streaming artifact writer for incremental stdout capture during
+    # drain. Pre-bound so terminal/exception paths can safely check it.
+    _streaming_writer_instance: "StreamingArtifactWriter | None" = None  # noqa: UP037
 
     # FAR-792: effective stdout/stderr retention cap for this node. "tail"
     # (legacy default) keeps the 512KB bound; "full" honours stdout_max_bytes
@@ -7365,9 +7383,50 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 drain_window_bytes=_stdout_cap if stdout_retention_mode == "full" else None,
             )
             # FAR-582: assign artifact_writer post-construction to keep
-            # __init__ param count under 13 (python:S107).
+            # __init__ param count under 13 (S107).
             watchdog._artifact_writer = _artifact_writer
             _drain_fn = watchdog.drain_sandbox_log
+
+            # FAR-844: streaming artifact writer for incremental stdout capture.
+            # Chunks are fed to the writer during drain_sandbox_log(), so the
+            # full transcript is persisted to the artifact store without
+            # assembling the entire string in memory. The writer computes SHA256
+            # incrementally. It is deliberately UNCAPPED (max_bytes=None): it
+            # must mirror the one-shot _persist_full_stdout_artifact fallback
+            # (which stores the FULL redacted transcript) — the streaming path
+            # is the incremental implementation of that same "keep everything
+            # the drain delivered" contract, NOT the retention-cap truncation
+            # that bounds the inline agent_stdout. Capping it at _stdout_cap
+            # silently dropped the tail of an over-cap redacted stream while the
+            # envelope still advertised truncated=False (FAR-844 review fix).
+            # Uses the same overflow key pattern as _persist_full_stdout_artifact.
+            if attempt_key:
+                try:
+                    from modulo.core.artifacts.store import get_store as _get_streaming_store
+                    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+
+                    # NOSONAR S2083 - _streaming_overflow_key is a derived artifact
+                    # key (attempt_key + a size suffix); it flows into
+                    # StreamingArtifactWriter -> LocalArtifactStore, whose _raw_path
+                    # rejects path-traversal chars and percent-encodes every segment
+                    # (see store.py). No traversal is possible.
+                    _streaming_overflow_key = f"{attempt_key}:full:{_stdout_cap}"
+                    _streaming_writer_instance = StreamingArtifactWriter(
+                        _get_streaming_store(),
+                        org_id=org_id,
+                        run_id=run_id,
+                        node_id=node_id,
+                        attempt_key=_streaming_overflow_key,
+                        stream="stdout",
+                        max_bytes=None,
+                    )
+                    watchdog._streaming_writer = _streaming_writer_instance
+                except Exception:
+                    _log.warning(
+                        "sandbox_agent.streaming_writer_init_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+                    _streaming_writer_instance = None
 
             # Redirect the agent's stdout/stderr into a sandbox log file so
             # the process writes to a regular file — never a pipe that can
@@ -7761,6 +7820,17 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         extra={"node_id": node_id},
                     )
             if stdout_truncated or _stall_full_stdout is not None:
+                # FAR-844: clean up the streaming writer's raw file before the
+                # stall path writes its own artifact (fresh read content, not
+                # the drain-window content the streaming writer captured).
+                if _streaming_writer_instance is not None and not _streaming_writer_instance.finalized:
+                    try:
+                        _streaming_writer_instance.cleanup()
+                    except Exception:
+                        _log.debug(
+                            "sandbox_agent.streaming_writer_cleanup_failed",
+                            extra={"node_id": node_id, "run_id": run_id},
+                        )
                 _redacted_for_artifact = _redact_raw_output(
                     _stall_full_stdout if _stall_full_stdout is not None else agent_stdout_raw
                 )
@@ -8147,16 +8217,42 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # truncated head. Best-effort: a store failure keeps today's inline
         # (truncated) behaviour with no pointer key. Redaction happened BEFORE
         # this point (order unchanged) — the stored bytes are the redacted text.
+        # FAR-844: prefer the streaming writer's pointer (incrementally captured
+        # during drain) over the one-shot _persist_full_stdout_artifact fallback.
         _stdout_artifact: dict[str, Any] | None = None
         if stdout_truncated:
-            _stdout_artifact = _persist_full_stdout_artifact(
-                org_id=org_id,
-                run_id=run_id,
-                node_id=node_id,
-                attempt_key=attempt_key,
-                node_cap=_stdout_cap,
-                redacted_stdout=_redact_raw_output(agent_stdout_raw),
-            )
+            if _streaming_writer_instance is not None:
+                try:
+                    _ptr = _streaming_writer_instance.finalize()
+                    if _ptr is not None:
+                        # ``truncated`` reflects the streaming writer's ACTUAL
+                        # state (honest notice): the writer is uncapped, so it is
+                        # normally False — but if a future cap is reintroduced or
+                        # the drain fed more than the writer accepted, surface the
+                        # truth rather than advertising a complete artifact.
+                        _stdout_artifact = {
+                            "rel_path": _ptr.get("rel_path"),
+                            "size_bytes": _ptr.get("size_bytes"),
+                            "sha256": _ptr.get("sha256"),
+                            "stream": "stdout",
+                            "compression": _ptr.get("compression"),
+                            "truncated": _streaming_writer_instance.truncated,
+                            "redacted": True,
+                        }
+                except Exception:
+                    _log.warning(
+                        "sandbox_agent.streaming_writer_finalize_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+            if _stdout_artifact is None:
+                _stdout_artifact = _persist_full_stdout_artifact(
+                    org_id=org_id,
+                    run_id=run_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    node_cap=_stdout_cap,
+                    redacted_stdout=_redact_raw_output(agent_stdout_raw),
+                )
 
         return _build_sandbox_node_envelope(
             node_id=node_id,
@@ -8323,14 +8419,34 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # at function scope) and the guard short-circuits.
         _exc_stdout_artifact: dict[str, Any] | None = None
         if _stdout_len > _stdout_cap and "agent_stdout_raw" in locals():
-            _exc_stdout_artifact = _persist_full_stdout_artifact(
-                org_id=org_id,
-                run_id=run_id,
-                node_id=node_id,
-                attempt_key=attempt_key,
-                node_cap=_stdout_cap,
-                redacted_stdout=_redact_raw_output(agent_stdout_raw),
-            )
+            # FAR-844: prefer the streaming writer's pointer.
+            if _streaming_writer_instance is not None and not _streaming_writer_instance.finalized:
+                try:
+                    _ptr = _streaming_writer_instance.finalize()
+                    if _ptr is not None:
+                        _exc_stdout_artifact = {
+                            "rel_path": _ptr.get("rel_path"),
+                            "size_bytes": _ptr.get("size_bytes"),
+                            "sha256": _ptr.get("sha256"),
+                            "stream": "stdout",
+                            "compression": _ptr.get("compression"),
+                            "truncated": _streaming_writer_instance.truncated,
+                            "redacted": True,
+                        }
+                except Exception:
+                    _log.warning(
+                        "sandbox_agent.streaming_writer_finalize_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+            if _exc_stdout_artifact is None:
+                _exc_stdout_artifact = _persist_full_stdout_artifact(
+                    org_id=org_id,
+                    run_id=run_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    node_cap=_stdout_cap,
+                    redacted_stdout=_redact_raw_output(agent_stdout_raw),
+                )
         return _build_sandbox_node_envelope(
             node_id=node_id,
             output=_SandboxNodeOutput(
@@ -8371,6 +8487,17 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             except Exception:
                 _log.exception(
                     "sandbox_agent.loop_intercept_teardown_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+        # FAR-844: clean up the streaming writer if it was never finalized
+        # (e.g. on exception or cancellation). Best-effort removal of the
+        # orphaned raw .tmp file.
+        if _streaming_writer_instance is not None and not _streaming_writer_instance.finalized:
+            try:
+                _streaming_writer_instance.cleanup()
+            except Exception:
+                _log.debug(
+                    "sandbox_agent.streaming_writer_cleanup_failed",
                     extra={"node_id": node_id, "run_id": run_id},
                 )
         if sandbox is not None:
