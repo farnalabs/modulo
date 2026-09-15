@@ -294,9 +294,27 @@ regression that silently weakens the suite:
   expression itself, never by the behaviour under test. The lens flags only
   the top-level ``BoolOp`` of the test expression (or one ``not``-wrapped),
   comparing operands by syntax so it catches attribute paths and subscripts
-  too (``assert row['x'] and not row['x']``); complementary comparisons
-  written with mirrored operators (``x == y or x != y``) are left alone
-  because they need operator algebra rather than syntax to prove
+  too (``assert row['x'] and not row['x']``); complementarity written with
+  *mirrored* operators (``assert x == y or x != y``) needs operator algebra
+  rather than syntax to prove and is owned by the mirrored-complementary-
+  comparison lens below
+- ``assert x == y or x != y`` — a boolean assertion that joins two
+  comparisons built from the same operand pair under *mirrored* operators.
+  ``a == b`` and ``a != b`` can never both hold (the ``and`` conjunction is a
+  contradiction that ALWAYS FAILS) and can never both fail (the ``or``
+  disjunction is a tautology that ALWAYS PASSES), so the outcome is pinned at
+  source time no matter what the code under test does. The mirrored-operation
+  twin of the complementary-boolean lens, which proves complementarity only by
+  syntax and leaves ``x == y or x != y`` alone. Operator algebra makes the
+  mirror provable: the same operand pair under a complementary operator —
+  either in the same order (``==``/``!=``, ``<``/``>=``, ``>``/``<=``,
+  ``in``/``not in``, ``is``/``is not``) or, for the symmetric relations, in the
+  swapped order too (``x < y or y <= x``) — fixes the verdict. Only operands
+  that are pure, side-effect-free expressions (names, attributes, subscripts,
+  constants) are judged; a call/``await``/comprehension operand can return a
+  different value on each evaluation, so ``probes.x() is not None or
+  probes.x() is None`` is not provably tautological and is deliberately left
+  alone
 - ``assert x or True`` / ``assert x and False`` (their constant-literal
   cousins, in either operand position, in a chain, and the ``not``-wrapped
   twins) — a boolean assertion whose test expression couples a value with a
@@ -6178,9 +6196,10 @@ def test_no_complementary_boolean_assertions():
     with zero coverage. Operands are compared by syntax, so attribute paths and
     subscripts are caught too (``assert row['x'] and not row['x']``), while
     complementarity written with mirrored operators (``assert x == y or x !=
-    y``) needs operator algebra to prove and is deliberately left alone; the
-    literal-constant, self-comparison, and negated-comparison lenses own the
-    neighbouring shapes."""
+    y``) needs operator algebra to prove and is deliberately left to the
+    mirrored-complementary-comparison lens; the literal-constant,
+    self-comparison, and negated-comparison lenses own the neighbouring
+    shapes."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
@@ -6204,7 +6223,8 @@ def test_complementary_boolean_lens_flags_fixed_outcomes():
     ``not``-wrapped, over names/attributes/subscripts) and ignore non-
     complementary conjunctions/disjunctions, single operands, complementarity
     that is nested inside an operand rather than fixing the whole outcome, and
-    value-complementarity expressed with mirrored operators."""
+    value-complementarity expressed with mirrored operators (owned by the
+    mirrored-complementary-comparison lens)."""
     positive_sources = [
         "def test_foo():\n    assert x and not x\n",
         "def test_foo():\n    assert not x and x\n",
@@ -6237,6 +6257,238 @@ def test_complementary_boolean_lens_flags_fixed_outcomes():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _complementary_boolean_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+#: Mirrored complement operator pairs. Two single-op comparisons whose operators
+#: come from this map — and whose operand pair matches (same order) — can never
+#: hold at the same time: ``a == b`` vs ``a != b``, ``a < b`` vs ``a >= b``,
+#: ``a is b`` vs ``a is not b``, ``a in b`` vs ``a not in b``, ...
+_MIRRORED_COMPLEMENT_OPERATORS = {
+    ast.Eq: ast.NotEq,
+    ast.NotEq: ast.Eq,
+    ast.Lt: ast.GtE,
+    ast.GtE: ast.Lt,
+    ast.Gt: ast.LtE,
+    ast.LtE: ast.Gt,
+    ast.In: ast.NotIn,
+    ast.NotIn: ast.In,
+    ast.Is: ast.IsNot,
+    ast.IsNot: ast.Is,
+}
+
+#: Complement spelled with the operand pair *swapped*. For the symmetric
+#: relations ``a R b`` asserts the same fact as ``b R' a`` (``a == b`` ⟺
+#: ``b == a``, ``a < b`` ⟺ ``b > a``), so the mirror is also provable in the
+#: reversed order: ``x < y or y <= x``. ``in``/``not in`` deliberately has no
+#: swapped twin — membership is asymmetric, so ``x in y`` and ``y not in x``
+#: are unrelated.
+_MIRRORED_COMPLEMENT_SWAPPED_OPERATORS = {
+    ast.Eq: ast.NotEq,
+    ast.NotEq: ast.Eq,
+    ast.Lt: ast.LtE,
+    ast.LtE: ast.Lt,
+    ast.Gt: ast.GtE,
+    ast.GtE: ast.Gt,
+    ast.Is: ast.IsNot,
+    ast.IsNot: ast.Is,
+}
+
+#: AST node types whose presence makes an operand expression potentially
+#: non-deterministic or side-effecting, so the lens must not assume the two
+#: evaluations resolve to the same value.
+_MIRRORED_COMPLEMENT_UNSTABLE_OPERAND_NODES = (
+    ast.Call,
+    ast.Await,
+    ast.Lambda,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
+
+
+#: Single-op comparisons only: a multi-op chained comparison is a different
+#: shape (and boundary == interior reads) that the operator-algebra lens does
+#: not fold.
+def _single_op_compare(node: ast.AST) -> ast.Compare | None:
+    """Return ``node`` when it is a single-op, single-comparator ``Compare``,
+    else ``None``."""
+    if not isinstance(node, ast.Compare):
+        return None
+    if len(node.ops) != 1 or len(node.comparators) != 1:
+        return None
+    return node
+
+
+def _is_pure_stable_expr(node: ast.AST) -> bool:
+    """True when ``node`` is a pure, side-effect-free expression whose repeated
+    evaluation is safe to assume yields the same value — names, attribute
+    paths, subscripts, and constants. Rejecting calls/comprehensions/``await``
+    mirrors the ``_stable_dump`` contract used by the sibling lenses, so
+    ``probes.x() is not None or probes.x() is None`` (a method may return a
+    different value per call) is never falsely folded."""
+    return all(not isinstance(n, _MIRRORED_COMPLEMENT_UNSTABLE_OPERAND_NODES) for n in ast.walk(node))
+
+
+def _mirrored_complement_comparison_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assert whose test expression
+    is a ``BoolOp`` (or a ``not``-wrapped ``BoolOp``) that joins two single-op
+    comparisons over the same operand pair under *mirrored* operators.
+
+    The operator-algebra twin of the complementary-boolean lens: that lens
+    proves complementarity by syntax only (``x and not x``) and deliberately
+    leaves ``assert x == y or x != y`` alone. Here the mirror is provable —
+    ``a == b`` and ``a != b`` can never both hold and can never both fail, so
+    an ``and`` conjunction is a contradiction (the assert ALWAYS FAILS) and an
+    ``or`` disjunction is a tautology (the assert ALWAYS PASSES); the
+    ``not``-wrapped twins invert the verdict. Either way the outcome is fixed
+    at source time, so the assert is dead code. For the symmetric relations
+    (``==``/``!=`` and the ordering operators) the swapped-order spelling is
+    folded too (``assert x < y or y <= x``); ``in``/``not in`` is asymmetric
+    and requires the same order. Operands are restricted to pure, stable
+    expressions — a call can return a different value on each evaluation, so
+    a method-call pair is never provably tautological."""
+    found: list[tuple[int, str]] = []
+
+    def _operand_pair(node: ast.Compare) -> tuple[str, str, object] | None:
+        left, right = node.left, node.comparators[0]
+        if not (_is_pure_stable_expr(left) and _is_pure_stable_expr(right)):
+            return None
+        return (ast.dump(left), ast.dump(right), type(node.ops[0]))
+
+    def _is_mirrored_complement(a: ast.Compare, b: ast.Compare) -> bool:
+        pa = _operand_pair(a)
+        pb = _operand_pair(b)
+        if pa is None or pb is None:
+            return False
+        a_left, a_right, a_op = pa
+        b_left, b_right, b_op = pb
+        if a_op is b_op:
+            return False
+        if _MIRRORED_COMPLEMENT_OPERATORS.get(a_op) is b_op and a_left == b_left and a_right == b_right:
+            return True
+        swapped = _MIRRORED_COMPLEMENT_SWAPPED_OPERATORS.get(a_op)
+        return swapped is b_op and a_left == b_right and a_right == b_left
+
+    for node in _all_nodes(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        negated = False
+        test = node.test
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            negated = True
+            test = test.operand
+        if not isinstance(test, ast.BoolOp):
+            continue
+        values = test.values
+        for i in range(len(values)):
+            a = _single_op_compare(values[i])
+            if a is None:
+                continue
+            for j in range(i + 1, len(values)):
+                b = _single_op_compare(values[j])
+                if b is None or not _is_mirrored_complement(a, b):
+                    continue
+                op_name = "AND" if isinstance(test.op, ast.And) else "OR"
+                kind = "contradiction" if isinstance(test.op, ast.And) else "tautology"
+                verdict = "always FAILS" if (isinstance(test.op, ast.And)) is not negated else "always PASSES"
+                found.append(
+                    (
+                        node.lineno,
+                        (
+                            f"assert {'not ' if negated else ''}{ast.unparse(node.test)} — "
+                            f"operand {ast.unparse(a)} and {ast.unparse(b)} are mirrored-conjugate "
+                            f"comparisons over the same operand pair, a {kind} under {op_name}: "
+                            f"{verdict} regardless of the code under test"
+                        ),
+                    )
+                )
+                break
+            else:
+                continue
+            break
+    return found
+
+
+def test_no_mirrored_complement_comparison_assertions():
+    """An ``assert`` whose test expression joins two comparisons built from the
+    same operand pair under mirrored operators — ``assert x == y or x != y``,
+    ``assert x < y and x >= y`` — is dead code with a fixed outcome. ``a == b``
+    and ``a != b`` cannot both hold, so the ``and`` form is a contradiction
+    that ALWAYS FAILS (the suite is unconditionally red), and cannot both
+    fail, so the ``or`` form is a tautology that ALWAYS PASSES whether the code
+    under test is broken or not (a silent false green a mutation-testing run
+    trusts). The ``not``-wrapped twins invert the verdict. This is the
+    operator-algebra mirror of the complementary-boolean lens, which proves
+    complementarity only by syntax and deliberately leaves the mirrored
+    spelling alone. Only pure, stable operands (names, attribute paths,
+    subscripts, constants) are folded: a call or ``await`` can return a
+    different value on every evaluation, so ``assert probes.x() is not None or
+    probes.x() is None`` is not provably tautological and stays unflagged."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _mirrored_complement_comparison_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) joining mirrored-conjugate comparisons.\n"
+        "'assert a == b or a != b' is always True and 'assert a == b and a != b' is always "
+        "False, so the verdict never depends on the code under test.\n"
+        "Pin the real condition, or drop the dead check.\n" + "\n".join(violations)
+    )
+
+
+def test_mirrored_complement_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the mirrored-complementary-
+    comparison lens: must flag an ``assert`` whose top-level ``BoolOp`` joins
+    two single-op comparisons over the same operand pair under complementary
+    operators (same order, and the swapped reordering of the symmetric
+    relations), either operator, direct or ``not``-wrapped, and ignore distinct
+    operand pairs, identical (non-complementary) conjunctions, membership
+    spelled across an order swap, and comparisons that involve calls or other
+    non-deterministic operands."""
+    positive_sources = [
+        "def test_foo():\n    assert x == y or x != y\n",
+        "def test_foo():\n    assert x != y and x == y\n",
+        "def test_foo():\n    assert x < y or x >= y\n",
+        "def test_foo():\n    assert x >= y and x < y\n",
+        "def test_foo():\n    assert x > y or x <= y\n",
+        "def test_foo():\n    assert x in items or x not in items\n",
+        "def test_foo():\n    assert x is not y or x is y\n",
+        "def test_foo():\n    assert not (x == y or x != y)\n",
+        "def test_foo():\n    assert row['a'] == row['b'] or row['a'] != row['b']\n",
+        # The symmetric relations are foldable across the swapped ordering too.
+        "def test_foo():\n    assert x == y or y != x\n",
+        "def test_foo():\n    assert x < y or y <= x\n",
+        "def test_foo():\n    assert x <= y and y < x\n",
+        "def test_foo():\n    assert a == 1 or a != 1\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _mirrored_complement_comparison_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x == y or x != z\n",
+        "def test_foo():\n    assert x == y or x == y\n",
+        "def test_foo():\n    assert x < y or x < y\n",
+        "def test_foo():\n    assert x < y or y < x\n",
+        "def test_foo():\n    assert x < y or x <= y\n",
+        "def test_foo():\n    assert x < y or y >= x\n",
+        "def test_foo():\n    assert x in y or z not in y\n",
+        "def test_foo():\n    assert x in y or y not in x\n",
+        "def test_foo():\n    assert x is y or x is not z\n",
+        "def test_foo():\n    assert f(x) == y or f(x) != y\n",
+        "def test_foo():\n    assert probes.x() is not None or probes.x() is None\n",
+        "def test_foo():\n    assert x == y or not (x != y)\n",
+        "def test_foo():\n    assert x and not x\n",
+        "def test_foo():\n    assert a == b or a == b\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _mirrored_complement_comparison_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def _constant_boolean_absorbent_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
