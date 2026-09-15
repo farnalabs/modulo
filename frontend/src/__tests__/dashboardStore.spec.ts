@@ -117,4 +117,46 @@ describe('useDashboardStore', () => {
     expect(store.periodRefreshing).toBe(false)
     await flushPromises()
   })
+
+  it('fetchTrends stores hitl_volume and rejection_trend from the response', async () => {
+    const trendsResponse = {
+      days: 7,
+      run_counts: [{ date: '2026-09-01', run_count: 10 }],
+      eval_pass_rates: [{ date: '2026-09-01', total_evals: 5, passed_evals: 4, pass_rate: 80 }],
+      token_spend: [{ date: '2026-09-01', total_spend_usd: 1.5 }],
+      hitl_volume: [{ date: '2026-09-01', total_decisions: 3, approved_count: 2, rejected_count: 1, rejection_rate: 33.3, avg_time_to_approve_ms: 45000 }],
+      rejection_trend: [{ date: '2026-09-01', rolling_rejection_rate: 25, raw_rejection_rate: 33.3 }],
+      correlation: [],
+      feedback_volume: [],
+    }
+    mockGet.mockResolvedValue({ data: trendsResponse, error: undefined })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+    await store.fetchTrends(7)
+    expect(store.trends).toBeTruthy()
+    expect(store.trends?.hitl_volume).toHaveLength(1)
+    expect(store.trends?.hitl_volume[0].avg_time_to_approve_ms).toBe(45000)
+    expect(store.trends?.rejection_trend).toHaveLength(1)
+    expect(store.trends?.rejection_trend[0].rolling_rejection_rate).toBe(25)
+  })
+
+  it('fetchTrends rejects responses missing hitl_volume or rejection_trend', async () => {
+    const incompleteResponse = {
+      days: 7,
+      run_counts: [{ date: '2026-09-01', run_count: 10 }],
+      eval_pass_rates: [],
+      token_spend: [],
+      // hitl_volume and rejection_trend missing
+      correlation: [],
+      feedback_volume: [],
+    }
+    mockGet.mockResolvedValue({ data: incompleteResponse, error: undefined })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+    await store.fetchTrends(7)
+    expect(store.trends).toBeNull()
+    expect(store.trendsError).toBeTruthy()
+  })
 })
