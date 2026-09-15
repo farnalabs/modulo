@@ -47,6 +47,12 @@ from modulo.api.dependencies import (
     pg_connection_string,
     require_permission,
 )
+from modulo.api.hitl_answer_validation import (
+    AnswerValidationError as SharedValidationError,
+)
+from modulo.api.hitl_answer_validation import (
+    validate_hitl_answer,
+)
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
@@ -180,6 +186,10 @@ class ClaimResponse(BaseModel):
 class ApproveRequest(BaseModel):
     claim_token: str
     notes: str | None = None
+    #: FAR-860: optional answer for ``kind: choice`` gates. The answer
+    #: carries ``kind`` (must match the gate's response_contract kind) and
+    #: ``option_id`` (must be a valid option id from the contract).
+    answer: dict[str, Any] | None = None
 
 
 class ApproveWithModificationRequest(BaseModel):
@@ -473,6 +483,54 @@ async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
 
 
 # ---------------------------------------------------------------------------
+# FAR-860: answer validation helper
+# ---------------------------------------------------------------------------
+
+
+class AnswerValidationErrorHTTP(HTTPException):
+    """422 raised when a choice answer fails validation against the response contract.
+
+    Named ``...HTTP`` to stay unambiguous against the shared
+    ``hitl_answer_validation.AnswerValidationError`` (a ``ValueError``) — the
+    two coexist in this module's imports, so a bare ``AnswerValidationError``
+    would grep ambiguously.
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+
+
+async def _validate_choice_answer(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    gate_id: str,
+    org_id: uuid.UUID,
+    answer: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Validate a HITL answer against the gate's response_contract.
+
+    Delegates to the shared ``validate_hitl_answer`` helper (MINOR-1) and
+    adapts its ``AnswerValidationError`` (ValueError) to the HTTP 422 format
+    expected by the REST layer.
+
+    Returns the validated answer dict, or None when no answer is provided.
+    Raises ``AnswerValidationErrorHTTP`` (422) when the answer is present but
+    invalid: missing ``kind``/``option_id``, unknown kind, or unknown
+    option_id.
+    """
+    try:
+        return await validate_hitl_answer(
+            session,
+            run_id=run_id,
+            gate_id=gate_id,
+            org_id=org_id,
+            answer=answer,
+        )
+    except SharedValidationError as exc:
+        raise AnswerValidationErrorHTTP(str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
 # Claim
 # ---------------------------------------------------------------------------
 
@@ -614,6 +672,7 @@ async def _run_hitl_manager(
     require_sandbox: bool,
     mgr_method: str,
     action: str | None = None,
+    answer: dict[str, Any] | None = None,
     **call_kwargs: Any,
 ) -> Any:
     """Open a tenant-scoped transaction and invoke a HITLManager decision method.
@@ -638,13 +697,17 @@ async def _run_hitl_manager(
             if require_sandbox:
                 await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
+                # FAR-860: forward the answer to the manager for audit enrichment.
+                manager_kwargs = dict(call_kwargs)
+                if answer is not None:
+                    manager_kwargs["answer"] = answer
                 return await getattr(mgr, mgr_method)(
                     session,
                     run_id=run_id,
                     gate_id=gate_id,
                     org_id=principal.organisation_id,
                     actor_id=principal.account_id,
-                    **call_kwargs,
+                    **manager_kwargs,
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -705,6 +768,9 @@ async def approve_gate(
     principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
+    # FAR-860: validate choice answer against the gate's response_contract
+    # BEFORE the manager call (fail-fast, no side effects).
+    validated_answer = await _validate_choice_answer(session, run_id, gate_id, principal.organisation_id, req.answer)
     # FAR-541: every resume decision is STAMPED with the gate it resolves so a
     # per-gate consumer (``_hitl_gate_resume_result``) can reject a foreign
     # decision left in state by an earlier gate (decisions are per-RUN but
@@ -714,6 +780,8 @@ async def approve_gate(
     resume_data: dict[str, Any] = {"action": "approved", "gate_id": gate_id}
     if req.notes:
         resume_data["notes"] = req.notes
+    if validated_answer is not None:
+        resume_data["answer"] = validated_answer
 
     await _run_hitl_manager(
         session,
@@ -726,6 +794,7 @@ async def approve_gate(
         claim_token=req.claim_token,
         decision_payload=resume_data,
         client_type=_client_type(principal),
+        answer=validated_answer,
     )
 
     try:

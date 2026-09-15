@@ -1183,6 +1183,37 @@ class EvalCondition(BaseModel):
     )
 
 
+class HitlResponseOption(BaseModel):
+    """A single selectable option for a ``kind: choice`` HITL gate (FAR-860)."""
+
+    id: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class HitlResponseContract(BaseModel):
+    """FAR-860: typed response contract for a HITL gate.
+
+    ``kind: approval`` = today's behaviour (approve/reject) — the default
+    and backward-compatible; an absent contract behaves identically.
+    ``kind: choice`` REQUIRES a non-empty ``options`` list with UNIQUE
+    non-empty ids and non-empty labels.
+    """
+
+    kind: Literal["approval", "choice"]
+    options: list[HitlResponseOption] | None = None
+
+    @model_validator(mode="after")
+    def _validate_choice_requires_options(self) -> HitlResponseContract:
+        if self.kind == "choice":
+            if not self.options:
+                raise ValueError("kind 'choice' requires a non-empty options list")
+            ids = [opt.id for opt in self.options]
+            if len(ids) != len(set(ids)):
+                raise ValueError("response_contract option ids must be unique")
+        return self
+
+
 class HitlGateConfig(BaseModel):
     label: str = Field(min_length=1, max_length=255)
     description: str = Field(max_length=2000)
@@ -1220,6 +1251,13 @@ class HitlGateConfig(BaseModel):
         "state.  Resolved against the same root the gate condition evaluates "
         "against (the merged state dict).  The resolved value is bounded and "
         "redacted identically to artifacts before persistence.",
+    )
+    response_contract: HitlResponseContract | None = Field(
+        default=None,
+        description="FAR-860: typed response contract. Absent/None = today's "
+        "approve/reject behaviour (backward-compatible). kind='choice' declares "
+        "agent-defined options; the human's answer is injected into run state "
+        "as hitl_answer_<gate_id> for downstream conditional edges.",
     )
 
     @field_validator("description")

@@ -50,6 +50,12 @@ from modulo.api.dependencies import (
     get_or_create_engine,
     get_or_create_session_factory,
 )
+from modulo.api.hitl_answer_validation import (
+    AnswerValidationError as SharedValidationError,
+)
+from modulo.api.hitl_answer_validation import (
+    validate_hitl_answer,
+)
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.api.middleware.sensitive_mask import mask_config_json, merge_masked_config
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
@@ -4164,6 +4170,39 @@ async def _check_human_only_gate(
     return None
 
 
+async def _validate_mcp_choice_answer(
+    s: AsyncSession,
+    run_id: uuid.UUID,
+    gate_id: str,
+    org_id: uuid.UUID,
+    answer: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Validate a HITL answer against the gate's response_contract (FAR-860, MCP).
+
+    Delegates to the shared ``validate_hitl_answer`` helper (MINOR-1) and
+    adapts its ``AnswerValidationError`` (ValueError) to the MCP error-dict
+    format expected by the MCP layer.
+
+    Returns ``(error, validated_answer)``. ``error`` is an MCP error dict when
+    validation fails (and ``validated_answer`` is then ``None``); otherwise
+    ``error`` is ``None`` and ``validated_answer`` is the validated answer dict
+    (or ``None`` when no answer was supplied). Returning the error out-of-band
+    avoids key-sniffing the answer dict: a legitimate answer that happens to
+    carry an ``"error"`` key must not be mistaken for an MCP error response.
+    """
+    try:
+        validated = await validate_hitl_answer(
+            s,
+            run_id=run_id,
+            gate_id=gate_id,
+            org_id=org_id,
+            answer=answer,
+        )
+    except SharedValidationError as exc:
+        return {"error": "invalid_answer", "detail": str(exc)}, None
+    return None, validated
+
+
 async def _dispatch_hitl_action(
     mgr: HITLManager,
     s: AsyncSession,
@@ -4175,6 +4214,7 @@ async def _dispatch_hitl_action(
     claim_token: str | None,
     output: dict[str, Any] | None,
     reason: str | None,
+    answer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Dispatch a validated HITL action to the manager and return the success dict.
 
@@ -4232,7 +4272,16 @@ async def _dispatch_hitl_action(
             "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
         }
     if action == "approve":
+        # FAR-860: validate choice answer before the manager call. The error is
+        # returned out-of-band so a legit answer carrying an "error" key is
+        # never misread as an MCP error dict.
+        answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, gate_id, org_id, answer)
+        if answer_error is not None:
+            return answer_error
         # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
+        approve_payload: dict[str, Any] = {"action": "approved", "gate_id": gate_id}
+        if validated_answer is not None:
+            approve_payload["answer"] = validated_answer
         await mgr.approve(
             s,
             run_id=rid,
@@ -4240,12 +4289,22 @@ async def _dispatch_hitl_action(
             org_id=org_id,
             claim_token=claim_token or "",
             actor_id=actor_account_id,
-            decision_payload={"action": "approved", "gate_id": gate_id},
+            decision_payload=approve_payload,
             client_type=client_type,
+            answer=validated_answer,
         )
         return {"status": "approved", "gate_id": gate_id}
     if action == "deliver_manual":
+        # FAR-860: validate choice answer before the manager call. The error is
+        # returned out-of-band so a legit answer carrying an "error" key is
+        # never misread as an MCP error dict.
+        answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, gate_id, org_id, answer)
+        if answer_error is not None:
+            return answer_error
         # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
+        manual_payload: dict[str, Any] = {"action": "deliver_manual", "gate_id": gate_id, "output": output or {}}
+        if validated_answer is not None:
+            manual_payload["answer"] = validated_answer
         await mgr.deliver_manual(
             s,
             run_id=rid,
@@ -4254,8 +4313,9 @@ async def _dispatch_hitl_action(
             claim_token=claim_token or "",
             output=output or {},
             actor_id=actor_account_id,
-            decision_payload={"action": "deliver_manual", "gate_id": gate_id, "output": output or {}},
+            decision_payload=manual_payload,
             client_type=client_type,
+            answer=validated_answer,
         )
         return {"status": "delivered_manual", "gate_id": gate_id}
     # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
@@ -4310,6 +4370,7 @@ async def _review_hitl_impl(
     claim_token: str | None,
     reason: str | None,
     output: dict[str, Any] | None,
+    answer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
@@ -4363,7 +4424,7 @@ async def _review_hitl_impl(
 
         try:
             return await _dispatch_hitl_action(
-                mgr, s, action, rid, gate_id, org_id, actor_account_id, claim_token, output, reason
+                mgr, s, action, rid, gate_id, org_id, actor_account_id, claim_token, output, reason, answer
             )
         except (
             GateNotFoundError,
@@ -4404,9 +4465,10 @@ async def review_hitl(
     claim_token: str | None = None,
     reason: str | None = None,
     output: dict[str, Any] | None = None,
+    answer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        return await _review_hitl_impl(run_id, gate_id, action, claim_token, reason, output)
+        return await _review_hitl_impl(run_id, gate_id, action, claim_token, reason, output, answer)
     except OperationalError:
         raise
     except Exception:
