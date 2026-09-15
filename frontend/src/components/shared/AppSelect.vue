@@ -6,6 +6,7 @@
     :option-value="optionValue"
     :model-value="modelValue"
     :placeholder="placeholder"
+    :aria-label="resolvedAriaLabel"
     :append-to="appendTo ?? 'self'"
     @update:model-value="emit('update:modelValue', $event)"
     @blur="emit('blur', $event)"
@@ -44,6 +45,7 @@
  * `Select` would never propagate `update:modelValue` back to the parent and
  * `v-model` would silently break. Re-emitting here restores the passthrough.
  */
+import { computed, useAttrs } from 'vue'
 import Select from 'primevue/select'
 
 defineOptions({ inheritAttrs: false })
@@ -68,4 +70,18 @@ defineProps<{
   placeholder?: string
   appendTo?: string
 }>()
+
+const attrs = useAttrs()
+
+/**
+ * Accessible name for the inner PrimeVue `Select` (which renders an `<input>`
+ * internally). Consumers normally pass `aria-label` through `$attrs`, but a
+ * bare `v-bind="$attrs"` is invisible to static analysis — SonarCloud's
+ * `Web:InputWithoutLabelCheck` only sees attributes written on the element, so
+ * the wrapper is flagged as an unlabelled field unless the binding is explicit
+ * here. Falls back to a generic name so the control is never unlabelled.
+ */
+const resolvedAriaLabel = computed(
+  () => (attrs['aria-label'] as string | undefined) || 'Select',
+)
 </script>
