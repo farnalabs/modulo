@@ -8,7 +8,6 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
-    ForeignKey,
     Index,
     Integer,
     Numeric,
@@ -71,13 +70,12 @@ class Organisation(Base):
         DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # FK added by migration 0236_add_organisations_constraints (ondelete=SET NULL
-    # so deleting the creating account nulls the column rather than blocking the
-    # drop — the "first org before first user" ordering concern is satisfied by
-    # the nullable + SET NULL pairing, not by omitting the reference).
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL", name="fk_organisations_created_by")
-    )
+    # created_by is deliberately NOT a foreign key: the first organisation must
+    # exist before its first user, so a FK to accounts.id would block bootstrap
+    # ordering. Migration 0239_revert_organisations_audit_drift drops the
+    # fk_organisations_created_by constraint the DB previously carried, matching
+    # this non-FK ORM declaration.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
 
     settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     otel_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
