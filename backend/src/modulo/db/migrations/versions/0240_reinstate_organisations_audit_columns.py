@@ -13,11 +13,12 @@ This migration restores the columns/FK so the migrated schema matches the ORM
 metadata again. It chains on top of 0239 (the erroneous revert is retained as
 history, not undone, because it has already been applied to live databases).
 
-On a fresh database the columns/FK are already present (0233 adds the three
-audit columns, 0236 adds the FK), so the upgrade is idempotent: each object is
-only created when it is currently absent. On a live database where an earlier
-DROP variant of 0239 was applied, the missing columns/FK are reinstated. The
-downgrade only drops what this migration actually added.
+The add operations are idempotent (guarded by information_schema checks): on a
+fresh database the columns/FK already exist because migration 0233_add_updated_at
+and 0236_add_organisations_constraints create them, and 0239 is a no-op, so this
+migration must not re-create them (that raised DuplicateColumn on a clean DB).
+On a live database where the originally-applied 0239 physically dropped them,
+this migration adds them back.
 
 Revision ID: 0240_reinstate_organisations_audit_columns
 Revises: 0239_revert_organisations_audit_drift
@@ -26,18 +27,39 @@ Create Date: 2026-09-15
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import text
 
 revision = "0240_reinstate_organisations_audit_columns"
 down_revision = "0239_revert_organisations_audit_drift"
 
 
-def upgrade() -> None:
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    existing_columns = {c["name"] for c in inspector.get_columns("organisations")}
-    existing_fks = {fk["name"] for fk in inspector.get_foreign_keys("organisations")}
+def _column_exists(conn, table: str, column: str) -> bool:
+    return (
+        conn.execute(
+            text("SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :column"),
+            {"table": table, "column": column},
+        ).scalar()
+        is not None
+    )
 
-    if "updated_at" not in existing_columns:
+
+def _fk_exists(conn, table: str, fk_name: str) -> bool:
+    return (
+        conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.table_constraints "
+                "WHERE table_name = :table "
+                "AND constraint_name = :fk AND constraint_type = 'FOREIGN KEY'"
+            ),
+            {"table": table, "fk": fk_name},
+        ).scalar()
+        is not None
+    )
+
+
+def upgrade() -> None:
+    conn = op.get_bind()
+    if not _column_exists(conn, "organisations", "updated_at"):
         op.add_column(
             "organisations",
             sa.Column(
@@ -48,11 +70,11 @@ def upgrade() -> None:
                 nullable=False,
             ),
         )
-    if "updated_by" not in existing_columns:
+    if not _column_exists(conn, "organisations", "updated_by"):
         op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
-    if "deleted_by" not in existing_columns:
+    if not _column_exists(conn, "organisations", "deleted_by"):
         op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
-    if "fk_organisations_created_by" not in existing_fks:
+    if not _fk_exists(conn, "organisations", "fk_organisations_created_by"):
         op.create_foreign_key(
             "fk_organisations_created_by",
             "organisations",
@@ -64,16 +86,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    existing_columns = {c["name"] for c in inspector.get_columns("organisations")}
-    existing_fks = {fk["name"] for fk in inspector.get_foreign_keys("organisations")}
-
-    if "fk_organisations_created_by" in existing_fks:
+    conn = op.get_bind()
+    if _fk_exists(conn, "organisations", "fk_organisations_created_by"):
         op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
-    if "deleted_by" in existing_columns:
+    if _column_exists(conn, "organisations", "deleted_by"):
         op.drop_column("organisations", "deleted_by")
-    if "updated_by" in existing_columns:
+    if _column_exists(conn, "organisations", "updated_by"):
         op.drop_column("organisations", "updated_by")
-    if "updated_at" in existing_columns:
+    if _column_exists(conn, "organisations", "updated_at"):
         op.drop_column("organisations", "updated_at")
