@@ -36,6 +36,7 @@ from modulo.api.routes.pipelines import (
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
@@ -102,6 +103,24 @@ def _minimal_edge(
         "target_node_id": str(target_id),
         "edge_type": edge_type,
     }
+
+
+def _orm_edge(**extra: Any) -> PipelineEdge:
+    """Build a real ORM ``PipelineEdge`` row — the shape ``get_pipeline_graph`` returns."""
+    edge = PipelineEdge()
+    edge.id = uuid.uuid4()
+    edge.source_node_id = uuid.uuid4()
+    edge.target_node_id = uuid.uuid4()
+    edge.edge_type = "normal"
+    edge.hitl_gate_config = None
+    edge.condition_expression = None
+    edge.source_port = "out"
+    edge.target_port = "in"
+    edge.retry = None
+    edge.on_failure_target = None
+    for key, value in extra.items():
+        setattr(edge, key, value)
+    return edge
 
 
 # ---------------------------------------------------------------------------
@@ -755,6 +774,25 @@ class TestNonDictEdgeEntry:
         body = resp.json()
         assert len(body["edges"]) == 1
         assert any(i["code"] == "edge_invalid_entry" for i in body["validation_issues"])
+
+    def test_orm_edge_object_is_not_skipped(self) -> None:
+        """``get_pipeline_graph`` returns ORM rows, not dicts — a real edge must
+        survive the read (regression guard for ``.get`` on an ORM row)."""
+        edge = _orm_edge()
+        resp = _graph_response([], [edge])
+        assert len(resp.edges) == 1
+        assert resp.edges[0].id == edge.id
+        assert resp.edges[0].source_node_id == edge.source_node_id
+        assert not any(i.code == "edge_invalid_entry" for i in resp.validation_issues)
+
+    def test_orm_edge_failing_validation_is_preserved(self) -> None:
+        """An ORM edge whose hitl_gate_config fails the current schema must be
+        returned through the fallback (preserving stored fields), not dropped."""
+        edge = _orm_edge(hitl_gate_config={"label": "x"})
+        resp = _graph_response([], [edge])
+        assert len(resp.edges) == 1
+        assert resp.edges[0].hitl_gate_config == {"label": "x"}
+        assert any(i.code == "edge_validation_failed" for i in resp.validation_issues)
 
 
 class TestBrokenButRealisticGraph:

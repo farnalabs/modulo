@@ -302,13 +302,24 @@ def _safe_validation_errors(exc: ValidationError) -> list[dict[str, Any]]:
     Pydantic v2 error dicts carry an ``input`` key holding the offending value.
     For model-level validators the input is the ENTIRE node/edge dict — which
     may contain ``env_vars`` (API keys), ``connector_binding``, and
-    ``workspace_inputs``.  Stripping ``input``, ``ctx``, and ``url`` prevents
-    secret leakage into ``validation_issues`` messages and log lines.
+    ``workspace_inputs``.  ``include_input=False`` / ``include_url=False``
+    suppress the ``input`` and ``url`` keys at source; the comprehension then
+    drops ``ctx`` (which those flags do not cover) so no secret can leak into
+    ``validation_issues`` messages or log lines.
     """
-    return [
-        {k: v for k, v in err.items() if k not in ("input", "ctx", "url")}
-        for err in exc.errors(include_url=False, include_input=False)
-    ]
+    return [{k: v for k, v in err.items() if k != "ctx"} for err in exc.errors(include_url=False, include_input=False)]
+
+
+def _edge_field(edge: Any, name: str, default: Any = None) -> Any:
+    """Read one field from an edge entry that may be a dict OR an object.
+
+    ``get_pipeline_graph`` returns ORM ``PipelineEdge`` rows (attribute access)
+    while the graph-save paths return plain dicts, so a bare ``edge.get(...)``
+    raises ``AttributeError`` on the ORM rows.  Normalise both shapes here.
+    """
+    if isinstance(edge, dict):
+        return edge.get(name, default)
+    return getattr(edge, name, default)
 
 
 async def _deny_hitl_gate(
@@ -1432,11 +1443,22 @@ def _graph_response(
                 # Preserve all stored fields (hitl_gate_config,
                 # condition_expression, etc.) — same approach as the node
                 # fallback: filter to model-declared fields, coerce only the
-                # IDs, and model_construct the rest.
-                fallback_fields = {k: v for k, v in edge_dict.items() if k in PipelineGraphEdge.model_fields}
-                fallback_fields["id"] = uuid.UUID(str(edge_dict["id"])) if edge_dict.get("id") else uuid.uuid4()
-                fallback_fields["source_node_id"] = uuid.UUID(str(edge_dict["source_node_id"]))
-                fallback_fields["target_node_id"] = uuid.UUID(str(edge_dict["target_node_id"]))
+                # IDs, and model_construct the rest.  Must work for dicts AND
+                # attribute objects (ORM rows): a legacy edge whose
+                # hitl_gate_config fails the current schema is still evidence
+                # worth preserving rather than silently dropping.
+                if isinstance(edge_dict, dict):
+                    fallback_fields = {k: v for k, v in edge_dict.items() if k in PipelineGraphEdge.model_fields}
+                else:
+                    fallback_fields = {
+                        name: getattr(edge_dict, name)
+                        for name in PipelineGraphEdge.model_fields
+                        if hasattr(edge_dict, name)
+                    }
+                raw_id = _edge_field(edge_dict, "id")
+                fallback_fields["id"] = uuid.UUID(str(raw_id)) if raw_id else uuid.uuid4()
+                fallback_fields["source_node_id"] = uuid.UUID(str(_edge_field(edge_dict, "source_node_id")))
+                fallback_fields["target_node_id"] = uuid.UUID(str(_edge_field(edge_dict, "target_node_id")))
                 fallback_edge = PipelineGraphEdge.model_construct(**fallback_fields)
                 valid_edges.append(fallback_edge)
             except Exception:
