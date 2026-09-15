@@ -13,11 +13,11 @@
       style="width: 34px"
     >
       <span
-        v-for="(val, ti) in yTickValuesDesc"
+        v-for="(val, ti) in yAxisLabelsDesc"
         :key="'ytick-' + ti"
         class="sparkline-y-label text-[9px] leading-none"
         :style="{ color: color, opacity: 0.85 }"
-        >{{ formatValue(val) }}</span
+        >{{ val }}</span
       >
     </div>
 
@@ -293,6 +293,26 @@ const yTickValues = computed(() => {
 // so the highest value must come first in DOM order (yTickValues is ascending).
 const yTickValuesDesc = computed(() => [...yTickValues.value].reverse());
 
+// Formatted Y-axis labels with collapse detection: if every tick rounds to the
+// same display string (e.g. all "$0" for a sub-dollar spend series), bump
+// precision by 1 decimal so the axis stays informative.
+const yAxisLabelsDesc = computed(() => {
+  const ticks = yTickValuesDesc.value;
+  if (ticks.length === 0) return [];
+  const seriesMax = max.value;
+  const unit = props.unit;
+
+  // First pass: integers by default.
+  const labels = ticks.map((v) => formatAxisValue(v, seriesMax, unit));
+
+  // Single-tick series can't collapse; otherwise, if every label rounds to the
+  // same string, re-format with 1 extra decimal of precision.
+  const collapsed = labels.length > 1 && labels.every((l) => l === labels[0]);
+  if (!collapsed) return labels;
+
+  return ticks.map((v) => formatAxisValue(v, seriesMax, unit, 1));
+});
+
 const xTickIndices = computed(() => {
   if (!props.showXTicks || !hasData.value) return [];
   const count = chartData.value.length;
@@ -346,6 +366,42 @@ const tooltipStyle = computed(() => ({
 function formatValue(v: number): string {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
   return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+/**
+ * Format a value for Y-axis labels. The axis should show integers by default
+ * (no decimal noise), but must never collapse a series to identical labels.
+ *
+ * - Counts (no unit): integer. If every tick rounds to the same integer,
+ *   fall back to 1 decimal so the axis stays informative.
+ * - Percentages (%): integer.
+ * - Dollars ($): if max < 1, show 2 decimals (sub-dollar precision);
+ *   otherwise integer. If every tick rounds to the same integer, fall back
+ *   to 1 decimal (3 decimals for sub-dollar series).
+ *
+ * `decimals` overrides the default precision on collapse; the tooltip
+ * (formatValue) keeps full precision — only the axis is targeted.
+ */
+function formatAxisValue(v: number, seriesMax: number, unit: string, decimals = 0): string {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+
+  if (unit === "%") {
+    return v.toLocaleString(undefined, { maximumFractionDigits: decimals });
+  }
+
+  if (unit === "$") {
+    if (seriesMax < 1) {
+      // Sub-dollar series: 2 decimals by default so $0.03 doesn't become $0,
+      // bumped to 3 when a collapse forces extra precision.
+      const d = decimals === 0 ? 2 : 3;
+      return `$${v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`;
+    }
+    // Normal dollar series: integer by default, 1 decimal on collapse.
+    return `$${v.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
+  }
+
+  // Counts / plain numbers: integer by default, 1 decimal on collapse.
+  return v.toLocaleString(undefined, { maximumFractionDigits: decimals });
 }
 
 function formatWithUnit(v: number): string {
