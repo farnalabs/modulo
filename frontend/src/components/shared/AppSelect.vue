@@ -39,6 +39,12 @@
 import { useAttrs } from 'vue'
 import Select from 'primevue/select'
 
+// Keep $attrs (e.g. data-testid) on the inner PrimeVue <Select> only.
+// With default inheritance the wrapper <label> would also receive them,
+// producing duplicate attributes (e.g. two elements sharing the same
+// data-testid) and breaking strict-mode selectors.
+defineOptions({ inheritAttrs: false })
+
 const props = withDefaults(defineProps<{
   appendTo?: string
   /**
