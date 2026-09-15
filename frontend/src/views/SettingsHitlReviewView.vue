@@ -107,6 +107,9 @@
         <div class="min-w-0 flex-1">{{ $t('views.SettingsHitlReviewView.assignee_label') }}</div>
         <span class="w-40 flex-shrink-0 text-right">{{ $t('views.SettingsHitlReviewView.created_label') }}</span>
       </div>
+      <!-- FAR-858: visually-hidden h2 so the h3 gate labels in HitlGateCard
+           don't skip a heading level (page h1 → h2 → h3). -->
+      <h2 class="sr-only">{{ $t('views.SettingsHitlReviewView.title') }}</h2>
       <div class="space-y-2">
       <div
         v-for="gate in filteredGates"
@@ -140,12 +143,11 @@
             <p class="truncate text-sm font-medium" data-testid="hitl-review-pipeline-name">{{ pipelineDisplayName(gate) }}</p>
           </div>
           <div class="min-w-0 flex-[2]">
-            <p class="truncate text-sm text-muted-foreground" data-testid="hitl-review-node-name">
-              <!-- FAR-727: the server-resolved gate label (the edge's human
-                   name) — the raw gate-id short ID renders only when the gate
-                   config carries no label at all. -->
-              <span v-if="gate.label">{{ gate.label }}</span>
-              <span v-else class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
+            <p class="truncate text-sm font-medium text-foreground" data-testid="hitl-review-node-name">
+              {{ gate.label || shortId(gate.gate_id) }}
+            </p>
+            <p v-if="gateDescriptionSnippet(gate)" class="mt-0.5 truncate text-xs text-muted-foreground" data-testid="hitl-review-snippet">
+              {{ gateDescriptionSnippet(gate) }}
             </p>
           </div>
           <div class="min-w-0 flex-1">
@@ -411,6 +413,26 @@ function pipelineDisplayName(gate: GateItem): string {
   const cached = pipelineName(gate.pipeline_id)
   if (cached) return cached
   return t('views.SettingsHitlReviewView.deleted_pipeline_fallback', { id: shortId(gate.pipeline_id) })
+}
+
+/** FAR-858: one-line snippet for the collapsed row — gate description or condition-result value. */
+function gateDescriptionSnippet(gate: GateItem): string {
+  let raw = ''
+  if (gate.description && gate.description.trim()) {
+    raw = gate.description
+  } else {
+    const ctx = gate.context
+    if (ctx && typeof ctx === 'object' && !Array.isArray(ctx)) {
+      const cr = (ctx as Record<string, unknown>).condition_result
+      if (cr && typeof cr === 'object' && !Array.isArray(cr)) {
+        const entry = cr as Record<string, unknown>
+        if (typeof entry.value === 'string' && entry.value.trim()) raw = entry.value
+      }
+    }
+  }
+  // Cap at 120 chars so the full text is never exposed to the accessibility tree.
+  const MAX_SNIPPET = 120
+  return raw.length > MAX_SNIPPET ? raw.slice(0, MAX_SNIPPET) + '\u2026' : raw
 }
 
 function matchesPipeline(gate: GateItem): boolean {

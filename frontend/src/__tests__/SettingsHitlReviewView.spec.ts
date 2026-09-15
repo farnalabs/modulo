@@ -634,9 +634,7 @@ describe('SettingsHitlReviewView', () => {
     // The briefing sits above the approve/reject controls in the actions column.
     const actionsColumn = briefing.element.parentElement
     expect(actionsColumn?.textContent).toContain('Approve')
-    // Details collapsed until toggled.
-    expect(wrapper!.find('[data-testid="hitl-briefing-details"]').exists()).toBe(false)
-    await wrapper!.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    // FAR-858: details are now open by default — no toggle needed.
     expect(wrapper!.find('[data-testid="hitl-briefing-details"]').exists()).toBe(true)
     expect(wrapper!.find('[data-testid="hitl-briefing-details"]').text()).toContain('Comment Generator')
   })
@@ -1114,5 +1112,60 @@ describe('SettingsHitlReviewView', () => {
     expect(wrapper!.find('[data-testid="hitl-review-column-headers"]').exists()).toBe(true)
     expect(wrapper!.text()).toContain('#approval')
     expect(wrapper!.text()).toContain('pending')
+  })
+
+  it('truncates long gate descriptions in the collapsed-row snippet to 120 chars (FAR-858)', async () => {
+    const { api } = await import('../lib/api/client')
+    const longDesc = 'A'.repeat(200)
+    ;(api.GET as any).mockResolvedValue(gatesResponse([{ ...pendingGateRow(), description: longDesc }]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const snippet = wrapper!.find('[data-testid="hitl-review-snippet"]')
+    expect(snippet.exists()).toBe(true)
+    // Truncated: visible text is 120 chars + ellipsis, NOT the full 200 chars.
+    expect(snippet.text()).toBe('A'.repeat(120) + '\u2026')
+    expect(snippet.text()).not.toBe(longDesc)
+  })
+
+  it('truncates long condition_result values in the snippet to 120 chars (FAR-858)', async () => {
+    const { api } = await import('../lib/api/client')
+    const longValue = 'B'.repeat(200)
+    ;(api.GET as any).mockResolvedValue(gatesResponse([{
+      ...pendingGateRow(),
+      description: null,
+      context: { condition_result: { value: longValue } },
+    }]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const snippet = wrapper!.find('[data-testid="hitl-review-snippet"]')
+    expect(snippet.exists()).toBe(true)
+    expect(snippet.text()).toBe('B'.repeat(120) + '\u2026')
+    expect(snippet.text()).not.toBe(longValue)
+  })
+
+  it('does not truncate short descriptions in the snippet (FAR-858)', async () => {
+    const { api } = await import('../lib/api/client')
+    const shortDesc = 'Short description'
+    ;(api.GET as any).mockResolvedValue(gatesResponse([{ ...pendingGateRow(), description: shortDesc }]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const snippet = wrapper!.find('[data-testid="hitl-review-snippet"]')
+    expect(snippet.exists()).toBe(true)
+    expect(snippet.text()).toBe(shortDesc)
   })
 })

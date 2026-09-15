@@ -1,13 +1,14 @@
 <template>
   <div class="space-y-3" data-testid="hitl-gate-card">
-    <!-- Header: label + full-id copy + status badge + pipeline -->
-    <div class="flex items-center gap-2 text-sm">
+    <!-- FAR-858: label as card title + status badge + pipeline -->
+    <div class="flex items-start gap-2 text-sm">
       <span :class="statusBadgeClass(status)">{{ status }}</span>
-      <span class="font-medium">{{ $t('hitl.gate.gate_label') }}</span>
-      <code
-        v-tooltip.top="{ value: gate.gate_id, showDelay: 300 }"
-        class="cursor-help select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
-      >{{ gate.label || shortId(gate.gate_id) }}</code>
+      <div class="min-w-0 flex-1">
+        <h3 class="text-base font-semibold leading-tight text-foreground">
+          {{ gate.label || shortId(gate.gate_id) }}
+        </h3>
+        <p v-if="gate.description" class="mt-0.5 truncate text-xs text-muted-foreground">{{ gate.description }}</p>
+      </div>
       <button
         type="button"
         data-testid="hitl-gate-copy-id"
@@ -17,7 +18,7 @@
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
       </button>
-      <span v-if="pipelineName" class="ml-auto truncate text-xs text-muted-foreground">{{ pipelineName }}</span>
+      <span v-if="pipelineName" class="flex-shrink-0 truncate text-xs text-muted-foreground">{{ pipelineName }}</span>
     </div>
 
     <!-- Run link -->

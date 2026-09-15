@@ -1830,9 +1830,7 @@ describe('RunDetailView HITL gates', () => {
     // The briefing sits ABOVE the claim control in the gate section.
     const section = wrapper.find('section')
     expect(section.text()).toContain('Why this gate needs a decision')
-    // Details are collapsed until toggled.
-    expect(wrapper.find('[data-testid="hitl-briefing-details"]').exists()).toBe(false)
-    await wrapper.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    // FAR-858: details are now open by default.
     const details = wrapper.find('[data-testid="hitl-briefing-details"]')
     expect(details.exists()).toBe(true)
     expect(details.text()).toContain('Comment Generator')

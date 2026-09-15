@@ -3882,6 +3882,9 @@ elements:
       - testid: hitl-review-node-name
         type: element
         dynamic_testid: false
+      - testid: hitl-review-snippet
+        type: element
+        dynamic_testid: false
       - testid: hitl-review-pipeline-name
         type: element
         dynamic_testid: false
