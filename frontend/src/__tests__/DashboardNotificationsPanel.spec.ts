@@ -2,17 +2,34 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 
-const { mockFetchNotifications, mockReviewLater, mockFetchUnreadCount, mockRegisterHandler } = vi.hoisted(() => ({
+const { mockFetchNotifications, mockReviewLater, mockFetchUnreadCount, mockRegisterHandler, mockDismissNotification } = vi.hoisted(() => ({
   mockFetchNotifications: vi.fn(),
   mockReviewLater: vi.fn(),
   mockFetchUnreadCount: vi.fn(),
-  mockRegisterHandler: vi.fn(() => vi.fn()),
+  mockRegisterHandler: vi.fn((_event: string, _cb: () => void) => vi.fn()),
+  mockDismissNotification: vi.fn(),
 }))
+
+type DNPVm = {
+  notifications: Array<{ id: string }>
+  total: number
+  reviewLaterError: string
+  page: number
+  totalPages: number
+  nextPage: () => void
+  prevPage: () => void
+  onReviewLater: (id: string) => Promise<void>
+  onDismissed: (id: string) => Promise<void>
+  refreshUnreadCount: () => Promise<void>
+  unreadCount: number
+  error: string | null
+}
 
 vi.mock('../lib/api/notifications', () => ({
   fetchNotifications: mockFetchNotifications,
   reviewLater: mockReviewLater,
   fetchUnreadCount: mockFetchUnreadCount,
+  dismissNotification: mockDismissNotification,
 }))
 
 vi.mock('../stores/syncRegistry', () => ({
@@ -172,5 +189,144 @@ describe('DashboardNotificationsPanel', () => {
     const badge = wrapper.find('[role="status"]')
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toContain('2')
+  })
+
+  it('onReviewLater removes the notification, decrements the total, and refreshes the unread count', async () => {
+    mockReviewLater.mockResolvedValue(undefined)
+    mockFetchUnreadCount.mockResolvedValue(2)
+    const wrapper = await mountAndExpand(makeNotifications(3), 3, 3)
+    const vm = wrapper.vm as unknown as DNPVm
+    await vm.onReviewLater('n-2')
+    await flushPromises()
+    await nextTick()
+    expect(mockReviewLater).toHaveBeenCalledWith('n-2')
+    expect(vm.notifications.find((n) => n.id === 'n-2')).toBeUndefined()
+    expect(vm.total).toBe(2)
+    expect(mockFetchUnreadCount).toHaveBeenCalled()
+  })
+
+  it('onReviewLater sets an error when the API rejects', async () => {
+    mockReviewLater.mockRejectedValue(new Error('boom'))
+    const wrapper = await mountAndExpand(makeNotifications(3), 3, 3)
+    const vm = wrapper.vm as unknown as DNPVm
+    await vm.onReviewLater('n-1')
+    await flushPromises()
+    await nextTick()
+    expect(vm.reviewLaterError).toBe('boom')
+  })
+
+  it('onDismissed removes the notification and refreshes the unread count', async () => {
+    mockDismissNotification.mockResolvedValue(undefined)
+    mockFetchUnreadCount.mockResolvedValue(2)
+    const wrapper = await mountAndExpand(makeNotifications(3), 3, 3)
+    const vm = wrapper.vm as unknown as DNPVm
+    await vm.onDismissed('n-3')
+    await flushPromises()
+    await nextTick()
+    expect(mockDismissNotification).not.toHaveBeenCalled()
+    expect(vm.notifications.find((n) => n.id === 'n-3')).toBeUndefined()
+    expect(vm.total).toBe(2)
+    expect(mockFetchUnreadCount).toHaveBeenCalled()
+  })
+
+  it('onDismissed on the last page goes back a page when the list empties', async () => {
+    mockDismissNotification.mockResolvedValue(undefined)
+    mockFetchNotifications.mockResolvedValue({ items: [], total: 1, page: 1, page_size: 10 })
+    const wrapper = await mountAndExpand(makeNotifications(1), 1, 1)
+    const vm = wrapper.vm as unknown as DNPVm
+    // Simulate being on page 2 with a single (now-removed) item.
+    vm.page = 2
+    vm.total = 1
+    vm.notifications = makeNotifications(1)
+    await vm.onDismissed('n-1')
+    await flushPromises()
+    await nextTick()
+    expect(vm.page).toBe(1)
+    expect(mockFetchNotifications).toHaveBeenLastCalledWith({ page: 1, page_size: 10, status: 'active' })
+  })
+
+  it('nextPage advances the page and reloads when not on the last page', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(12), 20)
+    const vm = wrapper.vm as unknown as DNPVm
+    vm.page = 1
+    vm.nextPage()
+    await flushPromises()
+    await nextTick()
+    expect(vm.page).toBe(2)
+    expect(mockFetchNotifications).toHaveBeenLastCalledWith({ page: 2, page_size: 10, status: 'active' })
+  })
+
+  it('prevPage goes back a page and reloads when past the first page', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(12), 20)
+    const vm = wrapper.vm as unknown as DNPVm
+    vm.page = 2
+    vm.prevPage()
+    await flushPromises()
+    await nextTick()
+    expect(vm.page).toBe(1)
+    expect(mockFetchNotifications).toHaveBeenLastCalledWith({ page: 1, page_size: 10, status: 'active' })
+  })
+
+  it('does not advance past the last page', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(12), 20)
+    const vm = wrapper.vm as unknown as DNPVm
+    vm.page = vm.totalPages
+    vm.nextPage()
+    await flushPromises()
+    await nextTick()
+    expect(vm.page).toBe(vm.totalPages)
+  })
+
+  it('reloads when the sync registry fires a "notification" event', async () => {
+    await mountAndExpand([], 0)
+    const handler = mockRegisterHandler.mock.calls[0]?.[1] as undefined | (() => void)
+    expect(handler).toBeTypeOf('function')
+    mockFetchNotifications.mockClear()
+    ;(handler as () => void)()
+    await flushPromises()
+    await nextTick()
+    expect(mockFetchNotifications).toHaveBeenCalledWith({ page: 1, page_size: 10, status: 'active' })
+  })
+
+  it('sets an error when loadPage fails', async () => {
+    mockFetchNotifications.mockRejectedValue(new Error('network down'))
+    const wrapper = mount(DashboardNotificationsPanel)
+    await flushPromises()
+    await nextTick()
+    const vm = wrapper.vm as unknown as DNPVm
+    expect(vm.error).toBe('network down')
+  })
+
+  it('unsubscribes the sync handler on unmount', async () => {
+    const unsub = vi.fn()
+    mockRegisterHandler.mockReturnValueOnce(unsub)
+    const wrapper = await mountAndExpand([], 0)
+    wrapper.unmount()
+    expect(unsub).toHaveBeenCalled()
+  })
+
+  it('refreshUnreadCount resets the badge to 0 when the endpoint fails', async () => {
+    const wrapper = await mountAndExpand(makeNotifications(3), 3, 3)
+    const vm = wrapper.vm as unknown as DNPVm
+    mockFetchUnreadCount.mockRejectedValue(new Error('badge down'))
+    await vm.refreshUnreadCount()
+    await flushPromises()
+    await nextTick()
+    expect(vm.unreadCount).toBe(0)
+  })
+
+  it('onReviewLater on the last page goes back a page when the list empties', async () => {
+    mockReviewLater.mockResolvedValue(undefined)
+    mockFetchNotifications.mockResolvedValue({ items: [], total: 1, page: 1, page_size: 10 })
+    const wrapper = await mountAndExpand(makeNotifications(1), 1, 1)
+    const vm = wrapper.vm as unknown as DNPVm
+    vm.page = 2
+    vm.total = 1
+    vm.notifications = makeNotifications(1)
+    await vm.onReviewLater('n-1')
+    await flushPromises()
+    await nextTick()
+    expect(vm.page).toBe(1)
+    expect(mockFetchNotifications).toHaveBeenLastCalledWith({ page: 1, page_size: 10, status: 'active' })
   })
 })
