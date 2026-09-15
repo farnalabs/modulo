@@ -372,4 +372,35 @@ describe('AdminRunRetentionView', () => {
     const query = (appliedCall[1] as { params: { query: Record<string, unknown> } }).params.query
     expect(query.date_from).toBe(new Date('2026-07-01T00:00').toISOString()) // nosemgrep: new-date-without-guard
   })
+
+  it('coalesces rapid date-filter edits into a single debounced auto-apply (FAR-868)', async () => {
+    const wrapper = await mountView()
+
+    vi.useFakeTimers()
+    try {
+      const dateFromInput = wrapper.find('[data-testid="admin-run-retention-date-from"]')
+      const dateToInput = wrapper.find('[data-testid="admin-run-retention-date-to"]')
+      // A second edit inside the debounce window must clear the pending timer
+      // and coalesce into one apply per watcher (no duplicate concurrent loads).
+      await dateFromInput.setValue('2026-07-01T00:00')
+      await dateFromInput.setValue('2026-07-02T00:00')
+      await dateToInput.setValue('2026-08-30T00:00')
+      await dateToInput.setValue('2026-08-31T23:59')
+
+      vi.advanceTimersByTime(300)
+    } finally {
+      vi.useRealTimers()
+    }
+    for (let i = 0; i < 10; i++) await flushPromises()
+
+    const getMock = api.GET as Mock
+    const candidatesCalls = getMock.mock.calls.filter(
+      (c: unknown[]) => c[0] === '/api/v1/admin/run-retention/candidates',
+    )
+    const appliedCall = candidatesCalls[candidatesCalls.length - 1] as unknown[]
+    const query = (appliedCall[1] as { params: { query: Record<string, unknown> } }).params.query
+    expect(query.date_from).toBe(new Date('2026-07-02T00:00').toISOString()) // nosemgrep: new-date-without-guard
+    expect(query.date_to).toBe(new Date('2026-08-31T23:59').toISOString()) // nosemgrep: new-date-without-guard
+    wrapper.unmount()
+  })
 })

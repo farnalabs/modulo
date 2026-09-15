@@ -208,6 +208,24 @@ describe('AdminErrorsView', () => {
     wrapper.unmount()
   })
 
+  it('auto-applies dropdown filter changes immediately, resetting to page 1 (FAR-868)', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    // The level/status/source Selects auto-apply on change — no Apply button.
+    const vm = wrapper.vm as unknown as { filterLevel: string }
+    vm.filterLevel = 'error'
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/errors', expect.objectContaining({
+      params: { query: expect.objectContaining({ level: 'error', offset: 0 }) },
+    }))
+    wrapper.unmount()
+  })
+
   it('truncates the message column by default (block-level ellipsis, bounded width)', async () => {
     const wrapper = mountWithLongMessageGroup()
     await flushPromises()
