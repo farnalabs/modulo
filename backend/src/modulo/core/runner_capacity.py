@@ -837,7 +837,7 @@ async def _assert_capacity_within_cap(session: AsyncSession, org_id: uuid.UUID) 
     return breached
 
 
-@dataclass(frozen=True)
+@dataclass
 class RunnerMarkerSweepError(RuntimeError):
     """The marker sweep failed (partially or wholly) — qa F5 liveness contract.
 
@@ -941,6 +941,174 @@ async def _release_sweep_dedup_lock(lock_conn: Any, k1: int, k2: int) -> None:
             _log.debug("runner.capacity.marker_sweep_lock_conn_close_failed", exc_info=True)
 
 
+# Sweep row processing — extracted to flatten the per-org loop nesting.
+# Each block below is a cohesive helper extracted from reconcile_runner_dispatch_markers
+# to reduce its SonarQube S3776 cognitive complexity from 63 → ~12.
+
+_SweepOutcome = tuple[uuid.UUID, str, str]
+
+
+async def _process_sweep_row(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    row: Any,
+    *,
+    recovery_or: Any,
+    exclusion: Any,
+    now: datetime,
+    fresh_window: float,
+    stale_window: int,
+) -> _SweepOutcome | None:
+    """Classify and apply one sweep-row action; return the outcome or ``None``.
+
+    Handles the lazy-recoverability check (F8), row-freshness (d2 exemption),
+    classification via :func:`classify_sweep_action`, and CAS-guarded SQL
+    execution for clear/transition actions.  The caller increments ``scanned``
+    and appends any non-``None`` return to ``committed_outcomes``.
+    """
+    marker_json: str | None = row.sandbox_dispatch_state
+    # Lazy recoverability (F8): terminal rows skip the check entirely (the
+    # recovery predicates are status-scoped — they can never match a terminal
+    # row); fence rows skip it too (rule (a) returns before the recoverability
+    # branch would be read).
+    is_terminal = row.status in TERMINAL_STATUSES
+    if is_terminal or marker_is_fence_component(marker_json):
+        recoverable = False
+    else:
+        recoverable = await _run_recoverable(session, row.id, recovery_or, exclusion)
+    row_fresh = row.updated_at is not None and ((now - row.updated_at).total_seconds() <= fresh_window)
+    action = classify_sweep_action(
+        status=row.status,
+        error_code=row.error_code,
+        marker_json=marker_json,
+        stale_reference=sweep_staleness_reference(marker_json, row.updated_at),
+        now=now,
+        stale_seconds=stale_window,
+        recoverable=recoverable,
+        row_fresh=row_fresh,
+    )
+    # keep_* actions are no-ops — the marker stays and the row is skipped.
+    if action in ("keep_fence", "keep_recoverable", "keep_anomaly", "keep_live"):
+        return None
+    if action in ("clear_terminal", "clear_stale"):
+        result = await session.execute(
+            _CLEAR_MARKER_SQL,
+            {"rid": row.id, "oid": str(org_id), "marker_seen": marker_json},
+        )
+        if result.fetchone() is not None:
+            return (row.id, row.status, action)
+    elif action == "transition_stale_running":
+        result = await session.execute(
+            _TRANSITION_STALE_RUNNING_SQL,
+            {
+                "rid": row.id,
+                "oid": str(org_id),
+                "detail": _SWEEP_STALE_DETAIL,
+                "marker_seen": marker_json,
+            },
+        )
+        if result.fetchone() is not None:
+            return (row.id, row.status, "transition_stale_running")
+    return None
+
+
+# Per-org scan — the full RLS-scoped transaction with batched cursor.
+async def _scan_org_markers(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    *,
+    settings: Any,
+    recovery_or: Any,
+    exclusion: Any,
+    now: datetime,
+    fresh_window: float,
+    stale_window: int,
+    scanned_slot: list[int],
+) -> tuple[int, bool, list[_SweepOutcome]]:
+    """Scan all marker-carrying runs for one org and apply sweep actions.
+
+    ``scanned_slot`` is a mutable ``[int]`` accumulator owned by the caller: the
+    per-row scan count is written there as rows are classified (not merely on
+    return) so a mid-transaction failure still leaves the partial count visible
+    to the caller's ``except`` block (qa F5 — a failed org pass must report how
+    many rows it had already swept, never silently zero).  Returns
+    ``(scanned_count, breach, committed_outcomes)`` on success.  The caller is
+    responsible for error handling — :class:`asyncio.CancelledError` is always
+    re-raised; other exceptions propagate for the caller's ``except`` block.
+    """
+    committed_outcomes: list[_SweepOutcome] = []
+    async with factory() as session, session.begin():
+        from modulo.db.rls import set_rls_org
+
+        await set_rls_org(session, org_id)
+        # FAR-767: bound the lock wait for every statement in this org pass.
+        # A sandbox-run transaction that holds a row lock on a marker-carrying
+        # run must NOT block the sweep past the 120s SAQ job timeout — the
+        # timeout converts any unbounded wait into a bounded, fail-open,
+        # self-healing skip.
+        lock_timeout_s = settings.runner_marker_sweep_lock_timeout_seconds
+        await session.execute(
+            text("SELECT set_config('lock_timeout', :val, true)"),
+            {"val": f"{lock_timeout_s}s"},
+        )
+        cursor: uuid.UUID | None = None
+        while True:
+            batch = (
+                await session.execute(
+                    _SWEEP_CANDIDATE_SQL,
+                    {"oid": str(org_id), "after": cursor, "batch": SWEEP_CANDIDATE_BATCH},
+                )
+            ).all()
+            if not batch:
+                break
+            for row in batch:
+                scanned_slot[0] += 1
+                outcome = await _process_sweep_row(
+                    session,
+                    org_id,
+                    row,
+                    recovery_or=recovery_or,
+                    exclusion=exclusion,
+                    now=now,
+                    fresh_window=fresh_window,
+                    stale_window=stale_window,
+                )
+                if outcome is not None:
+                    committed_outcomes.append(outcome)
+            cursor = batch[-1].id
+            if len(batch) < SWEEP_CANDIDATE_BATCH:
+                break
+        org_breach = await _assert_capacity_within_cap(session, org_id)
+    return scanned_slot[0], org_breach, committed_outcomes
+
+
+def _emit_sweep_outcomes(
+    org_id: uuid.UUID,
+    outcomes: list[_SweepOutcome],
+) -> tuple[int, int]:
+    """Log committed outcomes post-commit (qa F14: no phantom events).
+
+    Returns ``(cleared_count, transitioned_count)`` for this org.
+    """
+    cleared = 0
+    transitioned = 0
+    for run_id, run_status, reason in outcomes:
+        cleared += 1
+        if reason == "transition_stale_running":
+            transitioned += 1
+        _log.warning(
+            "runner.capacity.marker_cleared",
+            extra={
+                "run_id": str(run_id),
+                "org_id": str(org_id),
+                "run_status": run_status,
+                "reason": reason,
+                "note": "container destroy owned by the D4 reconciler",
+            },
+        )
+    return cleared, transitioned
+
+
 async def reconcile_runner_dispatch_markers(
     factory: async_sessionmaker[AsyncSession],
     *,
@@ -1029,92 +1197,28 @@ async def reconcile_runner_dispatch_markers(
             ) from None
 
         for org_id in org_ids:
-            # Outcomes decided inside the org transaction, emitted AFTER its
-            # commit (qa F14 phantom-event fix): a rolled-back org pass must
-            # not leave ``runner.capacity.marker_cleared`` notes or counters
-            # describing writes that never committed.
-            committed_outcomes: list[tuple[uuid.UUID, str, str]] = []
-            org_breach = False
+            org_scanned_slot: list[int] = [0]
             try:
-                async with factory() as session, session.begin():
-                    from modulo.db.rls import set_rls_org
-
-                    await set_rls_org(session, org_id)
-                    # FAR-767: bound the lock wait for every statement in this
-                    # org pass.  A sandbox-run transaction that holds a row lock
-                    # on a marker-carrying run must NOT block the sweep past the
-                    # 120s SAQ job timeout — the timeout converts any unbounded
-                    # wait into a bounded, fail-open, self-healing skip.
-                    lock_timeout_s = settings.runner_marker_sweep_lock_timeout_seconds
-                    await session.execute(
-                        text("SELECT set_config('lock_timeout', :val, true)"),
-                        {"val": f"{lock_timeout_s}s"},
-                    )
-                    cursor: uuid.UUID | None = None
-                    while True:
-                        batch = (
-                            await session.execute(
-                                _SWEEP_CANDIDATE_SQL,
-                                {"oid": str(org_id), "after": cursor, "batch": SWEEP_CANDIDATE_BATCH},
-                            )
-                        ).all()
-                        if not batch:
-                            break
-                        for row in batch:
-                            scanned += 1
-                            marker_json = row.sandbox_dispatch_state
-                            is_terminal = row.status in TERMINAL_STATUSES
-                            # Lazy recoverability (F8): terminal rows skip the
-                            # check entirely (the recovery predicates are
-                            # status-scoped — they can never match a terminal
-                            # row); fence rows skip it too (rule (a) returns
-                            # before the recoverability branch would be read).
-                            if is_terminal or marker_is_fence_component(marker_json):
-                                recoverable = False
-                            else:
-                                recoverable = await _run_recoverable(session, row.id, recovery_or, exclusion)
-                            row_fresh = row.updated_at is not None and (
-                                (now - row.updated_at).total_seconds() <= fresh_window
-                            )
-                            action = classify_sweep_action(
-                                status=row.status,
-                                error_code=row.error_code,
-                                marker_json=marker_json,
-                                stale_reference=sweep_staleness_reference(marker_json, row.updated_at),
-                                now=now,
-                                stale_seconds=stale_window,
-                                recoverable=recoverable,
-                                row_fresh=row_fresh,
-                            )
-                            if action in ("keep_fence", "keep_recoverable", "keep_anomaly", "keep_live"):
-                                continue
-                            if action in ("clear_terminal", "clear_stale"):
-                                result = await session.execute(
-                                    _CLEAR_MARKER_SQL,
-                                    {"rid": row.id, "oid": str(org_id), "marker_seen": marker_json},
-                                )
-                                if result.fetchone() is not None:
-                                    committed_outcomes.append((row.id, row.status, action))
-                            elif action == "transition_stale_running":
-                                result = await session.execute(
-                                    _TRANSITION_STALE_RUNNING_SQL,
-                                    {
-                                        "rid": row.id,
-                                        "oid": str(org_id),
-                                        "detail": _SWEEP_STALE_DETAIL,
-                                        "marker_seen": marker_json,
-                                    },
-                                )
-                                if result.fetchone() is not None:
-                                    committed_outcomes.append((row.id, row.status, "transition_stale_running"))
-                        cursor = batch[-1].id
-                        if len(batch) < SWEEP_CANDIDATE_BATCH:
-                            break
-                    org_breach = await _assert_capacity_within_cap(session, org_id)
+                org_scanned, org_breach, committed_outcomes = await _scan_org_markers(
+                    factory,
+                    org_id,
+                    settings=settings,
+                    recovery_or=recovery_or,
+                    exclusion=exclusion,
+                    now=now,
+                    fresh_window=fresh_window,
+                    stale_window=stale_window,
+                    scanned_slot=org_scanned_slot,
+                )
+                scanned += org_scanned
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 orgs_failed += 1
+                # qa F5: a failed org pass still reports the PARTIAL scan count —
+                # the rows it had already classified before the failure must not
+                # be silently dropped to zero on the raised RunnerMarkerSweepError.
+                scanned += org_scanned_slot[0]
                 # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run
                 # transaction holds a conflicting row lock.  Log at warning level
                 # with a distinctive event name so the sweep is visible in prod
@@ -1131,20 +1235,9 @@ async def reconcile_runner_dispatch_markers(
                 continue
             # The org transaction COMMITTED — emit the outcomes + the breach
             # verdict now (post-commit, never phantom).
-            for run_id, run_status, reason in committed_outcomes:
-                cleared += 1
-                if reason == "transition_stale_running":
-                    transitioned += 1
-                _log.warning(
-                    "runner.capacity.marker_cleared",
-                    extra={
-                        "run_id": str(run_id),
-                        "org_id": str(org_id),
-                        "run_status": run_status,
-                        "reason": reason,
-                        "note": "container destroy owned by the D4 reconciler",
-                    },
-                )
+            org_cleared, org_transitioned = _emit_sweep_outcomes(org_id, committed_outcomes)
+            cleared += org_cleared
+            transitioned += org_transitioned
             if org_breach:
                 violations += 1
         _log.info(

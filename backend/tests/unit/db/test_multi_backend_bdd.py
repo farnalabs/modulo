@@ -585,7 +585,7 @@ class TestRegisterTenantFilter:
 
 class TestOrganisationRootEntityModel:
     """Organisation is the root tenant entity — ``created_by`` is nullable and is
-    deliberately NOT a foreign key to ``accounts.id`` (migration 0241 drops the
+    deliberately NOT a foreign key to ``accounts.id`` (migration 0243 drops the
     drift introduced by 0236): the first org is bootstrapped with
     ``created_by=NULL`` and the FK would block that ordering because the org must
     exist before its first user; the model carries no ``organisation_id`` column
@@ -603,7 +603,7 @@ class TestOrganisationRootEntityModel:
         assert not fks, (
             "created_by must NOT be a foreign key to accounts.id — the first org "
             "is created with created_by=NULL but must exist before its first user, "
-            "so a FK would block bootstrap ordering (migration 0241 drops the "
+            "so a FK would block bootstrap ordering (migration 0243 drops the "
             "fk_organisations_created_by constraint added in 0236)"
         )
 

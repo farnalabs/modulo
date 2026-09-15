@@ -11,20 +11,21 @@ connector_instances / scheduled_reports only), and no application code reads or
 writes them. Keeping them produces schema drift vs the ORM metadata, which the
 pre-deploy integration test (test_migrated_schema_matches_orm_metadata) flags.
 
-This migration chains on top of 0240 and drops the spurious columns/FK so the
-migrated schema matches the Organisation ORM. The 0236 CHECK constraints are
-kept (they are legitimate, migration-owned quality guards).
+This migration chains on top of 0242_org_mint_budget_usage (main's current head)
+and drops the spurious columns/FK so the migrated schema matches the Organisation
+ORM. The 0236 CHECK constraints are kept (they are legitimate, migration-owned
+quality guards).
 
-Revision ID: 0241_drop_organisations_audit_columns
-Revises: 0240_reinstate_organisations_audit_columns
+Revision ID: 0243_drop_organisations_audit_columns
+Revises: 0242_org_mint_budget_usage
 Create Date: 2026-09-15
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0241_drop_organisations_audit_columns"
-down_revision = "0240_reinstate_organisations_audit_columns"
+revision = "0243_drop_organisations_audit_columns"
+down_revision = "0242_org_mint_budget_usage"
 
 
 def upgrade() -> None:

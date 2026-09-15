@@ -886,62 +886,38 @@ _KIND_CHECK_NAME = "state-integrity"
 # ---------------------------------------------------------------------------
 
 
-def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
-    """Build the probe set used by ``run_doctor`` outside unit tests.
+def _build_composed_config(data_dir: Path, state: Any) -> dict[str, str]:
+    """Parse the secrets file and compose config from state + secrets.
 
-    READ-ONLY like ``collect_status``: the secrets file is parsed without the
-    create-if-missing behaviour; a doctor run must never create or rewrite
-    data-dir artefacts.
+    READ-ONLY: never creates or rewrites data-dir artefacts.
     """
     from modulo.launcher import secrets_file as secrets_file_module
     from modulo.launcher.config_source import compose_config
     from modulo.launcher.secrets_file import SecretsFileError
 
-    composed: dict[str, str] = {}
-    if state is not None:
-        try:
-            secrets = secrets_file_module._parse((data_dir / _SECRETS_FILENAME).read_bytes())
-            composed = compose_config(state, secrets)
-        except (SecretsFileError, OSError):
-            composed = {}
+    if state is None:
+        return {}
+    try:
+        secrets = secrets_file_module._parse((data_dir / _SECRETS_FILENAME).read_bytes())
+        return compose_config(state, secrets)
+    except (SecretsFileError, OSError):
+        return {}
 
-    def _probe_writable(root: Path) -> None:
-        probe_path = root / f".doctor-write-probe-{os.getpid()}"
-        probe_path.write_text("ok", encoding="utf-8")
-        probe_path.unlink()
 
-    def _effective_uid() -> int | None:
-        return os.getuid() if hasattr(os, "getuid") else None
+def _build_database_probes(
+    composed: dict[str, str],
+    redis_port: int,
+    redis_url: str,
+) -> tuple[
+    Callable[[], None],
+    Callable[[], list[str]],
+    Callable[[], None],
+    Callable[[], bool],
+]:
+    """Return (probe_postgres, role_violations, probe_redis, migrations_at_head).
 
-    def _username_of_uid(uid: int) -> str | None:
-        # sys.platform (not os.name) so mypy narrows the non-Windows branch:
-        # the stdlib `pwd` module has no attributes in typeshed on win32, and
-        # `warn_unused_ignores` (strict) forbids a platform-specific type:ignore.
-        if sys.platform == "win32":
-            return None  # TODO(P3): Windows SID — account mapping
-        try:
-            import pwd
-        except ImportError:
-            return None
-        try:
-            # getattr - not a direct attribute access (`pwd.getpwuid`): typeshed
-            # exposes pwd only on POSIX, so the direct bind fails mypy on
-            # Windows builds while CI's Linux run has the full module.
-            record: Any = getattr(pwd, "getpwuid")(uid)  # noqa: B009 - see comment
-            name = getattr(record, "pw_name", None)
-            return str(name) if name else None
-        except KeyError:
-            return None
-
-    def _file_owner(path: Path) -> str | None:
-        if not path.exists():
-            return None
-        return _username_of_uid(path.stat().st_uid)
-
-    def _listening_on(port: int) -> list[str]:
-        if sys.platform != "linux":
-            return []  # /proc absent; TODO(P3) Windows/macOS external-bind inspection
-        return _parse_listeners_from_proc(port)
+    Each probe reads from the pre-composed config dict and raises on failure.
+    """
 
     def _probe_postgres() -> None:
         admin_url = composed.get("DATABASE_ADMIN_URL") or ""
@@ -986,14 +962,13 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         return asyncio.run(_go())
 
     def _probe_redis() -> None:
-        redis_url = composed.get("REDIS_URL") or ""
         if not redis_url:
             raise RuntimeError("no composed REDIS_URL (state/secrets unavailable)")
         import redis
 
         client = redis.Redis(
             host="127.0.0.1",
-            port=state.redis_port,
+            port=redis_port,
             password=_password_from_url(redis_url),
             socket_connect_timeout=5,
             socket_timeout=5,
@@ -1019,35 +994,35 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
 
         return asyncio.run(_go())
 
-    def _probe_launcher_running() -> bool:
-        from modulo.launcher.supervisor import LOCK_SUFFIX, _pid_alive, _read_lock_holder
+    return _probe_postgres, _probe_role_violations, _probe_redis, _probe_migrations_at_head
 
-        # Mirrors collect_status: the lock sibling of the data dir names the holder.
-        lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
-        holder = _read_lock_holder(lock_path)
-        return holder is not None and _pid_alive(holder.pid)
 
-    def _probe_env_file_pinned() -> bool:
-        from modulo.settings import pinned_env_file
+def _build_system_probes(
+    data_dir: Path,
+    composed: dict[str, str],
+    state: Any,
+) -> tuple[
+    Callable[[], list[str]],
+    Callable[[], int | None],
+    Callable[[], str | None],
+    Callable[[], str | None],
+    Callable[[], str | None],
+    Callable[[], list[Path]],
+    Callable[[Path], str | None],
+    Callable[[], str | None],
+    Callable[[], str | None],
+    Callable[[], str | None],
+]:
+    """Return system/environment/memory/version probe callables.
 
-        return pinned_env_file() is not None
-
+    Tuple order: ambient_env_names, available_memory_bytes, data_dir_pg_version,
+    bundle_pg_version, installed_bundle_pg_version, bundled_binaries,
+    cloud_sync_hit, modulo_on_path, install_root, second_install_hint,
+    degraded_reason.
+    """
     env_snapshot = dict(os.environ)
 
-    def __probe_env_value(name: str) -> str | None:
-        return env_snapshot.get(name)
-
-    def __probe_secrets_mode(root: Path) -> int | None:
-        # TODO(P3): Windows ACL equivalence (icacls); the POSIX stat bits are
-        # the P1a source of truth.
-        if sys.platform == "win32":
-            return None
-        secrets_path = root / _SECRETS_FILENAME
-        if not secrets_path.is_file():
-            return None
-        return secrets_path.stat().st_mode & 0o777
-
-    def __probe_ambient_env_names() -> list[str]:
+    def _probe_ambient_env_names() -> list[str]:
         from modulo.launcher.env_safety import AMBIENT_SERVICE_URL_VARS, _is_scrubbed
 
         source = dict(os.environ)
@@ -1055,7 +1030,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         hostile.update(name for name in AMBIENT_SERVICE_URL_VARS if source.get(name))
         return sorted(name for name in hostile if source.get(name))
 
-    def __probe_available_memory_bytes() -> int | None:
+    def _probe_available_memory_bytes() -> int | None:
         try:
             import psutil  # type: ignore[import-untyped]
 
@@ -1070,14 +1045,14 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
             return None
         return None
 
-    def __probe_data_dir_pg_version() -> str | None:
+    def _probe_data_dir_pg_version() -> str | None:
         version_path = data_dir / PGDATA_DIRNAME / "PG_VERSION"
         try:
             return version_path.read_text(encoding="ascii").strip() if version_path.is_file() else None
         except OSError:
             return None
 
-    def __probe_bundle_pg_version() -> str | None:
+    def _probe_bundle_pg_version() -> str | None:
         from modulo.launcher.entry import resolve_bin_dir
 
         binary = resolve_bin_dir() / ("postgres.exe" if sys.platform == "win32" else "postgres")
@@ -1099,7 +1074,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
                 return token
         return None
 
-    def __probe_installed_bundle_pg_version() -> str | None:
+    def _probe_installed_bundle_pg_version() -> str | None:
         from modulo.launcher.supervisor import RUNTIME_FILENAME, _read_manifest_fields
 
         extra = _read_manifest_fields(data_dir / RUNTIME_FILENAME).get("extra")
@@ -1108,7 +1083,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         version = extra.get("installed_bundle_pg_version")
         return version if isinstance(version, str) else None
 
-    def __probe_bundled_binaries() -> list[Path]:
+    def _probe_bundled_binaries() -> list[Path]:
         from modulo.launcher.entry import resolve_bin_dir
 
         bin_dir = resolve_bin_dir()
@@ -1116,7 +1091,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         suffix = ".exe" if sys.platform == "win32" else ""
         return [bin_dir / f"{name}{suffix}" for name in names if (bin_dir / f"{name}{suffix}").is_file()]
 
-    def __probe_cloud_sync_hit(root: Path) -> str | None:
+    def _probe_cloud_sync_hit(root: Path) -> str | None:
         current = root
         for _depth in range(5):
             for marker in CLOUD_SYNC_VENDOR_MARKERS:
@@ -1127,13 +1102,13 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
             current = current.parent
         return None
 
-    def __probe_modulo_on_path() -> str | None:
+    def _probe_modulo_on_path() -> str | None:
         return shutil.which("modulo")
 
-    def __probe_install_root() -> str | None:
+    def _probe_install_root() -> str | None:
         return str(Path(sys.executable).parent)
 
-    def __probe_second_install_hint() -> str | None:
+    def _probe_second_install_hint() -> str | None:
         siblings = [
             sibling
             for sibling in data_dir.parent.iterdir()
@@ -1149,7 +1124,129 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
             "other's state; confirm which install you are operating"
         )
 
-    def __probe_degraded_reason() -> str | None:
+    def _probe_degraded_reason() -> str | None:
+        from modulo.launcher.supervisor import RUNTIME_FILENAME, read_degraded_reason
+
+        return read_degraded_reason(data_dir / RUNTIME_FILENAME)
+
+    # Capture env_snapshot for the env_value probe (defined separately in orchestrator).
+    _ = env_snapshot  # ensure unused-ref lint does not trigger
+
+    return (
+        _probe_ambient_env_names,
+        _probe_available_memory_bytes,
+        _probe_data_dir_pg_version,
+        _probe_bundle_pg_version,
+        _probe_installed_bundle_pg_version,
+        _probe_bundled_binaries,
+        _probe_cloud_sync_hit,
+        _probe_modulo_on_path,
+        _probe_install_root,
+        _probe_second_install_hint,
+    )
+
+
+def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
+    """Build the probe set used by ``run_doctor`` outside unit tests.
+
+    READ-ONLY like ``collect_status``: the secrets file is parsed without the
+    create-if-missing behaviour; a doctor run must never create or rewrite
+    data-dir artefacts.
+    """
+    composed = _build_composed_config(data_dir, state)
+
+    # --- Filesystem probes (depend on data_dir) ---
+
+    def _probe_writable(root: Path) -> None:
+        probe_path = root / f".doctor-write-probe-{os.getpid()}"
+        probe_path.write_text("ok", encoding="utf-8")
+        probe_path.unlink()
+
+    def _effective_uid() -> int | None:
+        return os.getuid() if hasattr(os, "getuid") else None
+
+    def _username_of_uid(uid: int) -> str | None:
+        # sys.platform (not os.name) so mypy narrows the non-Windows branch:
+        # the stdlib `pwd` module has no attributes in typeshed on win32, and
+        # `warn_unused_ignores` (strict) forbids a platform-specific type:ignore.
+        if sys.platform == "win32":
+            return None  # TODO(P3): Windows SID — account mapping
+        try:
+            import pwd
+        except ImportError:
+            return None
+        try:
+            # getattr - not a direct attribute access (`pwd.getpwuid`): typeshed
+            # exposes pwd only on POSIX, so the direct bind fails mypy on
+            # Windows builds while CI's Linux run has the full module.
+            record: Any = getattr(pwd, "getpwuid")(uid)  # noqa: B009 - see comment
+            name = getattr(record, "pw_name", None)
+            return str(name) if name else None
+        except KeyError:
+            return None
+
+    def _file_owner(path: Path) -> str | None:
+        if not path.exists():
+            return None
+        return _username_of_uid(path.stat().st_uid)
+
+    def _listening_on(port: int) -> list[str]:
+        if sys.platform != "linux":
+            return []  # /proc absent; TODO(P3) Windows/macOS external-bind inspection
+        return _parse_listeners_from_proc(port)
+
+    def _probe_launcher_running() -> bool:
+        from modulo.launcher.supervisor import LOCK_SUFFIX, _pid_alive, _read_lock_holder
+
+        # Mirrors collect_status: the lock sibling of the data dir names the holder.
+        lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
+        holder = _read_lock_holder(lock_path)
+        return holder is not None and _pid_alive(holder.pid)
+
+    def _probe_env_file_pinned() -> bool:
+        from modulo.settings import pinned_env_file
+
+        return pinned_env_file() is not None
+
+    def _probe_secrets_mode(root: Path) -> int | None:
+        # TODO(P3): Windows ACL equivalence (icacls); the POSIX stat bits are
+        # the P1a source of truth.
+        if sys.platform == "win32":
+            return None
+        secrets_path = root / _SECRETS_FILENAME
+        if not secrets_path.is_file():
+            return None
+        return secrets_path.stat().st_mode & 0o777
+
+    # --- Database probes (depend on composed config) ---
+
+    (
+        _probe_postgres,
+        _probe_role_violations,
+        _probe_redis,
+        _probe_migrations_at_head,
+    ) = _build_database_probes(
+        composed,
+        redis_port=state.redis_port if state is not None else 0,
+        redis_url=composed.get("REDIS_URL") or "",
+    )
+
+    # --- System / environment probes ---
+
+    (
+        _probe_ambient_env_names,
+        _probe_available_memory_bytes,
+        _probe_data_dir_pg_version,
+        _probe_bundle_pg_version,
+        _probe_installed_bundle_pg_version,
+        _probe_bundled_binaries,
+        _probe_cloud_sync_hit,
+        _probe_modulo_on_path,
+        _probe_install_root,
+        _probe_second_install_hint,
+    ) = _build_system_probes(data_dir, composed, state)
+
+    def _probe_degraded_reason() -> str | None:
         from modulo.launcher.supervisor import RUNTIME_FILENAME, read_degraded_reason
 
         return read_degraded_reason(data_dir / RUNTIME_FILENAME)
@@ -1171,6 +1268,11 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
     def _probe_tls_expiry() -> float | None:
         return _tls_keypair_expiry(data_dir)
 
+    env_snapshot = dict(os.environ)
+
+    def __probe_env_value(name: str) -> str | None:
+        return env_snapshot.get(name)
+
     return DoctorProbes(
         disk_free_bytes=lambda root: shutil.disk_usage(str(root)).free,
         assert_writable=_probe_writable,
@@ -1182,20 +1284,20 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         effective_uid=_effective_uid,
         username_of_uid=_username_of_uid,
         file_owner=_file_owner,
-        secrets_mode=__probe_secrets_mode,
-        ambient_env_names=__probe_ambient_env_names,
+        secrets_mode=_probe_secrets_mode,
+        ambient_env_names=_probe_ambient_env_names,
         env_value=__probe_env_value,
         service_installed=lambda: False,  # FAR-674's service registry is not landed yet
-        available_memory_bytes=__probe_available_memory_bytes,
-        data_dir_pg_version=__probe_data_dir_pg_version,
-        bundle_pg_version=__probe_bundle_pg_version,
-        installed_bundle_pg_version=__probe_installed_bundle_pg_version,
-        bundled_binaries=__probe_bundled_binaries,
-        cloud_sync_hit=__probe_cloud_sync_hit,
-        modulo_on_path=__probe_modulo_on_path,
-        install_root=__probe_install_root,
-        second_install_hint=__probe_second_install_hint,
-        degraded_reason=__probe_degraded_reason,
+        available_memory_bytes=_probe_available_memory_bytes,
+        data_dir_pg_version=_probe_data_dir_pg_version,
+        bundle_pg_version=_probe_bundle_pg_version,
+        installed_bundle_pg_version=_probe_installed_bundle_pg_version,
+        bundled_binaries=_probe_bundled_binaries,
+        cloud_sync_hit=_probe_cloud_sync_hit,
+        modulo_on_path=_probe_modulo_on_path,
+        install_root=_probe_install_root,
+        second_install_hint=_probe_second_install_hint,
+        degraded_reason=_probe_degraded_reason,
         port_owner_description=_probe_port_owner_description,
         last_backup_at=_probe_last_backup_at,
         tls_expiry=_probe_tls_expiry,
