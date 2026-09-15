@@ -5,60 +5,36 @@ The Organisation model deliberately does NOT use TimestampMixin — it declares
 db/seed_demo.py ("Organisation carries no ``updated_at``") and enforced by
 migration 0243_remove_organisations_audit_drift which drops the DB columns.
 
-These tests prevent re-introduction of ``updated_at`` (or other orphaned
-audit columns) on the Organisation model. If a future change declares any of
-these columns, these tests will catch it before it reaches CI and causes
-UndefinedColumnError on live databases.
+These unit tests guard the ORM half of the contract: they prevent
+re-introduction of ``updated_at`` (or other orphaned audit columns) on the
+Organisation mapper. The DB half — that every mapped column actually exists in
+the migrated schema — cannot be asserted at unit level (comparing
+``sa_inspect(Organisation).columns`` with ``Organisation.__table__.columns`` is
+a tautology) and lives in
+``tests/integration/db/test_organisation_model_contract.py``, which reflects the
+real migrated ``organisations`` table.
 """
 
+import pytest
 from sqlalchemy import inspect as sa_inspect
 
 from modulo.db.models.organisation import Organisation
 
 
-def test_organisation_declares_no_updated_at() -> None:
-    """Organisation must not map ``updated_at``.
+@pytest.mark.parametrize("column", ["updated_at", "updated_by", "deleted_by"])
+def test_organisation_declares_no_audit_columns(column: str) -> None:
+    """Organisation must not map the audit columns dropped on main.
 
-    Regression test for FAR-872: PR #530 added ``updated_at`` to the ORM
-    but migration 0239 had already dropped the column from the DB, causing
-    ``ProgrammingError: column organisations.updated_at does not exist`` on
-    every ``select(Organisation)``.
+    Regression test for FAR-872: the mapper declared an audit column the
+    migrated DB did not have, so every ``select(Organisation)`` raised
+    ``ProgrammingError: column organisations.updated_at does not exist``.
+    Migration 0233 added ``updated_at``/``updated_by``/``deleted_by`` (0239 was
+    a no-op) and migration 0243_remove_organisations_audit_drift removes them —
+    matching this non-declaration.
     """
-    mapper = sa_inspect(Organisation)
-    column_names = {c.key for c in mapper.columns}
-    assert "updated_at" not in column_names, (
-        "Organisation must not declare updated_at — "
-        "see seed_demo.py and migration 0243. "
-        f"Currently mapped columns: {sorted(column_names)}"
-    )
-
-
-def test_organisation_declares_no_updated_by() -> None:
-    """Organisation must not map ``updated_by``.
-
-    Part of the audit-column set added by migration 0233 that the Organisation
-    model intentionally excludes (Organisation is not in the trigger-maintained
-    audit chain).
-    """
-    mapper = sa_inspect(Organisation)
-    column_names = {c.key for c in mapper.columns}
-    assert "updated_by" not in column_names, (
-        "Organisation must not declare updated_by — "
-        "see seed_demo.py and migration 0243. "
-        f"Currently mapped columns: {sorted(column_names)}"
-    )
-
-
-def test_organisation_declares_no_deleted_by() -> None:
-    """Organisation must not map ``deleted_by``.
-
-    Part of the audit-column set added by migration 0233 that the Organisation
-    model intentionally excludes.
-    """
-    mapper = sa_inspect(Organisation)
-    column_names = {c.key for c in mapper.columns}
-    assert "deleted_by" not in column_names, (
-        "Organisation must not declare deleted_by — "
+    column_names = {c.key for c in sa_inspect(Organisation).columns}
+    assert column not in column_names, (
+        f"Organisation must not declare {column} — "
         "see seed_demo.py and migration 0243. "
         f"Currently mapped columns: {sorted(column_names)}"
     )
@@ -81,35 +57,13 @@ def test_select_organisation_sql_omits_updated_at() -> None:
     )
 
 
-def test_organisation_uses_own_created_at_not_mixin() -> None:
-    """Organisation's ``created_at`` must be its own declaration, not inherited from TimestampMixin.
+def test_organisation_declares_created_at() -> None:
+    """Organisation's ``created_at`` must be present on the mapper.
 
-    Organisation intentionally does NOT use TimestampMixin (which provides
-    both ``created_at`` and ``updated_at``). If someone switches to
-    ``class Organisation(Base, TimestampMixin)``, ``updated_at`` would be
-    silently re-introduced.
+    Organisation intentionally does NOT use TimestampMixin (which provides both
+    ``created_at`` and ``updated_at``), so it declares ``created_at`` directly.
+    The guard that ``updated_at`` is absent (the mixin's other column) lives in
+    ``test_organisation_declares_no_audit_columns``.
     """
-    mapper = sa_inspect(Organisation)
-    column_names = {c.key for c in mapper.columns}
-    # Must have created_at (it does)
+    column_names = {c.key for c in sa_inspect(Organisation).columns}
     assert "created_at" in column_names
-    # Must NOT have updated_at (TimestampMixin would add it)
-    assert "updated_at" not in column_names
-
-
-def test_organisation_mapped_columns_are_complete() -> None:
-    """Every declared column in the Organisation model maps to a DB column.
-
-    This catches the inverse problem: a column declared in the ORM but missing
-    from the DB (the FAR-872 scenario).
-    """
-    mapper = sa_inspect(Organisation)
-    orm_columns = {c.key for c in mapper.columns}
-    table_columns = {c.name for c in Organisation.__table__.columns}
-    # ORM columns must be a subset of table columns
-    missing_in_db = orm_columns - table_columns
-    assert not missing_in_db, (
-        f"ORM declares columns not in DB table: {missing_in_db}. "
-        f"ORM columns: {sorted(orm_columns)}, "
-        f"DB columns: {sorted(table_columns)}"
-    )
