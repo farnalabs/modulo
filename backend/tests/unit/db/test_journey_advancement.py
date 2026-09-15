@@ -30,7 +30,7 @@ Part 3 wiring (FAR-143 part 3):
 
 import re
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -54,7 +54,9 @@ from modulo.db.lifecycle_refs import canonical_work_item_id
 from modulo.db.models.base import Base
 from modulo.db.models.journey import Journey
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
+from modulo.db.models.run_daily_facts import JourneyFact
 from modulo.db.models.run_node_outputs import RunNodeOutput
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -78,7 +80,15 @@ _TABLES: list[Table] = cast(
     # RunNodeOutput: the terminal-write dual-write chokepoint (FAR-583) touches
     # run_node_outputs on every finalize — the in-memory SQLite schema must
     # carry the table or the dual-write leg fails with "no such table".
-    [Journey.__table__, LifecycleMapStage.__table__, Run.__table__, RunNodeOutput.__table__],
+    # JourneyFact: _record_journey_fact upserts into modulo_journey_facts.
+    [
+        Journey.__table__,
+        LifecycleMapStage.__table__,
+        Run.__table__,
+        RunNodeOutput.__table__,
+        Organisation.__table__,
+        JourneyFact.__table__,
+    ],
 )
 
 
@@ -837,6 +847,150 @@ class TestFinalizeJourneyHook:
         assert await _read_journey_by_kind(session, "github_pr", "123") is None
         # The run row is untouched by the hook failure.
         assert await _read_run_refs(session, run_id) == [{"kind": "github_pr", "ref": "123", "source": "derived"}]
+
+
+class TestAgentMintFlagFinalize:
+    """FAR-795 slice B: the finalize hook mints agent-sourced refs ONLY
+    behind the org flag (fail-closed), with mint/suppress accounting."""
+
+    _FLAG_KEY = "work_item_agent_minting_enabled"
+
+    @pytest.fixture(autouse=True)
+    def _clear_flag_caches(self) -> Generator[None]:
+        from modulo.core.runtime_config import org_flags as org_flags_mod
+
+        org_flags_mod.clear_org_flag_cache()
+        yield
+        org_flags_mod.clear_org_flag_cache()
+
+    @pytest.fixture
+    def agent_counts(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+        counts = {"minted": 0, "suppressed": 0}
+        monkeypatch.setattr(
+            "modulo.core.cost_controller.finalize.record_refs_agent_minted",
+            lambda n=1: counts.__setitem__("minted", counts["minted"] + n),
+        )
+        monkeypatch.setattr(
+            "modulo.core.cost_controller.finalize.record_refs_agent_mint_suppressed_by_flag",
+            lambda n=1: counts.__setitem__("suppressed", counts["suppressed"] + n),
+        )
+        return counts
+
+    async def _seed_org(self, session: AsyncSession, *, flag: bool | None) -> None:
+        settings: dict[str, Any] | None = None
+        if flag is not None:
+            settings = {self._FLAG_KEY: True} if flag else {"other": "x"}
+        session.add(Organisation(id=_ORG, name="test org", slug=f"test-{_ORG}", settings_json=settings))
+        await session.flush()
+
+    async def test_flag_off_stores_agent_ref_without_mint(self, session: AsyncSession, agent_counts: dict) -> None:
+        run = await _seed_run(
+            session,
+            refs=[{"kind": "github_pr", "ref": "456", "source": "agent"}],
+            status="complete",
+        )
+        await _advance_journeys_on_terminal(session, run, "complete", {})
+        journey = await _read_journey_by_kind(session, "github_pr", "456")
+        assert journey is None
+        assert agent_counts == {"minted": 0, "suppressed": 1}
+
+    async def test_flag_on_mints_agent_ref_mint_only(self, session: AsyncSession, agent_counts: dict) -> None:
+        """Flag ON: the agent ref mints a row WITHOUT advancing it (mint-only);
+        ``run_count``/``latest_*`` stay owned by the finalise evidence path."""
+        await self._seed_org(session, flag=True)
+        run = await _seed_run(
+            session,
+            refs=[{"kind": "github_pr", "ref": "456", "source": "agent"}],
+            status="complete",
+            completed_at=_T2,
+        )
+        await _advance_journeys_on_terminal(session, run, "complete", {})
+        journey = await _read_journey_by_kind(session, "github_pr", "456")
+        assert journey is not None
+        assert journey.provenance == "agent"
+        assert journey.first_seen_source == "agent"
+        assert journey.run_count == 0
+        assert journey.latest_terminal_run_id is None
+        assert journey.latest_status is None
+        assert agent_counts == {"minted": 1, "suppressed": 0}
+
+    async def test_flag_error_fails_closed(
+        self,
+        session: AsyncSession,
+        agent_counts: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from modulo.core.runtime_config import org_flags as org_flags_mod
+
+        async def _boom(*_a: Any, **_k: Any) -> Any:
+            raise RuntimeError("db outage")
+
+        monkeypatch.setattr(org_flags_mod, "_read_org_settings_json", _boom)
+        run = await _seed_run(
+            session,
+            refs=[
+                {"kind": "github_pr", "ref": "123", "source": "derived"},
+                {"kind": "github_pr", "ref": "456", "source": "agent"},
+            ],
+            status="complete",
+        )
+        run_id = run.id
+        await _advance_journeys_on_terminal(session, run, "complete", {})
+        # Derive refs still advance — the flag read is fail-closed, not fatal.
+        derived = await _read_journey_by_kind(session, "github_pr", "123")
+        assert derived is not None
+        assert derived.latest_terminal_run_id == run_id
+        assert await _read_journey_by_kind(session, "github_pr", "456") is None
+        assert agent_counts["minted"] == 0
+        assert agent_counts["suppressed"] == 1
+
+    async def test_confirmed_agent_claim_advances_even_when_flag_off(
+        self, session: AsyncSession, agent_counts: dict
+    ) -> None:
+        """Flag OFF preserves today's confirmed-claim behaviour: an agent ref
+        confirmed against a PRE-EXISTING journey still advances (evidence +
+        run_count), and is NOT counted as a suppressed mint (the row exists)."""
+        run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
+        run_id = run.id
+        await _seed_journey_by_kind(session, "github_pr", "456")
+        merged = {"node1": {"output": {"work_item_refs": [{"kind": "github_pr", "ref": "#456", "status": "done"}]}}}
+        await _advance_journeys_on_terminal(session, run, "complete", merged)
+
+        journey = await _read_journey_by_kind(session, "github_pr", "456")
+        assert journey is not None
+        assert journey.latest_terminal_run_id == run_id
+        assert journey.latest_provenance == "agent"
+        assert journey.run_count == 1
+        assert agent_counts["minted"] == 0
+        assert agent_counts["suppressed"] == 0
+
+    async def test_agent_slot_never_downgrades_caller_row(self, session: AsyncSession, agent_counts: dict) -> None:
+        """An agent-sourced upsert must not downgrade a pre-existing broadcaster
+        row: agent ranks 0, caller ranks 2, and the UPDATE arm is rank-guarded
+        (``>`` only) — equal-or-higher keep their provenance and evidence."""
+        await self._seed_org(session, flag=True)
+        journey = await _seed_journey_by_kind(session, "github_pr", "123")
+        journey.provenance = "caller"
+        journey.latest_provenance = "caller"
+        journey.first_seen_source = "caller"
+        await session.flush()
+        from modulo.core.lifecycle_map.advancement import upsert_ref_provenances
+
+        considered, minted, suppressed = await upsert_ref_provenances(
+            session,
+            _ORG,
+            [{"kind": "github_pr", "ref": "123", "source": "agent"}],
+            include_agent=True,
+        )
+        assert considered == 1
+        assert minted == 0
+        assert suppressed == 0
+        session.expire_all()
+        refreshed = await _read_journey_by_kind(session, "github_pr", "123")
+        assert refreshed is not None
+        assert refreshed.provenance == "caller"
+        assert refreshed.first_seen_source is not None
+        assert refreshed.first_seen_source != "agent"
 
 
 class TestFinalizeCostWiring:

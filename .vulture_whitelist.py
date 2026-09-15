@@ -137,6 +137,11 @@ __all__ = [
     #     prod call site yet) ---
     "eval_maturity_enabled",
     # --- CRUD functions referenced only by tests ---
+    # FAR-795: create-time refs read used by test_work_item_refs_slice2b.py;
+    # the node-runner injection site now reads the same semantics via the
+    # DAG-ancestor union (_validated_node_input_refs + collect_injected_refs),
+    # so vulture sees no prod call site.
+    "_node_input_work_item_refs",
     "delete_composite_template",
     "upsert_daily_run_count",
     "get_daily_run_counts",
@@ -336,6 +341,15 @@ __all__ = [
     "record_resolved_inputs",
     "record_drift",
     "redact_url",
+    # --- FAR-795 agent-sourced journey minting (test-referenced; the invalidator
+    #     is consumed by the intake tests' flag-cache isolation fixture, so
+    #     vulture scans src/ only cannot see a call site) ---
+    "clear_agent_mint_flag_cache",
+    "consume_agent_mint_budget",  # FAR-795 mint budget guard: prod call sites
+    #     land in the mint-path integration slice (later); test-referenced.
+    "collect_injected_refs",  # FAR-795 DAG-ancestor ref-injection collector:
+    #     pure function pre-wired (node-runner wiring is a follow-up slice);
+    #     exercised by tests/unit/core/pipeline_engine/test_ancestor_ref_injection.py.
     # --- FAR-799 SSH transport hardening functions (test-referenced;
     #     production callers land in the provisioning layer, so vulture cannot
     #     see a prod call site yet) ---
