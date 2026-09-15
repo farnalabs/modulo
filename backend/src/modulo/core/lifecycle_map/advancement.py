@@ -238,12 +238,12 @@ def _persisted_provenance(source: str | None) -> str:
     """The provenance value that may be PERSISTED on a journey row (FAR-794).
 
     The stored ``latest_provenance`` vocabulary is invariant: only
-    ``caller`` / ``derived`` / ``agent`` are ever written. The legacy
-    ``reported`` marker stays accepted as the self-report confirm gate's
-    INPUT (it marks an advisory operator claim) but is normalised to
-    ``agent`` at the point the advance statement binds it. Unknown/legacy
-    values also map to ``agent`` (rank 0), matching the create-path
-    treatment in ``_PROVENANCE_UPSERT_SQL``.
+    ``caller`` / ``derived`` / ``agent`` are ever written. As a purely
+    defensive fallback, ANY unrecognised/missing value maps to ``agent``
+    (rank 0 — the lowest-provenance write), mirroring the create-path
+    treatment in ``_PROVENANCE_UPSERT_SQL``; this is not a legacy alias —
+    no known caller can produce one since the ``reported`` source was
+    dropped (FAR-795) and the self-report parser stamps ``agent`` directly.
     """
     return source if source in ("caller", "derived", "agent") else "agent"
 
@@ -339,11 +339,9 @@ async def confirm_reported_refs(
 
     ``entries`` must already be canonicalised by
     :func:`validate_and_normalise_reported_refs` (kind/ref canonical,
-    ``source="reported"``). The legacy ``reported`` marker is accepted as the
-    confirm gate's INPUT — the match keys on ``(org, kind, ref)`` only — but
-    it is never PERSISTED: the advance write normalises it to ``agent``
-    (``_persisted_provenance``), so ``journeys.latest_provenance`` only ever
-    stores ``caller`` / ``derived`` / ``agent``. Returns
+    ``source="agent"``). The match keys on ``(org, kind, ref)`` only and is
+    source-agnostic; entries with a stored journey row confirm, everything
+    else is counted as unmatched and never persisted. Returns
     ``(confirmed_entries, unmatched_count)``. The caller owns the RLS org
     context and an active transaction.
     """
@@ -447,8 +445,9 @@ async def _mint_or_advance_ref(
             "run_id": run_id.hex if run_id is not None else None,
             "status": status,
             # FAR-794 persisted-source invariant: ``latest_provenance`` only
-            # ever stores caller/derived/agent — a legacy ``reported`` input
-            # marker is normalised here, at the write.
+            # ever stores caller/derived/agent — the fallback in
+            # ``_persisted_provenance`` maps any unrecognised value there, so
+            # a bad source can never reach the columns.
             "provenance": provenance,
             "map_id": stage.map_id.hex if stage is not None else None,
             "map_version": stage.version if stage is not None else None,
@@ -515,11 +514,12 @@ async def advance_journeys(
         The number of journeys advanced (evidence + possibly ``run_count``
         written). Mint-only non-advancing runs are not counted.
 
-    Persisted provenance (FAR-794): the ``source`` carried by *refs* is
-    accepted as the confirm/match input marker (legacy ``reported`` keeps
-    matching), but the value written to ``journeys.latest_provenance`` is
-    always normalised to ``caller`` / ``derived`` / ``agent`` — ``reported``
-    is never persisted.
+    Persisted provenance (FAR-794): the ``source`` carried by *refs* is used
+    to select the mintable caller/derived entries vs confirmed agent claims,
+    and the value written to ``journeys.latest_provenance`` is always normalised
+    to ``caller`` / ``derived`` / ``agent`` — an entry whose ``source`` is
+    outside that vocabulary is REJECTED (dropped by ``validate_ref_entry``),
+    never persisted.
 
     """
     if not refs:

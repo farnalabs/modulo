@@ -127,7 +127,7 @@ def test_parse_is_pure_deterministic_and_non_mutating() -> None:
 
 def test_validate_accepts_valid_entry() -> None:
     valid, counters = validate_and_normalise_reported_refs([{"kind": "github_pr", "ref": "#123"}])
-    assert valid == [{"kind": "github_pr", "ref": "123", "source": "reported"}]
+    assert valid == [{"kind": "github_pr", "ref": "123", "source": "agent"}]
     assert counters == {"malformed": 0, "capped": 0, "valid": 1}
 
 
@@ -137,9 +137,9 @@ def test_validate_empty_entries() -> None:
     assert counters == {"malformed": 0, "capped": 0, "valid": 0}
 
 
-def test_validate_forces_reported_source() -> None:
+def test_validate_forces_agent_source() -> None:
     valid, _ = validate_and_normalise_reported_refs([{"kind": "github_pr", "ref": "#1", "source": "derived"}])
-    assert valid[0]["source"] == "reported"
+    assert valid[0]["source"] == "agent"
 
 
 def test_validate_keeps_optional_valid_status() -> None:
@@ -172,7 +172,7 @@ def test_validate_blank_kind_and_ref_are_malformed() -> None:
 
 def test_validate_non_dict_entry_is_malformed() -> None:
     valid, counters = validate_and_normalise_reported_refs(["not-a-dict", 42, {"kind": "pr", "ref": "1"}])
-    assert valid == [{"kind": "pr", "ref": "1", "source": "reported"}]
+    assert valid == [{"kind": "pr", "ref": "1", "source": "agent"}]
     assert counters["malformed"] == 2
     assert counters["valid"] == 1
 
@@ -197,15 +197,15 @@ def test_validate_drops_unknown_status() -> None:
         ]
     )
     assert valid == [
-        {"kind": "github_pr", "ref": "1", "source": "reported"},
-        {"kind": "github_pr", "ref": "2", "source": "reported", "status": "done"},
+        {"kind": "github_pr", "ref": "1", "source": "agent"},
+        {"kind": "github_pr", "ref": "2", "source": "agent", "status": "done"},
     ]
     assert counters["malformed"] == 0
 
 
 def test_validate_drops_non_string_status() -> None:
     valid, _ = validate_and_normalise_reported_refs([{"kind": "github_pr", "ref": "#1", "status": {"nested": True}}])
-    assert valid[0] == {"kind": "github_pr", "ref": "1", "source": "reported"}
+    assert valid[0] == {"kind": "github_pr", "ref": "1", "source": "agent"}
 
 
 # ---------------------------------------------------------------------------
@@ -222,9 +222,9 @@ def test_validate_applies_canonicalisation() -> None:
         ]
     )
     assert valid == [
-        {"kind": "pr", "ref": "123", "source": "reported"},
-        {"kind": "github_pr", "ref": "owner/repo#456", "source": "reported"},
-        {"kind": "linear", "ref": "FAR-789", "source": "reported"},
+        {"kind": "pr", "ref": "123", "source": "agent"},
+        {"kind": "github_pr", "ref": "owner/repo#456", "source": "agent"},
+        {"kind": "linear", "ref": "FAR-789", "source": "agent"},
     ]
 
 
@@ -246,8 +246,8 @@ def test_validate_dedups_by_kind_ref_source() -> None:
     ]
     valid, counters = validate_and_normalise_reported_refs(entries)
     assert valid == [
-        {"kind": "github_pr", "ref": "123", "source": "reported", "status": "attempted"},
-        {"kind": "github_pr", "ref": "124", "source": "reported"},
+        {"kind": "github_pr", "ref": "123", "source": "agent", "status": "attempted"},
+        {"kind": "github_pr", "ref": "124", "source": "agent"},
     ]
     assert counters == {"malformed": 0, "capped": 0, "valid": 2}
 

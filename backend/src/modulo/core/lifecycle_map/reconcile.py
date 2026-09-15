@@ -303,7 +303,7 @@ def record_self_report_refs_capped(count: int = 1) -> None:
 
 
 def record_unmatched_self_report_refs(count: int) -> None:
-    """Record reported refs that matched no existing journey row (advisory drop)."""
+    """Record self-reported refs that matched no existing journey row (advisory drop)."""
     if _unmatched_self_report_refs_total is None:
         _ensure()
     if _unmatched_self_report_refs_total is not None:
