@@ -27,6 +27,14 @@ bdd:
   - backend/tests/bdd/steps/test_grafana_connector.py
   - backend/tests/bdd/features/connectors/buildkite.feature
   - backend/tests/bdd/steps/test_buildkite_connector.py
+  - backend/tests/bdd/features/connectors/circleci.feature
+  - backend/tests/bdd/steps/test_circleci_connector.py
+  - backend/tests/bdd/features/connectors/jenkins.feature
+  - backend/tests/bdd/steps/test_jenkins_connector.py
+  - backend/tests/bdd/features/connectors/teamcity_connector.feature
+  - backend/tests/bdd/steps/test_teamcity_connector.py
+  - backend/tests/bdd/features/connectors/opsgenie_connector.feature
+  - backend/tests/bdd/steps/test_opsgenie_connector.py
 depends-on:
   - feat-model-backends
 status: covered
@@ -84,6 +92,28 @@ and per-destination rate limiting.
       validation via `/user` (200 => healthy, 401 => unhealthy), triggering a
       build on a branch, getting run status / listing runs / fetching per-job
       run logs (`buildkite.feature`, `steps/test_buildkite_connector.py`)
+- [x] The CircleCI connector is BDD-exercised against the real
+      `CircleCIConnector` (respx-mocked CircleCI REST API v2): token validation
+      via `/me` (200 => healthy, 401 => unhealthy), triggering a pipeline on a
+      branch, getting pipeline status / listing recent pipeline runs / fetching
+      workflow+job logs (`circleci.feature`, `steps/test_circleci_connector.py`)
+- [x] The Jenkins connector is BDD-exercised against the real
+      `JenkinsConnector` (respx-mocked Jenkins REST API): token validation via
+      `/api/json` (200 => healthy, 401 => unhealthy), triggering a build
+      (plain + parameterised via `buildWithParameters`), getting build status /
+      listing recent builds / fetching console logs
+      (`jenkins.feature`, `steps/test_jenkins_connector.py`)
+- [x] The TeamCity connector is BDD-exercised against the real
+      `TeamCityConnector` (respx-mocked TeamCity REST API): querying projects /
+      buildTypes / agents, triggering a build (buildQueue) and creating a build
+      type, and failing closed on an unsupported query resource
+      (`teamcity_connector.feature`, `steps/test_teamcity_connector.py`)
+- [x] The Opsgenie connector is BDD-exercised against the real
+      `OpsgenieConnector` (respx-mocked Opsgenie REST API v2): listing alerts /
+      teams / schedules / escalations, single-alert / notes / logs lookups,
+      on-call lookups, the alert write family (create / acknowledge / close /
+      note / snooze), and API-key validation via `GET /alerts?limit=1`
+      (`opsgenie_connector.feature`, `steps/test_opsgenie_connector.py`)
 
 ## Known Gaps
 
@@ -93,6 +123,26 @@ and per-destination rate limiting.
   coverage is via unit tests.
 
 ## QA History
+- 2026-09-15: **improve-architecture (product-map walk)** — closed the
+  `circleci.feature`, `jenkins.feature`, `teamcity_connector.feature` and
+  `opsgenie_connector.feature` orphan gaps: the features shipped under
+  `tests/bdd/features/connectors/` but no step module registered them via
+  `scenarios(...)`, so they never executed. Each is now wired from its own
+  step module that drives the REAL connector against a respx-mocked API
+  (mirroring the unit suites): `steps/test_circleci_connector.py` (5 scenarios
+  — `/me` health 200/401, trigger pipeline on a branch, get pipeline status,
+  list recent runs, workflow+job logs), `steps/test_jenkins_connector.py`
+  (7 scenarios — `/api/json` health 200/401, plain + parameterised build
+  trigger, build status, list builds, console logs),
+  `steps/test_teamcity_connector.py` (6 scenarios — query projects /
+  buildTypes / agents, trigger build, create build type, fail closed on an
+  unsupported resource) and `steps/test_opsgenie_connector.py` (16 scenarios —
+  list alerts/teams/schedules/escalations, alert-by-id / notes / logs,
+  on-calls, the create-acknowledge-close-note-snooze write family, and API-key
+  health). `_ORPHANED_BDD_FEATURES` shrinks by four; the remaining connector
+  orphans (`azure_key_vault`, `azure_pipelines`, `azure_repos`, `discord`,
+  `dropbox_paper`, `microsoft_teams`, `sharepoint`, `swappable_binding`) and
+  the two pipeline-validation orphans still await step modules.
 - 2026-09-14: **improve-architecture (product-map walk)** — closed the
   `buildkite.feature` orphan gap: the feature shipped under
   `tests/bdd/features/connectors/` but no step module registered it via
