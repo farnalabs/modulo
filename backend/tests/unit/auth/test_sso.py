@@ -2045,6 +2045,34 @@ class TestSsoJoinGate:
         mocks.invite.assert_awaited_once()
         mocks.consume.assert_not_awaited()
 
+    async def test_mode2_pending_invitation_role_wins_over_allowlist_default(self) -> None:
+        """FAR-855: a pending invitation outranks the domain-allowlist default role.
+
+        Regression: the auto-join branch previously called
+        ``_provision_membership`` WITHOUT the invitation, granting
+        ``provider.default_role`` (runner here) and then CAS-consuming the
+        pending invitation anyway - the user joined at the wrong role and the
+        invitation was burned. The invitation's role must win.
+        """
+        stack, mocks = self._gate_mocks()
+        invitation = _gate_invitation(role="operator")
+        settings = _override()
+        session = _mock_session()
+        provider = _gate_provider(auto_provision=True, allowed_domains=["corp.example.com"], default_role="runner")
+        with stack:
+            mocks.get_acct.side_effect = [None, SimpleNamespace(id=uuid.uuid4(), email="user@corp.example.com")]
+            mocks.invite.return_value = invitation
+            mocks.create.return_value = SimpleNamespace(role="operator")
+
+            _account, _org_id, role = await self._join(settings, session, provider, "user@corp.example.com")
+
+        assert role == "operator"
+        mocks.create.assert_awaited_once()
+        assert mocks.create.await_args.kwargs["role"] == "operator"
+        mocks.consume.assert_awaited_once()
+        assert mocks.consume.await_args.args[-1] is invitation
+        mocks.audit.assert_awaited_once()
+
     async def test_mode2_requires_verified_email(self) -> None:
         from modulo.auth.sso import SsoProvisioningDeniedError
 

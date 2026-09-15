@@ -131,21 +131,21 @@ async def jit_provision_user(
     org) raises a clean ``RuntimeError`` ("No organisation exists") instead of
     letting a raw RLS-scoped INSERT fail with a 500.
 
-    FAR-855 join gate (applies ONLY when ``sso_provider`` is a DB provider row â€”
+    FAR-855 join gate (applies ONLY when ``sso_provider`` is a DB provider row —
     the governed configuration surface; the env-var fallback keeps the legacy
     behaviour and logs):
-    - ``auto_provision=false`` (DEFAULT): "invitation only" â€” the user must
+    - ``auto_provision=false`` (DEFAULT): "invitation only" — the user must
       already hold an ACTIVE membership in the org, or a valid pending
       Invitation for (email, org) must exist and is consumed (CAS, granting
       the role it specifies). Otherwise DENY.
     - ``auto_provision=true`` + non-empty ``allowed_domains``: a VERIFIED
       email domain in the EXACT (case-insensitive, no implicit subdomain)
       allowlist auto-provisions with ``provider.default_role`` (fallback
-      ``settings.modulo_sso_default_role`` â€” closes FAR-839); otherwise
+      ``settings.modulo_sso_default_role`` — closes FAR-839); otherwise
       falls back to the invitation path. A pending invitation always wins
       over the domain path so it grants the role it specifies.
     - ``auto_provision=true`` + EMPTY ``allowed_domains``: "anyone who
-      authenticates" â€” DANGEROUS, gated behind the operator-level
+      authenticates" — DANGEROUS, gated behind the operator-level
       ``sso_unrestricted_provisioning`` feature flag (default OFF; OFF fails
       CLOSED at sign-in, keeping only existing members and invitations).
     An existing membership's role is NEVER changed. Denial happens BEFORE any
@@ -159,7 +159,7 @@ async def jit_provision_user(
         result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
         org = result.scalar_one_or_none()
         if org is None:
-            raise RuntimeError("No organisation exists â€” cannot JIT provision account")
+            raise RuntimeError("No organisation exists — cannot JIT provision account")
         org_id = org.id
 
     if sso_provider is None:
@@ -167,13 +167,13 @@ async def jit_provision_user(
         # configure allowed_domains/auto_provision against. Kept as-is with a
         # loud log until env-var providers are migrated to DB rows.
         _log.warning("sso.jit_policy_not_applicable", extra={"auth_provider": auth_provider})
-        account, org_role = await _provision_membership(
+        account, org_role, _invitation_used = await _provision_membership(
             session, settings, email, display_name, auth_provider, sso_subject, org_id
         )
         return account, org_id, org_role
 
     # Pre-provision eligibility check: NOTHING is written below unless the
-    # identity is allowed to join (fail-closed â€” a denial leaves no orphan row).
+    # identity is allowed to join (fail-closed — a denial leaves no orphan row).
     existing = await get_account_by_email(session, email)
     existing_membership = None
     if existing is not None:
@@ -195,39 +195,33 @@ async def jit_provision_user(
                 "sso.jit_unrestricted_flag_off",
                 extra={"organisation_id": str(org_id), "provider_id": sso_provider.provider_id},
             )
-    if unlocked:
-        account, org_role = await _provision_membership(
-            session,
-            settings,
-            email,
-            display_name,
-            auth_provider,
-            sso_subject,
-            org_id,
-            provider=sso_provider,
-        )
-    else:
-        if invitation is None:
-            await _deny_join(sso_provider, org_id)
-        # Invitation bridging: grant the membership/role the invitation
-        # specifies and CAS-consume it in the same transaction (mirrors
-        # accept-invite: consumption is the final guard, a lost race aborts
-        # the whole transaction).
-        account, org_role = await _provision_membership(
-            session,
-            settings,
-            email,
-            display_name,
-            auth_provider,
-            sso_subject,
-            org_id,
-            provider=sso_provider,
-            invitation=invitation,
-        )
+    if not unlocked and invitation is None:
+        # No self-service path (mode 1, or mode 2/3 whose gate did not match)
+        # and no pending invitation: fail closed before any write.
+        await _deny_join(sso_provider, org_id)
 
-    if invitation is not None:
+    # A pending invitation always wins over the self-service path: it grants
+    # the membership/role it specifies (including reactivating a tombstoned
+    # member with that role). Consumption is the final CAS guard, in the same
+    # transaction (mirrors accept-invite: a lost race aborts the whole
+    # transaction) and only happens when the invitation actually granted or
+    # restored the join - an existing live member keeps their role and never
+    # burns an invitation.
+    account, org_role, invitation_used = await _provision_membership(
+        session,
+        settings,
+        email,
+        display_name,
+        auth_provider,
+        sso_subject,
+        org_id,
+        provider=sso_provider,
+        invitation=invitation,
+    )
+
+    if invitation is not None and invitation_used:
         if not await consume_invitation(session, invitation):
-            # CAS lost the race â€” abort atomically, identical to accept-invite.
+            # CAS lost the race — abort atomically, identical to accept-invite.
             raise SsoProvisioningDeniedError(Constants.MSG_SSO_JOIN_DENIED)
         await _audit_invite_consumed_fail_open(session, org_id, invitation.id)
 
@@ -262,7 +256,7 @@ def _sso_jit_mode_allows_auto(provider: SsoProvider, email: str, email_verified:
 
     Returns ``(self_service_allowed, mode)`` where ``mode`` is one of
      ``"invitation_only"``, ``"domain_allowlist"``, ``"unrestricted"``. Note the
-     invitation path is still consulted when this returns False â€” an invitation
+     invitation path is still consulted when this returns False — an invitation
      grants the join even in the fail-closed states (mode 3 additionally
      requires the operator-level ``sso_unrestricted_provisioning`` flag,
      checked by the CALLER because it needs an async DB read).
@@ -360,21 +354,27 @@ async def _provision_membership(
     *,
     provider: SsoProvider | None = None,
     invitation: Invitation | None = None,
-) -> tuple[Account, str]:
+) -> tuple[Account, str, bool]:
     """Legacy + gated provisioning core: upsert account, ensure membership.
 
-    ``invitation`` (FAR-855) grants the invitation's role â€” including
+    ``invitation`` (FAR-855) grants the invitation's role — including
     reactivating a tombstoned membership with that role (accept-invite
     semantics). With ``provider`` present the role falls back to
     ``provider.default_role`` then ``settings.modulo_sso_default_role``.
     An existing LIVE membership is left untouched; a tombstoned one is
     reactivated with the join role (an invitation to a deactivated member
     must restore their access, mirroring accept-invite).
+
+    Returns ``(account, role, invitation_used)`` where ``invitation_used`` is
+    True only when the invitation actually granted the join (created the
+    membership or reactivated a tombstoned one) - the caller CAS-consumes the
+    invitation in exactly that case, so an existing live member never burns
+    one.
     """
     account = await _upsert_sso_identity(session, settings, email, display_name, auth_provider, sso_subject)
     existing = await get_membership_by_account_and_org(session, account.id, org_id)
     if existing is not None and existing.deactivated_at is None:
-        return account, existing.role
+        return account, existing.role, False
 
     if invitation is not None:
         role = invitation.org_role
@@ -386,9 +386,9 @@ async def _provision_membership(
     _log.info("sso.jit_membership")
     if existing is not None and existing.deactivated_at is not None:
         await reactivate_membership(session, existing, role)
-        return account, role
+        return account, role, invitation is not None
     membership = await create_membership(session, account_id=account.id, org_id=org_id, role=role)
-    return account, membership.role
+    return account, membership.role, invitation is not None
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +470,7 @@ async def issue_sso_tokens(
         account_id=str(account.id),
         org_role=org_role,
         ttl_minutes=settings.modulo_access_token_minutes,
-        # FAR-634: SSO completes a browser redirect flow â€” explicit browser
+        # FAR-634: SSO completes a browser redirect flow — explicit browser
         # class, same as the password login mint.
         client_kind=CLIENT_KIND_BROWSER,
     )
@@ -484,7 +484,7 @@ async def issue_sso_tokens(
         token_sequence=0,
         client_kind=CLIENT_KIND_BROWSER,
     )
-    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}  # nosec B105 â€” OAuth token_type label, not a credential
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}  # nosec B105 — OAuth token_type label, not a credential
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +544,7 @@ async def _resolve_oidc_provider(
             # NOSCOPE: instance-global OIDC IdP config, NOT tenant data. The
             # provider is read through the modulo_system role (BYPASSRLS) for
             # pre-auth SSO routes that carry no user/org claim, so there is no
-            # per-request RLS org to bind the decrypt to â€” org-scoping here would
+            # per-request RLS org to bind the decrypt to — org-scoping here would
             # be a cross-context error, not a hardening gain. Kept on the pure
             # helper deliberately; the no-unscoped-decrypt gate allows it via the
             # nosemgrep below.
@@ -647,7 +647,7 @@ async def oidc_process_callback(
         _log.warning(
             "sso.csrf_state_mismatch", extra={"state_prefix": state[:20] + "..." if len(state) > 20 else state}
         )
-        raise ValueError("Invalid state parameter â€” possible CSRF")
+        raise ValueError("Invalid state parameter — possible CSRF")
 
     provider_id = state_data.split(":", 1)[0] if ":" in state_data else state_data
 
@@ -694,7 +694,7 @@ async def oidc_process_callback(
     issuer = disc.get("issuer")
     if not isinstance(jwks_uri, str) or not jwks_uri or not isinstance(issuer, str) or not issuer:
         raise ValueError(
-            "OIDC provider discovery document is missing jwks_uri or issuer â€” "
+            "OIDC provider discovery document is missing jwks_uri or issuer — "
             "cannot verify ID token signature. Check provider configuration."
         )
     _enforce_oidc_endpoint_host(jwks_uri, discovery_url, issuer, "jwks")
@@ -706,7 +706,7 @@ async def oidc_process_callback(
 
     email = claims.get("email", "") or claims.get("sub", "")
     if not email:
-        raise ValueError("OIDC provider did not return an email or sub claim â€” cannot provision account")
+        raise ValueError("OIDC provider did not return an email or sub claim — cannot provision account")
     name = claims.get("name", "") or claims.get("preferred_username", "") or email.split("@")[0]
     sso_subject = f"{provider_id}:{claims.get('sub', email)}"
 
@@ -724,7 +724,7 @@ async def oidc_process_callback(
             sso_subject,
             default_org_id=default_org_id,
             sso_provider=db_provider,
-            # FAR-855: a domain-allowlist join requires a VERIFIED email â€” the
+            # FAR-855: a domain-allowlist join requires a VERIFIED email — the
             # IdP's email_verified claim; a missing claim is NOT verified.
             email_verified=bool(claims.get("email_verified")),
         )
@@ -816,11 +816,11 @@ def _enforce_oidc_endpoint_host(url: str, discovery_url: str, issuer: str | None
     NOTE (FAR-506): the exact-host allowlist was an over-restrictive secondary
     boundary that broke legitimate multi-host IdPs. Google's real discovery
     document returns ``token_endpoint`` on oauth2.googleapis.com and
-    ``jwks_uri`` on www.googleapis.com â€” sibling hosts of the discovery/issuer
+    ``jwks_uri`` on www.googleapis.com — sibling hosts of the discovery/issuer
     host (accounts.google.com). The **pinned client** is the real SSRF boundary:
     it pins the validated non-internal IP, closes the DNS-rebinding window, and
     blocks metadata/loopback. This check is therefore defense-in-depth only and
-    rejects what a pinned client could never safely reach anyway â€” a non-HTTPS
+    rejects what a pinned client could never safely reach anyway — a non-HTTPS
     URL, an embedded-userinfo URL, or a literal-IP internal/loopback/metadata
     host. The discovery/issuer-host allowlist is kept as a preferred-log nicety:
     a cross-host (multi-host IdP) endpoint is logged as a warning, never
@@ -850,7 +850,7 @@ async def _exchange_code(
 ) -> dict[str, object]:
     # Pinned client: the token endpoint is a remote-supplied URL. Pinning
     # validates + pins the connect so the ``client_secret`` in the POST body is
-    # only ever disclosed to a validated, allowlisted host â€” never a hostile or
+    # only ever disclosed to a validated, allowlisted host — never a hostile or
     # internal/metadata target. The caller enforces the host allowlist before
     # calling here.
     async with await pinned_async_client(token_endpoint) as client:
@@ -1031,7 +1031,7 @@ def _decode_saml_response(saml_response: str) -> bytes:
 def _validate_saml_response_destination(saml_response: str, acs_url: str) -> None:
     """Validate the SAML Response ``Destination`` matches the configured ACS URL.
 
-    SAML 2.0 Core Â§4.1.1 requires the Response ``Destination`` to match the
+    SAML 2.0 Core §4.1.1 requires the Response ``Destination`` to match the
     SP's ACS endpoint. A mismatched Destination is a replay/misdelivery signal
     and MUST be rejected. The attribute may be legitimately absent from some
     IdPs, in which case validation is skipped (python3-saml enforces it only
@@ -1105,7 +1105,7 @@ async def saml_process_response(
 
     email = attrs.get("email", "") or attrs.get("Email", "") or name_id or ""
     if not email:
-        raise ValueError("SAML provider did not return an email attribute â€” cannot provision account")
+        raise ValueError("SAML provider did not return an email attribute — cannot provision account")
     display_name = (
         attrs.get("displayName", "")
         or attrs.get("cn", "")
