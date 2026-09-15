@@ -493,7 +493,7 @@ class TestValidateAllowedDomains:
     def test_none_returns_empty_list(self) -> None:
         from modulo.db.crud.sso_provider import validate_allowed_domains
 
-        assert validate_allowed_domains(None) == []
+        assert not validate_allowed_domains(None)
 
     def test_normalises_trims_and_dedupes(self) -> None:
         from modulo.db.crud.sso_provider import validate_allowed_domains

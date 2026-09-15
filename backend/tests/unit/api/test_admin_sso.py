@@ -213,7 +213,7 @@ class TestListProviders:
 
         provider = _make_mock_provider(allowed_domains="not-json")
         response = SsoProviderResponse.model_validate(provider)
-        assert response.allowed_domains == []
+        assert not response.allowed_domains
 
 
 class TestCreateProvider:
