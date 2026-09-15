@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """Cross-platform pre-commit wrapper for the incremental semgrep hook.
 
-On Windows, semgrep-core cannot reliably scan the full `backend/src/`
-directory with `--baseline-commit` (it hangs with "Failed to obtain target
-files from semgrep-core"). Windows is a secondary local development platform;
-semgrep is enforced on Linux in CI (ci.yml / deploy.yml) and in E2B sandbox
-commits, so skipping the incremental pre-commit scan on Windows loses no
-enforcement. On Linux/macOS this wrapper runs the exact command the hook used
-before, unchanged.
+On Linux/macOS this wrapper runs the exact command the hook used before,
+unchanged: semgrep scans ``backend/src/`` with ``--baseline-commit=HEAD``.
+
+On Windows, the full-directory baseline scan hangs (semgrep-core cannot
+complete the diff for ~3400 files).  Instead, we detect the changed Python
+files (staged for commit + unstaged working-tree changes) and scan ONLY
+those files, with no ``--baseline-commit`` flag.  This catches any finding
+in the files the developer is actually touching — the highest-value subset
+— while remaining fast (~2 min vs 5+ min for the full scan, which times
+out).  CI (Linux) still runs the full baseline scan on every push, so no
+enforcement is lost.
+
+The Windows path is fail-open on TOOL errors (timeout, crash, missing
+semgrep): if semgrep cannot run, we warn loudly and exit 0 so the
+developer is not blocked by a broken tool.  We are NEVER fail-open on
+FINDINGS: if semgrep runs and finds violations, we exit non-zero.
 """
 
 from __future__ import annotations
@@ -32,15 +41,120 @@ _GIT_STATE_ENV = {
     "GIT_CEILING_DIRECTORIES",
 }
 
+_SEMGREP_TIMEOUT = 180  # seconds — scoped scan on a handful of files
 
-def main() -> int:
-    if sys.platform == "win32":
+_SEMGREP_WARN = """\
+========================================================================
+run_semgrep.py WARNING: semgrep did NOT complete on Windows.
+
+  semgrep findings in your changed files were NOT checked locally.
+  CI (Linux) will still catch them on push — do NOT claim lint-clean.
+
+  Reason: {reason}
+========================================================================"""
+
+
+def _get_changed_py_files() -> tuple[list[str], str | None]:
+    """Return changed .py files under backend/src/ and any git failure reason.
+
+    Checks both staged (index) and unstaged (working tree) changes so we
+    catch everything the developer is touching, regardless of whether they
+    ``git add``-ed first.
+
+    Returns ``(files, git_error)``: ``git_error`` is ``None`` on success, or a
+    non-empty reason string when a ``git diff`` invocation failed. A failed
+    ``git diff`` (bare repo, permission error, corrupt index, or an initial
+    commit where ``HEAD`` does not yet exist) yields no output; without the
+    error surfaced, the hook would silently scan zero files and pass - a
+    second silent fail-open path. The caller warns loudly on ``git_error``.
+    """
+    files: set[str] = set()
+    git_error: str | None = None
+    for diff_flag in ("--cached", ""):
+        cmd = [
+            "git",
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMR",
+        ]
+        if diff_flag:
+            cmd.append(diff_flag)
+        cmd.extend(["--", "backend/src/"])
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            git_error = stderr or f"{' '.join(cmd)} exited {result.returncode}"
+            continue
+        for raw_line in result.stdout.splitlines():
+            stripped = raw_line.strip()
+            if stripped.endswith(".py") and stripped.startswith("backend/src/"):
+                files.add(stripped)
+    return sorted(files), git_error
+
+
+def _run_windows() -> int:
+    """Run semgrep on changed files only (scoped, no baseline)."""
+    changed, git_error = _get_changed_py_files()
+    if git_error is not None:
+        # Never silently skip: if we cannot determine the changed files, warn
+        # loudly (still exit 0 - fail-open on TOOL, never on FINDINGS).
         print(
-            "run_semgrep.py: semgrep-core cannot complete the incremental scan on Windows "
-            "- skipping (semgrep is enforced on Linux CI and E2B sandboxes)",
+            _SEMGREP_WARN.format(reason=f"git change detection failed: {git_error}"),
+            file=sys.stderr,
+        )
+    if not changed:
+        return 0
+
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_STATE_ENV}
+    cmd = [
+        "uv",
+        "run",
+        "--project",
+        "backend",
+        "--no-sync",
+        "semgrep",
+        "scan",
+        "--config=.semgrep/",
+        "--error",
+        *changed,
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            env=env,
+            check=False,
+            timeout=_SEMGREP_TIMEOUT,
+        )
+        return result.returncode
+    except subprocess.TimeoutExpired:
+        print(
+            _SEMGREP_WARN.format(reason=f"semgrep timed out after {_SEMGREP_TIMEOUT}s scanning {len(changed)} file(s)"),
             file=sys.stderr,
         )
         return 0
+    except FileNotFoundError:
+        print(
+            _SEMGREP_WARN.format(reason="semgrep or uv not found on PATH"),
+            file=sys.stderr,
+        )
+        return 0
+    except Exception as exc:
+        print(
+            _SEMGREP_WARN.format(reason=f"unexpected error: {exc}"),
+            file=sys.stderr,
+        )
+        return 0
+
+
+def main() -> int:
+    if sys.platform == "win32":
+        return _run_windows()
 
     # pre-commit runs hooks from the repo root, so relative paths below resolve
     # correctly; the outer `uv run` in .pre-commit-config.yaml plus this inner
