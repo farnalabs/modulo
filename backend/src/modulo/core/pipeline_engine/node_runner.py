@@ -3837,9 +3837,9 @@ async def _hitl_gate_resume_result(
         return (False, None)
     is_rejected = action == "rejected"
     await _dispatch_reject_correction_best_effort(state, decision, gate_id, hitl_gate_config, session_factory, org_id)
-    gate_result = _hitl_gate_approve_reject_result(gate_id, decision, is_rejected)
-    _inject_answer_state(gate_id, decision, gate_result)
-    return (True, gate_result)
+    ar_result = _hitl_gate_approve_reject_result(gate_id, decision, is_rejected)
+    _inject_answer_state(gate_id, decision, ar_result)
+    return (True, ar_result)
 
 
 #: Deterministic cap for each serialised ``condition_result`` member carried

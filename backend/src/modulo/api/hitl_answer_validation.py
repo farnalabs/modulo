@@ -90,7 +90,7 @@ async def validate_hitl_answer(
         options = rc.get("options")
         if not isinstance(options, list):
             raise AnswerValidationError("gate response_contract has no options")
-        valid_ids = {opt.get("id") for opt in options if isinstance(opt, dict)}
+        valid_ids: set[str] = {opt["id"] for opt in options if isinstance(opt, dict) and isinstance(opt.get("id"), str)}
         if option_id not in valid_ids:
             raise AnswerValidationError(
                 f"option_id {option_id!r} is not a valid option for this gate; valid ids: {sorted(valid_ids)}"
