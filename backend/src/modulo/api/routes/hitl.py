@@ -180,6 +180,10 @@ class ClaimResponse(BaseModel):
 class ApproveRequest(BaseModel):
     claim_token: str
     notes: str | None = None
+    #: FAR-860: optional answer for ``kind: choice`` gates. The answer
+    #: carries ``kind`` (must match the gate's response_contract kind) and
+    #: ``option_id`` (must be a valid option id from the contract).
+    answer: dict[str, Any] | None = None
 
 
 class ApproveWithModificationRequest(BaseModel):
@@ -473,6 +477,79 @@ async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
 
 
 # ---------------------------------------------------------------------------
+# FAR-860: answer validation helper
+# ---------------------------------------------------------------------------
+
+
+class AnswerValidationError(HTTPException):
+    """422 raised when a choice answer fails validation against the response contract."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+
+
+async def _validate_choice_answer(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    gate_id: str,
+    org_id: uuid.UUID,
+    answer: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Validate a choice answer against the gate's response_contract.
+
+    Returns the validated answer dict, or None when no answer is provided.
+    Raises ``AnswerValidationError`` (422) when the answer is present but
+    invalid: missing ``kind``/``option_id``, unknown kind, or unknown
+    option_id.
+
+    The gate's response_contract is resolved from the gate's config
+    (snapshot or live edge). When the config cannot be resolved but the
+    gate fired, validation is skipped (fail-open — the legacy gate has no
+    contract, so any answer is accepted).
+    """
+    if answer is None:
+        return None
+    kind = answer.get("kind")
+    option_id = answer.get("option_id")
+    if not isinstance(kind, str) or not kind:
+        raise AnswerValidationError("answer must have a non-empty 'kind' string")
+    if not isinstance(option_id, str) or not option_id:
+        raise AnswerValidationError("answer must have a non-empty 'option_id' string")
+
+    config = await resolve_hitl_gate_config(
+        session,
+        run_id=run_id,
+        gate_id=gate_id,
+        org_id=org_id,
+    )
+    if config is None:
+        # Config unresolvable (legacy snapshot / graph drift): fail-open.
+        return answer
+    rc = config.get("response_contract")
+    if not isinstance(rc, dict):
+        # No contract declared: the gate is approval-type — any answer is
+        # accepted but the kind must match.
+        if kind != "approval":
+            raise AnswerValidationError(f"gate has no response_contract; answer kind must be 'approval', got {kind!r}")
+        return answer
+    declared_kind = rc.get("kind")
+    if kind != declared_kind:
+        raise AnswerValidationError(
+            f"answer kind {kind!r} does not match gate response_contract kind {declared_kind!r}"
+        )
+    if kind == "choice":
+        options = rc.get("options")
+        if not isinstance(options, list):
+            raise AnswerValidationError("gate response_contract has no options")
+        valid_ids = {opt.get("id") for opt in options if isinstance(opt, dict)}
+        if option_id not in valid_ids:
+            raise AnswerValidationError(
+                f"option_id {option_id!r} is not a valid option for this gate; valid ids: {sorted(valid_ids)}"
+            )
+    return answer
+
+
+# ---------------------------------------------------------------------------
 # Claim
 # ---------------------------------------------------------------------------
 
@@ -614,6 +691,7 @@ async def _run_hitl_manager(
     require_sandbox: bool,
     mgr_method: str,
     action: str | None = None,
+    answer: dict[str, Any] | None = None,
     **call_kwargs: Any,
 ) -> Any:
     """Open a tenant-scoped transaction and invoke a HITLManager decision method.
@@ -638,13 +716,17 @@ async def _run_hitl_manager(
             if require_sandbox:
                 await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
+                # FAR-860: forward the answer to the manager for audit enrichment.
+                manager_kwargs = dict(call_kwargs)
+                if answer is not None:
+                    manager_kwargs["answer"] = answer
                 return await getattr(mgr, mgr_method)(
                     session,
                     run_id=run_id,
                     gate_id=gate_id,
                     org_id=principal.organisation_id,
                     actor_id=principal.account_id,
-                    **call_kwargs,
+                    **manager_kwargs,
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -705,6 +787,9 @@ async def approve_gate(
     principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
+    # FAR-860: validate choice answer against the gate's response_contract
+    # BEFORE the manager call (fail-fast, no side effects).
+    validated_answer = await _validate_choice_answer(session, run_id, gate_id, principal.organisation_id, req.answer)
     # FAR-541: every resume decision is STAMPED with the gate it resolves so a
     # per-gate consumer (``_hitl_gate_resume_result``) can reject a foreign
     # decision left in state by an earlier gate (decisions are per-RUN but
@@ -714,6 +799,8 @@ async def approve_gate(
     resume_data: dict[str, Any] = {"action": "approved", "gate_id": gate_id}
     if req.notes:
         resume_data["notes"] = req.notes
+    if validated_answer is not None:
+        resume_data["answer"] = validated_answer
 
     await _run_hitl_manager(
         session,
@@ -726,6 +813,7 @@ async def approve_gate(
         claim_token=req.claim_token,
         decision_payload=resume_data,
         client_type=_client_type(principal),
+        answer=validated_answer,
     )
 
     try:

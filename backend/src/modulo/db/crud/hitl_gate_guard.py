@@ -230,6 +230,11 @@ def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[s
         types.append("eval_condition")
     if old_cfg.get("claim_expiry_minutes") is not None and new_cfg.get("claim_expiry_minutes") is None:
         types.append("claim_expiry_minutes")
+    # FAR-860: response_contract changes (adding/removing options, changing
+    # kind) are gate weakening — the set of choices available to the human
+    # is part of the gate's security posture.
+    if old_cfg.get("response_contract") != new_cfg.get("response_contract"):
+        types.append("response_contract")
     return types
 
 

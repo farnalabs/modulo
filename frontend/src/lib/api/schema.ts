@@ -9761,6 +9761,10 @@ export interface components {
             claim_token: string;
             /** Notes */
             notes?: string | null;
+            /** Answer */
+            answer?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** ApproveWithModificationRequest */
         ApproveWithModificationRequest: {
@@ -12514,6 +12518,38 @@ export interface components {
              * @description JMESPath expression naming the field under review in the run state.  Resolved against the same root the gate condition evaluates against (the merged state dict).  The resolved value is bounded and redacted identically to artifacts before persistence.
              */
             subject_path?: string | null;
+            /** @description FAR-860: typed response contract. Absent/None = today's approve/reject behaviour (backward-compatible). kind='choice' declares agent-defined options; the human's answer is injected into run state as hitl_answer_<gate_id> for downstream conditional edges. */
+            response_contract?: components["schemas"]["HitlResponseContract"] | null;
+        };
+        /**
+         * HitlResponseContract
+         * @description FAR-860: typed response contract for a HITL gate.
+         *
+         *     ``kind: approval`` = today's behaviour (approve/reject) — the default
+         *     and backward-compatible; an absent contract behaves identically.
+         *     ``kind: choice`` REQUIRES a non-empty ``options`` list with UNIQUE
+         *     non-empty ids and non-empty labels.
+         */
+        HitlResponseContract: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "approval" | "choice";
+            /** Options */
+            options?: components["schemas"]["HitlResponseOption"][] | null;
+        };
+        /**
+         * HitlResponseOption
+         * @description A single selectable option for a ``kind: choice`` HITL gate (FAR-860).
+         */
+        HitlResponseOption: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Description */
+            description?: string | null;
         };
         /** HousekeepingCategory */
         HousekeepingCategory: {

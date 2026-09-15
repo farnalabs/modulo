@@ -3707,6 +3707,44 @@ def _hitl_gate_deliver_manual_result(
     )
 
 
+# FAR-860: the state key prefix for the human's choice answer. Downstream
+# conditional edges branch on ``hitl_answer_<gate_id>`` to read the chosen
+# option id. The key is stable (derived from the gate id) and documented so
+# pipeline authors know the exact state path to reference in JMESPath
+# conditions.
+HITL_ANSWER_STATE_KEY_PREFIX = "hitl_answer_"
+
+
+def _inject_answer_state(
+    gate_id: str,
+    decision: dict[str, Any] | Any,
+    gate_result: dict[str, Any],
+) -> None:
+    """Inject the human's choice answer into the gate result as state.
+
+    FAR-860: when a ``kind: choice`` gate's decision carries an ``answer``
+    dict (``{"kind": "choice", "option_id": "<id>"}``), the chosen option id
+    is placed in state as ``hitl_answer_<gate_id>`` so downstream conditional
+    edges can branch on it via JMESPath.
+
+    The injection reuses the existing gate-result-as-state-seam: the gate
+    node's return dict IS the state update merged by LangGraph. No new
+    routing primitive is needed — existing conditional edges read this key
+    with ``state["hitl_answer_<gate_id>"]``.
+
+    ``gate_result`` is mutated in place (the caller owns the dict).
+    """
+    if not isinstance(decision, dict):
+        return
+    answer = decision.get("answer")
+    if not isinstance(answer, dict):
+        return
+    option_id = answer.get("option_id")
+    if isinstance(option_id, str) and option_id:
+        state_key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{gate_id}"
+        gate_result[state_key] = option_id
+
+
 def _hitl_gate_approve_reject_result(
     gate_id: str,
     decision: Any,
@@ -3779,7 +3817,9 @@ async def _hitl_gate_resume_result(
         )
         return (False, None)
     if action == "deliver_manual":
-        return _hitl_gate_deliver_manual_result(gate_id, decision)
+        gate_result = _hitl_gate_deliver_manual_result(gate_id, decision)
+        _inject_answer_state(gate_id, decision, gate_result[1])
+        return gate_result
     if action not in ("approved", "rejected"):
         _log.warning(
             "hitl_gate.malformed_decision_ignored",
@@ -3788,7 +3828,9 @@ async def _hitl_gate_resume_result(
         return (False, None)
     is_rejected = action == "rejected"
     await _dispatch_reject_correction_best_effort(state, decision, gate_id, hitl_gate_config, session_factory, org_id)
-    return (True, _hitl_gate_approve_reject_result(gate_id, decision, is_rejected))
+    gate_result = _hitl_gate_approve_reject_result(gate_id, decision, is_rejected)
+    _inject_answer_state(gate_id, decision, gate_result)
+    return (True, gate_result)
 
 
 #: Deterministic cap for each serialised ``condition_result`` member carried

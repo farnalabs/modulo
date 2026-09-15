@@ -4162,6 +4162,60 @@ async def _check_human_only_gate(
     return None
 
 
+async def _validate_mcp_choice_answer(
+    s: AsyncSession,
+    run_id: uuid.UUID,
+    gate_id: str,
+    org_id: uuid.UUID,
+    answer: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Validate a choice answer against the gate's response_contract (FAR-860, MCP).
+
+    Returns the validated answer dict, None when no answer is provided, or an
+    MCP error dict when validation fails.
+    """
+    if answer is None:
+        return None
+    kind = answer.get("kind")
+    option_id = answer.get("option_id")
+    if not isinstance(kind, str) or not kind:
+        return {"error": "invalid_answer", "detail": "answer must have a non-empty 'kind' string"}
+    if not isinstance(option_id, str) or not option_id:
+        return {"error": "invalid_answer", "detail": "answer must have a non-empty 'option_id' string"}
+
+    from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
+
+    config = await resolve_hitl_gate_config(s, run_id=run_id, gate_id=gate_id, org_id=org_id)
+    if config is None:
+        # Config unresolvable: fail-open (legacy gate has no contract).
+        return answer
+    rc = config.get("response_contract")
+    if not isinstance(rc, dict):
+        if kind != "approval":
+            return {
+                "error": "invalid_answer",
+                "detail": (f"gate has no response_contract; answer kind must be 'approval', got {kind!r}"),
+            }
+        return answer
+    declared_kind = rc.get("kind")
+    if kind != declared_kind:
+        return {
+            "error": "invalid_answer",
+            "detail": (f"answer kind {kind!r} does not match gate response_contract kind {declared_kind!r}"),
+        }
+    if kind == "choice":
+        options = rc.get("options")
+        if not isinstance(options, list):
+            return {"error": "invalid_answer", "detail": "gate response_contract has no options"}
+        valid_ids = {opt.get("id") for opt in options if isinstance(opt, dict)}
+        if option_id not in valid_ids:
+            return {
+                "error": "invalid_answer",
+                "detail": (f"option_id {option_id!r} is not a valid option; valid ids: {sorted(valid_ids)}"),
+            }
+    return answer
+
+
 async def _dispatch_hitl_action(
     mgr: HITLManager,
     s: AsyncSession,
@@ -4173,6 +4227,7 @@ async def _dispatch_hitl_action(
     claim_token: str | None,
     output: dict[str, Any] | None,
     reason: str | None,
+    answer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Dispatch a validated HITL action to the manager and return the success dict.
 
@@ -4230,7 +4285,14 @@ async def _dispatch_hitl_action(
             "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
         }
     if action == "approve":
+        # FAR-860: validate choice answer before the manager call.
+        validated_answer = await _validate_mcp_choice_answer(s, rid, gate_id, org_id, answer)
+        if isinstance(validated_answer, dict) and "error" in validated_answer:
+            return validated_answer
         # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
+        approve_payload: dict[str, Any] = {"action": "approved", "gate_id": gate_id}
+        if validated_answer is not None:
+            approve_payload["answer"] = validated_answer
         await mgr.approve(
             s,
             run_id=rid,
@@ -4238,12 +4300,20 @@ async def _dispatch_hitl_action(
             org_id=org_id,
             claim_token=claim_token or "",
             actor_id=actor_account_id,
-            decision_payload={"action": "approved", "gate_id": gate_id},
+            decision_payload=approve_payload,
             client_type=client_type,
+            answer=validated_answer,
         )
         return {"status": "approved", "gate_id": gate_id}
     if action == "deliver_manual":
+        # FAR-860: validate choice answer before the manager call.
+        validated_answer = await _validate_mcp_choice_answer(s, rid, gate_id, org_id, answer)
+        if isinstance(validated_answer, dict) and "error" in validated_answer:
+            return validated_answer
         # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
+        manual_payload: dict[str, Any] = {"action": "deliver_manual", "gate_id": gate_id, "output": output or {}}
+        if validated_answer is not None:
+            manual_payload["answer"] = validated_answer
         await mgr.deliver_manual(
             s,
             run_id=rid,
@@ -4252,8 +4322,9 @@ async def _dispatch_hitl_action(
             claim_token=claim_token or "",
             output=output or {},
             actor_id=actor_account_id,
-            decision_payload={"action": "deliver_manual", "gate_id": gate_id, "output": output or {}},
+            decision_payload=manual_payload,
             client_type=client_type,
+            answer=validated_answer,
         )
         return {"status": "delivered_manual", "gate_id": gate_id}
     # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
@@ -4308,6 +4379,7 @@ async def _review_hitl_impl(
     claim_token: str | None,
     reason: str | None,
     output: dict[str, Any] | None,
+    answer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
@@ -4361,7 +4433,7 @@ async def _review_hitl_impl(
 
         try:
             return await _dispatch_hitl_action(
-                mgr, s, action, rid, gate_id, org_id, actor_account_id, claim_token, output, reason
+                mgr, s, action, rid, gate_id, org_id, actor_account_id, claim_token, output, reason, answer
             )
         except (
             GateNotFoundError,
@@ -4402,9 +4474,10 @@ async def review_hitl(
     claim_token: str | None = None,
     reason: str | None = None,
     output: dict[str, Any] | None = None,
+    answer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        return await _review_hitl_impl(run_id, gate_id, action, claim_token, reason, output)
+        return await _review_hitl_impl(run_id, gate_id, action, claim_token, reason, output, answer)
     except OperationalError:
         raise
     except Exception:

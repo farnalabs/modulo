@@ -125,7 +125,7 @@ class HitlGateConditionResult(TypedDict, total=False):
 
 
 class HitlGateContext(TypedDict, total=False):
-    """The ``hitl_claims.context_json`` briefing bundle (FAR-613/FAR-688/FAR-859).
+    """The ``hitl_claims.context_json`` briefing bundle (FAR-613/FAR-688/FAR-859/FAR-860).
 
     ``total=False``: legacy bundles persisted before a key existed simply omit
     it; readers must tolerate missing members.
@@ -142,6 +142,10 @@ class HitlGateContext(TypedDict, total=False):
     pipeline_name: str | None
     subject: str | None
     consequences: dict[str, Any] | None
+    #: FAR-860: the gate's response contract (agent-defined options).
+    #: Threaded from the gate config at fire time so the UI can render
+    #: the option set from the briefing without re-resolving the graph.
+    response_contract: dict[str, Any] | None
 
 
 def serialize_value(value: Any) -> str:
@@ -460,6 +464,22 @@ async def _build_context_inner(
     if graph_json is not None:
         consequences = _resolve_consequences(graph_json, gate_id, config, source_node_id)
 
+    # FAR-860: capture the response_contract from the gate config so the
+    # UI can render agent-defined options from the briefing without
+    # re-resolving the graph. Bounded: only the serialisable subset is
+    # captured; the Pydantic model already enforces field limits.
+    response_contract: dict[str, Any] | None = None
+    if isinstance(config, dict):
+        raw_rc = config.get("response_contract")
+        if isinstance(raw_rc, dict):
+            # Bounded copy: re-serialise to strip any extra keys and bound.
+            try:
+                import json as _json
+
+                response_contract = _json.loads(_json.dumps(raw_rc, sort_keys=True, default=str, ensure_ascii=False))
+            except (TypeError, ValueError, KeyError):
+                response_contract = None
+
     return {
         "description": description,
         "condition": condition,
@@ -472,6 +492,7 @@ async def _build_context_inner(
         "pipeline_name": pipeline_name[:_NAME_FIELD_MAX_CHARS] if pipeline_name else None,
         "subject": bounded_subject,
         "consequences": consequences,
+        "response_contract": response_contract,
     }
 
 

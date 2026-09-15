@@ -614,12 +614,17 @@ class HITLManager:
         actor_id: uuid.UUID | None = None,
         decision_payload: dict[str, Any] | None = None,
         client_type: str | None = None,
+        answer: dict[str, Any] | None = None,
     ) -> HitlClaim:
         """Record approval and log a ``hitl.output_delivered`` audit event.
 
         ``client_type`` (FAR-611): the caller's credential kind recorded on
         the audit event when known (``"browser"`` / ``"api_key"`` /
         ``"mcp"``); internal callers omit it.
+
+        ``answer`` (FAR-860): optional choice answer dict
+        (``{"kind": "choice", "option_id": "<id>"}``) enriched into the
+        audit event for queryability.
 
         Raises on missing token, expired token, or decided gate, and
         ``DecisionPayloadError`` when the supplied *decision_payload* violates
@@ -640,12 +645,15 @@ class HITLManager:
             decided_by=actor_id,
         )
 
+        audit_kwargs: dict[str, Any] = {}
+        if answer is not None:
+            audit_kwargs["answer"] = answer
         await self._log_audit_and_deliver(
             session,
             gate,
             org_id=org_id,
             actor_id=actor_id,
-            events=[("hitl.output_delivered", self._base_audit_payload(gate, client_type=client_type))],
+            events=[("hitl.output_delivered", self._base_audit_payload(gate, client_type=client_type, **audit_kwargs))],
         )
         # FAR-611: approve-sweep anomaly alarm — failure-isolated so a broken
         # alarm can never fail the committed decision.
@@ -718,6 +726,7 @@ class HITLManager:
         actor_id: uuid.UUID | None = None,
         decision_payload: dict[str, Any] | None = None,
         client_type: str | None = None,
+        answer: dict[str, Any] | None = None,
     ) -> HitlClaim:
         """Record manual delivery and log a ``hitl.manual_delivery`` audit event.
 
@@ -729,6 +738,9 @@ class HITLManager:
         ``client_type`` (FAR-611): the caller's credential kind recorded on
         the audit event when known (``"browser"`` / ``"api_key"`` /
         ``"mcp"``); internal callers omit it.
+
+        ``answer`` (FAR-860): optional choice answer dict enriched into the
+        audit event for queryability.
 
         Raises on missing token, expired token, or decided gate, and
         ``DecisionPayloadError`` when the supplied *decision_payload* violates
@@ -751,6 +763,9 @@ class HITLManager:
             decided_by=actor_id,
         )
 
+        audit_kwargs: dict[str, Any] = {"manual_output": output}
+        if answer is not None:
+            audit_kwargs["answer"] = answer
         await self._log_audit_and_deliver(
             session,
             gate,
@@ -759,7 +774,7 @@ class HITLManager:
             events=[
                 (
                     "hitl.manual_delivery",
-                    self._base_audit_payload(gate, client_type=client_type, manual_output=output),
+                    self._base_audit_payload(gate, client_type=client_type, **audit_kwargs),
                 )
             ],
         )
@@ -1091,8 +1106,13 @@ class HITLManager:
         ``client_type`` (FAR-611) is included only when the caller knows the
         credential kind — internal callers' payloads stay unchanged (no
         ``client_type`` key at all, not a null one).
+
+        ``answer_kind`` / ``answer_option_id`` (FAR-860) are included when the
+        decision carries a response_contract answer — making the choice
+        queryable in the audit log.
         """
         client_type = extra.pop("client_type", None)
+        answer = extra.pop("answer", None)
         payload: dict[str, Any] = {
             "pipeline_run_id": str(gate.run_id),
             "node_id": gate.gate_id,
@@ -1101,6 +1121,13 @@ class HITLManager:
         }
         if client_type is not None:
             payload["client_type"] = client_type
+        if isinstance(answer, dict):
+            answer_kind = answer.get("kind")
+            answer_option_id = answer.get("option_id")
+            if isinstance(answer_kind, str) and answer_kind:
+                payload["answer_kind"] = answer_kind
+            if isinstance(answer_option_id, str) and answer_option_id:
+                payload["answer_option_id"] = answer_option_id
         payload.update(extra)
         return payload
 

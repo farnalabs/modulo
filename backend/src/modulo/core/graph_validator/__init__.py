@@ -1293,6 +1293,10 @@ class GraphValidator:
         # and node configs — node-level hitl_config bypasses Pydantic).
         self._check_hitl_gate_subject_paths(graph_json, result)
 
+        # FAR-860: response_contract validation (both edge-level
+        # hitl_gate_config and node-level hitl_config).
+        self._check_hitl_gate_response_contracts(graph_json, result)
+
         self._check_topology(graph_json, result)
         if not result.is_valid:
             return result
@@ -1858,6 +1862,126 @@ class GraphValidator:
             if str(source) in node_type_by_id and node_type_by_id[str(source)] == "hitl":
                 continue
             GraphValidator._check_hitl_subject_path(
+                hitl_config,
+                f"edge '{source}->{target}'",
+                result,
+            )
+
+    @staticmethod
+    def _check_hitl_response_contract(
+        config: dict[str, Any] | None,
+        source_label: str,
+        result: ValidationResult,
+    ) -> None:
+        """Validate a HITL gate's ``response_contract`` (FAR-860).
+
+        Mirrors the ``_check_hitl_subject_path`` pattern: validates both
+        edge-level ``hitl_gate_config`` and node-level ``hitl_config`` (the
+        latter bypasses Pydantic entirely).
+
+        Rules:
+        - ``kind`` must be ``"approval"`` or ``"choice"``; unknown kinds are
+          rejected.
+        - ``kind: choice`` REQUIRES a non-empty ``options`` list.
+        - Each option must have a non-empty ``id`` and ``label``.
+        - Option ``id``s must be unique within the list.
+        """
+        if not isinstance(config, dict):
+            return
+        rc = config.get("response_contract")
+        if rc is None:
+            return
+        if not isinstance(rc, dict):
+            result.error(
+                "HITL_RESPONSE_CONTRACT_INVALID",
+                f"HITL gate on {source_label}: response_contract must be an object",
+            )
+            return
+        kind = rc.get("kind")
+        if kind not in ("approval", "choice"):
+            result.error(
+                "HITL_RESPONSE_CONTRACT_UNKNOWN_KIND",
+                f"HITL gate on {source_label}: response_contract.kind must be 'approval' or 'choice', got {kind!r}",
+            )
+            return
+        options = rc.get("options")
+        if kind == "choice":
+            if not isinstance(options, list) or not options:
+                result.error(
+                    "HITL_RESPONSE_CONTRACT_CHOICE_REQUIRES_OPTIONS",
+                    f"HITL gate on {source_label}: response_contract kind 'choice' requires a non-empty options list",
+                )
+                return
+            seen_ids: set[str] = set()
+            for i, opt in enumerate(options):
+                if not isinstance(opt, dict):
+                    result.error(
+                        "HITL_RESPONSE_CONTRACT_INVALID_OPTION",
+                        f"HITL gate on {source_label}: response_contract option {i} must be an object",
+                    )
+                    continue
+                opt_id = opt.get("id")
+                opt_label = opt.get("label")
+                if not isinstance(opt_id, str) or not opt_id.strip():
+                    result.error(
+                        "HITL_RESPONSE_CONTRACT_OPTION_MISSING_ID",
+                        f"HITL gate on {source_label}: response_contract option {i} must have a non-empty string id",
+                    )
+                    continue
+                if not isinstance(opt_label, str) or not opt_label.strip():
+                    result.error(
+                        "HITL_RESPONSE_CONTRACT_OPTION_MISSING_LABEL",
+                        f"HITL gate on {source_label}: response_contract option {i} must have a non-empty string label",
+                    )
+                    continue
+                if opt_id in seen_ids:
+                    result.error(
+                        "HITL_RESPONSE_CONTRACT_DUPLICATE_OPTION_ID",
+                        f"HITL gate on {source_label}: response_contract has duplicate option id {opt_id!r}",
+                    )
+                seen_ids.add(opt_id)
+
+    @staticmethod
+    def _check_hitl_gate_response_contracts(graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """Validate ``response_contract`` on all HITL gate configs (FAR-860).
+
+        Checks both edge-level ``hitl_gate_config`` and node-level
+        ``hitl_config`` (the latter bypasses Pydantic entirely — this is
+        the ONLY save-time gate for node configs).
+        """
+        nodes = graph_json.get("nodes", [])
+        node_type_by_id: dict[str, str] = {}
+        for node in nodes:
+            if isinstance(node, dict) and node.get("id") is not None:
+                node_type_by_id[str(node["id"])] = str(node.get("node_type") or "agent")
+
+        for node in nodes:
+            if not isinstance(node, dict) or node.get("node_type") != "hitl":
+                continue
+            nid = str(node.get("id", ""))
+            GraphValidator._check_hitl_response_contract(
+                node.get("hitl_config"),
+                f"node '{nid}'",
+                result,
+            )
+
+        for edge in graph_json.get("edges", []):
+            if not isinstance(edge, dict):
+                continue
+            hitl_config = edge.get("hitl_gate_config")
+            if not isinstance(hitl_config, dict):
+                continue
+            source = edge.get("source")
+            if source is None:
+                source = edge.get("source_node_id")
+            target = edge.get("target")
+            if target is None:
+                target = edge.get("target_node_id")
+            # Skip edge-level configs that belong to a node-level gate
+            # (already reported by the node pass above — avoid double-reporting).
+            if str(source) in node_type_by_id and node_type_by_id[str(source)] == "hitl":
+                continue
+            GraphValidator._check_hitl_response_contract(
                 hitl_config,
                 f"edge '{source}->{target}'",
                 result,
