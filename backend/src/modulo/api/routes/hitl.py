@@ -110,7 +110,7 @@ def _build_resume_executor(engine: AsyncEngine) -> PipelineExecutor:
     notifier: Notifier | None = None
     try:
         notifier = Notifier(engine, get_settings().fernet_key)
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
         logger.exception("hitl.build_resume_executor.notifier_init_failed")
     return PipelineExecutor(
         engine,

@@ -57,7 +57,7 @@ async def list_community(
             generated = manifest.get("generated_at")
             if isinstance(generated, str):
                 synced_at = generated
-    except Exception:
+    except SQLAlchemyError:
         _log.exception("community_library.list_community")
         items = []
         synced_at = None
@@ -76,7 +76,7 @@ async def _fetch_entry_content(content_sha256: str) -> Any:
         blob = await client.fetch_blob(content_sha256)
         if blob is not None:
             return json.loads(blob.decode("utf-8"))
-    except Exception:
+    except ValueError:
         _log.exception("community_library.get_entry_blob")
     finally:
         await client.close()
@@ -92,7 +92,7 @@ async def get_entry(
     """Return a single community entry, including its parsed blob content."""
     try:
         entry = await get_community_entry(session, entry_id)
-    except Exception:
+    except (ValueError, KeyError):
         _log.exception("community_library.get_entry")
         entry = None
     if entry is None:
