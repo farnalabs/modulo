@@ -30,6 +30,10 @@ describe('No direct primevue/select or primevue/dropdown imports', () => {
   for (const file of files) {
     const relPath = relative(SRC_DIR, file)
     if (relPath.includes(ALLOWED_FILE)) continue
+    // Test files legitimately import the real PrimeVue Select to assert the
+    // wrapper delegates to it (e.g. AppSelect.overlay.spec.ts). The guard is
+    // about production usages, which must all route through the wrapper.
+    if (relPath.includes('__tests__')) continue
 
     const content = readFileSync(file, 'utf-8')
     if (/from\s+['"]primevue\/select['"]/.test(content) || /from\s+['"]primevue\/dropdown['"]/.test(content)) {

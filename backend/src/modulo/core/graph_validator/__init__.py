@@ -63,6 +63,7 @@ DB_SENTINEL_NODE_ID_PREFIX = "__"
 # threshold for edge-level gate configs) and the pipeline editor's save
 # validation, so all three surfaces agree.
 HITL_DESCRIPTION_MIN_LENGTH = 20
+HITL_SUBJECT_PATH_MAX_LENGTH = 500
 _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType(
     {
         "string": str,
@@ -1288,6 +1289,10 @@ class GraphValidator:
         # method docstring for the blast-radius scoping).
         self._check_hitl_gate_descriptions(graph_json, result)
 
+        # FAR-859: subject_path JMESPath syntax + length check (both edge
+        # and node configs — node-level hitl_config bypasses Pydantic).
+        self._check_hitl_gate_subject_paths(graph_json, result)
+
         self._check_topology(graph_json, result)
         if not result.is_valid:
             return result
@@ -1775,6 +1780,88 @@ class GraphValidator:
                     f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
                     node_id=_string_or_default(source),
                 )
+
+    @staticmethod
+    def _check_hitl_subject_path(
+        config: dict[str, Any] | None,
+        source_label: str,
+        result: ValidationResult,
+    ) -> None:
+        """Validate a HITL gate's ``subject_path`` JMESPath expression.
+
+        Mirrors the ``condition`` validation pattern: the expression must be
+        valid JMESPath (fail-fast at save time, not fire time) and must not
+        exceed :data:`HITL_SUBJECT_PATH_MAX_LENGTH`.
+
+        ``source_label`` is the human-readable edge or node identifier
+        included in the error message (e.g. ``edge 'A->B'`` or ``node 'X'``).
+        """
+        if not isinstance(config, dict):
+            return
+        subject_path = config.get("subject_path")
+        if subject_path is None:
+            return
+        if not isinstance(subject_path, str) or not subject_path.strip():
+            return
+        if len(subject_path) > HITL_SUBJECT_PATH_MAX_LENGTH:
+            result.error(
+                "HITL_SUBJECT_PATH_TOO_LONG",
+                f"HITL gate on {source_label}: subject_path exceeds max length of {HITL_SUBJECT_PATH_MAX_LENGTH} chars",
+            )
+            return
+        try:
+            jmespath.compile(subject_path.strip())
+        except jmespath.exceptions.JMESPathError as exc:
+            result.error(
+                "HITL_SUBJECT_PATH_INVALID_JMESPATH",
+                f"HITL gate on {source_label}: invalid JMESPath in subject_path: {exc}",
+            )
+
+    @staticmethod
+    def _check_hitl_gate_subject_paths(graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """Validate ``subject_path`` on all HITL gate configs.
+
+        Checks both edge-level ``hitl_gate_config`` and node-level
+        ``hitl_config`` (the latter bypasses Pydantic's ``max_length``
+        entirely — this is the ONLY save-time gate for node configs).
+        """
+        nodes = graph_json.get("nodes", [])
+        node_type_by_id: dict[str, str] = {}
+        for node in nodes:
+            if isinstance(node, dict) and node.get("id") is not None:
+                node_type_by_id[str(node["id"])] = str(node.get("node_type") or "agent")
+
+        for node in nodes:
+            if not isinstance(node, dict) or node.get("node_type") != "hitl":
+                continue
+            nid = str(node.get("id", ""))
+            GraphValidator._check_hitl_subject_path(
+                node.get("hitl_config"),
+                f"node '{nid}'",
+                result,
+            )
+
+        for edge in graph_json.get("edges", []):
+            if not isinstance(edge, dict):
+                continue
+            hitl_config = edge.get("hitl_gate_config")
+            if not isinstance(hitl_config, dict):
+                continue
+            source = edge.get("source")
+            if source is None:
+                source = edge.get("source_node_id")
+            target = edge.get("target")
+            if target is None:
+                target = edge.get("target_node_id")
+            # Skip edge-level configs that belong to a node-level gate
+            # (already reported by the node pass above — avoid double-reporting).
+            if str(source) in node_type_by_id and node_type_by_id[str(source)] == "hitl":
+                continue
+            GraphValidator._check_hitl_subject_path(
+                hitl_config,
+                f"edge '{source}->{target}'",
+                result,
+            )
 
     @staticmethod
     def _check_loop_edges(

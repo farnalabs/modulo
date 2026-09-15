@@ -197,6 +197,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # the same HTTP path.
     ]
 
+    # FAR-856: GET-specific rate limits for pre-auth anonymous endpoints.
+    # These endpoints are anonymous (no JWT), so the normal POST/PUT/PATCH
+    # rate-limit gate does not fire.  Enumeration defence: 60/min per IP.
+    GET_RULES: ClassVar[list[RateLimitRule]] = [
+        RateLimitRule(path_prefix="/api/v1/auth/login-context", max_requests=60, window_s=60),
+        RateLimitRule(path_prefix="/api/v1/auth/org-login/", max_requests=60, window_s=60),
+    ]
+
     # PRD §7.18: HITL review actions — 20/min per user, AGGREGATE across
     # runs, gates, and actions (FAR-611). The review endpoints live under
     # /api/v1/runs/{run_id}/hitl/{gate_id}/{action} where the run/gate ids are
@@ -270,12 +278,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
     def _should_rate_limit(self, request: Request) -> bool:
-        if request.method not in ("POST", "PUT", "PATCH"):
+        if request.method not in ("POST", "PUT", "PATCH", "GET"):
             return False
         token = request.headers.get(RATELIMIT_BYPASS_HEADER, "")
         if _matches_bypass_token(token, self._bypass_token or ""):
             return False
         path = request.url.path
+        # FAR-856: GET-specific rate limiting for pre-auth anonymous endpoints.
+        # GET /hitl/ reads are exempt from the HITL action budget (PRD §7.18
+        # budgets review ACTIONS, which are POST/PUT/PATCH — not GET reads),
+        # so the GET branch must be resolved before the HITL marker check.
+        if request.method == "GET":
+            if _is_hitl_budget_path(path):
+                return False
+            return any(path.startswith(rule.path_prefix) for rule in self.GET_RULES)
         if _is_hitl_budget_path(path):
             return True
         return any(path.startswith(rule.path_prefix) for rule in self.RULES)
@@ -284,6 +300,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if _is_hitl_budget_path(path):
             return self.HITL_RULE
+        # FAR-856: GET-specific rules take precedence for GET requests.
+        if request.method == "GET":
+            for rule in self.GET_RULES:
+                if path.startswith(rule.path_prefix):
+                    return rule
         for rule in self.RULES:
             if path.startswith(rule.path_prefix):
                 return rule

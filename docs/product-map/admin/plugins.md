@@ -5,6 +5,7 @@ adr: []
 code:
   - backend/src/modulo/api/routes/plugins.py
   - backend/src/modulo/core/plugin_registry
+  - backend/src/modulo/core/plugin_registry/__init__.py
 unit-tests:
   - backend/tests/unit/api/test_plugin_registry_bdd.py
   - backend/tests/unit/plugin_registry/test_plugin_registry.py

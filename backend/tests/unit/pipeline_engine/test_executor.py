@@ -1546,6 +1546,8 @@ async def test_interrupt_persists_fire_time_context_on_the_gate_row():
         "artifacts",
         "reason",
         "pipeline_name",
+        "subject",
+        "consequences",
     }
     assert context["pipeline_name"] == "PR Reviewer"
     # The synthetic payload carries no condition_result member — no evidence.

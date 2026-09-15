@@ -391,4 +391,7 @@ __all__ = [
     # --- FAR-801 compensating sweep (wired into dispatcher_reconcile;
     #     vulture cannot see the lazy-import call site) ---
     "_sweep_workspace_input_drift_flags",
+    # --- FAR-856 login-active predicate (ORM-level safety net, tested
+    #     independently; SQL-level helpers embed the same predicate) ---
+    "is_login_active_org",
 ]

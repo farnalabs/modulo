@@ -4,12 +4,14 @@
       type="button"
       data-testid="notifications-panel-toggle"
       class="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors"
+      :aria-expanded="!collapsed"
+      aria-controls="notifications-panel-content"
       @click="toggleCollapsed"
     >
       <div class="flex items-center gap-2">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
         <span>{{ $t('components.DashboardNotificationsPanel.notifications') }}</span>
-        <span v-if="unreadCount > 0" class="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-destructive px-1.5 text-[11px] font-bold text-destructive-foreground">{{ unreadCount }}</span>
+        <span v-if="unreadCount > 0" class="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-destructive px-1.5 text-[11px] font-bold text-destructive-foreground" role="status" :aria-label="`${unreadCount} unread notifications`">{{ unreadCount }}</span>
       </div>
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -21,19 +23,20 @@
         stroke-width="2"
         class="transition-transform duration-200"
         :class="{ 'rotate-180': !collapsed }"
+        aria-hidden="true"
       >
         <polyline points="6 15 12 9 18 15" />
       </svg>
     </button>
-    <div v-if="!collapsed" class="border-t px-4 py-3">
+    <div v-if="!collapsed" id="notifications-panel-content" class="border-t px-4 py-3">
       <LoadingSpinner v-if="loading" />
-      <div v-else-if="error" class="text-sm text-destructive">{{ error }}</div>
+      <div v-else-if="error" class="text-sm text-destructive" role="alert">{{ error }}</div>
       <div v-else-if="notifications.length === 0" class="text-center text-sm text-muted-foreground py-4">
-        No notifications
+        {{ $t('components.DashboardNotificationsPanel.no_notifications') }}
       </div>
       <template v-else>
-        <div v-if="reviewLaterError" class="px-4 py-1 text-xs text-destructive">{{ reviewLaterError }}</div>
-        <div class="space-y-2 max-h-[400px] overflow-y-auto">
+        <div v-if="reviewLaterError" class="px-4 py-1 text-xs text-destructive" role="alert">{{ reviewLaterError }}</div>
+        <div class="max-h-[400px] overflow-y-auto space-y-2">
           <NotificationCard
             v-for="n in notifications"
             :key="n.id"
@@ -42,13 +45,41 @@
             @review-later="onReviewLater"
           />
         </div>
+        <!-- Paging controls -->
+        <div v-if="totalPages > 1" class="flex items-center justify-between pt-3">
+          <p class="text-xs text-muted-foreground">
+            {{ $t('components.DashboardNotificationsPanel.page_x_of_y', { current: page, total: totalPages }) }}
+          </p>
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              data-testid="panel-prev-page"
+              class="rounded border px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors disabled:opacity-50"
+              :disabled="page <= 1"
+              :aria-label="$t('components.DashboardNotificationsPanel.previous_page')"
+              @click="prevPage"
+            >
+              &lsaquo;
+            </button>
+            <button
+              type="button"
+              data-testid="panel-next-page"
+              class="rounded border px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors disabled:opacity-50"
+              :disabled="page >= totalPages"
+              :aria-label="$t('components.DashboardNotificationsPanel.next_page')"
+              @click="nextPage"
+            >
+              &rsaquo;
+            </button>
+          </div>
+        </div>
       </template>
       <div v-if="!loading && !error" class="mt-3 text-center">
         <router-link
           to="/notifications"
           class="text-xs font-medium text-primary hover:underline"
         >
-          {{ $t('components.DashboardNotificationsPanel.view_all') }} →
+          {{ $t('components.DashboardNotificationsPanel.view_all') }} &rarr;
         </router-link>
       </div>
     </div>
@@ -56,31 +87,52 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useStorage } from '@vueuse/core';
 import type { NotificationResponse } from "../lib/api/notifications";
-import { fetchDashboardNotifications, reviewLater } from "../lib/api/notifications";
+import { fetchNotifications, reviewLater, fetchUnreadCount } from "../lib/api/notifications";
 import { registerHandler } from "../stores/syncRegistry";
 import NotificationCard from "./NotificationCard.vue";
 import { formatApiError } from "../lib/api/formatError";
 import LoadingSpinner from "./shared/LoadingSpinner.vue";
 
-const DASHBOARD_LIMIT = 5;
+const PAGE_SIZE = 10;
 const collapsed = useStorage('notif-panel-collapsed', true);
 const notifications = ref<NotificationResponse[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const reviewLaterError = ref("");
 const unreadCount = ref(0);
-const hasMore = ref(false);
+const page = ref(1);
+const total = ref(0);
+
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
 
 function toggleCollapsed() {
   collapsed.value = !collapsed.value;
 }
 
-function onDismissed(id: string) {
+// The unread badge must reflect the severity-filtered unread count
+// (warning+), not the raw count of all active notifications. Use the
+// existing dedicated endpoint rather than the paginated list total.
+async function refreshUnreadCount() {
+  try {
+    unreadCount.value = await fetchUnreadCount();
+  } catch {
+    unreadCount.value = 0;
+  }
+}
+
+async function onDismissed(id: string) {
   notifications.value = notifications.value.filter((n) => n.id !== id);
-  if (unreadCount.value > 0) unreadCount.value--;
+  total.value = Math.max(0, total.value - 1);
+  // If page is now empty and not the first page, go back one
+  if (notifications.value.length === 0 && page.value > 1) {
+    page.value--;
+    await loadPage();
+  } else {
+    await refreshUnreadCount();
+  }
 }
 
 async function onReviewLater(id: string) {
@@ -88,18 +140,38 @@ async function onReviewLater(id: string) {
   try {
     await reviewLater(id);
     notifications.value = notifications.value.filter((n) => n.id !== id);
-    if (unreadCount.value > 0) unreadCount.value--;
+    total.value = Math.max(0, total.value - 1);
+    if (notifications.value.length === 0 && page.value > 1) {
+      page.value--;
+      await loadPage();
+    } else {
+      await refreshUnreadCount();
+    }
   } catch (e: unknown) {
     reviewLaterError.value = e instanceof Error ? e.message : "Failed to dismiss notification";
+  }
+}
+
+function prevPage() {
+  if (page.value > 1) {
+    page.value--;
+    void loadPage();
+  }
+}
+
+function nextPage() {
+  if (page.value < totalPages.value) {
+    page.value++;
+    void loadPage();
   }
 }
 
 let unsubHandler: (() => void) | null = null;
 
 onMounted(async () => {
-  await loadDashboard();
+  await loadPage();
   unsubHandler = registerHandler("notification", () => {
-    void loadDashboard();
+    void loadPage();
   });
 });
 
@@ -107,14 +179,19 @@ onUnmounted(() => {
   if (unsubHandler) unsubHandler();
 });
 
-async function loadDashboard() {
+async function loadPage() {
   loading.value = true;
   error.value = null;
   try {
-    const result = await fetchDashboardNotifications();
-    notifications.value = result.notifications;
-    unreadCount.value = result.total_unread;
-    hasMore.value = result.notifications.length >= DASHBOARD_LIMIT;
+    const result = await fetchNotifications({
+      page: page.value,
+      page_size: PAGE_SIZE,
+      status: "active",
+    });
+    notifications.value = result.items;
+    total.value = result.total;
+    // Badge reflects the severity-filtered unread count, not the raw total.
+    await refreshUnreadCount();
   } catch (e: unknown) {
     error.value = formatApiError(e);
   } finally {

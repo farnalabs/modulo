@@ -1620,6 +1620,18 @@ def _interrupt_condition_result(gate_payload: dict[str, Any]) -> dict[str, Any] 
     return result if isinstance(result, dict) else None
 
 
+def _interrupt_subject(gate_payload: dict[str, Any]) -> str | None:
+    """The interrupt payload's ``subject`` member (FAR-859), or None.
+
+    The gate node resolves ``subject_path`` against the run state at fire
+    time and stamps the serialised value into the payload; the briefing
+    capture stores it as the reviewer's primary focus. None for gates
+    without a ``subject_path`` or when resolution failed.
+    """
+    result = gate_payload.get("subject")
+    return result if isinstance(result, str) else None
+
+
 class PipelineExecutor:
     """Execute a single pipeline run (HITL-aware, supports parallel fan-out).
 
@@ -5281,6 +5293,7 @@ class PipelineExecutor:
         required_team_id: uuid.UUID | None,
         completed_node_outputs: dict[str, Any] | None = None,
         condition_result: dict[str, Any] | None = None,
+        subject: str | None = None,
     ) -> tuple[str | None, bool]:
         """Create the HITL gate row (or reuse a coalescing open gate).
 
@@ -5359,6 +5372,7 @@ class PipelineExecutor:
                             pipeline_name=pipeline_name,
                             completed_node_outputs=completed_node_outputs,
                             condition_result=condition_result,
+                            subject=subject,
                         )
                 except asyncio.CancelledError:
                     raise
@@ -5427,6 +5441,7 @@ class PipelineExecutor:
         gate_id = gate_payload.get("gate_id", "")
         required_team_id = _interrupt_required_team_id(gate_payload)
         condition_result = _interrupt_condition_result(gate_payload)
+        subject = _interrupt_subject(gate_payload)
         node_token_usage = state.node_token_usage
         broker = ctx.broker
         run_id = ctx.run_id
@@ -5461,6 +5476,7 @@ class PipelineExecutor:
                 required_team_id=required_team_id,
                 completed_node_outputs=ctx.completed_node_outputs,
                 condition_result=condition_result,
+                subject=subject,
             )
             if coalesce_reused:
                 detail = (

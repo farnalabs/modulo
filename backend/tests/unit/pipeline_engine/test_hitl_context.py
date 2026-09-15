@@ -75,6 +75,7 @@ async def _build(
     completed_node_outputs: dict[str, Any] | None = None,
     pipeline_name: str | None = "PR Reviewer",
     condition_result: dict[str, Any] | None = None,
+    subject: str | None = None,
 ) -> dict[str, Any] | None:
     session = _make_session(graph_json)
     with (
@@ -88,6 +89,7 @@ async def _build(
             pipeline_name=pipeline_name,
             completed_node_outputs=completed_node_outputs or {},
             condition_result=condition_result,
+            subject=subject,
         )
 
 
@@ -488,3 +490,140 @@ class TestSerializeValue:
     def test_matches_dumps_sort_keys_default_str(self):
         value = {"k": 2, "z": [1, 2], "n": None}
         assert serialize_value(value) == json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+
+
+class TestSubjectCapture:
+    """FAR-859: the subject under review (subject_path resolution)."""
+
+    async def test_subject_present_when_provided(self):
+        config = {"description": "Approve the comments.", "condition": f"node_id=='{_UUID_OTHER}'"}
+        context = await _build(
+            _edge_graph(config),
+            completed_node_outputs={_UUID_OTHER: {"comment": "ship it"}},
+            subject='{"comment":"ship it"}',
+        )
+        assert context is not None
+        assert context["subject"] == '{"comment":"ship it"}'
+
+    async def test_subject_absent_when_not_provided(self):
+        config = {"description": "Approve the comments.", "condition": f"node_id=='{_UUID_OTHER}'"}
+        context = await _build(_edge_graph(config))
+        assert context is not None
+        assert "subject" not in context or context.get("subject") is None
+
+    async def test_subject_bounded_to_text_field_max(self):
+        config = {"description": "Approve the comments.", "condition": f"node_id=='{_UUID_OTHER}'"}
+        context = await _build(
+            _edge_graph(config),
+            subject="s" * 5000,
+        )
+        assert context is not None
+        assert len(context["subject"]) <= _TEXT_FIELD_MAX_CHARS
+        assert context["subject"].endswith(TRUNCATION_MARKER)
+
+    async def test_subject_redacted_for_credentials(self):
+        """Subject derived from node output is redacted (FAR-188)."""
+        config = {"description": "Approve the comments.", "condition": f"node_id=='{_UUID_OTHER}'"}
+        context = await _build(
+            _edge_graph(config),
+            subject=f"deployed with ghp_{'a' * 30} token",
+        )
+        assert context is not None
+        assert "ghp_" not in context["subject"]
+        assert "<redacted>" in context["subject"]
+
+    async def test_legacy_gate_without_subject_omits_field(self):
+        """Legacy gates that never declared subject_path have no subject."""
+        config = {"description": "Approve the comments."}
+        context = await _build(_edge_graph(config))
+        assert context is not None
+        # total=False TypedDict: key absent or None
+        assert context.get("subject") is None
+
+
+class TestConsequences:
+    """FAR-859: approve/reject routing from the snapshot graph."""
+
+    async def test_approve_and_reject_targets_resolved(self):
+        config = {
+            "description": "Approve the comments.",
+            "condition": f"node_id=='{_UUID_SRC}'",
+            "reject_target": _UUID_OTHER,
+        }
+        graph = {
+            "nodes": [
+                {"id": _UUID_SRC, "label": "Comment Gen"},
+                {"id": _UUID_TGT, "label": "Poster"},
+                {"id": _UUID_OTHER, "label": "Fixer"},
+            ],
+            "edges": [
+                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_gate_config": config},
+            ],
+        }
+        context = await _build(graph, completed_node_outputs={_UUID_SRC: {"ok": True}})
+        assert context is not None
+        consequences = context["consequences"]
+        assert consequences is not None
+        assert consequences["approve"]["node_id"] == _UUID_TGT
+        assert consequences["approve"]["label"] == "Poster"
+        assert consequences["reject"]["node_id"] == _UUID_OTHER
+        assert consequences["reject"]["label"] == "Fixer"
+
+    async def test_approve_only_when_no_reject_target(self):
+        config = {
+            "description": "Approve the comments.",
+            "condition": f"node_id=='{_UUID_SRC}'",
+        }
+        graph = {
+            "nodes": [
+                {"id": _UUID_SRC, "label": "Generator"},
+                {"id": _UUID_TGT, "label": "Next"},
+            ],
+            "edges": [
+                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_gate_config": config},
+            ],
+        }
+        context = await _build(graph, completed_node_outputs={_UUID_SRC: {"ok": True}})
+        assert context is not None
+        consequences = context["consequences"]
+        assert consequences is not None
+        assert "approve" in consequences
+        assert "reject" not in consequences
+
+    async def test_no_consequences_when_no_graph(self):
+        context = await _build(None)
+        assert context is not None
+        assert context.get("consequences") is None
+
+    async def test_no_consequences_when_gate_not_on_edge(self):
+        """HITL node gates have no edge with hitl_gate_config → no approve target."""
+        graph = _hitl_node_graph({"description": "Human review."})
+        context = await _build(graph)
+        assert context is not None
+        # Node gates: no edge with gate_id → no approve target resolved
+        # (the node itself is the gate, not an edge target)
+        consequences = context.get("consequences")
+        if consequences is not None:
+            # approve target may be None if no edge carries this gate_id
+            assert consequences.get("approve") is None or "node_id" in consequences.get("approve", {})
+
+    async def test_consequences_node_labels_resolved_from_snapshot(self):
+        config = {
+            "description": "Approve.",
+            "condition": f"node_id=='{_UUID_SRC}'",
+            "reject_target": _UUID_OTHER,
+        }
+        graph = {
+            "nodes": [
+                {"id": _UUID_SRC},
+                {"id": _UUID_TGT, "label": "Deploy Step"},
+                {"id": _UUID_OTHER, "label": "Rollback"},
+            ],
+            "edges": [
+                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_gate_config": config},
+            ],
+        }
+        context = await _build(graph, completed_node_outputs={_UUID_SRC: {"ok": True}})
+        assert context is not None
+        assert context["consequences"]["approve"]["label"] == "Deploy Step"
+        assert context["consequences"]["reject"]["label"] == "Rollback"

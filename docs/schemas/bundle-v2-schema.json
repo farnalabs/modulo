@@ -198,6 +198,10 @@
                           { "type": "null" },
                           { "type": "string" }
                         ]
+                      },
+                      "subject_path": {
+                        "type": "string",
+                        "description": "JMESPath expression naming the field under review."
                       }
                     },
                     "additionalProperties": false

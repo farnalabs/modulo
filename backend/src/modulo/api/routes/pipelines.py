@@ -1164,6 +1164,14 @@ class HitlGateConfig(BaseModel):
         "If the condition evaluates to true (e.g., score < threshold with operator lt), "
         "the gate fires. If false, execution continues without interrupting.",
     )
+    subject_path: str | None = Field(
+        default=None,
+        max_length=500,
+        description="JMESPath expression naming the field under review in the run "
+        "state.  Resolved against the same root the gate condition evaluates "
+        "against (the merged state dict).  The resolved value is bounded and "
+        "redacted identically to artifacts before persistence.",
+    )
 
     @field_validator("description")
     @classmethod

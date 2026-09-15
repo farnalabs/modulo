@@ -2767,9 +2767,6 @@ elements:
         type: element
         dynamic_testid: false
     /notifications:
-      - testid: notifications-apply-filters
-        type: button
-        dynamic_testid: false
       - testid: notifications-reset-filters
         type: button
         dynamic_testid: false
@@ -3337,6 +3334,12 @@ elements:
         type: element
         dynamic_testid: false
       - testid: hitl-briefing-description-fallback
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-subject
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-consequences
         type: element
         dynamic_testid: false
       - testid: hitl-briefing-details
@@ -3931,6 +3934,12 @@ elements:
         type: element
         dynamic_testid: false
       - testid: hitl-briefing-description-fallback
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-subject
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-consequences
         type: element
         dynamic_testid: false
       - testid: hitl-briefing-details

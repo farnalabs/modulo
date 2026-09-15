@@ -265,7 +265,8 @@ class HITLManager:
                 org_id=org_id,
                 pipeline_id=pipeline_id,
                 run_id=run_id,
-                gate_label=gate_id,
+                gate_label=(gate_config_json or {}).get("label") or gate_id,
+                briefing=context_json,
             )
         except Exception as exc:
             # schedule_hitl_email_dispatch is no-throw by contract; this guard

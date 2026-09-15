@@ -180,4 +180,98 @@ describe('HitlBriefing', () => {
     const wrapper = mount(HitlBriefing, { props: { description: null, context: null } })
     expect(wrapper.find('[data-testid="hitl-briefing-toggle"]').exists()).toBe(false)
   })
+
+  it('renders subject above artifacts as the primary focus (FAR-859)', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: {
+        description: 'Review this PR comment.',
+        context: {
+          ...fullContext,
+          subject: '{"body":"Please review the deploy configuration."}',
+        },
+      },
+    })
+    const subject = wrapper.find('[data-testid="hitl-briefing-subject"]')
+    expect(subject.exists()).toBe(true)
+    expect(subject.text()).toContain('What you are deciding')
+    expect(subject.text()).toContain('{"body":"Please review the deploy configuration."}')
+    // Subject appears before details toggle
+    const toggle = wrapper.find('[data-testid="hitl-briefing-toggle"]')
+    expect(subject.element.compareDocumentPosition(toggle.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('hides subject when context has no subject (FAR-859)', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: { description: 'Why this gate exists.', context: fullContext },
+    })
+    expect(wrapper.find('[data-testid="hitl-briefing-subject"]').exists()).toBe(false)
+  })
+
+  it('renders consequences summary with approve and reject (FAR-859)', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: {
+        description: 'Review this comment.',
+        context: {
+          ...fullContext,
+          consequences: {
+            approve: { node_id: '660e8400-e29b-41d4-a716-446655440001', label: 'Poster' },
+            reject: { node_id: '770e8400-e29b-41d4-a716-446655440002', label: 'Fixer' },
+          },
+        },
+      },
+    })
+    const consequences = wrapper.find('[data-testid="hitl-briefing-consequences"]')
+    expect(consequences.exists()).toBe(true)
+    expect(consequences.text()).toContain('Approve → continues to Poster')
+    expect(consequences.text()).toContain('Reject → routes to Fixer')
+  })
+
+  it('renders consequences with approve only when no reject (FAR-859)', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: {
+        description: 'Review this comment.',
+        context: {
+          ...fullContext,
+          consequences: {
+            approve: { node_id: '660e8400-e29b-41d4-a716-446655440001', label: 'Poster' },
+          },
+        },
+      },
+    })
+    const consequences = wrapper.find('[data-testid="hitl-briefing-consequences"]')
+    expect(consequences.exists()).toBe(true)
+    expect(consequences.text()).toContain('Approve → continues to Poster')
+    expect(consequences.text()).not.toContain('Reject')
+  })
+
+  it('hides consequences when context has none (FAR-859)', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: { description: 'Why this gate exists.', context: fullContext },
+    })
+    expect(wrapper.find('[data-testid="hitl-briefing-consequences"]').exists()).toBe(false)
+  })
+
+  it('shows details toggle when only subject is present (FAR-859)', () => {
+    const wrapper = mount(HitlBriefing, {
+      props: {
+        description: 'Review this.',
+        context: { subject: 'the thing to review' },
+      },
+    })
+    expect(wrapper.find('[data-testid="hitl-briefing-toggle"]').exists()).toBe(true)
+  })
+
+  it('legacy gate without subject/consequences renders unchanged (FAR-859)', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: {
+        description: 'Approve only if the diff is covered by tests.',
+        context: null,
+      },
+    })
+    expect(wrapper.find('[data-testid="hitl-briefing-subject"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="hitl-briefing-consequences"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="hitl-briefing-description"]').text()).toBe(
+      'Approve only if the diff is covered by tests.',
+    )
+  })
 })

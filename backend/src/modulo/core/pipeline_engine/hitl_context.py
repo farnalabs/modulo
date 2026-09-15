@@ -62,7 +62,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
-from modulo.db.crud.hitl_gate_config import config_from_graph, config_from_hitl_nodes, parse_hitl_gate_id
+from modulo.db.crud.hitl_gate_config import (
+    config_from_graph,
+    config_from_hitl_nodes,
+    edge_source_or_target,
+    make_gate_id,
+    parse_hitl_gate_id,
+)
 from modulo.db.crud.run import get_run
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
@@ -119,7 +125,7 @@ class HitlGateConditionResult(TypedDict, total=False):
 
 
 class HitlGateContext(TypedDict, total=False):
-    """The ``hitl_claims.context_json`` briefing bundle (FAR-613/FAR-688).
+    """The ``hitl_claims.context_json`` briefing bundle (FAR-613/FAR-688/FAR-859).
 
     ``total=False``: legacy bundles persisted before a key existed simply omit
     it; readers must tolerate missing members.
@@ -134,6 +140,8 @@ class HitlGateContext(TypedDict, total=False):
     artifacts: list[dict[str, str]]
     reason: str | None
     pipeline_name: str | None
+    subject: str | None
+    consequences: dict[str, Any] | None
 
 
 def serialize_value(value: Any) -> str:
@@ -298,6 +306,7 @@ async def build_hitl_gate_context(
     pipeline_name: str | None,
     completed_node_outputs: dict[str, Any] | None,
     condition_result: dict[str, Any] | None = None,
+    subject: str | None = None,
 ) -> HitlGateContext | None:
     """Build the fire-time briefing bundle for a HITL gate, or ``None``.
 
@@ -307,7 +316,10 @@ async def build_hitl_gate_context(
     briefing of a gate that already fired (the snapshot is the authoritative
     fire-time state). ``condition_result`` (FAR-688) is the matched value the
     gate node evaluated — when present on a condition gate it becomes the
-    bundle's PRIMARY evidence. Any error logs and returns ``None``: a
+    bundle's PRIMARY evidence. ``subject`` (FAR-859) is the pre-resolved
+    value at the gate's ``subject_path`` — the caller resolves it against the
+    run state (the same root the condition evaluates against) so the builder
+    does not need the state dict. Any error logs and returns ``None``: a
     briefing defect must never block the interrupt (failure-isolation
     contract).
     """
@@ -320,6 +332,7 @@ async def build_hitl_gate_context(
             pipeline_name=pipeline_name,
             completed_node_outputs=completed_node_outputs,
             condition_result=condition_result,
+            subject=subject,
         )
     except asyncio.CancelledError:
         raise
@@ -341,6 +354,7 @@ async def _build_context_inner(
     pipeline_name: str | None,
     completed_node_outputs: dict[str, Any] | None,
     condition_result: dict[str, Any] | None,
+    subject: str | None,
 ) -> HitlGateContext | None:
     run = await get_run(session, run_id, organisation_id=org_id)
     if run is None:
@@ -431,6 +445,21 @@ async def _build_context_inner(
                 artifacts.append(_artifact_entry(node_id, output))
 
     label = _snapshot_node_label(graph_json, source_node_id)
+
+    # FAR-859: resolve subject — bounded and redacted identically to artifacts.
+    # The subject is pre-serialised by the caller (node_runner) as a string;
+    # redact and bound without re-serialising to avoid double-quoting.
+    bounded_subject: str | None = None
+    if subject is not None:
+        bounded_subject = _bound_text(sanitize_error_text(subject))
+
+    # FAR-859: resolve consequences — approve/reject routing from the
+    # snapshot graph.  Approve continues to the gate edge's target node;
+    # reject routes to reject_target (when set).
+    consequences: dict[str, Any] | None = None
+    if graph_json is not None:
+        consequences = _resolve_consequences(graph_json, gate_id, config, source_node_id)
+
     return {
         "description": description,
         "condition": condition,
@@ -441,7 +470,61 @@ async def _build_context_inner(
         "artifacts": _bound_artifacts(artifacts),
         "reason": reason,
         "pipeline_name": pipeline_name[:_NAME_FIELD_MAX_CHARS] if pipeline_name else None,
+        "subject": bounded_subject,
+        "consequences": consequences,
     }
+
+
+def _resolve_consequences(
+    graph_json: dict[str, Any],
+    gate_id: str,
+    config: dict[str, Any] | None,
+    source_node_id: str | None,
+) -> dict[str, Any] | None:
+    """Resolve approve/reject consequences from the snapshot graph.
+
+    Approve: the gate edge's ``target_node_id`` (the run continues there).
+    Reject: the gate's ``reject_target`` (only when set).
+
+    Returns ``None`` when neither target can be resolved.
+    """
+    approve_target: str | None = None
+    reject_target: str | None = None
+
+    # Approve: find the edge whose topology-derived gate_id matches and
+    # extract its target.  Uses make_gate_id (topology-based) — the same
+    # derivation the executor stamps at fire time — NOT the config's
+    # gate_id field, which is injected only in compiled graphs.
+    for edge in graph_json.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        source = edge_source_or_target(edge, "source")
+        target = edge_source_or_target(edge, "target")
+        if source is not None and target is not None and make_gate_id(source, target) == gate_id:
+            approve_target = str(target)
+            break
+
+    # Reject: from the gate config's reject_target.
+    if isinstance(config, dict):
+        raw_reject = config.get("reject_target")
+        if raw_reject is not None:
+            reject_target = str(raw_reject)
+
+    if approve_target is None and reject_target is None:
+        return None
+
+    result: dict[str, Any] = {}
+    if approve_target is not None:
+        result["approve"] = {
+            "node_id": approve_target,
+            "label": _snapshot_node_label(graph_json, approve_target),
+        }
+    if reject_target is not None:
+        result["reject"] = {
+            "node_id": reject_target,
+            "label": _snapshot_node_label(graph_json, reject_target),
+        }
+    return result
 
 
 def _snapshot_source_is_hitl_node(graph_json: dict[str, Any] | None, source_node_id: str | None) -> bool:

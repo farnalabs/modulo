@@ -62,13 +62,14 @@ const emit = defineEmits<{
   (e: 'filter', event: unknown): void
 }>()
 
-defineProps<{
+const props = defineProps<{
   options?: unknown[]
   optionLabel?: string
   optionValue?: string
   modelValue?: unknown
   placeholder?: string
   appendTo?: string
+  label?: string
 }>()
 
 const attrs = useAttrs()
@@ -79,9 +80,12 @@ const attrs = useAttrs()
  * bare `v-bind="$attrs"` is invisible to static analysis — SonarCloud's
  * `Web:InputWithoutLabelCheck` only sees attributes written on the element, so
  * the wrapper is flagged as an unlabelled field unless the binding is explicit
- * here. Falls back to a generic name so the control is never unlabelled.
+ * here. An explicit `label` prop takes precedence (mirrors the API the shared
+ * wrapper exposes on `main`); consumers that pass `aria-label` keep working,
+ * and a generic name is used as a last resort so the control is never
+ * unlabelled.
  */
 const resolvedAriaLabel = computed(
-  () => (attrs['aria-label'] as string | undefined) || 'Select',
+  () => props.label || (attrs['aria-label'] as string | undefined) || 'Select',
 )
 </script>

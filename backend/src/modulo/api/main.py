@@ -99,6 +99,7 @@ from modulo.api.routes.node_categories import router as node_categories_router
 from modulo.api.routes.notifications import router as notifications_router
 from modulo.api.routes.observability import router as observability_router
 from modulo.api.routes.onboarding import router as onboarding_router
+from modulo.api.routes.org_login import router as org_login_router
 from modulo.api.routes.org_settings import router as org_settings_router
 from modulo.api.routes.parameter_schemas import router as parameter_schemas_router
 from modulo.api.routes.pipeline_folders import router as pipeline_folders_router
@@ -1094,6 +1095,7 @@ app.include_router(admin_housekeeping_router)
 app.include_router(admin_capacity_router)
 app.include_router(auth_router)
 app.include_router(sso_router)
+app.include_router(org_login_router)
 app.include_router(analytics_router)
 app.include_router(dashboard_router)
 app.include_router(deployment_router)
