@@ -182,6 +182,14 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `connectors/buildkite.feature` into the executing BDD suite
 > (`steps/test_buildkite_connector.py`), shrunk `_ORPHANED_BDD_FEATURES` by one
 > more, and closed `feat-connectors`'s Buildkite per-connector BDD gap
+> (`configure/connectors.md`). A seventh 2026-09-15 walk wired
+> `connectors/circleci.feature`, `connectors/jenkins.feature`,
+> `connectors/teamcity_connector.feature` and
+> `connectors/opsgenie_connector.feature` into the executing BDD suite
+> (`steps/test_circleci_connector.py`, `steps/test_jenkins_connector.py`,
+> `steps/test_teamcity_connector.py`, `steps/test_opsgenie_connector.py`),
+> shrunk `_ORPHANED_BDD_FEATURES` by four, and closed `feat-connectors`'s
+> CircleCI / Jenkins / TeamCity / Opsgenie per-connector BDD gaps
 > (`configure/connectors.md`).
 
 ### Admin
