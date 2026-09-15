@@ -245,7 +245,7 @@ import { ChevronRight, Plus } from '@lucide/vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 
 const planStore = usePlanStore()
 const { t } = useI18n()

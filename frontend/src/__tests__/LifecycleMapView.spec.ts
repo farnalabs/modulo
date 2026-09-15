@@ -21,7 +21,7 @@ vi.mock('../lib/api/formatError', () => ({
 
 import LifecycleMapView from '../views/lifecycle-map/LifecycleMapView.vue'
 import LifecycleMapRenderer from '../components/lifecycle-map/LifecycleMapRenderer.vue'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import { usePlanStore } from '../stores/planStore'
 import { useLifecycleMapsStore } from '../stores/lifecycleMaps'
 

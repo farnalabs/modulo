@@ -92,7 +92,7 @@ import { ref, reactive, computed, watch } from "vue";
 import { api } from "../lib/api/client";
 import { formatApiError } from "../lib/api/formatError";
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from './shared/AppSelect.vue'
 
 export interface NodeCategoryForm {
   name: string;

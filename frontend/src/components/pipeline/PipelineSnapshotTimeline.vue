@@ -111,7 +111,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import Select from 'primevue/select'
+import Select from '../shared/AppSelect.vue'
 import Button from 'primevue/button'
 import LoadingSpinner from '../shared/LoadingSpinner.vue'
 import { formatDateShort } from '../../lib/formatDate'

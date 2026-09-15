@@ -360,7 +360,7 @@ import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import type { JourneySummary } from '../../types/lifecycleMap'
 import type { LifecycleMapStage } from '../../stores/lifecycleMaps'
-import Select from 'primevue/select'
+import Select from '../../components/shared/AppSelect.vue'
 import { formatApiError } from '../../lib/api/formatError'
 
 const route = useRoute()

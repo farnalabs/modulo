@@ -79,7 +79,7 @@ import { reactive, computed, watch } from 'vue'
 import { GraduationCap as GraduationCapIcon } from '@lucide/vue'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../../shared/AppSelect.vue'
 import type { StageType, PipelineSummary } from '../../../types/lifecycleMap'
 
 interface FormModel {

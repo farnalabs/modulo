@@ -249,7 +249,7 @@ import { ChevronRight, Folder, FolderOpen, MoreVertical, X } from '@lucide/vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import Menu from 'primevue/menu'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import PageTabs from "../components/PageTabs.vue"
 
 type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse'] & {

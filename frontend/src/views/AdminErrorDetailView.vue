@@ -235,7 +235,7 @@ import BackLink from '../components/BackLink.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 
 const route = useRoute()
 const router = useRouter()

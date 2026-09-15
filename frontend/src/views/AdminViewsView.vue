@@ -184,7 +184,7 @@ import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort } from '../lib/formatDate'
 import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import TableActions from '../components/shared/TableActions.vue'
 import { ExternalLink } from '@lucide/vue'
 

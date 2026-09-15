@@ -57,7 +57,7 @@ import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
 import { usePlanStore } from "@/stores/planStore";
 import Badge from "primevue/badge";
-import Select from "primevue/select";
+import Select from './shared/AppSelect.vue';
 
 interface SavedView {
   id: string;

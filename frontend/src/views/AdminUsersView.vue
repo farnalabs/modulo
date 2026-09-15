@@ -366,7 +366,7 @@ import { formatDateShort, formatDateShortWithTime, formatRelativeTime } from '..
 import type { components } from '../lib/api/client'
 import { generateStrongPassword } from '../utils/password'
 import { passwordRuleKey, validatePasswordClient } from '../lib/passwordRules'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 
 interface UserItem {
   id: string

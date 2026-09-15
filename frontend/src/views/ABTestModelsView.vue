@@ -308,7 +308,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import Button from 'primevue/button'
 import EmptyState from '../components/shared/EmptyState.vue'
 import Dialog from 'primevue/dialog'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import { formatApiError } from '../lib/api/formatError'
 
 const { t } = useI18n()

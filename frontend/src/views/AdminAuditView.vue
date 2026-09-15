@@ -308,7 +308,7 @@ import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import { formatDateFilename } from '../lib/formatDate'
 import { shortId } from '../utils/format'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import { ChevronDown } from '@lucide/vue'
 
 const { t } = useI18n()

@@ -230,7 +230,7 @@ import HitlGateCard from '../components/hitl/HitlGateCard.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 
 const planStore = usePlanStore()
 const { t } = useI18n()

@@ -345,7 +345,7 @@ describe('FeedbackInboxView', () => {
   })
 
   it('renders the pipeline filter as a PrimeVue Select with the pipeline options (FAR-631 fix)', async () => {
-    // FeedbackInboxView.vue imports Select from 'primevue/select', so the
+    // FeedbackInboxView.vue imports Select from '../components/shared/AppSelect.vue', so the
     // pipeline filter renders as a real PrimeVue Select carrying the pipeline
     // options — not the broken native-select fallback with zero options.
     mockRecords = []

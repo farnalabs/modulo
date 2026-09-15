@@ -66,7 +66,7 @@
 
 <script setup lang="ts">
 import { reactive, watch } from 'vue'
-import Select from 'primevue/select'
+import Select from '../../shared/AppSelect.vue'
 import type { TriggerType, EstimatedFrequency } from '../../../types/lifecycleMap'
 
 interface FormModel {

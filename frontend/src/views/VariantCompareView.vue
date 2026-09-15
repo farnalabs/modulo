@@ -258,7 +258,7 @@ import PageTabs from "../components/PageTabs.vue"
 import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import EmptyState from '../components/shared/EmptyState.vue'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 import { TERMINAL_STATUSES } from '../constants/runStatuses'

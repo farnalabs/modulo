@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../shared/AppSelect.vue'
 import { api } from '../../lib/api/client'
 
 const props = defineProps<{

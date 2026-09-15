@@ -2,7 +2,7 @@
 import { ref, computed } from "vue";
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
-import Select from 'primevue/select'
+import Select from '../../shared/AppSelect.vue'
 import Badge from 'primevue/badge'
 
 interface EvalConfig {
