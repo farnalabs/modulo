@@ -4169,51 +4169,32 @@ async def _validate_mcp_choice_answer(
     org_id: uuid.UUID,
     answer: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Validate a choice answer against the gate's response_contract (FAR-860, MCP).
+    """Validate a HITL answer against the gate's response_contract (FAR-860, MCP).
+
+    Delegates to the shared ``validate_hitl_answer`` helper (MINOR-1) and
+    adapts its ``AnswerValidationError`` (ValueError) to the MCP error-dict
+    format expected by the MCP layer.
 
     Returns the validated answer dict, None when no answer is provided, or an
     MCP error dict when validation fails.
     """
-    if answer is None:
-        return None
-    kind = answer.get("kind")
-    option_id = answer.get("option_id")
-    if not isinstance(kind, str) or not kind:
-        return {"error": "invalid_answer", "detail": "answer must have a non-empty 'kind' string"}
-    if not isinstance(option_id, str) or not option_id:
-        return {"error": "invalid_answer", "detail": "answer must have a non-empty 'option_id' string"}
+    from modulo.api.hitl_answer_validation import (
+        AnswerValidationError as SharedValidationError,
+    )
+    from modulo.api.hitl_answer_validation import (
+        validate_hitl_answer,
+    )
 
-    from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
-
-    config = await resolve_hitl_gate_config(s, run_id=run_id, gate_id=gate_id, org_id=org_id)
-    if config is None:
-        # Config unresolvable: fail-open (legacy gate has no contract).
-        return answer
-    rc = config.get("response_contract")
-    if not isinstance(rc, dict):
-        if kind != "approval":
-            return {
-                "error": "invalid_answer",
-                "detail": (f"gate has no response_contract; answer kind must be 'approval', got {kind!r}"),
-            }
-        return answer
-    declared_kind = rc.get("kind")
-    if kind != declared_kind:
-        return {
-            "error": "invalid_answer",
-            "detail": (f"answer kind {kind!r} does not match gate response_contract kind {declared_kind!r}"),
-        }
-    if kind == "choice":
-        options = rc.get("options")
-        if not isinstance(options, list):
-            return {"error": "invalid_answer", "detail": "gate response_contract has no options"}
-        valid_ids = {opt.get("id") for opt in options if isinstance(opt, dict)}
-        if option_id not in valid_ids:
-            return {
-                "error": "invalid_answer",
-                "detail": (f"option_id {option_id!r} is not a valid option; valid ids: {sorted(valid_ids)}"),
-            }
-    return answer
+    try:
+        return await validate_hitl_answer(
+            s,
+            run_id=run_id,
+            gate_id=gate_id,
+            org_id=org_id,
+            answer=answer,
+        )
+    except SharedValidationError as exc:
+        return {"error": "invalid_answer", "detail": str(exc)}
 
 
 async def _dispatch_hitl_action(

@@ -495,58 +495,34 @@ async def _validate_choice_answer(
     org_id: uuid.UUID,
     answer: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Validate a choice answer against the gate's response_contract.
+    """Validate a HITL answer against the gate's response_contract.
+
+    Delegates to the shared ``validate_hitl_answer`` helper (MINOR-1) and
+    adapts its ``AnswerValidationError`` (ValueError) to the HTTP 422 format
+    expected by the REST layer.
 
     Returns the validated answer dict, or None when no answer is provided.
     Raises ``AnswerValidationError`` (422) when the answer is present but
     invalid: missing ``kind``/``option_id``, unknown kind, or unknown
     option_id.
-
-    The gate's response_contract is resolved from the gate's config
-    (snapshot or live edge). When the config cannot be resolved but the
-    gate fired, validation is skipped (fail-open — the legacy gate has no
-    contract, so any answer is accepted).
     """
-    if answer is None:
-        return None
-    kind = answer.get("kind")
-    option_id = answer.get("option_id")
-    if not isinstance(kind, str) or not kind:
-        raise AnswerValidationError("answer must have a non-empty 'kind' string")
-    if not isinstance(option_id, str) or not option_id:
-        raise AnswerValidationError("answer must have a non-empty 'option_id' string")
-
-    config = await resolve_hitl_gate_config(
-        session,
-        run_id=run_id,
-        gate_id=gate_id,
-        org_id=org_id,
+    from modulo.api.hitl_answer_validation import (
+        AnswerValidationError as SharedValidationError,
     )
-    if config is None:
-        # Config unresolvable (legacy snapshot / graph drift): fail-open.
-        return answer
-    rc = config.get("response_contract")
-    if not isinstance(rc, dict):
-        # No contract declared: the gate is approval-type — any answer is
-        # accepted but the kind must match.
-        if kind != "approval":
-            raise AnswerValidationError(f"gate has no response_contract; answer kind must be 'approval', got {kind!r}")
-        return answer
-    declared_kind = rc.get("kind")
-    if kind != declared_kind:
-        raise AnswerValidationError(
-            f"answer kind {kind!r} does not match gate response_contract kind {declared_kind!r}"
+    from modulo.api.hitl_answer_validation import (
+        validate_hitl_answer,
+    )
+
+    try:
+        return await validate_hitl_answer(
+            session,
+            run_id=run_id,
+            gate_id=gate_id,
+            org_id=org_id,
+            answer=answer,
         )
-    if kind == "choice":
-        options = rc.get("options")
-        if not isinstance(options, list):
-            raise AnswerValidationError("gate response_contract has no options")
-        valid_ids = {opt.get("id") for opt in options if isinstance(opt, dict)}
-        if option_id not in valid_ids:
-            raise AnswerValidationError(
-                f"option_id {option_id!r} is not a valid option for this gate; valid ids: {sorted(valid_ids)}"
-            )
-    return answer
+    except SharedValidationError as exc:
+        raise AnswerValidationError(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

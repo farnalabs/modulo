@@ -3733,11 +3733,20 @@ def _inject_answer_state(
     with ``state["hitl_answer_<gate_id>"]``.
 
     ``gate_result`` is mutated in place (the caller owns the dict).
+
+    Security (MAJOR-2): only ``kind: choice`` answers inject state.
+    Approval answers must NOT inject ``option_id`` into state — doing so
+    would let a downstream conditional edge branch on an attacker-controlled
+    value. The ``kind == "choice"`` check is defence-in-depth; validation
+    already rejects ``option_id`` on non-choice answers.
     """
     if not isinstance(decision, dict):
         return
     answer = decision.get("answer")
     if not isinstance(answer, dict):
+        return
+    # MAJOR-2: only inject for kind=choice — approval answers inject nothing.
+    if answer.get("kind") != "choice":
         return
     option_id = answer.get("option_id")
     if isinstance(option_id, str) and option_id:
