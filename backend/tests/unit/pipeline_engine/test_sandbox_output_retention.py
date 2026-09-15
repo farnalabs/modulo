@@ -1351,6 +1351,83 @@ async def test_streaming_writer_captures_over_cap_stdout_on_success_path(tmp_pat
     assert "stdout_artifact" not in output
 
 
+async def test_streaming_writer_success_path_over_cap_emits_full_artifact(tmp_path):
+    """FAR-844 review fix: on the success path, when the captured stdout exceeds
+    the retention cap (``stdout_truncated`` is True), the streaming writer must
+    store the FULL redacted transcript it was fed during drain — NOT cap its own
+    output at the retention cap and silently drop the tail. The emitted pointer
+    must advertise the writer's REAL truncation state (honest ``truncated`` flag)
+    rather than a hardcoded ``False``.
+
+    The drain window normally equals the retention cap, which keeps the drained
+    content under the cap and makes ``stdout_truncated`` False. This test
+    decouples them (small cap, large drain window) so the over-cap branch is
+    actually exercised: with the bug (writer capped at ``_stdout_cap``) the
+    artifact would hold only ``cap`` bytes and claim ``truncated: False``; the
+    fix keeps the full ``len(over_cap_content)`` bytes and reports ``truncated:
+    False`` honestly (the writer is uncapped)."""
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    cap = 2048  # small retention cap
+    over_cap_content = "y" * 4096  # raw > cap -> stdout_truncated True
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="tail")
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return over_cap_content
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(over_cap_content)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    store = LocalArtifactStore(tmp_path)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        # Shrink only the retention cap; the drain window stays at the import-time
+        # _MAX_DRAIN_WINDOW (512KB), so the full 4096-byte log is drained and the
+        # over-cap branch fires.
+        patch(
+            "modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG",
+            new=cap,
+        ),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["stdout_truncated"] is True
+    # The streaming writer is uncapped: it captured the FULL transcript, not a
+    # 2048-byte truncated head.
+    pointer = output.get("stdout_artifact")
+    assert pointer is not None, "over-cap success path must emit stdout_artifact via the streaming writer"
+    assert pointer["size_bytes"] == 4096, "streaming writer must store the full transcript (not capped)"
+    assert pointer["truncated"] is False, "uncapped writer stores full content -> not truncated"
+    assert pointer["redacted"] is True
+    assert pointer["stream"] == "stdout"
+    assert pointer["compression"] == "zstd"
+    assert pointer["rel_path"].endswith(".zst")
+
+
 async def test_streaming_writer_under_cap_stdout_has_no_pointer(tmp_path):
     """FAR-844: when stdout is UNDER the cap, the streaming writer produces no
     pointer — inline retention is sufficient."""

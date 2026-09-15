@@ -7260,9 +7260,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # FAR-844: streaming artifact writer for incremental stdout capture.
             # Chunks are fed to the writer during drain_sandbox_log(), so the
             # full transcript is persisted to the artifact store without
-            # assembling the entire string in memory. The writer enforces the
-            # byte cap and computes SHA256 incrementally. Uses the same
-            # overflow key pattern as _persist_full_stdout_artifact.
+            # assembling the entire string in memory. The writer computes SHA256
+            # incrementally. It is deliberately UNCAPPED (max_bytes=None): it
+            # must mirror the one-shot _persist_full_stdout_artifact fallback
+            # (which stores the FULL redacted transcript) — the streaming path
+            # is the incremental implementation of that same "keep everything
+            # the drain delivered" contract, NOT the retention-cap truncation
+            # that bounds the inline agent_stdout. Capping it at _stdout_cap
+            # silently dropped the tail of an over-cap redacted stream while the
+            # envelope still advertised truncated=False (FAR-844 review fix).
+            # Uses the same overflow key pattern as _persist_full_stdout_artifact.
             if attempt_key:
                 try:
                     from modulo.core.artifacts.store import get_store as _get_streaming_store
@@ -7276,7 +7283,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         node_id=node_id,
                         attempt_key=_streaming_overflow_key,
                         stream="stdout",
-                        max_bytes=_stdout_cap,
+                        max_bytes=None,
                     )
                     watchdog._streaming_writer = _streaming_writer_instance
                 except Exception:
@@ -8083,13 +8090,18 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 try:
                     _ptr = _streaming_writer_instance.finalize()
                     if _ptr is not None:
+                        # ``truncated`` reflects the streaming writer's ACTUAL
+                        # state (honest notice): the writer is uncapped, so it is
+                        # normally False — but if a future cap is reintroduced or
+                        # the drain fed more than the writer accepted, surface the
+                        # truth rather than advertising a complete artifact.
                         _stdout_artifact = {
                             "rel_path": _ptr.get("rel_path"),
                             "size_bytes": _ptr.get("size_bytes"),
                             "sha256": _ptr.get("sha256"),
                             "stream": "stdout",
                             "compression": _ptr.get("compression"),
-                            "truncated": False,
+                            "truncated": _streaming_writer_instance.truncated,
                             "redacted": True,
                         }
                 except Exception:
@@ -8283,7 +8295,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             "sha256": _ptr.get("sha256"),
                             "stream": "stdout",
                             "compression": _ptr.get("compression"),
-                            "truncated": False,
+                            "truncated": _streaming_writer_instance.truncated,
                             "redacted": True,
                         }
                 except Exception:
