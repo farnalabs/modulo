@@ -992,9 +992,6 @@ elements:
       - testid: admin-audit-target-type
         type: select
         dynamic_testid: false
-      - testid: admin-audit-apply-filters
-        type: button
-        dynamic_testid: false
       - testid: admin-audit-reset
         type: button
         dynamic_testid: false
@@ -1358,6 +1355,9 @@ elements:
         dynamic_testid: false
       - testid: admin-errors-message-truncated
         type: element
+        dynamic_testid: false
+      - testid: admin-errors-reset
+        type: button
         dynamic_testid: false
       - testid: filter-bar-search
         type: input
@@ -1971,9 +1971,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: admin-run-retention-purge
-        type: button
-        dynamic_testid: false
-      - testid: admin-run-retention-apply
         type: button
         dynamic_testid: false
       - testid: admin-run-retention-date-from
