@@ -1639,7 +1639,7 @@ async def test_total_timeout_over_cap_stdout_emits_artifact_pointer(tmp_path):
     assert pointer["rel_path"].endswith(".zst")
 
 
-async def test_far844_exc_path_streaming_writer_finalize_emits_pointer(tmp_path, monkeypatch):
+async def test_far844_exc_path_streaming_writer_finalize_emits_pointer(tmp_path):
     """FAR-844 coverage: on the generic exception path with over-cap stdout,
     the streaming writer (created during drain) is finalised and its pointer is
     attached as _exc_stdout_artifact rather than falling through to the
