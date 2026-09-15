@@ -212,9 +212,25 @@ jobs:
           # renamed-away integration test would otherwise be fed to pytest below
           # and error "file or directory not found" (exit 4). Mirrors the
           # migration-prefix collision check's HEAD-existence guard.
+          #
+          # Keep only pytest-collectable test modules (test_*.py / *_test.py).
+          # Support files under tests/integration/ - conftest.py, __init__.py -
+          # are NOT collectable: passing one to pytest collects 0 tests and it
+          # exits 5 ("no tests collected"), failing the job although nothing is
+          # broken (PR #614 changed only conftest.py). A conftest-only change is
+          # still exercised by the deploy pipeline's pre-deploy integration gate,
+          # which runs the full suite with Docker available.
           : > /tmp/integration-changed.txt
           while IFS= read -r f; do
             [ -z "$f" ] && continue
+            base="${f##*/}"
+            case "$base" in
+              test_*.py|*_test.py) ;;
+              *)
+                echo "  (skip) not a collectable test module: ${f}"
+                continue
+                ;;
+            esac
             if ! git cat-file -e "HEAD:${f}" 2>/dev/null; then
               echo "  (skip) not present in PR tree: ${f}"
               continue
@@ -226,7 +242,7 @@ jobs:
           if [ -n "$CHANGED" ]; then
             echo "Changed integration test files: ${CHANGED}"
           else
-            echo "No integration test files changed - skipping."
+            echo "No collectable integration test modules changed - skipping."
           fi
       - name: Start Postgres (integration dependency)
         if: steps.changed.outputs.changed_files != ''
