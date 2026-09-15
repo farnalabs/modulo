@@ -194,27 +194,65 @@ describe('Sparkline', () => {
   })
 
   it('bumps precision when integer dollar labels all collapse to the same value', () => {
-    // All values round to $0 as integers — collapse detection should add 1 decimal.
+    // Every tick rounds to the same integer ($1) — collapse detection must add
+    // 1 decimal so the axis stays informative.
     const wrapper = mount(Sparkline, {
-      props: { data: [0.3, 0.4, 0.5, 0.6], unit: '$', showYAxis: true },
+      props: { data: [1.1, 1.2, 1.3, 1.4], unit: '$', showYAxis: true },
     })
     const labels = wrapper.findAll('.sparkline-y-label')
     const texts = labels.map(l => l.text())
     // With collapse detection: at least two distinct labels should exist.
     const unique = new Set(texts)
     expect(unique.size).toBeGreaterThan(1)
+    // The bumped labels keep the $ prefix and a single decimal place.
+    texts.forEach(t => {
+      expect(t.startsWith('$')).toBe(true)
+      expect(t.slice(1)).toContain('.')
+    })
   })
 
   it('bumps precision when integer count labels all collapse to the same value', () => {
-    // All values are between 0 and 1 — they all round to 0 as integers.
+    // Every tick rounds to 0 as an integer — collapse detection must add 1 decimal.
     const wrapper = mount(Sparkline, {
-      props: { data: [0.1, 0.3, 0.5, 0.7], showYAxis: true },
+      props: { data: [0.1, 0.2, 0.3, 0.4], showYAxis: true },
     })
     const labels = wrapper.findAll('.sparkline-y-label')
     const texts = labels.map(l => l.text())
     // With collapse detection: at least two distinct labels should exist.
     const unique = new Set(texts)
     expect(unique.size).toBeGreaterThan(1)
+    // The bumped labels carry a single decimal place.
+    texts.forEach(t => expect(t).toContain('.'))
+  })
+
+  it('bumps precision when integer percent labels all collapse to the same value', () => {
+    // Every tick rounds to 50% as an integer — collapse detection must add 1 decimal.
+    const wrapper = mount(Sparkline, {
+      props: { data: [50.1, 50.2, 50.3, 50.4], unit: '%', showYAxis: true },
+    })
+    const labels = wrapper.findAll('.sparkline-y-label')
+    const texts = labels.map(l => l.text())
+    // With collapse detection: at least two distinct labels should exist.
+    const unique = new Set(texts)
+    expect(unique.size).toBeGreaterThan(1)
+    // The bumped labels carry a single decimal place (the % unit is rendered
+    // separately from the numeric label, so the label itself has no suffix).
+    texts.forEach(t => expect(t).toContain('.'))
+  })
+
+  it('bumps precision when sub-dollar labels all collapse to $0.00', () => {
+    // Every tick rounds to $0.00 at 2-decimal precision — collapse detection must
+    // add a 3rd decimal so the axis stays informative.
+    const wrapper = mount(Sparkline, {
+      props: { data: [0.001, 0.002, 0.003, 0.004], unit: '$', showYAxis: true },
+    })
+    const labels = wrapper.findAll('.sparkline-y-label')
+    const texts = labels.map(l => l.text())
+    // With collapse detection: at least two distinct labels should exist.
+    const unique = new Set(texts)
+    expect(unique.size).toBeGreaterThan(1)
+    // No label should be the useless "$0.00" collapse.
+    texts.forEach(t => expect(t).not.toBe('$0.00'))
   })
 
   it('renders x-axis tick marks when showXTicks is enabled and omits them otherwise', () => {
