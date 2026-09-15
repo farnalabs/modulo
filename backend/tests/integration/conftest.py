@@ -44,6 +44,100 @@ os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 BACKEND_ROOT = Path(__file__).parents[2]
 
 
+# ---------------------------------------------------------------------------
+# Docker availability detection — fails the session early when Docker is
+# missing instead of letting every container fixture error individually.
+# ---------------------------------------------------------------------------
+def _docker_available() -> bool:
+    """Return True if Docker is reachable via the testcontainers SDK."""
+    try:
+        from testcontainers.core.docker_client import DockerClient  # type: ignore[import-untyped]
+
+        client = DockerClient()
+        client.client.ping()
+        return True
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).info(
+            "Docker is not available: %s — integration tests will be skipped locally or fail in CI",
+            exc,
+        )
+        return False
+
+
+_DOCKER_AVAILABLE = _docker_available()
+
+# How many integration items were skipped by the collection hook (set by
+# pytest_collection_modifyitems, read by pytest_terminal_summary).
+_skip_count = 0
+
+
+def _ci_env_is_truthy() -> bool:
+    """Return True when the ``CI`` env var is set to a truthy value."""
+    ci = os.environ.get("CI", "").strip().lower()
+    return ci not in ("", "0", "false")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "no_docker(reason): mark test as skipped when Docker is unavailable",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    global _skip_count
+
+    if _DOCKER_AVAILABLE:
+        return
+
+    if _ci_env_is_truthy():
+        pytest.exit(
+            "FATAL: Docker is NOT available in CI — integration coverage cannot be "
+            "silently skipped. Fix the Docker daemon / testcontainers environment.",
+            returncode=1,
+        )
+
+    # Local: skip every integration test loudly.
+    reason = (
+        "SKIPPED: Docker is not available locally — integration tests require "
+        "Docker (Testcontainers). These tests run in CI. "
+        "Install Docker Desktop or start Docker to run integration tests locally."
+    )
+    for item in items:
+        item.add_marker(pytest.mark.skip(reason=reason))
+    _skip_count = len(items)
+
+    border = "=" * 80
+    banner = (
+        f"\n{border}\n"
+        f"  WARNING: Docker is not available — SKIPPING the entire integration "
+        f"test suite ({_skip_count} tests).\n"
+        f"  These tests run in CI.\n"
+        f"{border}\n"
+    )
+    # Write to stderr so it is always visible even with captured output.
+    sys.stderr.write(banner)
+    sys.stderr.flush()
+
+
+def pytest_terminal_summary(
+    terminalreporter: pytest.TerminalReporter,
+    exitstatus: int,
+    config: pytest.Config,
+) -> None:
+    if _skip_count == 0:
+        return
+    terminalreporter.section("Integration suite — Docker unavailable (local)")
+    terminalreporter.write_line(
+        f"  {_skip_count} integration test(s) were SKIPPED because Docker is not "
+        f"available locally. These tests run in CI.\n"
+        f"  To run locally, install Docker Desktop or start the Docker daemon.",
+        yellow=True,
+    )
+
+
 @pytest.fixture(scope="session")
 def session_monkeypatch() -> Generator[pytest.MonkeyPatch, None, None]:
     """Session-scoped monkeypatch so session-scoped fixtures can set env vars.
