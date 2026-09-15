@@ -1,13 +1,25 @@
 <template>
-  <Select
-    v-bind="$attrs"
-    :append-to="appendTo"
-    :aria-label="resolvedAriaLabel"
-  >
-    <template v-for="(_, name) in $slots" #[name]="slotData">
-      <slot :name="name" v-bind="slotData ?? {}" />
-    </template>
-  </Select>
+  <!--
+    Wrap the PrimeVue Select in a <label> so the rendered <input> is
+    statically associated with a label.  PrimeVue's Select renders an
+    <input> internally; without an explicit label association SonarCloud's
+    Web:InputWithoutLabelCheck flags it as an unlabelled field (this is the
+    reliability-rating gate failure on PR #596).  The wrapper itself never
+    renders visible label text, so consumer layout is unchanged — it only
+    satisfies the accessibility/static-analysis requirement.  See
+    AgentRunnerBindings.vue for the same pattern.
+  -->
+  <label>
+    <Select
+      v-bind="$attrs"
+      :append-to="appendTo"
+      :aria-label="resolvedAriaLabel"
+    >
+      <template v-for="(_, name) in $slots" #[name]="slotData">
+        <slot :name="name" v-bind="slotData ?? {}" />
+      </template>
+    </Select>
+  </label>
 </template>
 
 <script setup lang="ts">

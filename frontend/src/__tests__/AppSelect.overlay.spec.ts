@@ -29,6 +29,28 @@ describe('AppSelect', () => {
     })
     expect(wrapper.find('[data-testid="ddi"]').exists()).toBe(true)
   })
+
+  it('uses an explicit label prop as the resolved aria-label on the real Select', () => {
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '', label: 'Priority' },
+    })
+    expect(wrapper.findComponent(Select).props('ariaLabel')).toBe('Priority')
+  })
+
+  it('falls back to an aria-label passed through $attrs when no label prop is given', () => {
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '' },
+      attrs: { 'aria-label': 'Level' },
+    })
+    expect(wrapper.findComponent(Select).props('ariaLabel')).toBe('Level')
+  })
+
+  it('uses the generic default aria-label when neither a label prop nor $attrs aria-label is present', () => {
+    const wrapper = mount(AppSelect, {
+      props: { modelValue: '' },
+    })
+    expect(wrapper.findComponent(Select).props('ariaLabel')).toBe('Select')
+  })
 })
 
 describe('FilterBar select overlay anchoring (FAR-851)', () => {
