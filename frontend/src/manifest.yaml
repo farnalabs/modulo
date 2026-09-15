@@ -1156,6 +1156,12 @@ elements:
       - testid: cost-avg-per-run
         type: element
         dynamic_testid: false
+      - testid: cost-per-successful-run
+        type: element
+        dynamic_testid: false
+      - testid: cost-successful-runs-count
+        type: element
+        dynamic_testid: false
       - testid: cost-total-runs
         type: element
         dynamic_testid: false
