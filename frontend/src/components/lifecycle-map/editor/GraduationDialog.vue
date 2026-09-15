@@ -82,7 +82,7 @@
 import { ref, computed } from 'vue'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../../shared/AppSelect.vue'
 import type { PipelineSummary } from '../../../types/lifecycleMap'
 
 const props = defineProps<{

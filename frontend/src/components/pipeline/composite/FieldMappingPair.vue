@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import type { SchemaField } from '../../../types/pipeline'
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../../shared/AppSelect.vue'
 
 const props = defineProps<{
   sourceFields: SchemaField[]

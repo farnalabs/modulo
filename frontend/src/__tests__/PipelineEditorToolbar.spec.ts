@@ -74,10 +74,14 @@ function mountEditor() {
   })
 }
 
-// Attribute selectors resolve to the component whose ROOT element carries the
-// data-testid; the shared WrapperLike type omits props(), so re-type it here.
+// The shared AppSelect wrapper is a transparent passthrough, so an attribute
+// selector resolves to the WRAPPER whose root element carries the data-testid
+// (AppSelect's root is PrimeVue's Select). Drill into the inner PrimeVue Select
+// to assert the props that actually drive the dropdown (appendTo anchoring,
+// ariaLabel). The shared WrapperLike type omits props(), so re-type it here.
 function componentByTestid(wrapper: VueWrapper, testid: string): { props: (name: string) => unknown } {
-  return wrapper.findComponent(`[data-testid="${testid}"]`) as unknown as { props: (name: string) => unknown }
+  const outer = wrapper.findComponent(`[data-testid="${testid}"]`)
+  return outer.findComponent({ name: 'Select' }) as unknown as { props: (name: string) => unknown }
 }
 
 describe('PipelineEditorView toolbar & fit-on-load', () => {

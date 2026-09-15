@@ -253,7 +253,7 @@
 
 <script setup lang="ts">
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from './shared/AppSelect.vue'
 
 interface SsoFormState {
   provider_type: string;

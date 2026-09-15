@@ -244,7 +244,7 @@ import Card from 'primevue/card'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { formatMoney } from '../lib/money'
 

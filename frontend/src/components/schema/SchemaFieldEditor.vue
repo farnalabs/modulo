@@ -112,7 +112,7 @@
 
 <script setup lang="ts">
 import type { SchemaField } from '../../utils/schema-definition'
-import Select from 'primevue/select'
+import Select from '../shared/AppSelect.vue'
 import { ChevronUp, ChevronDown, Trash2 } from '@lucide/vue'
 
 const field = defineModel<SchemaField>('field', { required: true })

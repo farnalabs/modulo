@@ -225,7 +225,7 @@ import FormDialog from '../components/shared/FormDialog.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 
 const planStore = usePlanStore()
 const { t } = useI18n()

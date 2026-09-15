@@ -1298,7 +1298,7 @@ import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 
 function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000): Promise<T> {
   const ctrl = new AbortController()

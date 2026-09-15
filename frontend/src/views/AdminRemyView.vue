@@ -683,7 +683,7 @@ import FeatureGate from '../components/FeatureGate.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
 import AccessEntitySelector from '../components/remy/AccessEntitySelector.vue'
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import type { SkillItem } from '../types/remy'
 import { useI18n } from 'vue-i18n'
 

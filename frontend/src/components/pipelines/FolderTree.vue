@@ -187,7 +187,7 @@ import { formatApiError } from '../../lib/api/formatError'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
-import Select from 'primevue/select'
+import Select from '../shared/AppSelect.vue'
 
 interface FolderItem {
   id: string

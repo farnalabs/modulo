@@ -12,7 +12,7 @@ vi.mock('../lib/api/client', () => ({
   getAuthHeaders: vi.fn().mockReturnValue({}),
 }))
 
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 
 import AdminRunRetentionView from '../views/AdminRunRetentionView.vue'
 import { api } from '../lib/api/client'

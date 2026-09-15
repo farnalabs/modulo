@@ -256,7 +256,7 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
 import Button from 'primevue/button'
 import FormDialog from '../components/shared/FormDialog.vue'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import { formatDateShort } from '../lib/formatDate'
 
 const planStore = usePlanStore()

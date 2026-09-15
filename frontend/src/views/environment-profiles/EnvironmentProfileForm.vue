@@ -181,7 +181,7 @@ import { useI18n } from 'vue-i18n'
 import { useEnvironmentProfilesStore } from '../../stores/environmentProfiles'
 import { runnerTierForProvider, runnerTierLabelKey } from '../../lib/runnerTiers'
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../../components/shared/AppSelect.vue'
 
 const props = defineProps<{
   profileId?: string

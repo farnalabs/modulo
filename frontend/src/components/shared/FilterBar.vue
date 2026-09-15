@@ -22,7 +22,7 @@
   v-for="filter in selectFilters"
   :key="filter.key"
   :model-value="(filterValues[filter.key] ?? '') || ALL_VALUE"
-  @update:model-value="(val: string | number | null) => $emit('update:filter', filter.key, val === ALL_VALUE ? '' : String(val))"
+  @update:model-value="(val: unknown) => $emit('update:filter', filter.key, val === ALL_VALUE ? '' : String(val))"
   :placeholder="filter.label"
   :data-testid="`filter-bar-${filter.key}`"
   class="w-full sm:w-auto sm:min-w-[140px]"

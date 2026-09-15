@@ -21,7 +21,7 @@ vi.mock('../lib/api/formatError', () => ({
 
 import LifecycleMapView from '../views/lifecycle-map/LifecycleMapView.vue'
 import LifecycleMapRenderer from '../components/lifecycle-map/LifecycleMapRenderer.vue'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import { usePlanStore } from '../stores/planStore'
 import { useLifecycleMapsStore } from '../stores/lifecycleMaps'
 
@@ -434,7 +434,12 @@ describe('LifecycleMapView work-items toggle and filters (FAR-742)', () => {
   }
 
   function findSelectByTestId(wrapper: ReturnType<typeof mountView>, testId: string) {
-    return wrapper.findAllComponents(Select).find((s) => s.attributes('data-testid') === testId)
+    // AppSelect forwards `data-testid` to the inner PrimeVue Select (its own
+    // root is the accessibility <label> wrapper), so match on the rendered
+    // subtree rather than the wrapper component's root attributes.
+    return wrapper
+      .findAllComponents(Select)
+      .find((s) => s.find(`[data-testid="${testId}"]`).exists())
   }
 
   it('flag on, checkbox unchecked (default): no journeys fetch, no journey UI', async () => {

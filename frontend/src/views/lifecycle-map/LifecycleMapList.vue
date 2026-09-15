@@ -206,7 +206,7 @@ import type { LifecycleMapSummary } from '../../stores/lifecycleMaps'
 import { formatDateShort } from '../../lib/formatDate'
 import { useApi } from '../../composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
-import Select from 'primevue/select'
+import Select from '../../components/shared/AppSelect.vue'
 
 const router = useRouter()
 const route = useRoute()

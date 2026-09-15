@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../../shared/AppSelect.vue'
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort, ParameterPortType } from "../../../types/pipeline";
 

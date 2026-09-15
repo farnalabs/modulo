@@ -284,7 +284,7 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { Pencil, Trash2 } from '@lucide/vue'
 import { api } from '../lib/api/client'

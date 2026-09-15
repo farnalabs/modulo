@@ -285,7 +285,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import Button from 'primevue/button'
-import Select from 'primevue/select'
+import Select from '../components/shared/AppSelect.vue'
 import TableActions from '../components/shared/TableActions.vue'
 import RestConnectorConfigForm, {
   AUTH_MODE_OPTIONS,
