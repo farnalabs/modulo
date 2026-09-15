@@ -893,6 +893,9 @@ elements:
       - testid: dashboard-stats-card
         type: element
         dynamic_testid: false
+      - testid: dashboard-run-activity
+        type: element
+        dynamic_testid: false
       - testid: notifications-panel-toggle
         type: button
         dynamic_testid: false
