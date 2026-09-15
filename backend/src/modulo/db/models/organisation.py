@@ -3,19 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import (
-    JSON,
-    Boolean,
-    CheckConstraint,
-    DateTime,
-    Index,
-    Integer,
-    Numeric,
-    String,
-    Uuid,
-    func,
-    text,
-)
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Index, Integer, Numeric, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -70,15 +58,8 @@ class Organisation(Base):
         DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # created_by is intentionally NOT an FK: the first organisation must exist
-    # before its first user, so the reference cannot be enforced. Migration
-    # 0239_revert_organisations_audit_drift dropped the fk_organisations_created_by
-    # FK that 0236 briefly added. The audit columns 0233 added
-    # (updated_at/updated_by/deleted_by) were reverted by 0239 as spurious drift
-    # (the Organisation ORM never read them) — keep the model in lockstep with
-    # the migrated schema so ORM loads of organisations do not SELECT columns the
-    # DB no longer owns.
-    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    # This is deliberately not an FK: the first organisation must exist before its first user.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid())
     settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     otel_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     plan_id: Mapped[str | None] = mapped_column(String(255))

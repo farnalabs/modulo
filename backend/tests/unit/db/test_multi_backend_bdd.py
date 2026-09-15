@@ -584,27 +584,20 @@ class TestRegisterTenantFilter:
 
 
 class TestOrganisationRootEntityModel:
-    """Organisation is the root tenant entity — ``created_by`` is a plain nullable
-    column (NOT a foreign key): the first org is bootstrapped with
-    ``created_by=NULL`` and no ``accounts`` row exists to reference yet, so the
-    column cannot carry an FK. Migration 0239_revert_organisations_audit_drift
-    dropped the ``fk_organisations_created_by`` FK (and the 0233 audit columns
-    updated_at/updated_by/deleted_by) that 0236 briefly added, because the
-    Organisation ORM never declared them and no application code uses them — the
-    ORM metadata stays in lockstep with the migrated schema. The model carries no
-    ``organisation_id`` column so the tenant filter / RLS never scopes it (mirrors
-    ``test_rls_coverage.py``'s only-exclusion)."""
+    """Organisation is the root tenant entity — ``created_by`` is nullable and
+    deliberately NOT an FK (the first org must exist before its first user),
+    and the model carries no ``organisation_id`` column so the tenant filter /
+    RLS never scopes it (mirrors ``test_rls_coverage.py``'s only-exclusion)."""
 
-    def test_created_by_column_is_nullable(self) -> None:
+    def test_created_by_column_is_nullable_and_not_fk(self) -> None:
+        from sqlalchemy import ForeignKey
+
         from modulo.db.models.organisation import Organisation
 
         column = Organisation.__table__.c.created_by
         assert column.nullable is True, "created_by must be nullable for org bootstrap"
-        # Post-0239: created_by is intentionally NOT a foreign key. The
-        # fk_organisations_created_by FK was reverted as spurious schema drift.
-        assert not column.foreign_keys, (
-            "created_by must NOT be a foreign key post-0239: the FK was reverted "
-            "because the Organisation ORM never declared it"
+        assert not any(isinstance(fk, ForeignKey) for fk in column.foreign_keys), (
+            "created_by must NOT be a foreign key — the first org is created before its first user exists"
         )
 
     def test_created_by_defaults_to_none_for_bootstrap_org(self) -> None:
