@@ -1763,7 +1763,8 @@ def _compute_log_totals(
 
     Legacy inner-output envelopes carry ``agent_stdout`` / ``agent_stderr`` but
     NOT ``stdout_length`` -- the fallback derives the length from the inline
-    content in that case.
+    content in that case.  A null inline value contributes 0 rather than the
+    literal ``"None"`` (``str(None)`` would otherwise add phantom characters).
     """
     stdout_total = 0
     stderr_total = 0
@@ -1776,17 +1777,17 @@ def _compute_log_totals(
             if stdout_len is not None:
                 stdout_total += int(stdout_len or 0)
             elif "agent_stdout" in tele:
-                stdout_total += len(str(tele["agent_stdout"]))
+                stdout_total += len(str(tele["agent_stdout"] or ""))
             if stderr_len is not None:
                 stderr_total += int(stderr_len or 0)
             elif "agent_stderr" in tele:
-                stderr_total += len(str(tele["agent_stderr"]))
+                stderr_total += len(str(tele["agent_stderr"] or ""))
         else:
             # No telemetry: derive from inline content length.
             out = (normalized_outputs or {}).get(node_id)
             if isinstance(out, dict):
-                stdout_total += len(str(out.get("agent_stdout", "")))
-                stderr_total += len(str(out.get("agent_stderr", "")))
+                stdout_total += len(str(out.get("agent_stdout") or ""))
+                stderr_total += len(str(out.get("agent_stderr") or ""))
             elif isinstance(out, str):
                 stdout_total += len(out)
     return stdout_total, stderr_total

@@ -414,3 +414,36 @@ class TestIoLogTotals:
         # agent_stdout or stdout_length, so it contributes 0.  New node:
         # stdout_length = 200_000 is the true pre-truncation count.
         assert body["stdout_total_length"] == 200_000
+
+    def test_total_length_ignores_null_telemetry_inline_values(
+        self, client: TestClient, mock_session: AsyncMock
+    ) -> None:
+        """A null inline telemetry value contributes 0, not ``len("None")``."""
+        run = _make_run(
+            outputs_json={"node1": {"result": "ok"}},
+            node_telemetry_json={
+                "node1": {
+                    "status": "completed",
+                    # No stdout_length / stderr_length -> inline fallback.
+                    "agent_stdout": None,
+                    "agent_stderr": None,
+                }
+            },
+        )
+
+        body = self._get_io(client, run)
+
+        assert body["stdout_total_length"] == 0
+        assert body["stderr_total_length"] == 0
+
+    def test_total_length_ignores_null_legacy_inline_values(self, client: TestClient, mock_session: AsyncMock) -> None:
+        """A legacy dict output with null inline logs contributes 0, not ``len("None")``."""
+        run = _make_run(
+            outputs_json={"legacy-node": {"agent_stdout": None, "agent_stderr": None}},
+            node_telemetry_json=None,
+        )
+
+        body = self._get_io(client, run)
+
+        assert body["stdout_total_length"] == 0
+        assert body["stderr_total_length"] == 0
