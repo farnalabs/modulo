@@ -534,17 +534,57 @@
                   </p>
                 </div>
                 <div v-if="getNodeLog(node.name, 'agent_stdout')" class="rounded-lg border bg-muted p-4">
-                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.agent_stdout') }}</h4>
-                  <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stdout') }}</code></pre>
-                  <p v-if="isNodeLogTruncated(node.name, 'agent_stdout')" class="mt-1 text-xs text-muted-foreground">
-                    {{ $t('views.RunDetailView.log_truncated', { count: MAX_LOG_CHARS.toLocaleString() }) }}
+                  <div class="mb-2 flex flex-wrap items-center gap-2">
+                    <h4 class="text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.agent_stdout') }}</h4>
+                    <label class="inline-flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
+                      <input
+                        type="checkbox"
+                        :checked="prettyPrintLogs"
+                        class="h-3 w-3 rounded border-muted-foreground/30"
+                        data-testid="run-detail-pretty-print"
+                        :aria-label="$t('views.RunDetailView.pretty_print_toggle')"
+                        @change="prettyPrintLogs = !prettyPrintLogs"
+                      />
+                      {{ $t('views.RunDetailView.pretty_print') }}
+                    </label>
+                    <label
+                      v-if="hasAnsiSequences(getNodeLog(node.name, 'agent_stdout') ?? '')"
+                      class="inline-flex items-center gap-1 text-xs text-muted-foreground cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        :checked="stripAnsiLogs"
+                        class="h-3 w-3 rounded border-muted-foreground/30"
+                        data-testid="run-detail-strip-ansi"
+                        :aria-label="$t('views.RunDetailView.strip_ansi_toggle')"
+                        @change="stripAnsiLogs = !stripAnsiLogs"
+                      />
+                      {{ $t('views.RunDetailView.strip_ansi') }}
+                    </label>
+                  </div>
+                  <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLogTransformed(node.name, 'agent_stdout') }}</code></pre>
+                  <p v-if="isNodeLogTruncated(node.name, 'agent_stdout')" class="mt-1 text-xs text-muted-foreground" data-testid="run-detail-log-truncated-stdout">
+                    {{ $t('views.RunDetailView.log_truncated_shown_of', { shown: MAX_LOG_CHARS.toLocaleString(), total: rawLogLength(node.name, 'agent_stdout').toLocaleString() }) }}
                   </p>
                 </div>
                 <div v-if="getNodeLog(node.name, 'agent_stderr')" class="rounded-lg border bg-destructive/10 p-4">
-                  <h4 class="mb-2 text-xs font-semibold text-destructive">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
-                  <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stderr') }}</code></pre>
-                  <p v-if="isNodeLogTruncated(node.name, 'agent_stderr')" class="mt-1 text-xs text-muted-foreground">
-                    {{ $t('views.RunDetailView.log_truncated', { count: MAX_LOG_CHARS.toLocaleString() }) }}
+                  <div class="mb-2 flex flex-wrap items-center gap-2">
+                    <h4 class="text-xs font-semibold text-destructive">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
+                    <label class="inline-flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
+                      <input
+                        type="checkbox"
+                        :checked="prettyPrintLogs"
+                        class="h-3 w-3 rounded border-muted-foreground/30"
+                        data-testid="run-detail-pretty-print-stderr"
+                        :aria-label="$t('views.RunDetailView.pretty_print_toggle')"
+                        @change="prettyPrintLogs = !prettyPrintLogs"
+                      />
+                      {{ $t('views.RunDetailView.pretty_print') }}
+                    </label>
+                  </div>
+                  <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLogTransformed(node.name, 'agent_stderr') }}</code></pre>
+                  <p v-if="isNodeLogTruncated(node.name, 'agent_stderr')" class="mt-1 text-xs text-muted-foreground" data-testid="run-detail-log-truncated-stderr">
+                    {{ $t('views.RunDetailView.log_truncated_shown_of', { shown: MAX_LOG_CHARS.toLocaleString(), total: rawLogLength(node.name, 'agent_stderr').toLocaleString() }) }}
                   </p>
                 </div>
                 <!-- FAR-582: full-log artifact download links -->
@@ -555,6 +595,9 @@
                   aria-live="polite"
                 >
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.full_logs') }}</h4>
+                  <p v-if="isNodeLogTruncated(node.name, 'agent_stdout') || isNodeLogTruncated(node.name, 'agent_stderr')" class="mb-2 text-xs text-primary font-medium">
+                    {{ $t('views.RunDetailView.full_log_download_hint') }}
+                  </p>
                   <ul class="flex flex-wrap gap-2">
                     <li v-for="art in nodeArtifactMap[node.name]" :key="art.attempt_key + art.stream">
                       <a
@@ -609,8 +652,16 @@
           <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.total_run_cost') }}</h2>
           <span class="text-2xl font-semibold tabular-nums">{{ formatMoney(Number(formattedCost), currencyCode, 6) }}</span>
         </div>
-        <p v-if="totalTokens != null" class="mt-1 text-xs text-muted-foreground">
-          {{ $t('views.RunDetailView.total_tokens', { count: totalTokens.toLocaleString() }) }}
+        <p v-if="totalTokens != null || costBasisTokens != null" class="mt-1 text-xs text-muted-foreground">
+          <template v-if="nodesReportedTokens && (totalTokens ?? 0) > 0">
+            {{ $t('views.RunDetailView.total_tokens_node_reported', { count: (totalTokens ?? 0).toLocaleString() }) }}
+          </template>
+          <template v-else-if="!nodesReportedTokens && costBasisTokens != null && costBasisTokens > 0">
+            {{ $t('views.RunDetailView.total_tokens_not_reported_by_nodes', { count: costBasisTokens.toLocaleString() }) }}
+          </template>
+          <template v-else-if="totalTokens != null">
+            {{ $t('views.RunDetailView.total_tokens', { count: totalTokens.toLocaleString() }) }}
+          </template>
         </p>
 
         <div
@@ -641,14 +692,18 @@
                 <tr v-for="entry in breakdownEntries" :key="entry.component" class="border-b last:border-b-0">
                   <td class="py-2 pr-4 font-medium">
                     {{ entry.display_name || entry.component }}
-                    <span v-if="entry.missing_self_report" class="ml-1 inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground" data-testid="run-detail-not-reported">{{ $t('views.RunDetailView.not_reported') }}</span>
                     <span v-if="entry.error" class="ml-1 inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning">{{ $t('views.RunDetailView.eval_error_badge') }}</span>
                   </td>
                   <td class="py-2 pr-4 tabular-nums">{{ entry.missing_self_report ? '—' : formatMoney(Number(entry.amountUsd), currencyCode, 6) }}</td>
                   <td class="py-2 pr-4">
-                    <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs" :class="entry.source === 'self_reported' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
-                      {{ entry.source === 'self_reported' ? $t('views.RunDetailView.reported') : $t('views.RunDetailView.estimated') }}
-                    </span>
+                    <template v-if="entry.missing_self_report">
+                      <span class="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground" data-testid="run-detail-not-reported">{{ $t('views.RunDetailView.not_reported') }}</span>
+                    </template>
+                    <template v-else>
+                      <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs" :class="entry.source === 'self_reported' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
+                        {{ entry.source === 'self_reported' ? $t('views.RunDetailView.reported') : $t('views.RunDetailView.estimated') }}
+                      </span>
+                    </template>
                   </td>
                   <td class="py-2 text-xs text-muted-foreground">{{ entry.basisLine }}</td>
                 </tr>
@@ -765,6 +820,7 @@ import { requestRunCancellation, requestRunRerun } from '../lib/api/runs'
 import { isTerminalStatus } from '../constants/runStatuses'
 import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
+import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 import { Check, X, AlertTriangle, RotateCcw, Download } from '@lucide/vue'
@@ -889,6 +945,10 @@ const overrideMessage = ref<{ type: string; text: string } | null>(null)
 // (FAR-123 delivers the full truncation UX later.)
 const MAX_LOG_CHARS = 20000
 
+// ── Log display toggles (FAR-849) ──────────────────────────────────
+const prettyPrintLogs = ref(false)
+const stripAnsiLogs = ref(false)
+
 const { isOperator: isOrgOperator } = useCurrentUser()
 
 const isGuardrailBlocked = computed(() =>
@@ -990,7 +1050,11 @@ const shareSummary = computed(() => {
   if (!r) return ''
   const completed = nodeEntries.value.filter(n => n.status === 'complete').length
   const total = nodeEntries.value.length
-  const tokens = totalTokens.value?.toLocaleString() ?? '—'
+  const tokens = nodesReportedTokens.value
+    ? `${(totalTokens.value ?? 0).toLocaleString()} (node-reported)`
+    : costBasisTokens.value != null
+      ? `${costBasisTokens.value.toLocaleString()} (cost basis)`
+      : (totalTokens.value?.toLocaleString() ?? '—')
   const cost = r.total_cost_usd != null ? formatMoney(Number(r.total_cost_usd), currencyCode.value, 6) : '—'
   const runNumber = r.run_number != null ? `#${r.run_number}` : shortId(r.run_id)
   return [
@@ -1287,6 +1351,30 @@ function isNodeLogTruncated(nodeName: string, field: string): boolean {
   return typeof val === 'string' && val.length > MAX_LOG_CHARS
 }
 
+function rawLogLength(nodeName: string, field: string): number {
+  const nodeTelemetry = nodeTelemetryFor(nodeName)
+  const val = nodeTelemetry?.[field]
+  return typeof val === 'string' ? val.length : 0
+}
+
+// ── Log pretty-print transform (FAR-849) ───────────────────────────
+// Unescapes literal \n/\t sequences, pretty-prints JSON, and renders
+// tool-use blocks readably. Returns an object with rendered HTML and
+// whether any transformation was applied.
+
+function getNodeLogTransformed(nodeName: string, field: string): string | null {
+  const raw = getNodeLog(nodeName, field)
+  if (!raw) return null
+  let result = raw
+  if (stripAnsiLogs.value) {
+    result = stripAnsi(result)
+  }
+  if (prettyPrintLogs.value) {
+    result = prettyPrintLog(result).html
+  }
+  return result
+}
+
 function nodeTelemetryFor(nodeName: string): Record<string, unknown> | null {
   const telemetry = runIO.value?.node_telemetry as Record<string, unknown> | null ?? {}
   const entry = telemetry[nodeName]
@@ -1354,6 +1442,26 @@ const totalTokens = computed(() => {
   if (!run.value?.node_token_usage) return null
   const ntu = run.value.node_token_usage as Record<string, NodeTokenUsage>
   return Object.values(ntu).reduce((sum, n) => sum + (n.total_tokens ?? 0), 0)
+})
+
+// Tokens reported in the cost breakdown basis (from the cost system, not per-node telemetry)
+const costBasisTokens = computed(() => {
+  const entries = breakdownRaw.value
+  for (const entry of entries) {
+    const basis = entry.basis
+    if (basis && typeof basis === 'object') {
+      const reported = basis.tokens_total_reported ?? basis.tokens_input_reported
+      if (typeof reported === 'number' && reported > 0) return reported
+    }
+  }
+  return null
+})
+
+// Whether nodes actually reported per-node token usage
+const nodesReportedTokens = computed(() => {
+  if (!run.value?.node_token_usage) return false
+  const ntu = run.value.node_token_usage as Record<string, NodeTokenUsage>
+  return Object.values(ntu).some(n => (n.total_tokens ?? 0) > 0 || (n.input_tokens ?? 0) > 0 || (n.output_tokens ?? 0) > 0)
 })
 
 const formattedCost = computed(() => {

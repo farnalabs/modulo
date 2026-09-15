@@ -3420,6 +3420,21 @@ elements:
       - testid: run-detail-live-output
         type: element
         dynamic_testid: false
+      - testid: run-detail-pretty-print
+        type: checkbox
+        dynamic_testid: false
+      - testid: run-detail-strip-ansi
+        type: checkbox
+        dynamic_testid: false
+      - testid: run-detail-pretty-print-stderr
+        type: checkbox
+        dynamic_testid: false
+      - testid: run-detail-log-truncated-stdout
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-log-truncated-stderr
+        type: element
+        dynamic_testid: false
       - testid: run-detail-node-telemetry
         type: element
         dynamic_testid: false

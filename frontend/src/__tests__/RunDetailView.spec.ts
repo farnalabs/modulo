@@ -1505,6 +1505,63 @@ describe('RunDetailView', () => {
     expect(strip.findAll('button').length).toBe(3)
     wrapper.unmount()
   })
+
+  // ── FAR-849: badge logic prove-the-fix ────────────────────────────────
+  it('does NOT show a "reported" source badge when missing_self_report is true (contradictory badges)', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        {
+          component: 'model_cost',
+          display_name: 'Model cost (self-reported)',
+          source: 'self_reported',
+          amount_usd: '0.000000',
+          missing_self_report: true,
+        },
+      ],
+    })
+
+    // The "not reported" badge must be in the source column.
+    const notReportedBadge = wrapper.find('[data-testid="run-detail-not-reported"]')
+    expect(notReportedBadge.exists()).toBe(true)
+    expect(notReportedBadge.text()).toContain('not reported')
+
+    // The "reported" source badge (bg-primary/10) must NOT appear in this row.
+    const rows = wrapper.findAll('tbody tr')
+    const targetRow = rows.find((r: any) => r.text().includes('Model cost'))!
+    expect(targetRow.exists()).toBe(true)
+    // Should NOT have the primary "reported" badge (only the muted "not reported")
+    const reportedBadge = targetRow.find('.bg-primary\\/10')
+    expect(reportedBadge.exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows "reported" source badge when missing_self_report is false and source is self_reported', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        {
+          component: 'model_cost',
+          display_name: 'Model cost',
+          source: 'self_reported',
+          amount_usd: '0.500000',
+          missing_self_report: false,
+          basis: { tokens_total_reported: 1000 },
+        },
+      ],
+    })
+
+    const rows = wrapper.findAll('tbody tr')
+    const targetRow = rows.find((r: any) => r.text().includes('Model cost'))!
+    expect(targetRow.exists()).toBe(true)
+    // Should have the primary "reported" badge
+    const reportedBadge = targetRow.find('.bg-primary\\/10')
+    expect(reportedBadge.exists()).toBe(true)
+    // Should NOT contain the "not reported" badge
+    const notReportedBadge = wrapper.find('[data-testid="run-detail-not-reported"]')
+    expect(notReportedBadge.exists()).toBe(false)
+    wrapper.unmount()
+  })
 })
 
 // Module-level helpers for the appended describe blocks below (the original
@@ -2002,7 +2059,8 @@ describe('RunDetailView rendering extras', () => {
     await wrapper.find('[data-testid="run-detail-toggle-logs"]').trigger('click')
     await nextTick()
     const logRow = wrapper.find('[data-testid="run-detail-log-row"]')
-    expect(logRow.text()).toContain('Log truncated')
+    expect(logRow.text()).toContain('Showing 20,000 of 20,001')
+    expect(logRow.text()).toContain('Full log available')
     wrapper.unmount()
   })
 
