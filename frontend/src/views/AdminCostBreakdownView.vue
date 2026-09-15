@@ -15,7 +15,7 @@
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
 
       <template v-else>
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Card>
             <template #title><span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend_this_month') }}</span></template>
             <template #content>
@@ -26,6 +26,18 @@
             <template #title><span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.avg_cost_per_run') }}</span></template>
             <template #content>
               <p class="text-2xl font-semibold tabular-nums" data-testid="cost-avg-per-run">{{ formatMoney(avgCostPerRun, currencyCode) }}</p>
+            </template>
+          </Card>
+          <Card>
+            <template #title><span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.cost_per_successful_run') }}</span></template>
+            <template #content>
+              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-per-successful-run">
+                <template v-if="successfulRuns > 0">{{ formatMoney(costPerSuccessfulRun, currencyCode) }}</template>
+                <template v-else>—</template>
+              </p>
+              <p class="mt-1 text-xs text-muted-foreground" data-testid="cost-successful-runs-count">
+                {{ successfulRuns > 0 ? $t('views.AdminCostBreakdownView.successful_runs_count', { count: successfulRuns }) : $t('views.AdminCostBreakdownView.no_successful_runs') }}
+              </p>
             </template>
           </Card>
           <Card>
@@ -198,6 +210,49 @@ const totalRuns = computed(() => {
 })
 const avgCostPerRun = computed(() => totalRuns.value > 0 ? totalSpend.value / totalRuns.value : 0)
 
+// Cost per successful run — derived from the existing analytics buckets endpoint.
+// Each bucket carries `count` (total runs) and `success_rate` (complete / count).
+// Summing count * success_rate across all day-buckets for the period gives the
+// total successful-run count. No new backend endpoint needed.
+interface AnalyticsBucket {
+  date: string
+  count: number
+  success_rate: number | null
+  total_cost_usd: number | null
+}
+
+interface AnalyticsResponse {
+  buckets: AnalyticsBucket[]
+}
+
+const successfulRuns = ref(0)
+
+async function loadSuccessCount() {
+  try {
+    const now = new Date()
+    const dateFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+    const dateTo = now.toISOString().slice(0, 10)
+
+    const { data: analyticsData, error: analyticsErr } = await (api as any).GET('/api/v1/analytics/query', {
+      params: { query: { group_by: 'day', date_from: dateFrom, date_to: dateTo } },
+    })
+    if (!analyticsErr && analyticsData) {
+      const resp = analyticsData as AnalyticsResponse
+      successfulRuns.value = resp.buckets.reduce((sum: number, b: AnalyticsBucket) => {
+        if (b.success_rate != null) {
+          return sum + Math.round(b.count * b.success_rate)
+        }
+        return sum
+      }, 0)
+    }
+  } catch {
+    // Analytics endpoint may lack permission — degrade gracefully to 0.
+    successfulRuns.value = 0
+  }
+}
+
+const costPerSuccessfulRun = computed(() => successfulRuns.value > 0 ? totalSpend.value / successfulRuns.value : 0)
+
 const activeAnomalies = computed(() => anomalies.value.filter((a) => !a.dismissed))
 const dismissedAnomalies = computed(() => anomalies.value.filter((a) => a.dismissed))
 
@@ -235,6 +290,7 @@ async function dismissAnomaly(id: string) {
 onMounted(() => {
   planStore.fetchPlan()
   loadData()
+  loadSuccessCount()
   loadAnomalies()
   loadCurrency()
 })
