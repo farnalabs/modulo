@@ -43,7 +43,9 @@ class TestCreateGateEmailHook:
                 pipeline_id=_PIPELINE,
                 org_id=_ORG,
             )
-        mock_schedule.assert_called_once_with(org_id=_ORG, pipeline_id=_PIPELINE, run_id=_RUN, gate_label=_GATE)
+        mock_schedule.assert_called_once_with(
+            org_id=_ORG, pipeline_id=_PIPELINE, run_id=_RUN, gate_label=_GATE, briefing=None
+        )
         assert gate is not None
 
     async def test_idempotent_reentry_does_not_reschedule(self) -> None:
