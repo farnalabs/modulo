@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import get_plan_context
+from modulo.api.dependencies import get_anonymous_plan_context, get_plan_context
 from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.settings import Settings, get_settings
 
@@ -100,6 +100,7 @@ def _setup_saml_client(license_key: str = "test-license-key") -> None:
 
     _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key)
     _app.dependency_overrides[get_plan_context] = lambda: _plan
+    _app.dependency_overrides[get_anonymous_plan_context] = lambda: _plan
     get_settings.cache_clear()
 
 

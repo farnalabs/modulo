@@ -554,6 +554,66 @@ def _team_membership_or_admin_dep(
     )
 
 
+async def resolve_anonymous_plan_context(settings: Settings, session: AsyncSession) -> PlanContext:
+    """Resolve the plan context WITHOUT a user (pre-auth login-page surface).
+
+    Shared by ``require_feature_anonymous`` and the SSO discovery route
+    (``/auth/sso/providers``). Mirrors :func:`get_plan_context` minus the
+    ``get_current_user`` dependency: with no organisation context the plan
+    resolves from the system-level license (in-memory store, then env var),
+    falling back to ``CommunityTier``.
+
+    The ``TypeError``/``AttributeError`` fallback matches ``get_plan_context``'s
+    handling of test-double sessions.
+
+    Security note: these are authentication entry-point routes — they must be
+    reachable before a session exists. The gate must remain fail-closed: when
+    the plan/license cannot be resolved, deny (402) rather than allow. Never
+    make a route anonymous that previously required a user unless it is one of
+    the documented pre-auth SSO login/callback/SAML routes.
+    """
+    from modulo.core.feature_flags import CommunityTier
+    from modulo.core.feature_flags import resolve_plan_context as _resolve
+
+    try:
+        async with session.begin():
+            return await _resolve(settings, session, org=None)
+    except (TypeError, AttributeError):
+        logger.warning(
+            "api.dependencies.anonymous_plan_context_fallback",
+            extra={"reason": ("Session does not support anonymous plan resolution — returning CommunityTier")},
+        )
+        return CommunityTier()
+
+
+def require_feature_anonymous(feature_name: str) -> DependsParameter:
+    """Pre-auth feature gate — resolves the plan WITHOUT a user.
+
+    Use on authentication entry-point routes (SSO login, callback, SAML
+    ACS/metadata) that must be reachable before any session exists. The plan
+    is resolved from the system-level license only (no org context), falling
+    back to ``CommunityTier``.
+
+    Returns 402 Payment Required when the feature is unavailable — never 401.
+    The gate is fail-closed: if plan resolution itself fails, the route is
+    denied (402) rather than permitted.
+
+    .. code-block:: python
+
+       _: object = require_feature_anonymous("sso")  # route parameter
+    """
+
+    async def _check(ctx: PlanContext = Depends(get_anonymous_plan_context)) -> None:
+        if not ctx.feature_enabled(feature_name):
+            raise ProblemException(
+                ProblemType.FEATURE_REQUIRED,
+                detail=f"{feature_name} is not available on your plan",
+                instance=feature_name,
+            )
+
+    return cast("DependsParameter", Depends(_check))
+
+
 def require_feature(feature_name: str) -> DependsParameter:
     """FastAPI dependency factory — blocks access if the named feature is not enabled on the current plan.
 
@@ -781,6 +841,23 @@ async def get_db_session(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
             ) from None
+
+
+async def get_anonymous_plan_context(
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> PlanContext:
+    """DI-overridable anonymous plan context for pre-auth routes.
+
+    Resolves the plan WITHOUT a user: system-level license -> CommunityTier
+    fallback.  Mirrors :func:`get_plan_context` minus ``get_current_user``.
+
+    Tests can override this via
+    ``app.dependency_overrides[get_anonymous_plan_context]`` to control
+    feature gating on pre-auth SSO routes without providing authentication
+    credentials.
+    """
+    return await resolve_anonymous_plan_context(settings, session)
 
 
 async def get_plan_context(

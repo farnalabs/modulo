@@ -13,7 +13,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_system_db_session
+from modulo.api.dependencies import (
+    _get_engine,
+    get_anonymous_plan_context,
+    get_db_session,
+    get_plan_context,
+    get_system_db_session,
+)
 from modulo.api.routes.sso import router as sso_router
 from modulo.auth.sso import (
     parse_oidc_providers,
@@ -77,6 +83,9 @@ def client() -> Generator[TestClient, None, None]:
     _app.dependency_overrides[get_system_db_session] = _override_session
     _app.dependency_overrides[_get_engine] = lambda: MagicMock()
     _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
+    _app.dependency_overrides[get_anonymous_plan_context] = lambda: DbPlanContext(
+        FeatureFlagRegistry(current_tier="team")
+    )
     try:
         yield TestClient(_app)
     finally:
@@ -88,6 +97,9 @@ def _override_settings(**kwargs: str | bool) -> None:
     _app.dependency_overrides[get_settings] = lambda: _override(**kwargs)
     settings = _override(**kwargs)
     _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
+        FeatureFlagRegistry(current_tier="team" if settings.modulo_license_key else "community")
+    )
+    _app.dependency_overrides[get_anonymous_plan_context] = lambda: DbPlanContext(
         FeatureFlagRegistry(current_tier="team" if settings.modulo_license_key else "community")
     )
 

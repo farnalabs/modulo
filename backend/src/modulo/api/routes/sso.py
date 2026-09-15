@@ -11,7 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, get_system_db_session, require_feature
+from modulo.api.dependencies import (
+    get_db_session,
+    get_system_db_session,
+    require_feature_anonymous,
+    resolve_anonymous_plan_context,
+)
 from modulo.auth.sso import (
     _set_default_rls_org,
     oidc_get_authorize_url,
@@ -20,7 +25,6 @@ from modulo.auth.sso import (
     saml_get_auth_url,
     saml_process_response,
 )
-from modulo.core.feature_flags import CommunityTier, PlanContext, resolve_plan_context
 from modulo.core.sanitize_log import sanitise_log_value
 from modulo.db.crud.sso_provider import get_enabled_saml_provider, list_enabled_oidc_providers
 from modulo.settings import Settings, get_settings
@@ -91,25 +95,11 @@ async def _get_enabled_saml_global(
 async def _anonymous_plan_context(settings: Settings, session: AsyncSession) -> Any:
     """Resolve the plan context WITHOUT a user (pre-auth login-page surface).
 
-    Mirrors :func:`modulo.api.dependencies.get_plan_context` minus the
-    ``get_current_user`` dependency: with no organisation context the plan
-    resolves from the system-level license (in-memory store, then env var),
-    falling back to the community tier. The TypeError/AttributeError fallback
-    matches get_plan_context's handling of test-double sessions.
-
-    Never raises auth errors — the login page calls the SSO discovery endpoint
-    before any token exists.
+    DEPRECATED: prefer ``resolve_anonymous_plan_context`` from
+    ``modulo.api.dependencies`` — this wrapper is retained for backward
+    compatibility with callers that import from this module directly.
     """
-    try:
-        async with session.begin():
-            ctx: PlanContext = await resolve_plan_context(settings, session, org=None)
-            return ctx
-    except (TypeError, AttributeError):
-        _log.warning(
-            "Session does not support anonymous plan resolution — returning CommunityTier",
-            exc_info=True,
-        )
-        return CommunityTier()
+    return await resolve_anonymous_plan_context(settings, session)
 
 
 @router.get("/sso/providers")
@@ -185,7 +175,7 @@ async def sso_providers(
 async def oidc_login(
     provider: str,
     _request: Request,
-    _: object = require_feature("sso"),
+    _: object = require_feature_anonymous("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -210,7 +200,7 @@ async def oidc_login(
 async def oidc_callback(
     provider: str,
     request: Request,
-    _: object = require_feature("sso"),
+    _: object = require_feature_anonymous("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -278,7 +268,7 @@ async def oidc_callback(
 @handle_db_errors("sso.saml_login")
 async def saml_login(
     _request: Request,
-    _: object = require_feature("sso"),
+    _: object = require_feature_anonymous("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -320,7 +310,7 @@ async def saml_login(
 @handle_db_errors("sso.saml_acs")
 async def saml_acs(
     request: Request,
-    _: object = require_feature("sso"),
+    _: object = require_feature_anonymous("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
@@ -375,7 +365,7 @@ async def saml_acs(
 @handle_db_errors("sso.saml_metadata")
 async def saml_metadata(
     _request: Request,
-    _: object = require_feature("sso"),
+    _: object = require_feature_anonymous("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
