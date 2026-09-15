@@ -241,6 +241,14 @@ _AUDIT_CHAIN_COLUMNS: dict[str, frozenset[str]] = {
     "agents": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
     "connector_instances": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
     "scheduled_reports": frozenset({"created_by", "updated_by", "deleted_by", "deleted_at"}),
+    # organisations: migrations 0233 (updated_at/updated_by/deleted_by) add the same
+    # audit columns the sibling audit-chain tables carry. The Organisation ORM model
+    # deliberately does NOT declare them (created_by stays non-FK so the first org can
+    # exist before its first user), so they are DB-owned here too — both the
+    # remove_column (ORM-declared, DB-dropped) and add_column (DB-added, ORM-absent)
+    # directions are benign, migration-owned divergence.
+    # permanent (documented repo divergence)
+    "organisations": frozenset({"updated_by", "deleted_by", "updated_at"}),
 }
 # Their FKs to accounts.id (same tables; deleted_at carries no FK).
 # permanent (documented repo divergence)
@@ -248,6 +256,12 @@ _AUDIT_CHAIN_FK_COLUMNS: dict[str, frozenset[str]] = {
     "agents": frozenset({"created_by", "updated_by", "deleted_by"}),
     "connector_instances": frozenset({"created_by", "updated_by", "deleted_by"}),
     "scheduled_reports": frozenset({"created_by", "updated_by", "deleted_by"}),
+    # organisations: migration 0236 adds fk_organisations_created_by (ON DELETE
+    # SET NULL). The ORM keeps created_by deliberately non-FK (bootstrap order), so
+    # the FK is DB-owned and not modelled — both the remove_fk and add_fk directions
+    # are benign, matching the sibling tables above.
+    # permanent (documented repo divergence)
+    "organisations": frozenset({"created_by"}),
 }
 
 
@@ -282,7 +296,14 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
         # updated_at but no migration ever created the column; created_at is
         # the write instant.
         # permanent (documented repo divergence)
-        return inner[2] == "modulo_journey_facts" and inner[3].name == "updated_at"
+        if inner[2] == "modulo_journey_facts" and inner[3].name == "updated_at":
+            return True
+        # DB-owned audit-chain columns the migrations add but the ORM does not
+        # declare (organisations + the sibling audit-chain tables). The reverse
+        # remove_column direction is handled below; here the DB carries the
+        # column the ORM omits, which is equally benign, migration-owned divergence.
+        # permanent (documented repo divergence)
+        return inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]
     if kind == "remove_column":
         # Audit-chain columns the DB triggers own (0108) — per-table entries.
         return inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]
@@ -292,10 +313,15 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
             {col.name for col in inner[1].columns} <= _AUDIT_CHAIN_FK_COLUMNS[inner[1].table.name]
         )
     if kind == "add_fk":
-        # ANY ORM-declared FK the migrated schema lacks is real drift (the
-        # far-644 nodes.id KNOWN-GAP wheel was closed with the drift itself;
-        # a stale wheel would keep hiding new FK drift).
-        return False
+        # DB-owned audit-chain FKs the migrations add but the ORM does not declare
+        # (organisations.created_by + the sibling audit-chain tables) are benign,
+        # migration-owned divergence. Any FK not in that set is real drift (the
+        # far-644 nodes.id KNOWN-GAP wheel was closed with the drift itself; a
+        # stale wheel would keep hiding new FK drift).
+        # permanent (documented repo divergence)
+        return inner[1].table.name in _AUDIT_CHAIN_FK_COLUMNS and bool(
+            {col.name for col in inner[1].columns} <= _AUDIT_CHAIN_FK_COLUMNS[inner[1].table.name]
+        )
     if kind == "remove_constraint":
         # CHECK guards that exist ONLY in migrations (0157/0165/0192) —
         # per-(table, constraint) entries.
