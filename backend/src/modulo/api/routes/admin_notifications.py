@@ -389,6 +389,112 @@ async def retry_all_failed_deliveries(
     return {"retried": retried, "errors": errors, "success": len(errors) == 0}
 
 
+@router.post("/{webhook_id}/deliveries/replay")
+@handle_db_errors("admin.notifications.replay_failed_deliveries")
+async def replay_failed_deliveries(
+    webhook_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Replay every failed/dead-lettered delivery of ONE webhook.
+
+    Closes the per-endpoint dead-letter surface gap: ``retry-all-failed`` is
+    org-wide bulk-only, while this endpoint replays the dead-lettered
+    deliveries of a single webhook. Each replay re-dispatches through
+    :func:`_retry_one_delivery`, so a delivery with a retained request body
+    (``payload_ciphertext``) is replayed verbatim rather than re-fabricated as
+    a placeholder envelope.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            ep = await session.get(NotificationEndpoint, webhook_id)
+            if ep is None or ep.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
+            deliveries = list(
+                (
+                    await session.execute(
+                        select(NotificationDeliveryLog).where(
+                            NotificationDeliveryLog.organisation_id == principal.organisation_id,
+                            NotificationDeliveryLog.endpoint_id == webhook_id,
+                            NotificationDeliveryLog.status.in_(["failed", "dead_lettered"]),
+                        )
+                    )
+                ).scalars()
+            )
+    except ProgrammingError:
+        logger.warning(
+            _CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING,
+            extra={"route": "replay_failed_deliveries", "webhook_id": str(webhook_id)},
+        )
+        logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
+        ) from None
+    except SQLAlchemyError:
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "replay_failed_deliveries"})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "replay_failed_deliveries"})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    replayed = 0
+    delivered = 0
+    errors: list[str] = []
+
+    for delivery in deliveries:
+        resp, error = await _retry_one_delivery(session, principal, settings, delivery, ep)
+        replayed += 1
+        if error:
+            errors.append(error)
+        elif resp is not None and resp.is_success:
+            delivered += 1
+
+    return {"replayed": replayed, "delivered": delivered, "errors": errors, "success": len(errors) == 0}
+
+
+def _retry_request_body(delivery: NotificationDeliveryLog, fernet_key: str) -> tuple[bytes, bytes | None]:
+    """Build the retry request body, replaying a retained payload when present.
+
+    A delivery that opted in to payload retention (``payload_ciphertext``) stores
+    the EXACT original request body, Fernet-encrypted. Replaying it preserves the
+    original event + payload for the receiver instead of the legacy placeholder
+    envelope (which only carried ``event_type``). Decryption is fail-open: any
+    error falls back to the placeholder body so one corrupt row can never abort a
+    retry batch.
+
+    Returns ``(body, retained_ciphertext_or_None)``; the ciphertext is carried
+    forward onto the new delivery-log row so the audit trail stays continuous.
+    """
+    ciphertext = getattr(delivery, "payload_ciphertext", None)
+    if isinstance(ciphertext, (bytes, bytearray)):
+        try:
+            body = Fernet(fernet_key.encode()).decrypt(bytes(ciphertext))
+        except Exception:
+            logger.exception("Failed to decrypt retained payload for retry", extra={"delivery_id": str(delivery.id)})
+        else:
+            if body:
+                return body, bytes(ciphertext)
+    body = json.dumps(
+        {
+            "event": delivery.event_type,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "payload": {"event_type": delivery.event_type, "retry": True},
+        }
+    ).encode()
+    return body, None
+
+
 async def _retry_one_delivery(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -398,17 +504,16 @@ async def _retry_one_delivery(
 ) -> tuple[httpx.Response | None, str | None]:
     """Retry one failed delivery and record its outcome.
 
+    When the failed delivery retained its original request body
+    (``payload_ciphertext``, opt-in at dispatch time), the retry REPLAYS that
+    exact body so the receiver gets the true event instead of a placeholder
+    envelope; otherwise the legacy placeholder body is used.
+
     Returns ``(response, None)`` when the request reached the endpoint, or
     ``(None, error)`` on a transport failure (also recorded as a new failed
     delivery).
     """
-    body = json.dumps(
-        {
-            "event": delivery.event_type,
-            "timestamp": datetime.now(UTC).isoformat(),
-            "payload": {"event_type": delivery.event_type, "retry": True},
-        }
-    ).encode()
+    body, retained_ciphertext = _retry_request_body(delivery, settings.fernet_key)
 
     headers = {"Content-Type": _MSG_APPLICATION_JSON, "User-Agent": _MSG_MODULO_NOTIFIER_1_0}
     if ep.secret_ciphertext:
@@ -435,10 +540,10 @@ async def _retry_one_delivery(
         return None, str(exc)
     try:
         resp = await client.post(ep.url, content=body, headers=headers)
-        await _record_delivery_result(session, principal, delivery, ep, resp)
+        await _record_delivery_result(session, principal, delivery, ep, resp, retained_ciphertext)
         return resp, None
     except httpx.RequestError as exc:
-        await _record_delivery_error(session, principal, delivery, ep, exc)
+        await _record_delivery_error(session, principal, delivery, ep, exc, retained_ciphertext)
         return None, str(exc)
     finally:
         await client.aclose()
@@ -450,6 +555,7 @@ async def _record_delivery_result(
     delivery: NotificationDeliveryLog,
     ep: NotificationEndpoint,
     resp: httpx.Response,
+    payload_ciphertext: bytes | None = None,
 ) -> None:
     """Record a delivery that reached the endpoint and update its counters."""
     try:
@@ -464,6 +570,7 @@ async def _record_delivery_result(
                 response_code=resp.status_code,
                 response_body=resp.text[:500] if resp.is_success else None,
                 last_error=(None if resp.is_success else f"HTTP {resp.status_code}: {resp.text[:200]}"),
+                payload_ciphertext=payload_ciphertext,
             )
             session.add(new_log)
 
@@ -501,6 +608,7 @@ async def _record_delivery_error(
     delivery: NotificationDeliveryLog,
     ep: NotificationEndpoint,
     exc: BaseException,
+    payload_ciphertext: bytes | None = None,
 ) -> None:
     """Record a transport-failed delivery and bump the endpoint dead-letter count."""
     try:
@@ -515,6 +623,7 @@ async def _record_delivery_error(
                 response_code=None,
                 response_body=None,
                 last_error=str(exc),
+                payload_ciphertext=payload_ciphertext,
             )
             session.add(new_log)
             await _bump_dead_letter_count(session, ep)

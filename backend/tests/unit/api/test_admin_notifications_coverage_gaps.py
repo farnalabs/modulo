@@ -13,6 +13,7 @@ payloads use the module's real request models.
 
 import hashlib
 import hmac
+import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -127,6 +128,7 @@ def _delivery(**overrides: object) -> MagicMock:
     d.response_code = overrides.get("response_code", 500)
     d.last_error = overrides.get("last_error", "boom")
     d.response_body = overrides.get("response_body")
+    d.payload_ciphertext = overrides.get("payload_ciphertext")
     d.created_at = overrides.get("created_at", datetime(2025, 6, 1, tzinfo=UTC))
     return d
 
@@ -723,6 +725,69 @@ def test_retry_delivery_unexpected_error_500(api: tuple[TestClient, AsyncMock]) 
     assert resp.status_code == 500
 
 
+def _retained_original_payload() -> tuple[bytes, bytes]:
+    original_body = json.dumps(
+        {
+            "event": "run_failed",
+            "timestamp": "2025-06-01T00:00:00+00:00",
+            "payload": {"run_id": "r-1", "error_code": "budget_exceeded"},
+        },
+        separators=(",", ":"),
+    ).encode()
+    return original_body, Fernet(_FERNET_KEY.encode()).encrypt(original_body)
+
+
+def test_retry_delivery_replays_retained_payload(
+    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, session = api
+    original_body, ciphertext = _retained_original_payload()
+    session.get = AsyncMock(side_effect=[_endpoint(), _delivery(payload_ciphertext=ciphertext)])
+    http_client = _http_client()
+    monkeypatch.setattr(admin_notifications, "pinned_async_client", AsyncMock(return_value=http_client))
+    resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries/{_DELIVERY_ID}/retry")
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    assert http_client.post.call_args.kwargs["content"] == original_body
+    new_log = session.add.call_args.args[0]
+    assert new_log.payload_ciphertext == ciphertext
+
+
+def test_retry_delivery_signs_replayed_payload(
+    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, session = api
+    original_body, ciphertext = _retained_original_payload()
+    ep = _endpoint(secret_ciphertext=b"cipher")
+    session.get = AsyncMock(side_effect=[ep, _delivery(payload_ciphertext=ciphertext)])
+    monkeypatch.setattr(admin_notifications, "decode_stored_secret_scoped", AsyncMock(return_value="raw-secret"))
+    http_client = _http_client()
+    monkeypatch.setattr(admin_notifications, "pinned_async_client", AsyncMock(return_value=http_client))
+    resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries/{_DELIVERY_ID}/retry")
+    assert resp.status_code == 200
+    sent_content = http_client.post.call_args.kwargs["content"]
+    sent_headers = http_client.post.call_args.kwargs["headers"]
+    expected_sig = hmac.new(b"raw-secret", sent_content, hashlib.sha256).hexdigest()
+    assert sent_headers["X-Modulo-Signature"] == f"sha256={expected_sig}"
+    assert sent_content == original_body
+
+
+def test_retry_delivery_corrupt_retained_payload_falls_back(
+    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, session = api
+    session.get = AsyncMock(side_effect=[_endpoint(), _delivery(payload_ciphertext=b"not-fernet")])
+    http_client = _http_client()
+    monkeypatch.setattr(admin_notifications, "pinned_async_client", AsyncMock(return_value=http_client))
+    resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries/{_DELIVERY_ID}/retry")
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    sent_body = json.loads(http_client.post.call_args.kwargs["content"])
+    assert sent_body["payload"]["retry"] is True
+    new_log = session.add.call_args.args[0]
+    assert new_log.payload_ciphertext is None
+
+
 # ---
 
 
@@ -830,6 +895,77 @@ def test_retry_all_failed_unexpected_error_500(api: tuple[TestClient, AsyncMock]
     client, session = api
     session.execute = AsyncMock(side_effect=RuntimeError("boom"))
     resp = client.post("/api/v1/admin/notifications/deliveries/retry-all-failed")
+    assert resp.status_code == 500
+
+
+# --- POST /{webhook_id}/deliveries/replay (per-endpoint dead-letter replay) ---
+
+
+def test_replay_failed_deliveries_success(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
+    client, session = api
+    session.get = AsyncMock(return_value=_endpoint())
+    deliveries = [_delivery(id=uuid.uuid4(), status="dead_lettered"), _delivery(id=uuid.uuid4(), status="failed")]
+    session.execute = AsyncMock(return_value=_result(scalars=deliveries))
+    monkeypatch.setattr(
+        admin_notifications,
+        "_retry_one_delivery",
+        AsyncMock(return_value=(_http_response(), None)),
+    )
+    resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries/replay")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["replayed"] == 2
+    assert data["delivered"] == 2
+    assert data["errors"] == []
+    assert data["success"] is True
+
+
+def test_replay_failed_deliveries_scopes_to_endpoint(
+    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, session = api
+    session.get = AsyncMock(return_value=_endpoint())
+    session.execute = AsyncMock(return_value=_result(scalars=[_delivery(status="dead_lettered")]))
+    retry = AsyncMock(return_value=(None, "transport down"))
+    monkeypatch.setattr(admin_notifications, "_retry_one_delivery", retry)
+    resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries/replay")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["replayed"] == 1
+    assert data["delivered"] == 0
+    assert data["errors"] == ["transport down"]
+    assert data["success"] is False
+
+
+def test_replay_failed_deliveries_missing_webhook_404(api: tuple[TestClient, AsyncMock]) -> None:
+    client, session = api
+    session.get = AsyncMock(return_value=None)
+    resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries/replay")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Webhook not found"
+
+
+def test_replay_failed_deliveries_cross_org_404(api: tuple[TestClient, AsyncMock]) -> None:
+    client, session = api
+    session.get = AsyncMock(return_value=_endpoint(organisation_id=uuid.uuid4()))
+    resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries/replay")
+    assert resp.status_code == 404
+
+
+@pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
+def test_replay_failed_deliveries_error_mapping(
+    api: tuple[TestClient, AsyncMock], exc: Exception, expected: int
+) -> None:
+    client, session = api
+    session.get = AsyncMock(side_effect=[exc])
+    resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries/replay")
+    assert resp.status_code == expected
+
+
+def test_replay_failed_deliveries_unexpected_error_500(api: tuple[TestClient, AsyncMock]) -> None:
+    client, session = api
+    session.get = AsyncMock(side_effect=[RuntimeError("boom")])
+    resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries/replay")
     assert resp.status_code == 500
 
 

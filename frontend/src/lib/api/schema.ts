@@ -6647,6 +6647,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/notifications/{webhook_id}/deliveries/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replay Failed Deliveries
+         * @description Replay every failed/dead-lettered delivery of ONE webhook.
+         *
+         *     Closes the per-endpoint dead-letter surface gap: ``retry-all-failed`` is
+         *     org-wide bulk-only, while this endpoint replays the dead-lettered
+         *     deliveries of a single webhook. Each replay re-dispatches through
+         *     :func:`_retry_one_delivery`, so a delivery with a retained request body
+         *     (``payload_ciphertext``) is replayed verbatim rather than re-fabricated as
+         *     a placeholder envelope.
+         */
+        post: operations["replay_failed_deliveries_api_v1_admin_notifications__webhook_id__deliveries_replay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/notifications/available-events": {
         parameters: {
             query?: never;
@@ -33649,6 +33676,41 @@ export interface operations {
             };
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replay_failed_deliveries_api_v1_admin_notifications__webhook_id__deliveries_replay_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                webhook_id: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
