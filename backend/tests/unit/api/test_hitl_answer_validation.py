@@ -122,3 +122,36 @@ async def test_unsupported_contract_kind_rejected():
     config = {"response_contract": {"kind": "ranking"}}
     with pytest.raises(AnswerValidationError, match="unsupported answer kind"):
         await _validate({"kind": "ranking"}, config)
+
+
+async def test_mcp_adapter_keeps_answer_with_error_key_as_answer():
+    """Regression: an answer dict that itself carries an ``error`` key must not
+    be mistaken for the MCP error sentinel — the old key-sniffing silently
+    skipped ``mgr.approve``. The adapter returns ``(error, answer)``."""
+    from modulo.api.mcp_server import _validate_mcp_choice_answer
+
+    answer = {"kind": "choice", "option_id": "yes", "error": "a legitimate answer field"}
+    config = {"response_contract": {"kind": "choice", "options": [{"id": "yes", "label": "Yes"}]}}
+    with patch(
+        "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+        new=AsyncMock(return_value=config),
+    ):
+        error, validated = await _validate_mcp_choice_answer(AsyncMock(), _RUN_ID, _GATE_ID, _ORG_ID, answer)
+    assert error is None
+    assert validated == answer
+
+
+async def test_mcp_adapter_returns_error_tuple_on_invalid_answer():
+    from modulo.api.mcp_server import _validate_mcp_choice_answer
+
+    config = {"response_contract": {"kind": "choice", "options": [{"id": "yes", "label": "Yes"}]}}
+    with patch(
+        "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+        new=AsyncMock(return_value=config),
+    ):
+        error, validated = await _validate_mcp_choice_answer(
+            AsyncMock(), _RUN_ID, _GATE_ID, _ORG_ID, {"kind": "choice", "option_id": "maybe"}
+        )
+    assert error is not None
+    assert error["error"] == "invalid_answer"
+    assert validated is None

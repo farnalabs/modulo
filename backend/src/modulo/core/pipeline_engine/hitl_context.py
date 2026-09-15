@@ -474,9 +474,7 @@ async def _build_context_inner(
         if isinstance(raw_rc, dict):
             # Bounded copy: re-serialise to strip any extra keys and bound.
             try:
-                import json as _json
-
-                response_contract = _json.loads(_json.dumps(raw_rc, sort_keys=True, default=str, ensure_ascii=False))
+                response_contract = json.loads(json.dumps(raw_rc, sort_keys=True, default=str, ensure_ascii=False))
             except (TypeError, ValueError, KeyError):
                 response_contract = None
 

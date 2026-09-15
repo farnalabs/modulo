@@ -50,6 +50,12 @@ from modulo.api.dependencies import (
     get_or_create_engine,
     get_or_create_session_factory,
 )
+from modulo.api.hitl_answer_validation import (
+    AnswerValidationError as SharedValidationError,
+)
+from modulo.api.hitl_answer_validation import (
+    validate_hitl_answer,
+)
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.api.middleware.sensitive_mask import mask_config_json, merge_masked_config
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
@@ -4182,13 +4188,6 @@ async def _validate_mcp_choice_answer(
     avoids key-sniffing the answer dict: a legitimate answer that happens to
     carry an ``"error"`` key must not be mistaken for an MCP error response.
     """
-    from modulo.api.hitl_answer_validation import (
-        AnswerValidationError as SharedValidationError,
-    )
-    from modulo.api.hitl_answer_validation import (
-        validate_hitl_answer,
-    )
-
     try:
         validated = await validate_hitl_answer(
             s,
