@@ -116,7 +116,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-teams** - Users, teams, and role-based access - routes: `/settings/teams`, `/admin/users`
 - **feat-org** - Organization settings (Feature Flags deferred from the MVP nav — hidden via private_preview; see FAR-548) - routes: `/admin/org`
 - **feat-sso** - Single sign-on (SSO) - routes: `/settings/sso`
-- **feat-plugins** - Plugin registry (deferred from the MVP nav — hidden via private_preview; see FAR-544) - routes: `/admin/plugins`
+- **feat-plugins** - Plugin registry (deferred from the MVP nav — hidden via private_preview; see FAR-544). Supports connector, model-backend, eval, and schema-type entry point groups via `modulo.connectors`, `modulo.model_backends`, `modulo.evals`, and `modulo.schema_types` - routes: `/admin/plugins`
 - **feat-audit** - Audit trail and audit log - routes: `/admin/audit`
 - **feat-feedback** - Feedback inbox - routes: `/feedback/inbox`
 

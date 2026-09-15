@@ -22,17 +22,12 @@ Plugins are **discovered at startup**: all builder functions are loaded from ins
 
 ### Entry point groups
 
-| Group | Purpose | Builder signature |
-|---|---|---|
-| `modulo.connectors` | Third-party connector types | `(config: dict, creds: dict) -> ConnectorBase` |
-| `modulo.model_backends` | Third-party model backends | `(api_key: str, model_id: str, **params) -> ModelBackendBase` |
-
-### Future groups (documented, not yet implemented)
-
-| Group | Purpose | Status |
-|---|---|---|
-| `modulo.evals` | Custom eval functions | v1 |
-| `modulo.schema_types` | Custom schema field types | v1 |
+| Group | Purpose | Builder signature | Status |
+|---|---|---|---|
+| `modulo.connectors` | Third-party connector types | `(config: dict, creds: dict) -> ConnectorBase` | Implemented |
+| `modulo.model_backends` | Third-party model backends | `(api_key: str, model_id: str, **params) -> ModelBackendBase` | Implemented |
+| `modulo.evals` | Custom eval functions | `(config: dict) -> Any` | Implemented |
+| `modulo.schema_types` | Custom schema field types | `(config: dict) -> Any` | Implemented |
 
 ## Plugin Registry reference
 
