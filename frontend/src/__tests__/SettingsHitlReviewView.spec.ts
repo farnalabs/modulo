@@ -15,6 +15,7 @@ vi.mock('../lib/api/schema', () => ({}))
 
 import SettingsHitlReviewView from '../views/SettingsHitlReviewView.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
+import { useHitlGateState, resetHitlGateState } from '../composables/useHitlGateState'
 
 const PENDING_GATE = {
   run_id: '550e8400-e29b-41d4-a716-446655440000',
@@ -99,6 +100,7 @@ describe('SettingsHitlReviewView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    resetHitlGateState()
   })
 
   afterEach(() => {
@@ -1167,5 +1169,288 @@ describe('SettingsHitlReviewView', () => {
     const snippet = wrapper!.find('[data-testid="hitl-review-snippet"]')
     expect(snippet.exists()).toBe(true)
     expect(snippet.text()).toBe(shortDesc)
+  })
+
+  // ---- FAR-861: bulk selection + bulk operations ----
+
+  it('shows a checkbox per row and a select-all checkbox in the column header', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, gate_id: 'deploy-gate-1' }]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const selectAll = wrapper!.find('[data-testid="hitl-review-select-all"]')
+    expect(selectAll.exists()).toBe(true)
+    expect((selectAll.element as HTMLInputElement).checked).toBe(false)
+
+    const rowCheckboxes = wrapper!.findAll('[data-testid="hitl-review-row-checkbox"]')
+    expect(rowCheckboxes).toHaveLength(2)
+  })
+
+  it('select-all toggles all row checkboxes', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, gate_id: 'deploy-gate-1' }]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const selectAll = wrapper!.find('[data-testid="hitl-review-select-all"]')
+    await selectAll.setValue(true)
+    await flushPromises()
+    await nextTick()
+
+    const bar = wrapper!.find('[data-testid="hitl-review-bulk-bar"]')
+    expect(bar.exists()).toBe(true)
+    expect(bar.text()).toContain('2 gates selected')
+
+    const rowCheckboxes = wrapper!.findAll('[data-testid="hitl-review-row-checkbox"]')
+    expect(rowCheckboxes.every(cb => (cb.element as HTMLInputElement).checked)).toBe(true)
+  })
+
+  it('individual row checkbox toggles selection and shows bulk bar', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(false)
+
+    const checkbox = wrapper!.find('[data-testid="hitl-review-row-checkbox"]')
+    await checkbox.setValue(true)
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(true)
+    expect(wrapper!.text()).toContain('1 gate selected')
+  })
+
+  it('bulk claim claims each selected unclaimed gate and reports outcomes', async () => {
+    const { api } = await import('../lib/api/client')
+    const gate1 = PENDING_GATE
+    const gate2 = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', gate_id: 'deploy-gate-1' }
+    ;(api.GET as any).mockResolvedValue(gatesResponse([gate1, gate2]))
+    let claimCount = 0
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        claimCount++
+        if (claimCount === 1) {
+          return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+        }
+        return Promise.resolve({ data: null, error: { type: 'urn:problem:modulo:hitl_gate_already_claimed', title: 'Conflict', status: 409, detail: 'already claimed' } })
+      }
+      return Promise.resolve({ data: { ok: true }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Select both gates
+    const selectAll = wrapper!.find('[data-testid="hitl-review-select-all"]')
+    await selectAll.setValue(true)
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-bulk-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(claimCount).toBe(2)
+    const outcomes = wrapper!.find('[data-testid="hitl-review-bulk-outcomes"]')
+    expect(outcomes.exists()).toBe(true)
+    expect(outcomes.text()).toContain('Claimed / Rejected')
+    expect(outcomes.text()).toContain('Failed')
+  })
+
+  it('bulk reject sends a shared reason to each selected claimed gate', async () => {
+    const { api } = await import('../lib/api/client')
+    const claimed = claimedGate({ claimed_by_me: true })
+    const claimed2 = { ...claimed, gate_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
+    ;(api.GET as any).mockResolvedValue(gatesResponse([claimed, claimed2]))
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+      }
+      if (url.endsWith('/reject')) {
+        return Promise.resolve({ data: { ok: true }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    // Pre-populate the gate state store with tokens so bulk reject can proceed
+    resetHitlGateState()
+    const gs1 = useHitlGateState(claimed.run_id, claimed.gate_id)
+    gs1.setClaimToken('tok-bulk-1')
+    const gs2 = useHitlGateState(claimed2.run_id, claimed2.gate_id)
+    gs2.setClaimToken('tok-bulk-2')
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Select both gates
+    const selectAll = wrapper!.find('[data-testid="hitl-review-select-all"]')
+    await selectAll.setValue(true)
+    await flushPromises()
+    await nextTick()
+
+    // Open bulk reject
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject"]').trigger('click')
+    await nextTick()
+
+    const reasonInput = wrapper!.find('[data-testid="hitl-review-bulk-reject-reason"]')
+    expect(reasonInput.exists()).toBe(true)
+    await reasonInput.setValue('Does not meet criteria')
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject-confirm"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const rejectCalls = (api.POST as any).mock.calls.filter((c: unknown[]) => (c[0] as string).endsWith('/reject'))
+    expect(rejectCalls).toHaveLength(2)
+    for (const call of rejectCalls) {
+      expect((call as any)[1].body.reason).toBe('Does not meet criteria')
+    }
+  })
+
+  it('bulk reject reports partial failure when some gates fail', async () => {
+    const { api } = await import('../lib/api/client')
+    const claimed = claimedGate({ claimed_by_me: true })
+    const claimed2 = { ...claimed, gate_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
+    ;(api.GET as any).mockResolvedValue(gatesResponse([claimed, claimed2]))
+    let rejectCount = 0
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+      }
+      if (url.endsWith('/reject')) {
+        rejectCount++
+        if (rejectCount === 1) {
+          return Promise.resolve({ data: { ok: true }, error: undefined })
+        }
+        return Promise.resolve({ data: null, error: { type: 'urn:problem:modulo:hitl_gate_already_decided', title: 'Conflict', status: 409, detail: 'already decided' } })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    // Pre-populate the gate state store with tokens so bulk reject can proceed
+    resetHitlGateState()
+    const gs1 = useHitlGateState(claimed.run_id, claimed.gate_id)
+    gs1.setClaimToken('tok-bulk-1')
+    const gs2 = useHitlGateState(claimed2.run_id, claimed2.gate_id)
+    gs2.setClaimToken('tok-bulk-2')
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const selectAll = wrapper!.find('[data-testid="hitl-review-select-all"]')
+    await selectAll.setValue(true)
+    await flushPromises()
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject"]').trigger('click')
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject-confirm"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('could not be rejected')
+
+    const outcomes = wrapper!.find('[data-testid="hitl-review-bulk-outcomes"]')
+    expect(outcomes.exists()).toBe(true)
+    expect(outcomes.text()).toContain('Claimed / Rejected')
+    expect(outcomes.text()).toContain('Failed')
+  })
+
+  it('clear selection resets all checkboxes and hides the bulk bar', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-row-checkbox"]').setValue(true)
+    await nextTick()
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(true)
+
+    const clearBtn = wrapper!.findAll('button').find(b => b.text() === 'Clear Selection')
+    expect(clearBtn).toBeTruthy()
+    await clearBtn!.trigger('click')
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(false)
+    expect((wrapper!.find('[data-testid="hitl-review-row-checkbox"]').element as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('bulk bar is hidden when no gates are selected', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(false)
+  })
+
+  it('bulk claim skips already-decided gates and reports them as skipped', async () => {
+    const { api } = await import('../lib/api/client')
+    const approvedGate = {
+      ...PENDING_GATE,
+      gate_id: 'approved-gate',
+      claimed_by: 'reviewer@team',
+      decision: 'approved',
+      decision_at: '2025-06-30T11:00:00Z',
+    }
+    ;(api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, approvedGate]))
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const selectAll = wrapper!.find('[data-testid="hitl-review-select-all"]')
+    await selectAll.setValue(true)
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-bulk-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const outcomes = wrapper!.find('[data-testid="hitl-review-bulk-outcomes"]')
+    expect(outcomes.exists()).toBe(true)
+    expect(outcomes.text()).toContain('Claimed / Rejected')
+    expect(outcomes.text()).toContain('Skipped (already decided)')
   })
 })

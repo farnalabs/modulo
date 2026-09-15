@@ -50,6 +50,110 @@
         </div>
       </template>
     </FilterBar>
+    <!-- FAR-861: bulk action bar — visible when 1+ gates are selected. Shows
+         selection count, bulk claim, bulk reject (with shared reason input),
+         and per-gate outcome reporting. -->
+    <div
+      v-if="someSelected"
+      data-testid="hitl-review-bulk-bar"
+      role="status"
+      class="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3"
+    >
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="text-sm font-medium">
+          {{ $t('views.SettingsHitlReviewView.bulk_selected', { count: selectedCount }) }}
+        </span>
+        <button
+          type="button"
+          :disabled="bulkClaiming || bulkRejecting"
+          data-testid="hitl-review-bulk-claim"
+          class="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          @click="bulkClaim"
+        >
+          {{ bulkClaiming ? $t('views.SettingsHitlReviewView.bulk_claiming') : $t('views.SettingsHitlReviewView.bulk_claim') }}
+        </button>
+        <button
+          type="button"
+          :disabled="bulkClaiming || bulkRejecting || showBulkRejectInput"
+          data-testid="hitl-review-bulk-reject"
+          class="rounded-lg bg-destructive px-3 py-1.5 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+          @click="openBulkReject"
+        >
+          {{ $t('views.SettingsHitlReviewView.bulk_reject') }}
+        </button>
+        <button
+          type="button"
+          :disabled="bulkClaiming || bulkRejecting"
+          class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+          @click="clearSelection"
+        >
+          {{ $t('views.SettingsHitlReviewView.bulk_clear') }}
+        </button>
+      </div>
+      <!-- Bulk reject shared reason input -->
+      <div v-if="showBulkRejectInput" class="mt-3 flex flex-wrap items-end gap-3">
+        <label class="flex-1">
+          <span class="mb-1 block text-sm font-medium">{{ $t('views.SettingsHitlReviewView.bulk_reject_reason_label') }}</span>
+          <textarea
+            v-model="bulkRejectReason"
+            rows="2"
+            data-testid="hitl-review-bulk-reject-reason"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            :placeholder="$t('views.SettingsHitlReviewView.bulk_reject_reason_placeholder')"
+          />
+        </label>
+        <div class="flex gap-2">
+          <button
+            type="button"
+            :disabled="bulkRejecting"
+            data-testid="hitl-review-bulk-reject-confirm"
+            class="rounded-lg bg-destructive px-3 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+            @click="confirmBulkReject"
+          >
+            {{ bulkRejecting ? $t('views.SettingsHitlReviewView.bulk_rejecting') : $t('views.SettingsHitlReviewView.bulk_reject_confirm') }}
+          </button>
+          <button
+            type="button"
+            :disabled="bulkRejecting"
+            class="rounded-lg border border-input bg-background px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+            @click="cancelBulkReject"
+          >
+            {{ $t('views.SettingsHitlReviewView.bulk_reject_cancel') }}
+          </button>
+        </div>
+      </div>
+      <!-- Per-gate outcome report -->
+      <div
+        v-if="bulkOutcomes"
+        data-testid="hitl-review-bulk-outcomes"
+        class="mt-3 space-y-1 text-sm"
+      >
+        <p class="font-medium">{{ $t('views.SettingsHitlReviewView.bulk_outcomes_title') }}</p>
+        <div v-for="outcome in bulkOutcomes" :key="outcome.key" class="flex items-start gap-2">
+          <span
+            class="mt-0.5 inline-block h-2 w-2 flex-shrink-0 rounded-full"
+            :class="{
+              'bg-success': outcome.status === 'succeeded',
+              'bg-muted-foreground': outcome.status.startsWith('skipped'),
+              'bg-destructive': outcome.status === 'failed',
+            }"
+          />
+          <span>
+            <span class="font-mono text-xs">{{ shortId(outcome.key.split(':')[1]) }}</span>
+            — {{ $t(`views.SettingsHitlReviewView.bulk_outcome_${outcome.status.replace(/-/g, '_')}`) }}
+            <span v-if="outcome.error" class="text-destructive">{{ outcome.error }}</span>
+          </span>
+        </div>
+        <button
+          type="button"
+          class="mt-1 text-xs text-muted-foreground hover:text-foreground"
+          data-testid="hitl-review-bulk-outcomes-dismiss"
+          @click="dismissBulkOutcomes"
+        >
+          {{ $t('views.SettingsHitlReviewView.bulk_outcomes_dismiss') }}
+        </button>
+      </div>
+    </div>
     <div class="flex items-center gap-1 text-xs text-muted-foreground">
       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       {{ $t('views.SettingsHitlReviewView.auto_refresh', { seconds: refreshCountdown }) }}
@@ -100,7 +204,16 @@
         data-testid="hitl-review-column-headers"
         class="flex items-center gap-4 px-4 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground"
       >
-        <span class="h-4 w-4 flex-shrink-0" aria-hidden="true"></span>
+        <label class="h-4 w-4 flex-shrink-0">
+          <input
+            type="checkbox"
+            :checked="allSelected"
+            :aria-label="$t('views.SettingsHitlReviewView.bulk_select_all')"
+            data-testid="hitl-review-select-all"
+            class="h-4 w-4 rounded border-input accent-primary"
+            @change="toggleSelectAll"
+          />
+        </label>
         <div class="w-24 flex-shrink-0">{{ $t('views.SettingsHitlReviewView.status_label') }}</div>
         <div class="min-w-0 flex-[2]">{{ $t('views.SettingsHitlReviewView.pipeline_label') }}</div>
         <div class="min-w-0 flex-[2]">{{ $t('views.SettingsHitlReviewView.node_label') }}</div>
@@ -123,6 +236,19 @@
           :class="{ 'border-b': expandedKey === expandKey(gate) }"
           @click="toggleExpand(gate)"
         >
+          <label
+            class="h-4 w-4 flex-shrink-0"
+            @click.stop
+          >
+            <input
+              type="checkbox"
+              :checked="isSelected(gate)"
+              :aria-label="$t('views.SettingsHitlReviewView.bulk_select_gate', { id: shortId(gate.gate_id) })"
+              data-testid="hitl-review-row-checkbox"
+              class="h-4 w-4 rounded border-input accent-primary"
+              @change="toggleSelect(gate)"
+            />
+          </label>
           <svg
             class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
             :class="{ 'rotate-90': expandedKey === expandKey(gate) }"
@@ -230,6 +356,8 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import HitlGateCard from '../components/hitl/HitlGateCard.vue'
 import { usePlanStore } from '../stores/planStore'
+import { useHitlGateState } from '../composables/useHitlGateState'
+import { formatApiError } from '../lib/api/formatError'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
 import Select from '../components/shared/AppSelect.vue'
@@ -497,6 +625,214 @@ async function onGateDecided() {
   await loadGates()
 }
 
+// ---- Bulk selection + bulk actions (FAR-861) ----
+const selectedKeys = ref<Set<string>>(new Set())
+const bulkClaiming = ref(false)
+const bulkRejecting = ref(false)
+const bulkRejectReason = ref('')
+const showBulkRejectInput = ref(false)
+
+interface BulkOutcome {
+  key: string
+  status: 'succeeded' | 'skipped-already-decided' | 'skipped-claimed-by-other' | 'skipped-pending' | 'failed'
+  error?: string
+}
+
+const bulkOutcomes = ref<BulkOutcome[] | null>(null)
+
+function gateKey(gate: GateItem): string {
+  return `${gate.run_id}:${gate.gate_id}`
+}
+
+const allSelected = computed(() => {
+  if (filteredGates.value.length === 0) return false
+  return filteredGates.value.every(g => selectedKeys.value.has(gateKey(g)))
+})
+
+const someSelected = computed(() => selectedKeys.value.size > 0)
+
+const selectedCount = computed(() => selectedKeys.value.size)
+
+function toggleSelectAll() {
+  if (allSelected.value) {
+    selectedKeys.value = new Set()
+  } else {
+    selectedKeys.value = new Set(filteredGates.value.map(g => gateKey(g)))
+  }
+}
+
+function toggleSelect(gate: GateItem) {
+  const key = gateKey(gate)
+  const next = new Set(selectedKeys.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  selectedKeys.value = next
+}
+
+function isSelected(gate: GateItem): boolean {
+  return selectedKeys.value.has(gateKey(gate))
+}
+
+function clearSelection() {
+  selectedKeys.value = new Set()
+  bulkOutcomes.value = null
+  showBulkRejectInput.value = false
+  bulkRejectReason.value = ''
+}
+
+function dismissBulkOutcomes() {
+  bulkOutcomes.value = null
+}
+
+function claimFailureMessage(err: unknown): string {
+  const detail = formatApiError(err)
+  const problemType = typeof err === 'object' && err !== null
+    ? (err as Record<string, unknown>).type
+    : undefined
+  if (problemType === 'urn:problem:modulo:hitl_gate_already_claimed') {
+    return t('hitl.gate.claim_failed_already_claimed')
+  }
+  if (problemType === 'urn:problem:modulo:hitl_gate_already_decided') {
+    return t('hitl.gate.claim_failed_already_decided')
+  }
+  if (problemType === 'urn:problem:modulo:hitl_run_not_awaiting') {
+    return t('hitl.gate.claim_failed_run_not_awaiting', { reason: detail })
+  }
+  return `${t('hitl.gate.claim_failed')} ${detail}`
+}
+
+async function bulkClaim() {
+  bulkClaiming.value = true
+  bulkOutcomes.value = null
+  const outcomes: BulkOutcome[] = []
+  const selected = filteredGates.value.filter(g => selectedKeys.value.has(gateKey(g)))
+  let anyFailed = false
+
+  for (const gate of selected) {
+    const key = gateKey(gate)
+    const status = gateStatus(gate)
+
+    if (status === 'approved' || status === 'rejected') {
+      outcomes.push({ key, status: 'skipped-already-decided' })
+      continue
+    }
+    if (status === 'claimed') {
+      outcomes.push({ key, status: 'skipped-claimed-by-other' })
+      continue
+    }
+
+    try {
+      const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/claim', {
+        params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
+        body: { expiry_minutes: 15 },
+      })
+      if (err) {
+        outcomes.push({ key, status: 'failed', error: claimFailureMessage(err) })
+        anyFailed = true
+      } else if (data) {
+        const d = data as { claim_token: string; expires_at: string }
+        const gateState = useHitlGateState(gate.run_id, gate.gate_id)
+        gateState.setClaimToken(d.claim_token)
+        outcomes.push({ key, status: 'succeeded' })
+      }
+    } catch (e: unknown) {
+      outcomes.push({ key, status: 'failed', error: claimFailureMessage(e) })
+      anyFailed = true
+    }
+  }
+
+  bulkOutcomes.value = outcomes
+  bulkClaiming.value = false
+
+  if (anyFailed) {
+    const failedMessages = outcomes.filter(o => o.status === 'failed').map(o => o.error).join('; ')
+    showClaimFailureBanner(t('views.SettingsHitlReviewView.bulk_claim_partial_failure', { errors: failedMessages }))
+  }
+
+  try {
+    await loadGates()
+  } catch {
+    // Ignore — the banner above already explains what happened.
+  }
+}
+
+function openBulkReject() {
+  showBulkRejectInput.value = true
+  bulkRejectReason.value = ''
+}
+
+function cancelBulkReject() {
+  showBulkRejectInput.value = false
+  bulkRejectReason.value = ''
+}
+
+async function confirmBulkReject() {
+  bulkRejecting.value = true
+  bulkOutcomes.value = null
+  const selected = filteredGates.value.filter(g => selectedKeys.value.has(gateKey(g)))
+  const outcomes: BulkOutcome[] = []
+  let anyFailed = false
+  const reason = bulkRejectReason.value.trim() || t('hitl.gate.rejected_by_reviewer')
+
+  for (const gate of selected) {
+    const key = gateKey(gate)
+    const gateState = useHitlGateState(gate.run_id, gate.gate_id)
+    const token = gateState.claimToken.value
+
+    if (gate.decision === 'approved' || gate.decision === 'rejected') {
+      outcomes.push({ key, status: 'skipped-already-decided' })
+      continue
+    }
+    if (!gate.claimed_by) {
+      outcomes.push({ key, status: 'skipped-pending' })
+      continue
+    }
+    if (gate.claimed_by && !gate.claimed_by_me && !token) {
+      outcomes.push({ key, status: 'skipped-claimed-by-other' })
+      continue
+    }
+    if (!token) {
+      outcomes.push({ key, status: 'skipped-claimed-by-other' })
+      continue
+    }
+
+    try {
+      const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/reject', {
+        params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
+        body: { claim_token: token, reason },
+      })
+      if (err) {
+        outcomes.push({ key, status: 'failed', error: `${t('hitl.gate.reject_failed')} ${formatApiError(err)}` })
+        anyFailed = true
+      } else {
+        gateState.clear()
+        outcomes.push({ key, status: 'succeeded' })
+      }
+    } catch (e: unknown) {
+      outcomes.push({ key, status: 'failed', error: `${t('hitl.gate.reject_failed')} ${formatApiError(e)}` })
+      anyFailed = true
+    }
+  }
+
+  bulkOutcomes.value = outcomes
+  bulkRejecting.value = false
+  showBulkRejectInput.value = false
+  bulkRejectReason.value = ''
+
+  if (anyFailed) {
+    const failedMessages = outcomes.filter(o => o.status === 'failed').map(o => o.error).join('; ')
+    showClaimFailureBanner(t('views.SettingsHitlReviewView.bulk_reject_partial_failure', { errors: failedMessages }))
+  }
+
+  try {
+    await loadGates()
+  } catch {
+    // Ignore — the banner above already explains what happened.
+  }
+}
 
 function toggleExpand(gate: GateItem) {
   const key = expandKey(gate)
