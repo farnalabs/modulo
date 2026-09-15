@@ -69,9 +69,14 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.lifecycle_map.advancement import advance_journeys
+from modulo.core.lifecycle_map.advancement import (
+    advance_journeys,
+    agent_minting_enabled,
+    confirm_reported_refs,
+)
 from modulo.db.lifecycle_refs import (
     REFS_EVENT_ASSIGNED_SOURCE,
+    REFS_EVENT_DISMISSAL_SUPPRESSED,
     REFS_EVENT_MALFORMED,
     REFS_EVENT_SHADOW_STRIP_HIT,
     REFS_EVENT_UNKNOWN_SOURCE,
@@ -81,6 +86,9 @@ from modulo.db.lifecycle_refs import (
 from modulo.db.models.journey import Journey
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 
+# FAR-795: engine-assigned agent provenance (rank 0).
+_AGENT_SOURCE = "agent"
+
 _log = logging.getLogger(__name__)
 
 __all__ = [
@@ -89,8 +97,10 @@ __all__ = [
     "record_journey_finalise_attempt",
     "record_journey_parse_failure",
     "record_journey_reconcile_drift",
+    "record_refs_agent_mint_budget_exceeded",
     "record_refs_by_source",
     "record_refs_cap_dropped",
+    "record_refs_dismissal_suppressed",
     "record_refs_malformed",
     "record_refs_shadow_strip_hit",
     "record_refs_unknown_source",
@@ -126,12 +136,26 @@ _refs_unknown_source_total: Any = None
 _refs_shadow_strip_hits_total: Any = None
 _refs_malformed_total: Any = None
 _refs_cap_dropped_total: Any = None
+_refs_agent_minted_total: Any = None
+_refs_agent_mint_suppressed_total: Any = None
+_refs_agent_mint_budget_exceeded_total: Any = None
+_refs_dismissal_suppressed_total: Any = None
 
 # The cap-drop event name emitted by the finalize merge and the node-input
 # injection paths (both report it verbatim through ``notify_refs_event``).
 # Declared locally — the db-layer event vocabulary in ``lifecycle_refs``
 # predates this counter and does not carry it.
 _REFS_EVENT_CAP_DROPPED = "refs_cap_dropped"
+# FAR-795 slice B: agent-mint counter event names. The db layer cannot import
+# core, so ``modulo.db.crud.run`` emits these raw strings through the
+# ``lifecycle_refs`` counter hook and this sink maps them onto the OTel
+# counters — the string pair is a deliberate layering mirror.
+REFS_EVENT_AGENT_MINTED = "agent_minted"
+REFS_EVENT_AGENT_MINT_SUPPRESSED = "agent_mint_suppressed_by_flag"
+# FAR-795: agent mints denied by the per-org budget cap (consume_agent_mint_budget
+# returned False). Mirrors the flag-suppressed event so the two suppression reasons
+# are independently observable.
+REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED = "agent_mint_budget_exceeded"
 
 
 def _get_meter() -> Any:
@@ -159,7 +183,11 @@ def _ensure() -> None:
         _refs_unknown_source_total, \
         _refs_shadow_strip_hits_total, \
         _refs_malformed_total, \
-        _refs_cap_dropped_total
+        _refs_cap_dropped_total, \
+        _refs_agent_minted_total, \
+        _refs_agent_mint_suppressed_total, \
+        _refs_agent_mint_budget_exceeded_total, \
+        _refs_dismissal_suppressed_total
     if _journey_advance_total is not None:
         return
     meter = _get_meter()
@@ -218,6 +246,26 @@ def _ensure() -> None:
     _refs_cap_dropped_total = meter.create_counter(
         name="modulo_work_item_refs_cap_dropped_total",
         description="Work-item refs dropped by the unified work_item_refs cap (finalise merge + node-input injection)",
+        unit="1",
+    )
+    _refs_agent_minted_total = meter.create_counter(
+        name="modulo_work_item_refs_agent_minted_total",
+        description="Agent-sourced journey mints that created a journey row (flag ON, FAR-795)",
+        unit="1",
+    )
+    _refs_agent_mint_suppressed_total = meter.create_counter(
+        name="modulo_work_item_refs_agent_mint_suppressed_by_flag_total",
+        description="Agent-sourced journey mints suppressed because the org flag was OFF (FAR-795)",
+        unit="1",
+    )
+    _refs_agent_mint_budget_exceeded_total = meter.create_counter(
+        name="modulo_work_item_refs_agent_mint_budget_exceeded_total",
+        description="Agent-sourced journey mints denied by the per-org agent-mint budget cap (FAR-795)",
+        unit="1",
+    )
+    _refs_dismissal_suppressed_total = meter.create_counter(
+        name="modulo_work_item_refs_dismissal_suppressed_total",
+        description="Journeys re-mint/advance attempts suppressed by an operator dismissal (FAR-795)",
         unit="1",
     )
 
@@ -315,6 +363,38 @@ def record_refs_cap_dropped(count: int = 1) -> None:
         _refs_cap_dropped_total.add(count)
 
 
+def record_refs_agent_minted(count: int = 1) -> None:
+    """Record agent-sourced journey mints that created a journey row (FAR-795)."""
+    if _refs_agent_minted_total is None:
+        _ensure()
+    if _refs_agent_minted_total is not None:
+        _refs_agent_minted_total.add(count)
+
+
+def record_refs_agent_mint_suppressed_by_flag(count: int = 1) -> None:
+    """Record agent-sourced journey mints suppressed by the org flag (FAR-795)."""
+    if _refs_agent_mint_suppressed_total is None:
+        _ensure()
+    if _refs_agent_mint_suppressed_total is not None:
+        _refs_agent_mint_suppressed_total.add(count)
+
+
+def record_refs_agent_mint_budget_exceeded(count: int = 1) -> None:
+    """Record agent-sourced journey mints denied by the per-org budget cap (FAR-795)."""
+    if _refs_agent_mint_budget_exceeded_total is None:
+        _ensure()
+    if _refs_agent_mint_budget_exceeded_total is not None:
+        _refs_agent_mint_budget_exceeded_total.add(count)
+
+
+def record_refs_dismissal_suppressed(count: int = 1) -> None:
+    """Record journey mint/advance attempts suppressed by an operator dismissal (FAR-795)."""
+    if _refs_dismissal_suppressed_total is None:
+        _ensure()
+    if _refs_dismissal_suppressed_total is not None:
+        _refs_dismissal_suppressed_total.add(count)
+
+
 def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
     """Dispatch db-layer ref events onto the FAR-794 counters.
 
@@ -338,6 +418,14 @@ def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
         record_refs_malformed(int(count) if count is not None else 1)
     elif event == _REFS_EVENT_CAP_DROPPED:
         record_refs_cap_dropped(int(count) if count is not None else 1)
+    elif event == REFS_EVENT_AGENT_MINTED:
+        record_refs_agent_minted(int(count) if count is not None else 1)
+    elif event == REFS_EVENT_AGENT_MINT_SUPPRESSED:
+        record_refs_agent_mint_suppressed_by_flag(int(count) if count is not None else 1)
+    elif event == REFS_EVENT_AGENT_MINT_BUDGET_EXCEEDED:
+        record_refs_agent_mint_budget_exceeded(int(count) if count is not None else 1)
+    elif event == REFS_EVENT_DISMISSAL_SUPPRESSED:
+        record_refs_dismissal_suppressed(int(count) if count is not None else 1)
 
 
 def _init_once_register_refs_counter_hook() -> None:
@@ -401,13 +489,17 @@ async def _drift_refs(
     * STALE applies only to *advancing* runs (their evidence can move);
       ``cancelled`` / ``stalled`` runs mint-only, so only MISSING refs are
       drift for them (a stale row can never be moved and must not re-fire).
+    * FAR-795 slice C: a DISMISSED tombstone row is never drift — the sweep
+      must not resurrect a dismissed journey. Its suppressed re-advance
+      attempt is counted (``refs_dismissal_suppressed``) and the ref is
+      skipped.
     """
     if not canonical:
         return []
     clauses = [and_(Journey.kind == entry["kind"], Journey.ref == entry["ref"]) for entry in canonical]
     rows = (
         await session.execute(
-            select(Journey.kind, Journey.ref, Journey.updated_at)
+            select(Journey.kind, Journey.ref, Journey.updated_at, Journey.dismissed_at)
             .where(
                 Journey.organisation_id == organisation_id,
                 or_(*clauses),
@@ -415,12 +507,23 @@ async def _drift_refs(
             .execution_options(populate_existing=True)
         )
     ).all()
-    found: dict[tuple[str, str], datetime | None] = {(row[0], row[1]): row[2] for row in rows}
+    found: dict[tuple[str, str], tuple[datetime | None, datetime | None]] = {
+        (row[0], row[1]): (row[2], row[3]) for row in rows
+    }
     drift: list[dict[str, Any]] = []
+    dismissed = 0
     for entry in canonical:
-        updated_at = found.get((entry["kind"], entry["ref"]))
-        if updated_at is None or (advancing and anchor is not None and updated_at < anchor):
+        row = found.get((entry["kind"], entry["ref"]))
+        if row is None:
             drift.append(entry)
+            continue
+        updated_at, dismissed_at = row
+        if dismissed_at is not None:
+            dismissed += 1
+        elif updated_at is None or (advancing and anchor is not None and updated_at < anchor):
+            drift.append(entry)
+    if dismissed:
+        record_refs_dismissal_suppressed(dismissed)
     return drift
 
 
@@ -472,9 +575,13 @@ def _drift_predicate(dialect: str) -> Any:
         .where(
             or_(
                 Journey.id.is_(None),
+                # FAR-795 slice C: a joined DISMISSED row is never stale drift
+                # — the sweep must not select-and-resurrect a dismissed
+                # journey forever. Mirrors the ``_drift_refs`` skip.
                 and_(
                     stale_evidence,
                     Run.status.in_(_ADVANCING_STATUSES),
+                    Journey.dismissed_at.is_(None),
                 ),
             )
         )
@@ -521,6 +628,13 @@ async def reconcile_journeys(session: AsyncSession, batch_size: int = 500) -> in
         drift = await _drift_refs(session, run.organisation_id, canonical, anchor, advancing=advancing)
         if not drift:
             continue
+        # FAR-795 slice B: agent-sourced drift refs mint only behind the
+        # org flag (fail-closed). The sweep is the third mint surface that
+        # can observe an agent ref — flag OFF means zero agent mints here
+        # too, and the suppressed mints are counted.
+        drift, skip_advance = await _apply_agent_drift_gate(session, run.organisation_id, drift)
+        if skip_advance:
+            continue
         drift_total += len(drift)
         record_journey_reconcile_drift(len(drift), kind="stale" if advancing else "missing")
         try:
@@ -549,3 +663,33 @@ async def reconcile_journeys(session: AsyncSession, batch_size: int = 500) -> in
         extra={"candidates": len(candidates), "advanced": advanced, "drift": drift_total, "errors": errors},
     )
     return advanced
+
+
+async def _apply_agent_drift_gate(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    drift: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Apply the fail-closed agent-mint gate to a run's drift refs (FAR-795 B).
+
+    Returns ``(drift, skip_advance)``. The sweep is the third mint surface that
+    can observe an agent ref: flag OFF drops agent entries (counted as
+    suppressed) and, when that empties the drift, signals ``skip_advance`` so the
+    run is not re-advanced with zero refs. Flag ON leaves the drift intact and
+    counts fresh agent mints (row-existence probe fail-open).
+    """
+    agent_minting = await agent_minting_enabled(session, org_id)
+    agent_drift = [entry for entry in drift if entry.get("source") == _AGENT_SOURCE]
+    if not agent_drift:
+        return drift, False
+    if not agent_minting:
+        record_refs_agent_mint_suppressed_by_flag(len(agent_drift))
+        filtered = [entry for entry in drift if entry.get("source") != _AGENT_SOURCE]
+        return filtered, not bool(filtered)
+    try:
+        confirmed, _unmatched = await confirm_reported_refs(session, org_id, agent_drift)
+    except Exception:
+        _log.exception("journey_reconcile.agent_mint_probe_failed org=%s", org_id)
+        confirmed = []
+    record_refs_agent_minted(len(agent_drift) - len(confirmed))
+    return drift, False

@@ -72,7 +72,7 @@ class Organisation(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # created_by is deliberately NOT a foreign key: the first organisation must
     # exist before its first user, so a FK to accounts.id would block bootstrap
-    # ordering. Migration 0241_drop_organisations_audit_columns drops the
+    # ordering. Migration 0243_drop_organisations_audit_columns drops the
     # fk_organisations_created_by constraint the DB previously carried, matching
     # this non-FK ORM declaration.
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
