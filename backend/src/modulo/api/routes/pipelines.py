@@ -1298,7 +1298,8 @@ def _graph_response(
     _read_ctx = {"legacy_read": True}
     valid_nodes: list[PipelineGraphNode] = []
     for node_dict in nodes:
-        node_id = str(node_dict.get("id", "unknown"))
+        raw_node_id = node_dict.get("id")
+        node_id = str(raw_node_id) if raw_node_id is not None else "unknown"
         try:
             # First attempt: strict validation (write-path quality).
             valid_nodes.append(PipelineGraphNode.model_validate(node_dict))
@@ -1362,7 +1363,8 @@ def _graph_response(
     # pipelines whose gate descriptions predate the minimum stay readable.
     valid_edges: list[PipelineGraphEdge] = []
     for edge_dict in edges:
-        edge_id = str(edge_dict.get("id", "unknown"))
+        raw_edge_id = edge_dict.get("id")
+        edge_id = str(raw_edge_id) if raw_edge_id is not None else "unknown"
         try:
             valid_edges.append(PipelineGraphEdge.model_validate(edge_dict, context=_read_ctx))
         except ValidationError as exc:
