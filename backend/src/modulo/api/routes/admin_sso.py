@@ -98,11 +98,27 @@ class SsoProviderResponse(BaseModel):
     enabled: bool
     auto_provision: bool
     default_role: str
-    allowed_domains: list[str]
+    allowed_domains: list[str] = Field(default_factory=list)
     created_at: datetime
 
     model_config = {"from_attributes": True}
     updated_at: datetime
+
+    @field_validator("allowed_domains", mode="before")
+    @classmethod
+    def _coerce_allowed_domains_none(cls, value: object) -> list[str]:
+        """Rows constructed without a flush (and legacy rows) carry NULL; expose []."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                return []
+            return parsed if isinstance(parsed, list) else []
+        if isinstance(value, list):
+            return value
+        return []
 
     @field_validator("scopes", mode="before")
     @classmethod
@@ -298,10 +314,11 @@ async def update_provider_endpoint(
     updates = req.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
-    try:
-        updates["allowed_domains"] = validate_allowed_domains(updates["allowed_domains"])
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if "allowed_domains" in updates:
+        try:
+            updates["allowed_domains"] = validate_allowed_domains(updates["allowed_domains"])
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     try:
         async with session.begin():

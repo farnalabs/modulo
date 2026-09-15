@@ -76,6 +76,7 @@ def _make_mock_provider(**overrides: object) -> MagicMock:
     provider.enabled = overrides.get("enabled", True)
     provider.auto_provision = overrides.get("auto_provision", True)
     provider.default_role = overrides.get("default_role", "runner")
+    provider.allowed_domains = overrides.get("allowed_domains", [])
     provider.group_mappings = overrides.get("group_mappings", [])
     provider.created_at = _NOW
     provider.updated_at = _NOW
@@ -205,7 +206,10 @@ class TestCreateProvider:
     URL = "/api/v1/admin/sso/providers"
 
     def test_create_oidc_provider(self, client: TestClient) -> None:
-        mock_provider = _make_mock_provider()
+        # FAR-855: a create without allowed_domains would be unrestricted
+        # (mode 3) and is rejected with 422 while the flag is off, so this
+        # happy-path test uses an allowlisted provider.
+        mock_provider = _make_mock_provider(allowed_domains=["example.com"])
         with patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)):
             resp = client.post(
                 self.URL,
@@ -218,6 +222,7 @@ class TestCreateProvider:
                     "scopes": ["openid", "profile"],
                     "auto_provision": True,
                     "default_role": "operator",
+                    "allowed_domains": ["example.com"],
                 },
             )
             assert resp.status_code == 201
@@ -227,7 +232,10 @@ class TestCreateProvider:
 
     def test_create_saml_provider(self, client: TestClient) -> None:
         mock_provider = _make_mock_provider(
-            provider_type="saml", name="Test SAML", metadata_url="https://idp.example.com/metadata"
+            provider_type="saml",
+            name="Test SAML",
+            metadata_url="https://idp.example.com/metadata",
+            auto_provision=False,
         )
         with patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)):
             resp = client.post(
@@ -237,6 +245,7 @@ class TestCreateProvider:
                     "name": "Test SAML",
                     "metadata_url": "https://idp.example.com/metadata",
                     "entity_id": "modulo",
+                    "auto_provision": False,
                 },
             )
             assert resp.status_code == 201
@@ -269,7 +278,9 @@ class TestUpdateProvider:
     URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010"
 
     def test_update_provider(self, client: TestClient) -> None:
-        mock_provider = _make_mock_provider(name="Updated Name")
+        # FAR-855: the update path validates the MERGED provider state; the
+        # returned mock must not look like an unrestricted (mode 3) provider.
+        mock_provider = _make_mock_provider(name="Updated Name", auto_provision=False)
         with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)):
             resp = client.put(self.URL, json={"name": "Updated Name"})
             assert resp.status_code == 200

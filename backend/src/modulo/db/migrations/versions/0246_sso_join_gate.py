@@ -25,7 +25,6 @@ Create Date: 2026-09-15
 
 from alembic import op
 from sqlalchemy import inspect, text
-from sqlalchemy.engine import Connection
 
 revision = "0246_sso_join_gate"
 down_revision = "0245_drop_organisations_created_by_fk"

@@ -1,11 +1,14 @@
 """SSO (OIDC + SAML) unit tests: state signing, provider parsing, JIT provisioning, routes."""
 
 import base64
+import contextlib
 import json
 import uuid
 from collections.abc import Generator
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, cast
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from defusedxml import ElementTree
@@ -958,6 +961,8 @@ class TestSamlProcessResponse:
                 "saml",
                 "saml:https://idp.example.com:user@example.com",
                 default_org_id=None,
+                sso_provider=ANY,
+                email_verified=True,
             )
             mock_tok.assert_awaited_once()
 
@@ -1502,6 +1507,8 @@ class TestSystemSessionProviderResolution:
             "oidc",
             "auth0:abc",
             default_org_id=org_id,
+            sso_provider=ANY,
+            email_verified=ANY,
         )
         mock_tok.assert_awaited_once()
 
@@ -1876,3 +1883,284 @@ class TestOidcMultiHostIdp:
                     "auth-code", signed, settings, session, session, "http://localhost/callback"
                 )
             mock_ex.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-855: the SSO join gate (invitation / domain-allowlist / operator flag)
+# ---------------------------------------------------------------------------
+
+
+def _gate_provider(**overrides: object) -> SimpleNamespace:
+    base: dict[str, object] = {
+        "provider_id": "corporate",
+        "name": "Corporate",
+        "provider_type": "oidc",
+        "auto_provision": False,
+        "allowed_domains": [],
+        "default_role": "runner",
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def _gate_invitation(role: str = "runner") -> SimpleNamespace:
+    """A live invitation pending consumption (id/email matched by the CRUD lookup)."""
+    return SimpleNamespace(id=uuid.uuid4(), organisation_id=uuid.uuid4(), org_role=role)
+
+
+class TestSsoJoinGate:
+    """FAR-855: a previously-unknown SSO identity must NOT self-join an org.
+
+    The mocks hang off an ExitStack created BEFORE the denial can raise, so
+    the post-assertions (create_membership never awaited, ...) stay reachable
+    in the deny paths.
+    """
+
+    ORG_ID = uuid.uuid4()
+
+    def _gate_mocks(self) -> tuple[contextlib.ExitStack, SimpleNamespace]:
+        stack = contextlib.ExitStack()
+        mocks = SimpleNamespace(
+            get_acct=stack.enter_context(patch("modulo.auth.sso.get_account_by_email", new_callable=AsyncMock)),
+            membership=stack.enter_context(
+                patch("modulo.auth.sso.get_membership_by_account_and_org", new_callable=AsyncMock)
+            ),
+            invite=stack.enter_context(patch("modulo.auth.sso.get_live_for_email", new_callable=AsyncMock)),
+            consume=stack.enter_context(patch("modulo.auth.sso.consume_invitation", new_callable=AsyncMock)),
+            create=stack.enter_context(patch("modulo.auth.sso.create_membership", new_callable=AsyncMock)),
+            reactivate=stack.enter_context(patch("modulo.auth.sso.reactivate_membership", new_callable=AsyncMock)),
+            flag=stack.enter_context(
+                patch("modulo.auth.sso.resolve_sso_unrestricted_provisioning", new_callable=AsyncMock)
+            ),
+            audit=stack.enter_context(patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)),
+        )
+        mocks.get_acct.return_value = None
+        mocks.membership.return_value = None
+        mocks.invite.return_value = None
+        mocks.flag.return_value = False
+        mocks.consume.return_value = True
+        mocks.create.return_value = SimpleNamespace(role="runner")
+        return stack, mocks
+
+    async def _join(
+        self,
+        settings: Settings,
+        session: AsyncSession,
+        provider: SimpleNamespace | None,
+        email: str,
+        *,
+        email_verified: bool = True,
+    ) -> tuple[object, object, str]:
+        from modulo.auth.sso import jit_provision_user
+
+        # The gate is typed against the SsoProvider model; the tests drive it
+        # with structurally-identical stand-ins, so cast explicitly.
+        sso_provider = cast("Any", provider)
+        return await jit_provision_user(
+            session,
+            settings,
+            email,
+            "New User",
+            "oidc",
+            "corporate:sub",
+            default_org_id=self.ORG_ID,
+            sso_provider=sso_provider,
+            email_verified=email_verified,
+        )
+
+    async def test_mode1_default_denies_unknown_identity_without_account_write(self) -> None:
+        from modulo.auth.sso import SsoProvisioningDeniedError
+
+        stack, mocks = self._gate_mocks()
+        with stack, pytest.raises(SsoProvisioningDeniedError, match="not been invited"):
+            await self._join(_override(), _mock_session(), _gate_provider(), "new@example.com")
+        mocks.get_acct.assert_awaited_once()
+        mocks.create.assert_not_awaited()
+        mocks.consume.assert_not_awaited()
+
+    async def test_mode1_live_invitation_joins_with_invitation_role_and_consumes(self) -> None:
+        stack, mocks = self._gate_mocks()
+        invitation = _gate_invitation(role="operator")
+        settings = _override()
+        session = _mock_session()
+        with stack:
+            mocks.get_acct.side_effect = [None, SimpleNamespace(id=uuid.uuid4(), email="new@example.com")]
+            mocks.invite.return_value = invitation
+            mocks.create.return_value = SimpleNamespace(role="operator")
+
+            _account, org_id, role = await self._join(settings, session, _gate_provider(), "new@example.com")
+
+        assert role == "operator"
+        assert org_id == self.ORG_ID
+        mocks.create.assert_awaited_once()
+        assert mocks.create.await_args.kwargs["role"] == "operator"
+        mocks.consume.assert_awaited_once()
+        assert mocks.consume.await_args.args[-1] is invitation
+        mocks.audit.assert_awaited_once()
+
+    async def test_mode1_invitation_audit_failure_is_fail_open(self) -> None:
+        stack, mocks = self._gate_mocks()
+        invitation = _gate_invitation(role="runner")
+        settings = _override()
+        session = _mock_session()
+        with stack:
+            mocks.get_acct.side_effect = [None, SimpleNamespace(id=uuid.uuid4(), email="new@example.com")]
+            mocks.invite.return_value = invitation
+            mocks.audit.side_effect = RuntimeError("audit chain unavailable")
+
+            _account, _org_id, role = await self._join(settings, session, _gate_provider(), "new@example.com")
+
+        assert role == "runner"
+
+    async def test_mode1_invitation_consumed_twice_raised_as_denial(self) -> None:
+        """A lost CAS race aborts the join atomically (same contract as accept-invite)."""
+        from modulo.auth.sso import SsoProvisioningDeniedError
+
+        stack, mocks = self._gate_mocks()
+        invitation = _gate_invitation(role="runner")
+        settings = _override()
+        session = _mock_session()
+        with stack:
+            mocks.get_acct.side_effect = [None, SimpleNamespace(id=uuid.uuid4(), email="new@example.com")]
+            mocks.invite.return_value = invitation
+            mocks.consume.return_value = False
+
+            with pytest.raises(SsoProvisioningDeniedError):
+                await self._join(settings, session, _gate_provider(), "new@example.com")
+
+    async def test_mode2_domain_allowlist_joins_verified_exact_domain(self) -> None:
+        stack, mocks = self._gate_mocks()
+        settings = _override()
+        session = _mock_session()
+        provider = _gate_provider(auto_provision=True, allowed_domains=["  CORP.Example.COM "], default_role="operator")
+        with stack:
+            mocks.get_acct.side_effect = [None, SimpleNamespace(id=uuid.uuid4(), email="user@corp.example.com")]
+            mocks.create.return_value = SimpleNamespace(role="operator")
+
+            _account, _org_id, role = await self._join(settings, session, provider, "user@corp.example.com")
+
+        assert role == "operator"
+        mocks.create.assert_awaited_once()
+        assert mocks.create.await_args.kwargs["role"] == "operator"
+        mocks.invite.assert_awaited_once()
+        mocks.consume.assert_not_awaited()
+
+    async def test_mode2_requires_verified_email(self) -> None:
+        from modulo.auth.sso import SsoProvisioningDeniedError
+
+        stack, mocks = self._gate_mocks()
+        provider = _gate_provider(auto_provision=True, allowed_domains=["corp.example.com"])
+        with stack, pytest.raises(SsoProvisioningDeniedError):
+            await self._join(_override(), _mock_session(), provider, "user@corp.example.com", email_verified=False)
+        mocks.create.assert_not_awaited()
+
+    async def test_mode2_exact_match_rejects_subdomains(self) -> None:
+        from modulo.auth.sso import SsoProvisioningDeniedError
+
+        stack, mocks = self._gate_mocks()
+        provider = _gate_provider(auto_provision=True, allowed_domains=["corp.example.com"])
+        with stack, pytest.raises(SsoProvisioningDeniedError):
+            await self._join(_override(), _mock_session(), provider, "attacker@sub.corp.example.com")
+        mocks.create.assert_not_awaited()
+
+    async def test_mode2_unverified_email_still_joins_via_invitation(self) -> None:
+        stack, mocks = self._gate_mocks()
+        invitation = _gate_invitation(role="operator")
+        settings = _override()
+        session = _mock_session()
+        provider = _gate_provider(auto_provision=True, allowed_domains=["corp.example.com"])
+        with stack:
+            mocks.get_acct.side_effect = [None, SimpleNamespace(id=uuid.uuid4(), email="user@corp.example.com")]
+            mocks.invite.return_value = invitation
+            mocks.create.return_value = SimpleNamespace(role="operator")
+
+            _account, _org_id, role = await self._join(
+                settings, session, provider, "user@corp.example.com", email_verified=False
+            )
+
+        assert role == "operator"
+
+    async def test_mode3_flag_off_fails_closed(self) -> None:
+        from modulo.auth.sso import SsoProvisioningDeniedError
+
+        stack, mocks = self._gate_mocks()
+        provider = _gate_provider(auto_provision=True)  # empty allowed_domains = mode 3
+        with stack, pytest.raises(SsoProvisioningDeniedError):
+            await self._join(_override(), _mock_session(), provider, "new@example.com")
+        mocks.flag.assert_awaited_once()
+        mocks.create.assert_not_awaited()
+
+    async def test_mode3_flag_on_joins_verified_email(self) -> None:
+        stack, mocks = self._gate_mocks()
+        settings = _override()
+        session = _mock_session()
+        provider = _gate_provider(auto_provision=True, default_role="operator")
+        with stack:
+            mocks.get_acct.side_effect = [None, SimpleNamespace(id=uuid.uuid4(), email="new@example.com")]
+            mocks.flag.return_value = True
+            mocks.create.return_value = SimpleNamespace(role="operator")
+
+            _account, _org_id, role = await self._join(settings, session, provider, "new@example.com")
+
+        assert role == "operator"
+        mocks.consume.assert_not_awaited()
+
+    async def test_mode3_requires_verified_email(self) -> None:
+        from modulo.auth.sso import SsoProvisioningDeniedError
+
+        stack, mocks = self._gate_mocks()
+        provider = _gate_provider(auto_provision=True)
+        with stack, pytest.raises(SsoProvisioningDeniedError):
+            await self._join(_override(), _mock_session(), provider, "new@example.com", email_verified=False)
+        mocks.flag.assert_not_awaited()
+        mocks.create.assert_not_awaited()
+
+    async def test_existing_member_role_unchanged(self) -> None:
+        stack, mocks = self._gate_mocks()
+        account = SimpleNamespace(id=uuid.uuid4(), email="member@example.com")
+        with stack:
+            mocks.get_acct.side_effect = [account, account]
+            mocks.membership.return_value = SimpleNamespace(role="runner", deactivated_at=None)
+
+            _account, _org_id, role = await self._join(
+                _override(), _mock_session(), _gate_provider(), "member@example.com"
+            )
+
+        assert role == "runner"
+        mocks.create.assert_not_awaited()
+        mocks.invite.assert_not_awaited()
+        mocks.consume.assert_not_awaited()
+
+    async def test_tombstoned_membership_reactivated_by_invitation_role(self) -> None:
+        stack, mocks = self._gate_mocks()
+        invitation = _gate_invitation(role="operator")
+        account = SimpleNamespace(id=uuid.uuid4(), email="old@example.com")
+        settings = _override()
+        session = _mock_session()
+        with stack:
+            mocks.get_acct.side_effect = [account, account]
+            mocks.membership.return_value = SimpleNamespace(role="runner", deactivated_at=datetime.now(UTC))
+            mocks.invite.return_value = invitation
+
+            _account, _org_id, role = await self._join(settings, session, _gate_provider(), "old@example.com")
+
+        assert role == "operator"
+        mocks.reactivate.assert_awaited_once()
+        assert mocks.reactivate.await_args.args[2] == "operator"
+        mocks.consume.assert_awaited_once()
+        mocks.audit.assert_awaited_once()
+
+    async def test_env_path_provider_keeps_legacy_provisioning(self) -> None:
+        stack, mocks = self._gate_mocks()
+        settings = _override()
+        session = _mock_session()
+        with stack:
+            mocks.create.return_value = SimpleNamespace(role="runner")
+
+            _account, org_id, role = await self._join(settings, session, None, "legacy@example.com")
+
+        assert org_id == self.ORG_ID
+        assert role == "runner"
+        mocks.create.assert_awaited_once()
+        mocks.consume.assert_not_awaited()
+        mocks.flag.assert_not_awaited()
