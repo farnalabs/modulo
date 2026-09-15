@@ -6,7 +6,7 @@
     :option-value="optionValue"
     :model-value="modelValue"
     :placeholder="placeholder"
-    append-to="self"
+    :append-to="appendTo ?? 'self'"
     @update:model-value="emit('update:modelValue', $event)"
     @blur="emit('blur', $event)"
     @focus="emit('focus', $event)"
@@ -29,6 +29,13 @@
  * to prevent dropdowns detaching to the viewport origin (FAR-851, FAR-869).
  *
  * Forwards all props, events, and slots to PrimeVue's Select.
+ *
+ * NOTE: `appendTo` is a declared prop defaulting to `'self'`. Consumers that
+ * pass `append-to` keep control; a hardcoded `append-to="self"` after
+ * `v-bind="$attrs"` would silently override the consumer's value. Declaring it
+ * (rather than reading it out of `$attrs`) is required because Vue keys
+ * fallthrough attrs by their original name, so `$attrs.appendTo` is undefined
+ * for a kebab-case `append-to`.
  *
  * NOTE: events are declared in `defineEmits` for consumer type-safety AND
  * re-emitted to the inner PrimeVue `Select` below. Declaring an event in
@@ -59,5 +66,6 @@ defineProps<{
   optionValue?: string
   modelValue?: unknown
   placeholder?: string
+  appendTo?: string
 }>()
 </script>
