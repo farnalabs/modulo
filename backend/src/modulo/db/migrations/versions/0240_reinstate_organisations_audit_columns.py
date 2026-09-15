@@ -19,6 +19,10 @@ and 0236_add_organisations_constraints create them, and 0239 is a no-op, so this
 migration must not re-create them (that raised DuplicateColumn on a clean DB).
 On a live database where the originally-applied 0239 physically dropped them,
 this migration adds them back.
+
+Revision ID: 0240_reinstate_organisations_audit_columns
+Revises: 0239_revert_organisations_audit_drift
+Create Date: 2026-09-15
 """
 
 import sqlalchemy as sa
@@ -27,8 +31,6 @@ from sqlalchemy import text
 
 revision = "0240_reinstate_organisations_audit_columns"
 down_revision = "0239_revert_organisations_audit_drift"
-
-_FK_NAME = "fk_organisations_created_by"
 
 
 def _column_exists(conn, table: str, column: str) -> bool:
