@@ -20,6 +20,7 @@ from modulo.api.routes.variants import (
     get_group,
     list_groups,
     prompt_diffs,
+    restore_group,
     run_batch,
     run_variant,
     update_group,
@@ -1369,6 +1370,520 @@ class TestBatchCompare:
             with pytest.raises(HTTPException) as exc:
                 await batch_compare(uuid.uuid4(), mock_session, principal)
             assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+class TestRestoreGroup:
+    async def test_restores_deleted_group(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+
+        mock_group = MagicMock()
+        mock_group.id = group_id
+        mock_group.pipeline_id = uuid.uuid4()
+        mock_group.name = "restored"
+        mock_group.description = None
+        mock_group.variants = []
+        mock_group.selection_strategy = "weighted"
+        mock_group.run_count = 0
+        mock_group.max_concurrent_runs = 5
+        mock_group.degraded_evals = False
+        from datetime import datetime
+
+        mock_group.created_at = datetime.now(UTC)
+        mock_group.updated_at = datetime.now(UTC)
+
+        with patch(
+            "modulo.api.routes.variants.restore_variant_group",
+            new_callable=AsyncMock,
+            return_value=mock_group,
+        ):
+            result = await restore_group(group_id, mock_session, principal)
+        assert result["name"] == "restored"
+
+    async def test_raises_404_when_not_found(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.restore_variant_group",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await restore_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 404
+
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.restore_variant_group",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await restore_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 409
+
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.restore_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await restore_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 501
+
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.restore_variant_group",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await restore_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 503
+
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.restore_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ValueError("unexpected"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await restore_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 500
+
+
+class TestMintVariantIds:
+    def test_mints_id_when_none(self) -> None:
+        from modulo.api.routes.variants import _mint_variant_ids
+
+        variants = [{"name": "a", "snapshot_id": str(uuid.uuid4()), "id": None}]
+        result = _mint_variant_ids(variants)
+        assert result[0]["id"] is not None
+        assert len(result[0]["id"]) == 36  # UUID string
+
+    def test_preserves_existing_id(self) -> None:
+        from modulo.api.routes.variants import _mint_variant_ids
+
+        vid = "my-variant-id"
+        variants = [{"name": "a", "snapshot_id": str(uuid.uuid4()), "id": vid}]
+        result = _mint_variant_ids(variants)
+        assert result[0]["id"] == vid
+
+    def test_does_not_mutate_input(self) -> None:
+        from modulo.api.routes.variants import _mint_variant_ids
+
+        variants = [{"name": "a", "snapshot_id": str(uuid.uuid4()), "id": None}]
+        _mint_variant_ids(variants)
+        assert variants[0]["id"] is None
+
+
+class TestCollectSnapshotIds:
+    def test_collects_uuid_from_dicts(self) -> None:
+        from modulo.api.routes.variants import _collect_snapshot_ids
+
+        sid = uuid.uuid4()
+        result = _collect_snapshot_ids([{"snapshot_id": sid}])
+        assert result == [sid]
+
+    def test_converts_string_to_uuid(self) -> None:
+        from modulo.api.routes.variants import _collect_snapshot_ids
+
+        sid = uuid.uuid4()
+        result = _collect_snapshot_ids([{"snapshot_id": str(sid)}])
+        assert result == [sid]
+
+    def test_skips_non_dict_variants(self) -> None:
+        from modulo.api.routes.variants import _collect_snapshot_ids
+
+        result = _collect_snapshot_ids(["not-a-dict", 42])
+        assert result == []
+
+    def test_skips_missing_snapshot_id(self) -> None:
+        from modulo.api.routes.variants import _collect_snapshot_ids
+
+        result = _collect_snapshot_ids([{"name": "a"}])
+        assert result == []
+
+    def test_skips_none_snapshot_id(self) -> None:
+        from modulo.api.routes.variants import _collect_snapshot_ids
+
+        result = _collect_snapshot_ids([{"snapshot_id": None}])
+        assert result == []
+
+
+@pytest.mark.asyncio
+class TestListGroupsDBErrors:
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.list_variant_groups",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await list_groups(pipeline_id=None, page=1, page_size=20, session=mock_session, principal=principal)
+            assert exc.value.status_code == 409
+
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.list_variant_groups",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await list_groups(pipeline_id=None, page=1, page_size=20, session=mock_session, principal=principal)
+            assert exc.value.status_code == 501
+
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.list_variant_groups",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await list_groups(pipeline_id=None, page=1, page_size=20, session=mock_session, principal=principal)
+            assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestGetGroupDBErrors:
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 409
+
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 501
+
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestUpdateGroupDBErrors:
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.name = "test"
+        body.description = None
+        body.variants = []
+        body.selection_strategy = "weighted"
+        body.max_concurrent_runs = 5
+        body.degraded_evals = False
+        body.model_dump.return_value = {}
+        body.pipeline_id = uuid.uuid4()
+        with (
+            patch("modulo.api.routes.variants.validate_batch_ownership", new_callable=AsyncMock, return_value=True),
+            patch(
+                "modulo.api.routes.variants.update_variant_group",
+                new_callable=AsyncMock,
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await update_group(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 409
+
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.name = "test"
+        body.description = None
+        body.variants = []
+        body.selection_strategy = "weighted"
+        body.max_concurrent_runs = 5
+        body.degraded_evals = False
+        body.model_dump.return_value = {}
+        body.pipeline_id = uuid.uuid4()
+        with (
+            patch("modulo.api.routes.variants.validate_batch_ownership", new_callable=AsyncMock, return_value=True),
+            patch(
+                "modulo.api.routes.variants.update_variant_group",
+                new_callable=AsyncMock,
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await update_group(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 501
+
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.name = "test"
+        body.description = None
+        body.variants = []
+        body.selection_strategy = "weighted"
+        body.max_concurrent_runs = 5
+        body.degraded_evals = False
+        body.model_dump.return_value = {}
+        body.pipeline_id = uuid.uuid4()
+        with (
+            patch("modulo.api.routes.variants.validate_batch_ownership", new_callable=AsyncMock, return_value=True),
+            patch(
+                "modulo.api.routes.variants.update_variant_group",
+                new_callable=AsyncMock,
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await update_group(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestDeleteGroupDBErrors:
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.soft_delete_variant_group",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await delete_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 409
+
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.soft_delete_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await delete_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 501
+
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.soft_delete_variant_group",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await delete_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestRunVariantDBErrors:
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.input_payload = {}
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await run_variant(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 409
+
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.input_payload = {}
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await run_variant(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 501
+
+
+@pytest.mark.asyncio
+class TestRunBatchDBErrors:
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.input_payload = {}
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await run_batch(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 409
+
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.input_payload = {}
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await run_batch(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 501
+
+
+@pytest.mark.asyncio
+class TestCoverageGapsDBErrors:
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await coverage_gaps(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 409
+
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await coverage_gaps(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 501
+
+
+@pytest.mark.asyncio
+class TestPromptDiffsDBErrors:
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await prompt_diffs(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 409
+
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await prompt_diffs(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 501
+
+
+@pytest.mark.asyncio
+class TestBatchCompareDBErrors:
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants._load_batch_compare_tx",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await batch_compare(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 409
+
+    async def test_raises_501_on_programming_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants._load_batch_compare_tx",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await batch_compare(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 501
+
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants._load_batch_compare_tx",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await batch_compare(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 503
+
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        with patch(
+            "modulo.api.routes.variants._load_batch_compare_tx",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("unexpected"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await batch_compare(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 500
 
 
 @pytest.mark.asyncio
