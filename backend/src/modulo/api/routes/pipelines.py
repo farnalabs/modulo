@@ -905,8 +905,23 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         """
         return v if isinstance(v, str) and v else " && "
 
-    @model_validator(mode="after")
-    def validate_node_type(self) -> PipelineGraphNode:
+    @model_validator(mode="wrap")
+    @classmethod
+    def validate_node_type(
+        cls,
+        data: Any,
+        handler: Any,
+        info: ValidationInfo,
+    ) -> PipelineGraphNode:
+        self: PipelineGraphNode = handler(data)
+        # FAR-874: skip type-specific validation on graph READS.  Stored
+        # graphs may reference node/field combinations that a later Pydantic
+        # model revision made stricter — the write path validated at save time.
+        # The ``legacy_read`` context is set by ``_graph_response`` and mirrors
+        # the existing pattern on ``PipelineGraphEdge`` (HITL gate description
+        # minimum length).
+        if isinstance(info.context, dict) and info.context.get("legacy_read"):
+            return self
         node_validators = {
             "manual": self._validate_manual_node,
             "composite": self._validate_composite_node,
@@ -1268,23 +1283,125 @@ def _graph_response(
     *,
     validation_issues: list[GraphValidationIssue] | None = None,
 ) -> PipelineGraphResponse:
-    try:
-        return PipelineGraphResponse(
-            nodes=[PipelineGraphNode.model_validate(node) for node in nodes],
-            # Reads re-validate STORED edges, so gate-description enforcement
-            # must stay write-scoped (FAR-613) — legacy pipelines whose gate
-            # descriptions predate the minimum stay readable/editable.
-            edges=[PipelineGraphEdge.model_validate(edge, context={"legacy_read": True}) for edge in edges],
-            validation_issues=validation_issues or [],
-        )
-    except ValidationError as e:
-        logger.exception("Pipeline graph data validation failed: %s", e.errors())
-        detail = "Pipeline graph contains invalid data. This may be caused by a schema migration."
-        detail += f" Validation errors: {e.errors()}"
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=detail,
-        ) from e
+    """Serialise stored graph data into a validated response.
+
+    A graph READ must be **total**: every stored node and edge is returned even
+    if it fails the current Pydantic schema — the data was valid at save time,
+    and a later model revision may have made validators stricter.  Per-node /
+    per-edge validation failures are collected into ``validation_issues`` so the
+    consumer (frontend, MCP, agents) can surface them without the HTTP response
+    failing with an opaque 422.  (FAR-874)
+    """
+    issues: list[GraphValidationIssue] = list(validation_issues or [])
+
+    # --- nodes: validate per-node; never fail the read ---
+    _read_ctx = {"legacy_read": True}
+    valid_nodes: list[PipelineGraphNode] = []
+    for node_dict in nodes:
+        node_id = str(node_dict.get("id", "unknown"))
+        try:
+            # First attempt: strict validation (write-path quality).
+            valid_nodes.append(PipelineGraphNode.model_validate(node_dict))
+        except ValidationError:
+            # Second attempt: lenient validation (FAR-874) — skip type-specific
+            # validators that may have been tightened since the data was saved.
+            try:
+                lenient = PipelineGraphNode.model_validate(node_dict, context=_read_ctx)
+                valid_nodes.append(lenient)
+                logger.info(
+                    "Graph read: node %s has legacy data that passes lenient "
+                    "validation but fails strict; including with warning.",
+                    node_id,
+                )
+                issues.append(
+                    GraphValidationIssue(
+                        severity="warning",
+                        code="node_legacy_data",
+                        message=(
+                            f"Node {node_id} has legacy data that passes "
+                            "lenient read validation but would fail write "
+                            "validation."
+                        ),
+                        node_id=node_id,
+                    )
+                )
+            except ValidationError as exc:
+                # Even lenient validation failed — use model_construct
+                # passthrough so the read never 422s.
+                logger.warning(
+                    "Graph read: node %s failed all validation (%s); including raw data with warning.",
+                    node_id,
+                    exc.errors(include_url=False),
+                )
+                issues.append(
+                    GraphValidationIssue(
+                        severity="warning",
+                        code="node_validation_failed",
+                        message=(f"Node {node_id} failed validation: {exc.errors(include_url=False)}"),
+                        node_id=node_id,
+                    )
+                )
+                try:
+                    fallback = PipelineGraphNode.model_construct(
+                        id=uuid.UUID(str(node_dict["id"])) if node_dict.get("id") else uuid.uuid4(),
+                        node_type=node_dict.get("node_type", "agent"),
+                        position=GraphPosition(
+                            x=node_dict.get("position", {}).get("x", 0),
+                            y=node_dict.get("position", {}).get("y", 0),
+                        ),
+                    )
+                    valid_nodes.append(fallback)
+                except Exception:
+                    logger.warning(
+                        "Graph read: could not construct fallback for node %s",
+                        node_id,
+                    )
+
+    # --- edges: validate per-edge; never fail the read ---
+    # Gate-description enforcement must stay write-scoped (FAR-613) — legacy
+    # pipelines whose gate descriptions predate the minimum stay readable.
+    valid_edges: list[PipelineGraphEdge] = []
+    for edge_dict in edges:
+        edge_id = str(edge_dict.get("id", "unknown"))
+        try:
+            valid_edges.append(PipelineGraphEdge.model_validate(edge_dict, context=_read_ctx))
+        except ValidationError as exc:
+            logger.warning(
+                "Graph read: edge %s failed Pydantic validation (%s); including raw data with warning.",
+                edge_id,
+                exc.errors(include_url=False),
+            )
+            issues.append(
+                GraphValidationIssue(
+                    severity="warning",
+                    code="edge_validation_failed",
+                    message=(f"Edge {edge_id} failed validation: {exc.errors(include_url=False)}"),
+                )
+            )
+            try:
+                fallback_edge = PipelineGraphEdge.model_construct(
+                    id=uuid.UUID(str(edge_dict["id"])) if edge_dict.get("id") else uuid.uuid4(),
+                    source_node_id=uuid.UUID(str(edge_dict["source_node_id"])),
+                    target_node_id=uuid.UUID(str(edge_dict["target_node_id"])),
+                    edge_type=edge_dict.get("edge_type", "normal"),
+                )
+                valid_edges.append(fallback_edge)
+            except Exception:
+                logger.warning(
+                    "Graph read: could not construct fallback for edge %s",
+                    edge_id,
+                )
+
+    # Use model_construct to bypass the PipelineGraphUpdate
+    # ``reject_database_conflicts`` validator — on reads we only need the
+    # per-node/per-edge validation already performed above, and fallback
+    # nodes constructed via ``model_construct`` (no Pydantic field validation)
+    # would fail re-validation here.
+    return PipelineGraphResponse.model_construct(
+        nodes=valid_nodes,
+        edges=valid_edges,
+        validation_issues=issues,
+    )
 
 
 async def _enforce_connector_team_bindings(
