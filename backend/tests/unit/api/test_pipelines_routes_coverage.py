@@ -545,14 +545,17 @@ def test_pipeline_graph_update_rejects_duplicates_and_overflow() -> None:
     assert "paths must be unique" in str(excinfo.value)
 
 
-def test_graph_response_invalid_data_maps_422() -> None:
-    from fastapi import HTTPException as HttpExceptionMarker
-
+def test_graph_response_invalid_data_returns_with_issues() -> None:
+    """FAR-874: _graph_response must never 422 on read. Invalid stored data
+    is returned with validation_issues instead of raising."""
     from modulo.api.routes.pipelines import _graph_response
 
-    with pytest.raises(HttpExceptionMarker) as excinfo:
-        _graph_response([{"id": "not-a-uuid"}], [])
-    assert excinfo.value.status_code == 422
+    resp = _graph_response([{"id": "not-a-uuid"}], [])
+    # Should return a response, not raise
+    assert resp is not None
+    # Should have validation_issues for the invalid node
+    assert resp.validation_issues
+    assert resp.validation_issues[0].severity == "warning"
 
 
 def test_collect_schema_ids_and_pin_builder() -> None:
