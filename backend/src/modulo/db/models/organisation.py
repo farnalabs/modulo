@@ -8,7 +8,6 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
-    ForeignKey,
     Index,
     Integer,
     Numeric,
@@ -71,22 +70,15 @@ class Organisation(Base):
         DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # FK added by migration 0236_add_organisations_constraints (ondelete=SET NULL
-    # so deleting the creating account nulls the column rather than blocking the
-    # drop — the "first org before first user" ordering concern is satisfied by
-    # the nullable + SET NULL pairing, not by omitting the reference).
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL", name="fk_organisations_created_by")
-    )
-    # Audit columns added by migration 0233_add_updated_at_audit_to_organisations.
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.current_timestamp(),
-        onupdate=func.current_timestamp(),
-        nullable=False,
-    )
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    # created_by is intentionally NOT an FK: the first organisation must exist
+    # before its first user, so the reference cannot be enforced. Migration
+    # 0239_revert_organisations_audit_drift dropped the fk_organisations_created_by
+    # FK that 0236 briefly added. The audit columns 0233 added
+    # (updated_at/updated_by/deleted_by) were reverted by 0239 as spurious drift
+    # (the Organisation ORM never read them) — keep the model in lockstep with
+    # the migrated schema so ORM loads of organisations do not SELECT columns the
+    # DB no longer owns.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     otel_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     plan_id: Mapped[str | None] = mapped_column(String(255))
