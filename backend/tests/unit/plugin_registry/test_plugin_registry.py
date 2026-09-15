@@ -327,7 +327,7 @@ def test_entry_point_errors_recorded_on_load_failure():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[fail_ep], []],
+        side_effect=[[fail_ep], [], [], []],
     ):
         registry.discover_plugins()
     assert registry.entry_point_errors == {"pkg-broken": "Failed to load entry point broken_con"}
@@ -555,7 +555,7 @@ def test_load_entry_point_uses_metadata_defaults():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[bare_ep], []],
+        side_effect=[[bare_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
 
@@ -577,7 +577,7 @@ def test_discover_plugins_returns_deep_copies():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[mock_ep], []],
+        side_effect=[[mock_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
 
@@ -607,7 +607,7 @@ def test_entry_point_error_cleared_on_successful_reload():
     with (
         patch(
             "modulo.core.plugin_registry.importlib.metadata.entry_points",
-            side_effect=[[fail_ep], [], [ok_ep], []],
+            side_effect=[[fail_ep], [], [], [], [ok_ep], [], [], []],
         ),
         patch("modulo.core.plugin_registry.importlib.metadata.metadata", return_value=object()),
     ):
@@ -656,7 +656,7 @@ def test_load_entry_point_failure_variants_are_skipped():
         )
         with patch(
             "modulo.core.plugin_registry.importlib.metadata.entry_points",
-            side_effect=[[fail_ep], []],
+            side_effect=[[fail_ep], [], [], []],
         ):
             discovered = registry.discover_plugins()
         assert discovered == []
@@ -672,7 +672,7 @@ def test_discover_plugins_connector_entry_point():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[mock_ep], []],
+        side_effect=[[mock_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
 
@@ -693,7 +693,7 @@ def test_discover_plugins_backend_entry_point():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[], [mock_ep]],
+        side_effect=[[], [mock_ep], [], []],
     ):
         discovered = registry.discover_plugins()
 
@@ -709,7 +709,7 @@ def test_discover_plugins_both_groups():
     ep2 = _make_mock_entry_point("modulo.model_backends", "b1", dist_name="pkg-b", load_result=_build_stub_backend)
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[ep1], [ep2]],
+        side_effect=[[ep1], [ep2], [], []],
     ):
         discovered = registry.discover_plugins()
 
@@ -725,7 +725,7 @@ def test_discover_plugins_duplicate_plugin_id():
     ep2 = _make_mock_entry_point("modulo.model_backends", "b1", dist_name="pkg-x", load_result=_build_stub_backend)
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[ep1], [ep2]],
+        side_effect=[[ep1], [ep2], [], []],
     ):
         registry.discover_plugins()
 
@@ -759,7 +759,7 @@ def test_discover_plugins_entry_point_load_failure():
     )
     with patch(
         "modulo.core.plugin_registry.importlib.metadata.entry_points",
-        side_effect=[[fail_ep], []],
+        side_effect=[[fail_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
     assert discovered == []

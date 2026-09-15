@@ -18,8 +18,6 @@ Usage:
     registry.discover_plugins()
     connector = registry.build_connector("my_connector", config, creds)
     backend = registry.build_model_backend("my_provider", api_key, model_id)
-    eval_fn = registry.build_eval("my_eval", config)
-    schema_field = registry.build_schema_field("my_type", config)
 """
 
 from __future__ import annotations
@@ -280,48 +278,6 @@ class PluginRegistry:
             logger.exception("Model backend builder %s for provider %s raised an error", builder.__name__, provider)
             raise RuntimeError(f"Model backend builder for provider {provider!r} failed") from exc
 
-    def build_eval(self, eval_type: str, config: dict[str, Any]) -> Any:
-        """Build a custom eval function from a plugin-registered builder.
-
-        Raises ``PluginNotFoundError`` if no plugin provides this eval type.
-        """
-        if not isinstance(eval_type, str):
-            raise TypeError("eval_type must be a string")
-        if not isinstance(config, dict):
-            raise TypeError("config must be a dict")
-        with self._lock:
-            builder = self._eval_builders.get(eval_type)
-        if builder is None:
-            raise PluginNotFoundError(f"No plugin registered eval function {eval_type!r}")
-        try:
-            return builder(config)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception("Eval builder %s for type %s raised an error", builder.__name__, eval_type)
-            raise RuntimeError(f"Eval builder for type {eval_type!r} failed") from exc
-
-    def build_schema_field(self, field_type: str, config: dict[str, Any]) -> Any:
-        """Build a custom schema field type from a plugin-registered builder.
-
-        Raises ``PluginNotFoundError`` if no plugin provides this field type.
-        """
-        if not isinstance(field_type, str):
-            raise TypeError("field_type must be a string")
-        if not isinstance(config, dict):
-            raise TypeError("config must be a dict")
-        with self._lock:
-            builder = self._schema_type_builders.get(field_type)
-        if builder is None:
-            raise PluginNotFoundError(f"No plugin registered schema field type {field_type!r}")
-        try:
-            return builder(config)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception("Schema field builder %s for type %s raised an error", builder.__name__, field_type)
-            raise RuntimeError(f"Schema field builder for type {field_type!r} failed") from exc
-
     def register_connector_type(
         self, type_id: str, builder: Callable[..., ConnectorBase], manifest: PluginManifest
     ) -> None:
@@ -354,36 +310,6 @@ class PluginRegistry:
             self._backend_builders[provider] = builder
             self._finalize_registration(manifest, _CAP_MODEL_BACKEND)
 
-    def register_eval(self, eval_type: str, builder: Callable[..., Any], manifest: PluginManifest) -> None:
-        """Explicitly register an eval function builder (e.g. from an in-tree module)."""
-        if not isinstance(eval_type, str):
-            raise TypeError("eval_type must be a string")
-        if not callable(builder):
-            raise TypeError("builder must be callable")
-        if not isinstance(manifest, PluginManifest):
-            raise TypeError("manifest must be a PluginManifest")
-        with self._lock:
-            if eval_type in self._eval_builders:
-                logger.warning("Overwriting existing eval function '%s' from plugin %s", eval_type, manifest.PLUGIN_ID)
-            self._eval_builders[eval_type] = builder
-            self._finalize_registration(manifest, _CAP_EVAL)
-
-    def register_schema_type(self, field_type: str, builder: Callable[..., Any], manifest: PluginManifest) -> None:
-        """Explicitly register a schema field type builder (e.g. from an in-tree module)."""
-        if not isinstance(field_type, str):
-            raise TypeError("field_type must be a string")
-        if not callable(builder):
-            raise TypeError("builder must be callable")
-        if not isinstance(manifest, PluginManifest):
-            raise TypeError("manifest must be a PluginManifest")
-        with self._lock:
-            if field_type in self._schema_type_builders:
-                logger.warning(
-                    "Overwriting existing schema field type '%s' from plugin %s", field_type, manifest.PLUGIN_ID
-                )
-            self._schema_type_builders[field_type] = builder
-            self._finalize_registration(manifest, _CAP_SCHEMA_TYPE)
-
     def _finalize_registration(self, manifest: PluginManifest, capability: str) -> None:
         """Shared bookkeeping for registering a plugin's manifest and health."""
         manifest.capabilities.add(capability)
@@ -413,14 +339,6 @@ class PluginRegistry:
         with self._lock:
             return provider in self._backend_builders
 
-    def has_eval(self, eval_type: str) -> bool:
-        with self._lock:
-            return eval_type in self._eval_builders
-
-    def has_schema_field(self, field_type: str) -> bool:
-        with self._lock:
-            return field_type in self._schema_type_builders
-
     @property
     def connector_types(self) -> frozenset[str]:
         with self._lock:
@@ -430,16 +348,6 @@ class PluginRegistry:
     def backend_providers(self) -> frozenset[str]:
         with self._lock:
             return frozenset(self._backend_builders)
-
-    @property
-    def eval_types(self) -> frozenset[str]:
-        with self._lock:
-            return frozenset(self._eval_builders)
-
-    @property
-    def schema_field_types(self) -> frozenset[str]:
-        with self._lock:
-            return frozenset(self._schema_type_builders)
 
     @property
     def entry_point_errors(self) -> dict[str, str]:
