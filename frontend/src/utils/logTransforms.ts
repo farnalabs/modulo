@@ -24,8 +24,9 @@ export function prettyPrintLog(raw: string): { html: string; applied: boolean } 
     const parsed = JSON.parse(s)
     s = JSON.stringify(parsed, null, 2)
     jsonFormatted = true
-  } catch {
+  } catch (err) {
     // Not JSON — leave as-is (with escapes resolved)
+    console.warn('prettyPrintLog: input is not JSON, leaving as-is', err)
   }
   const applied = hadEscapes || jsonFormatted
   return { html: s, applied }
