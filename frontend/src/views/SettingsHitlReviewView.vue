@@ -140,12 +140,11 @@
             <p class="truncate text-sm font-medium" data-testid="hitl-review-pipeline-name">{{ pipelineDisplayName(gate) }}</p>
           </div>
           <div class="min-w-0 flex-[2]">
-            <p class="truncate text-sm text-muted-foreground" data-testid="hitl-review-node-name">
-              <!-- FAR-727: the server-resolved gate label (the edge's human
-                   name) — the raw gate-id short ID renders only when the gate
-                   config carries no label at all. -->
-              <span v-if="gate.label">{{ gate.label }}</span>
-              <span v-else class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
+            <p class="truncate text-sm font-medium text-foreground" data-testid="hitl-review-node-name">
+              {{ gate.label || shortId(gate.gate_id) }}
+            </p>
+            <p v-if="gateDescriptionSnippet(gate)" class="mt-0.5 truncate text-xs text-muted-foreground" data-testid="hitl-review-snippet">
+              {{ gateDescriptionSnippet(gate) }}
             </p>
           </div>
           <div class="min-w-0 flex-1">
@@ -411,6 +410,20 @@ function pipelineDisplayName(gate: GateItem): string {
   const cached = pipelineName(gate.pipeline_id)
   if (cached) return cached
   return t('views.SettingsHitlReviewView.deleted_pipeline_fallback', { id: shortId(gate.pipeline_id) })
+}
+
+/** FAR-858: one-line snippet for the collapsed row — gate description or condition-result value. */
+function gateDescriptionSnippet(gate: GateItem): string {
+  if (gate.description && gate.description.trim()) return gate.description
+  const ctx = gate.context
+  if (ctx && typeof ctx === 'object' && !Array.isArray(ctx)) {
+    const cr = (ctx as Record<string, unknown>).condition_result
+    if (cr && typeof cr === 'object' && !Array.isArray(cr)) {
+      const entry = cr as Record<string, unknown>
+      if (typeof entry.value === 'string' && entry.value.trim()) return entry.value
+    }
+  }
+  return ''
 }
 
 function matchesPipeline(gate: GateItem): boolean {

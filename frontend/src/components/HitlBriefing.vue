@@ -11,7 +11,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-const showDetails = ref(false)
+const showDetails = ref(true)
 
 const ctx = computed<Record<string, unknown> | null>(() =>
   props.context && typeof props.context === 'object' && !Array.isArray(props.context) ? props.context : null,
