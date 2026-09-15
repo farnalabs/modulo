@@ -122,6 +122,14 @@ describe('FilterBar', () => {
     expect(wrapper.emitted('update:filter')).toBeTruthy()
     expect(wrapper.emitted('update:filter')![0]).toEqual(['status', ''])
   })
+
+  it('emits update:filter with the selected value (not "All") as a string', async () => {
+    const wrapper = mountFilterBar()
+    const runningOption = wrapper.findAll('.p-select-option').find((o) => o.attributes('data-value') === 'running')!
+    await runningOption.trigger('click')
+    expect(wrapper.emitted('update:filter')).toBeTruthy()
+    expect(wrapper.emitted('update:filter')![0]).toEqual(['status', 'running'])
+  })
 })
 
 describe('FilterBar responsive layout (FAR-627)', () => {
