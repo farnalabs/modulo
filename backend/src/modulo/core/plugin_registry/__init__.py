@@ -354,9 +354,7 @@ class PluginRegistry:
             self._backend_builders[provider] = builder
             self._finalize_registration(manifest, _CAP_MODEL_BACKEND)
 
-    def register_eval(
-        self, eval_type: str, builder: Callable[..., Any], manifest: PluginManifest
-    ) -> None:
+    def register_eval(self, eval_type: str, builder: Callable[..., Any], manifest: PluginManifest) -> None:
         """Explicitly register an eval function builder (e.g. from an in-tree module)."""
         if not isinstance(eval_type, str):
             raise TypeError("eval_type must be a string")
@@ -370,9 +368,7 @@ class PluginRegistry:
             self._eval_builders[eval_type] = builder
             self._finalize_registration(manifest, _CAP_EVAL)
 
-    def register_schema_type(
-        self, field_type: str, builder: Callable[..., Any], manifest: PluginManifest
-    ) -> None:
+    def register_schema_type(self, field_type: str, builder: Callable[..., Any], manifest: PluginManifest) -> None:
         """Explicitly register a schema field type builder (e.g. from an in-tree module)."""
         if not isinstance(field_type, str):
             raise TypeError("field_type must be a string")
@@ -382,7 +378,9 @@ class PluginRegistry:
             raise TypeError("manifest must be a PluginManifest")
         with self._lock:
             if field_type in self._schema_type_builders:
-                logger.warning("Overwriting existing schema field type '%s' from plugin %s", field_type, manifest.PLUGIN_ID)
+                logger.warning(
+                    "Overwriting existing schema field type '%s' from plugin %s", field_type, manifest.PLUGIN_ID
+                )
             self._schema_type_builders[field_type] = builder
             self._finalize_registration(manifest, _CAP_SCHEMA_TYPE)
 
