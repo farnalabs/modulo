@@ -6,8 +6,8 @@ migration was originally written to DROP those columns/FK because, at the time,
 the Organisation ORM model did not declare them and the pre-deploy integration
 test (test_migrated_schema_matches_orm_metadata) flagged the drift.
 
-Commit #553 ("align Organisation ORM with migrations 0233/0236") then aligned
-the ORM to those migrations: the Organisation model now declares
+PR #553 (commit b341e13a1, "align Organisation ORM with migrations 0233/0236")
+then aligned the ORM to those migrations: the Organisation model now declares
 updated_at/updated_by/deleted_by and created_by as a FK to accounts. The
 columns/FK are therefore part of the INTENDED schema, not drift, so dropping
 them reintroduces drift (and breaks every query that loads an Organisation,
@@ -29,7 +29,8 @@ down_revision = "0238_workspace_input_drift_and_audit"
 def upgrade() -> None:
     # No-op: the organisations updated_at/updated_by/deleted_by columns and the
     # fk_organisations_created_by FK (added by 0233/0236) are now declared on
-    # the Organisation ORM model (commit #553), so they must be retained.
+    # the Organisation ORM model (PR #553, commit b341e13a1), so they must be
+    # retained.
     pass
 
 
