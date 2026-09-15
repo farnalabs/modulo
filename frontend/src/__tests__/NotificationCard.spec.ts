@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import NotificationCard from '../components/NotificationCard.vue'
+import { dismissNotification } from '../lib/api/notifications'
 
 vi.mock('../lib/api/notifications', () => ({
   dismissNotification: vi.fn(),
@@ -56,5 +57,52 @@ describe('NotificationCard', () => {
       props: { notification: makeNotification({ category: 'pipeline_run' }) },
     })
     expect(other.find('a').text()).toBe('View')
+  })
+
+  it('emits review-later when the review-later button is clicked', async () => {
+    const wrapper = mount(NotificationCard, {
+      props: { notification: makeNotification() },
+    })
+    const reviewLaterBtn = wrapper
+      .findAll('button')
+      .find((b) => b.text() === 'Review Later')
+    expect(reviewLaterBtn).toBeTruthy()
+    await reviewLaterBtn!.trigger('click')
+    expect(wrapper.emitted('review-later')).toBeTruthy()
+    expect(wrapper.emitted('review-later')![0]).toEqual(['n-1'])
+  })
+
+  it('opens the dismiss dialog when the dismiss button is clicked', async () => {
+    const wrapper = mount(NotificationCard, {
+      props: { notification: makeNotification() },
+    })
+    const dismissBtn = wrapper
+      .findAll('button')
+      .find((b) => b.text() === 'Dismiss this notification')
+    expect(dismissBtn).toBeTruthy()
+    await dismissBtn!.trigger('click')
+    // Dialog visibility toggled open
+    expect(wrapper.findComponent({ name: 'DismissDialog' }).exists()).toBe(true)
+  })
+
+  it('emits dismissed after a successful dismiss', async () => {
+    const wrapper = mount(NotificationCard, {
+      props: { notification: makeNotification() },
+    })
+    const vm = wrapper.vm as unknown as { onDismiss: (s: 'self' | 'scope') => Promise<void> }
+    await vm.onDismiss('self')
+    expect(vi.mocked(dismissNotification)).toHaveBeenCalledWith('n-1', 'self')
+    expect(wrapper.emitted('dismissed')).toBeTruthy()
+    expect(wrapper.emitted('dismissed')![0]).toEqual(['n-1'])
+  })
+
+  it('surfaces a dismiss error when the API fails', async () => {
+    vi.mocked(dismissNotification).mockRejectedValue(new Error('dismiss failed'))
+    const wrapper = mount(NotificationCard, {
+      props: { notification: makeNotification() },
+    })
+    const vm = wrapper.vm as unknown as { onDismiss: (s: 'self' | 'scope') => Promise<void> }
+    await vm.onDismiss('self')
+    expect(wrapper.text()).toContain('dismiss failed')
   })
 })
