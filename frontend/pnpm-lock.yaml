@@ -21,7 +21,7 @@ importers:
     dependencies:
       '@lucide/vue':
         specifier: ^1.41.0
-        version: 1.45.0(vue@3.5.42(@typescript/typescript6@6.0.2))
+        version: 1.46.0(vue@3.5.42(@typescript/typescript6@6.0.2))
       '@primeuix/styled':
         specifier: ^1.0.0
         version: 1.0.0
@@ -206,10 +206,10 @@ importers:
     optionalDependencies:
       '@datadog/browser-logs':
         specifier: ^7.12.0
-        version: 7.12.0(@datadog/browser-rum@7.12.0)
+        version: 7.13.0(@datadog/browser-rum@7.13.0)
       '@datadog/browser-rum':
         specifier: ^7.12.0
-        version: 7.12.0(@datadog/browser-logs@7.12.0)
+        version: 7.13.0(@datadog/browser-logs@7.13.0)
       '@grafana/faro-web-sdk':
         specifier: ^2.8.2
         version: 2.11.0
@@ -535,30 +535,30 @@ packages:
     resolution: {integrity: sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA==}
     engines: {node: '>=20.19.0'}
 
-  '@datadog/browser-core@7.12.0':
-    resolution: {integrity: sha512-yDDY9Wt2hPNNOsifj4qveABxorPy0ipliAaf+SxOwvT2zYR1WVjYu5sw3Gv55wYAGI4AHG/xam3U29mbbOhuUQ==}
+  '@datadog/browser-core@7.13.0':
+    resolution: {integrity: sha512-pLde6WSrJ3XMLx7Kh2W3uy2K4PGs69ZBwDVjxDeufgnQTBCs2QFd9RBUCy5EqKg7buyFya3qwoCLz3f2UWn0tQ==}
 
-  '@datadog/browser-logs@7.12.0':
-    resolution: {integrity: sha512-TiTnlmpLDwb2kRWFirI9VYdxSiPLaCvrcCyKgbCtKwhzvBRNudZ5OWSrmbxnTRnrlFxtGEQ3APIduxkCd4iAiA==}
+  '@datadog/browser-logs@7.13.0':
+    resolution: {integrity: sha512-x+faqZjpj6Ji0jqkCStqeKPhpe8RdZALa2+ocr3CpMX0Ox6VH3SgICYTNIhRY0w5rvpZ6A1MSAiYGtEcRJveow==}
     peerDependencies:
-      '@datadog/browser-rum': 7.12.0
+      '@datadog/browser-rum': 7.13.0
     peerDependenciesMeta:
       '@datadog/browser-rum':
         optional: true
 
-  '@datadog/browser-rum-core@7.12.0':
-    resolution: {integrity: sha512-29R17OrMReJoXdfomGiY1AXNggczlzcuhtq/W4n6FTP4o4DLss6Ivuci7uZ5hU4HR9UmvFql2UvjWr2nJwJ3Lg==}
+  '@datadog/browser-rum-core@7.13.0':
+    resolution: {integrity: sha512-zHcCE5NqzFHJsdxv2fZlzvWBfkVXzhCQ+FpuVeCpzYHulPnv+5LKpGjXeHvOWNlUeC1bo29ECEF6q/ZlMTKgLA==}
 
-  '@datadog/browser-rum@7.12.0':
-    resolution: {integrity: sha512-nf25qk8+JYugexX/vILLacRc+p6nHsKKNaEkChNO9fNsQEcqRikpq8DEU2QjDYRR3nSr6qmdEuhMphsaqsX86w==}
+  '@datadog/browser-rum@7.13.0':
+    resolution: {integrity: sha512-98bOoB7SYvcjQyOWb38I4TtS16Lm4IfPgWNYWDnq+LwCOEwQyQfCsZakvlpXGo3WpYdJA+DW7Jzulj+GEp8Cnw==}
     peerDependencies:
-      '@datadog/browser-logs': 7.12.0
+      '@datadog/browser-logs': 7.13.0
     peerDependenciesMeta:
       '@datadog/browser-logs':
         optional: true
 
-  '@datadog/js-core@0.0.13':
-    resolution: {integrity: sha512-6+2H/3DM1KETvndFhY9+o6cvvCezD2TgIJ3xJNPZ6cmXx4C+zP3Qt4rwGGVNjnwFhhHRn35QSs5DDXlzpMElJw==}
+  '@datadog/js-core@0.0.14':
+    resolution: {integrity: sha512-JRWzc1ko80kwyTcNdUAY40iO9xZrj0yy8tBbJgUydnja6IpB4mF8+HkSgzhGzjiqCmrtnJsqNlRVBamP8F9nFw==}
 
   '@epic-web/invariant@1.0.0':
     resolution: {integrity: sha512-lrTPqgvfFQtR/eY/qkIzp98OGdNJu0m5ji3q/nJI8v3SXkRKEnWiOxMmbvcSoAIzv/cGiuvRy57k4suKQSAdwA==}
@@ -810,8 +810,8 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@lucide/vue@1.45.0':
-    resolution: {integrity: sha512-tbMlusqK6brViI1xj8nsXAgNDyJOvNeOdOQlBI0hOWCAbnBrPRlanoQ6EygDEMv3dqwXfCZPb4a0/ImtI5KAmQ==}
+  '@lucide/vue@1.46.0':
+    resolution: {integrity: sha512-xp4mUamXKM/jYCve8TOcEcuikidFh3Jn9gs0THCeEKn/fAdeU0mKhPqk0fmIwn42fI4CwGLRWrLneLA69h8Nqw==}
     peerDependencies:
       vue: '>=3.0.1'
 
@@ -3908,35 +3908,35 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.0': {}
 
-  '@datadog/browser-core@7.12.0':
+  '@datadog/browser-core@7.13.0':
     dependencies:
-      '@datadog/js-core': 0.0.13
+      '@datadog/js-core': 0.0.14
     optional: true
 
-  '@datadog/browser-logs@7.12.0(@datadog/browser-rum@7.12.0)':
+  '@datadog/browser-logs@7.13.0(@datadog/browser-rum@7.13.0)':
     dependencies:
-      '@datadog/browser-core': 7.12.0
-      '@datadog/js-core': 0.0.13
+      '@datadog/browser-core': 7.13.0
+      '@datadog/js-core': 0.0.14
     optionalDependencies:
-      '@datadog/browser-rum': 7.12.0(@datadog/browser-logs@7.12.0)
+      '@datadog/browser-rum': 7.13.0(@datadog/browser-logs@7.13.0)
     optional: true
 
-  '@datadog/browser-rum-core@7.12.0':
+  '@datadog/browser-rum-core@7.13.0':
     dependencies:
-      '@datadog/browser-core': 7.12.0
-      '@datadog/js-core': 0.0.13
+      '@datadog/browser-core': 7.13.0
+      '@datadog/js-core': 0.0.14
     optional: true
 
-  '@datadog/browser-rum@7.12.0(@datadog/browser-logs@7.12.0)':
+  '@datadog/browser-rum@7.13.0(@datadog/browser-logs@7.13.0)':
     dependencies:
-      '@datadog/browser-core': 7.12.0
-      '@datadog/browser-rum-core': 7.12.0
-      '@datadog/js-core': 0.0.13
+      '@datadog/browser-core': 7.13.0
+      '@datadog/browser-rum-core': 7.13.0
+      '@datadog/js-core': 0.0.14
     optionalDependencies:
-      '@datadog/browser-logs': 7.12.0(@datadog/browser-rum@7.12.0)
+      '@datadog/browser-logs': 7.13.0(@datadog/browser-rum@7.13.0)
     optional: true
 
-  '@datadog/js-core@0.0.13':
+  '@datadog/js-core@0.0.14':
     optional: true
 
   '@epic-web/invariant@1.0.0': {}
@@ -4173,7 +4173,7 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@lucide/vue@1.45.0(vue@3.5.42(@typescript/typescript6@6.0.2))':
+  '@lucide/vue@1.46.0(vue@3.5.42(@typescript/typescript6@6.0.2))':
     dependencies:
       vue: 3.5.42(@typescript/typescript6@6.0.2)
 

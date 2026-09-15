@@ -342,9 +342,11 @@ class TestMigrationBackfillGrace:
         # and 0237_fix_token_family_org_nullable chains on top of 0236_add_organisations_constraints,
         # and FAR-801's 0238_workspace_input_drift_and_audit chains on top of 0237_fix_token_family_org_nullable,
         # and 0239_revert_organisations_audit_drift chains on top of 0238_workspace_input_drift_and_audit,
-        # and 0241_pipeline_stdout_retention_config chains on top of 0239_revert_organisations_audit_drift,
-        # so it is now the single linear head of the chain.
-        assert heads == ["0241_pipeline_stdout_retention_config"], f"expected a single head, got {heads}"
+        # and 0241_remove_organisations_audit_drift chains on top of
+        # 0240_reinstate_organisations_audit_columns, and 0242_pipeline_stdout_retention_config
+        # chains on top of 0241_remove_organisations_audit_drift, so it is now the single
+        # linear head of the chain.
+        assert heads == ["0242_pipeline_stdout_retention_config"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
