@@ -17,12 +17,12 @@
         @input="$emit('update:search', ($event.target as HTMLInputElement).value)"
       />
     </div>
-    <Select
+    <AppSelect
   :aria-label="filter.label"
   v-for="filter in selectFilters"
   :key="filter.key"
   :model-value="(filterValues[filter.key] ?? '') || ALL_VALUE"
-  @update:model-value="(val) => $emit('update:filter', filter.key, val === ALL_VALUE ? '' : String(val))"
+  @update:model-value="(val: string | number | null) => $emit('update:filter', filter.key, val === ALL_VALUE ? '' : String(val))"
   :placeholder="filter.label"
   :data-testid="`filter-bar-${filter.key}`"
   class="w-full sm:w-auto sm:min-w-[140px]"
@@ -38,7 +38,7 @@
   <template #option="{ option }">
     <span :data-value="option.value">{{ option.label }}</span>
   </template>
-</Select>
+</AppSelect>
     <slot name="after" />
     <slot />
   </div>
@@ -47,7 +47,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import Select from 'primevue/select'
+import AppSelect from './AppSelect.vue'
 
 const props = defineProps<{
   search?: { placeholder?: string }
