@@ -100,8 +100,9 @@ _MIGRATION_PATH = (
 # and 0237_fix_token_family_org_nullable chained onto 0236_add_organisations_constraints,
 # and FAR-801's 0238_workspace_input_drift_and_audit chained onto
 # 0237_fix_token_family_org_nullable, and 0239_revert_organisations_audit_drift
-# chained onto 0238_workspace_input_drift_and_audit as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0239_revert_organisations_audit_drift"
+# chained onto 0238_workspace_input_drift_and_audit, and 0240_reinstate_organisations_audit_columns
+# chained onto 0239_revert_organisations_audit_drift as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0240_reinstate_organisations_audit_columns"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

@@ -71,19 +71,17 @@ class Organisation(Base):
         DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # FK added by migration 0236_add_organisations_constraints (ondelete=SET NULL
-    # so deleting the creating account nulls the column rather than blocking the
-    # drop — the "first org before first user" ordering concern is satisfied by
-    # the nullable + SET NULL pairing, not by omitting the reference).
+    # FK to the creating account, added by migration 0236_add_organisations_constraints
+    # with ondelete=SET NULL so deleting the account nulls the column rather than
+    # blocking the drop — the "first org before first user" ordering concern is
+    # satisfied by the nullable + SET NULL pairing, not by omitting the reference.
+    # 0239_revert_organisations_audit_drift nominally reverted these columns/FK but
+    # ships as a no-op, and 0240_reinstate_organisations_audit_columns restores them,
+    # so the FK is part of the intended schema and the ORM must declare it (kept in
+    # step with the migrations by test_migrated_schema_matches_orm_metadata).
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="SET NULL", name="fk_organisations_created_by")
     )
-    # organisations is intentionally excluded from the trigger-maintained
-    # audit chain (agents / connector_instances / scheduled_reports carry
-    # updated_at/updated_by/deleted_by; organisations does not). Migrations
-    # 0233/0236 added those columns and FK but they were reverted by 0239
-    # (the model never declares them — see test_initial_migration
-    # _AUDIT_CHAIN_COLUMNS), so the ORM stays in step with the deployed schema.
     settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     otel_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     plan_id: Mapped[str | None] = mapped_column(String(255))
