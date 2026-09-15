@@ -7275,6 +7275,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     from modulo.core.artifacts.store import get_store as _get_streaming_store
                     from modulo.core.artifacts.streaming import StreamingArtifactWriter
 
+                    # NOSONAR S2083 - _streaming_overflow_key is a derived artifact
+                    # key (attempt_key + a size suffix); it flows into
+                    # StreamingArtifactWriter -> LocalArtifactStore, whose _raw_path
+                    # rejects path-traversal chars and percent-encodes every segment
+                    # (see store.py). No traversal is possible.
                     _streaming_overflow_key = f"{attempt_key}:full:{_stdout_cap}"
                     _streaming_writer_instance = StreamingArtifactWriter(
                         _get_streaming_store(),
