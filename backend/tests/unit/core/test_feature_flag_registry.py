@@ -466,34 +466,57 @@ class TestDefaultOffFlags:
 
 
 class TestResolveSsoUnrestrictedProvisioning:
-    """FAR-855: the operator-level SSO flag reader fails CLOSED on any error."""
+    """FAR-855: the mode-3 gate wrapper resolves the operator flag and fails CLOSED."""
 
-    async def test_returns_true_when_registry_resolves_true(self) -> None:
-        from modulo.core import feature_flags as ff
+    _ORG = uuid.UUID("00000000-0000-0000-0000-000000000555")
 
-        registry = MagicMock()
+    async def test_delegates_to_registry(self) -> None:
+        from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+
+        registry = AsyncMock()
         registry.resolve_flag = AsyncMock(return_value=True)
-        with patch.object(ff, "get_registry", return_value=registry):
-            result = await ff.resolve_sso_unrestricted_provisioning(_make_session(), org_id=uuid.uuid4())
-        assert result is True
-        registry.resolve_flag.assert_awaited_once()
-        assert registry.resolve_flag.await_args.args[0] == "sso_unrestricted_provisioning"
+        with patch("modulo.core.feature_flags.get_registry", return_value=registry):
+            assert (await resolve_sso_unrestricted_provisioning(None, org_id=self._ORG)) is True
 
-    async def test_returns_false_on_resolution_error(self) -> None:
-        from modulo.core import feature_flags as ff
+    async def test_false_when_flag_off(self) -> None:
+        from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
 
-        registry = MagicMock()
+        registry = AsyncMock()
+        registry.resolve_flag = AsyncMock(return_value=False)
+        with patch("modulo.core.feature_flags.get_registry", return_value=registry):
+            assert (await resolve_sso_unrestricted_provisioning(None, org_id=self._ORG)) is False
+
+    async def test_fails_closed_when_registry_raises(self, caplog) -> None:
+        from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+
+        registry = AsyncMock()
         registry.resolve_flag = AsyncMock(side_effect=RuntimeError("db down"))
-        with patch.object(ff, "get_registry", return_value=registry):
-            result = await ff.resolve_sso_unrestricted_provisioning(_make_session(), org_id=uuid.uuid4())
-        assert result is False
+        with (
+            patch("modulo.core.feature_flags.get_registry", return_value=registry),
+            caplog.at_level("ERROR"),
+        ):
+            assert (await resolve_sso_unrestricted_provisioning(None, org_id=self._ORG)) is False
+        assert "failing closed" in caplog.text
 
-    async def test_cancelled_error_is_reraised(self) -> None:
+    async def test_fails_closed_when_get_registry_raises(self, caplog) -> None:
+        from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+
+        with (
+            patch("modulo.core.feature_flags.get_registry", side_effect=RuntimeError("no registry")),
+            caplog.at_level("ERROR"),
+        ):
+            assert (await resolve_sso_unrestricted_provisioning(None, org_id=self._ORG)) is False
+        assert "failing closed" in caplog.text
+
+    async def test_cancelled_error_propagates(self) -> None:
         import asyncio
 
-        from modulo.core import feature_flags as ff
+        from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
 
-        registry = MagicMock()
+        registry = AsyncMock()
         registry.resolve_flag = AsyncMock(side_effect=asyncio.CancelledError())
-        with patch.object(ff, "get_registry", return_value=registry), pytest.raises(asyncio.CancelledError):
-            await ff.resolve_sso_unrestricted_provisioning(_make_session(), org_id=None)
+        with (
+            patch("modulo.core.feature_flags.get_registry", return_value=registry),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await resolve_sso_unrestricted_provisioning(None, org_id=self._ORG)

@@ -244,6 +244,23 @@ class TestCreateProvider:
             assert data["name"] == "Test OIDC Provider"
             assert data["provider_type"] == "oidc"
 
+    def test_422_on_invalid_allowed_domains(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock()) as created:
+            resp = client.post(
+                self.URL,
+                json={
+                    "provider_type": "oidc",
+                    "name": "Bad",
+                    "client_id": "cid",
+                    "client_secret": "secret",
+                    "discovery_url": "https://example.com/.well-known/openid-configuration",
+                    "allowed_domains": ["no space"],
+                },
+            )
+        assert resp.status_code == 422
+        assert "allowed_domains" in resp.json()["detail"]
+        created.assert_not_called()
+
     def test_create_saml_provider(self, client: TestClient) -> None:
         mock_provider = _make_mock_provider(
             provider_type="saml",
@@ -311,17 +328,6 @@ class TestCreateProvider:
             )
         assert resp.status_code == 422
 
-    def test_create_rejects_invalid_allowed_domains(self, client: TestClient) -> None:
-        resp = client.post(
-            self.URL,
-            json={
-                "provider_type": "oidc",
-                "name": "Bad SSO",
-                "allowed_domains": ["@example.com"],
-            },
-        )
-        assert resp.status_code == 422
-
 
 class TestUpdateProvider:
     URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010"
@@ -343,10 +349,6 @@ class TestUpdateProvider:
     def test_400_on_empty_body(self, client: TestClient) -> None:
         resp = client.put(self.URL, json={})
         assert resp.status_code == 400
-
-    def test_update_rejects_invalid_allowed_domains(self, client: TestClient) -> None:
-        resp = client.put(self.URL, json={"allowed_domains": ["localhost"]})
-        assert resp.status_code == 422
 
 
 class TestDeleteProvider:
@@ -781,3 +783,42 @@ class TestApplyGroupMappings:
         await apply_group_mappings(session, account, _ORG_ID, ["engineering"], mappings)
 
         assert existing.role == "operator"
+
+
+class TestAllowedDomainsResponseCoercion:
+    """FAR-855: SsoProviderResponse coerces legacy/NULL string transports to []."""
+
+    def _validate(self, allowed_domains: object) -> list:
+        from modulo.api.routes.admin_sso import SsoProviderResponse
+
+        provider = _make_mock_provider(allowed_domains=allowed_domains)
+        provider.id = _PROVIDER_ID
+        provider.created_at = _NOW
+        provider.updated_at = _NOW
+        return SsoProviderResponse.model_validate(provider).allowed_domains
+
+    def test_string_list_json_parses(self) -> None:
+        assert self._validate(json.dumps(["Example.com"])) == ["Example.com"]
+
+    def test_string_invalid_json_falls_back_to_empty(self) -> None:
+        assert not self._validate("{not json")
+
+    def test_string_non_list_json_falls_back_to_empty(self) -> None:
+        assert not self._validate(json.dumps({"not": "a list"}))
+
+    def test_list_passthrough(self) -> None:
+        assert self._validate(["example.com"]) == ["example.com"]
+
+
+class TestUpdateAllowedDomainsValidation:
+    """FAR-855: PATCH/PUT allowed_domains is server-side validated (422 on garbage)."""
+
+    URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010"
+
+    def test_422_on_invalid_allowed_domains(self, client: TestClient) -> None:
+        mock_provider = _make_mock_provider(name="Updated Name", auto_provision=False)
+        with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd:
+            resp = client.put(self.URL, json={"allowed_domains": ["@bad"]})
+        assert resp.status_code == 422
+        assert "allowed_domains" in resp.json()["detail"]
+        upd.assert_not_called()
