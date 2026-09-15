@@ -701,6 +701,62 @@ class TestNonDictNodeEntry:
         assert resp.nodes[0].id == nid
 
 
+class TestNonDictEdgeEntry:
+    """An edges list containing a non-dict must not raise.
+
+    Symmetric with ``TestNonDictNodeEntry``: a malformed (non-dict) entry in
+    the stored edges array previously reached ``edge_dict.get("id")`` and
+    raised ``AttributeError`` -> HTTP 500, breaking the "graph read never
+    fails" contract (FAR-874).
+    """
+
+    def test_string_in_edges_list(self) -> None:
+        edges: list[Any] = ["not-a-dict", 42, None]
+        resp = _graph_response([], edges)  # type: ignore[arg-type]
+        # Non-dict entries are skipped; no crash
+        assert not resp.edges
+
+    def test_string_in_edges_list_mixed_with_valid(self) -> None:
+        src, tgt = uuid.uuid4(), uuid.uuid4()
+        edges: list[Any] = ["garbage", _minimal_edge(src, tgt)]
+        resp = _graph_response([], edges)  # type: ignore[arg-type]
+        assert len(resp.edges) == 1
+        assert resp.edges[0].source_node_id == src
+        assert resp.edges[0].target_node_id == tgt
+
+    def test_non_dict_edge_entry_reports_issue(self) -> None:
+        """The skipped non-dict entry is surfaced as a warning issue so the
+        malformed stored data is not silently dropped."""
+        edges: list[Any] = ["garbage"]
+        resp = _graph_response([], edges)  # type: ignore[arg-type]
+        assert not resp.edges
+        issues = [i for i in resp.validation_issues if i.code == "edge_invalid_entry"]
+        assert len(issues) == 1
+        assert issues[0].severity == "warning"
+
+    def test_string_in_edges_list_endpoint(self, client: TestClient) -> None:
+        """Same as above but through the GET /graph endpoint: a non-dict edge
+        entry must yield 200, not a 500."""
+        src, tgt = uuid.uuid4(), uuid.uuid4()
+        nodes = [_minimal_node(src, "agent"), _minimal_node(tgt, "agent")]
+        edges: list[Any] = ["not-a-dict", _minimal_edge(src, tgt)]
+        pipeline = _make_mock_pipeline(nodes)
+
+        with (
+            patch(
+                "modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, edges)
+            ),
+            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["edges"]) == 1
+        assert any(i["code"] == "edge_invalid_entry" for i in body["validation_issues"])
+
+
 class TestBrokenButRealisticGraph:
     """Composite node with composite_ref: None + an edge pointing at it."""
 

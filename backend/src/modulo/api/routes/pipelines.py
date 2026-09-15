@@ -1395,7 +1395,22 @@ def _graph_response(
     # dedicated validator that may have been tightened since the data was saved.
     valid_edges: list[PipelineGraphEdge] = []
     for edge_dict in edges:
-        raw_edge_id = edge_dict.get("id")
+        # Stored edges arrive as either plain dicts (write path / JSON) or
+        # ``PipelineEdge`` ORM rows (the DB read path validates them through
+        # ``from_attributes``).  A malformed scalar entry (str/int/None from
+        # corrupt data) has neither a mapping interface nor edge attributes and
+        # would raise AttributeError on ``.get`` -> HTTP 500, so skip it instead.
+        if not isinstance(edge_dict, dict) and not hasattr(edge_dict, "source_node_id"):
+            logger.warning("Graph read: skipping malformed edge entry: %r", type(edge_dict).__name__)
+            issues.append(
+                GraphValidationIssue(
+                    severity="warning",
+                    code="edge_invalid_entry",
+                    message=(f"Skipped malformed edge entry of type {type(edge_dict).__name__}."),
+                )
+            )
+            continue
+        raw_edge_id = edge_dict.get("id") if isinstance(edge_dict, dict) else getattr(edge_dict, "id", None)
         edge_id = str(raw_edge_id) if raw_edge_id is not None else "unknown"
         try:
             valid_edges.append(PipelineGraphEdge.model_validate(edge_dict, context=LEGACY_READ_CONTEXT))
