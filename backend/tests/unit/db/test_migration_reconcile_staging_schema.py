@@ -73,8 +73,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # chains off 0240_reinstate_organisations_audit_columns, and 0242_org_mint_budget_usage (FAR-795)
 # chains off 0241_journey_dismissal, and 0243_remove_organisations_audit_drift (FAR-811)
 # chains off 0242_org_mint_budget_usage, and 0244_pipeline_stdout_retention_config (FAR-811)
-# chains off 0243_remove_organisations_audit_drift as the chain head.
-_CHAIN_HEAD_MIGRATION = "0244_pipeline_stdout_retention_config"
+# chains off 0243_remove_organisations_audit_drift, and 0245_drop_organisations_created_by_fk
+# (PR #559) chains off 0244_pipeline_stdout_retention_config as the chain head.
+_CHAIN_HEAD_MIGRATION = "0245_drop_organisations_created_by_fk"
 
 
 def _source(name: str) -> str:
