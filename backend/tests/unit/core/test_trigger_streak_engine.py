@@ -346,9 +346,12 @@ class TestMigrationBackfillGrace:
         # and 0240_reinstate_organisations_audit_columns chains on top of 0239_revert_organisations_audit_drift,
         # and 0241_journey_dismissal (FAR-795) chains on top of 0240_reinstate_organisations_audit_columns,
         # and 0242_org_mint_budget_usage (FAR-795) chains on top of 0241_journey_dismissal,
-        # and 0243_drop_organisations_audit_columns chains on top of 0242_org_mint_budget_usage,
-        # so it is now the single linear head of the chain.
-        assert heads == ["0243_drop_organisations_audit_columns"], f"expected a single head, got {heads}"
+        # and 0243_remove_organisations_audit_drift (FAR-811) chains on top of 0242_org_mint_budget_usage,
+        # and 0244_pipeline_stdout_retention_config (FAR-811) chains on top of
+        # 0243_remove_organisations_audit_drift, and 0245_drop_organisations_created_by_fk (PR #559)
+        # chains on top of 0244_pipeline_stdout_retention_config, so it is now the single linear
+        # head of the chain.
+        assert heads == ["0245_drop_organisations_created_by_fk"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

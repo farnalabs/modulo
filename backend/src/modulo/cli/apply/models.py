@@ -391,11 +391,26 @@ class PipelineEntity(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     max_concurrent_runs: int = Field(default=5, ge=1)
     graph: ApplyGraph | None = None
+    stdout_retention_config: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Pipeline-level default for sandbox stdout retention. "
+            'Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. '
+            "NULL = no pipeline override."
+        ),
+    )
 
     @field_validator("name")
     @classmethod
     def _name_must_not_contain_separator(cls, value: str) -> str:
         return _reject_composite_separator("pipeline name", value)
+
+    @field_validator("stdout_retention_config", mode="before")
+    @classmethod
+    def _validate_stdout_retention_config(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        from modulo.core.stdout_retention import validate_stdout_retention_config
+
+        return validate_stdout_retention_config(v)
 
     def managed_view(self, *, graph: dict[str, Any] | None = None) -> dict[str, Any]:
         """Canonical managed-field view used for hashing.
@@ -407,6 +422,7 @@ class PipelineEntity(BaseModel):
         view: dict[str, Any] = {
             "description": self.description,
             "max_concurrent_runs": self.max_concurrent_runs,
+            "stdout_retention_config": self.stdout_retention_config,
         }
         if self.graph is not None:
             view["graph"] = {"nodes": [], "edges": []} if graph is None else graph

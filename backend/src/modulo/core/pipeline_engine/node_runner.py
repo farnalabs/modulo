@@ -5973,6 +5973,12 @@ class _SandboxNodeConfig:
     watch_globs: list[str]
     stdout_retention_mode: str
     stdout_max_bytes: int | None
+    # FAR-811: pipeline-level default for sandbox stdout retention, threaded
+    # from the pipeline model through graph compilation.  When the node did not
+    # explicitly set stdout_retention_mode (raw key absent from node_def), the
+    # pipeline default's mode/max_bytes are inherited before the org ceiling
+    # clamp.  Node-explicit settings always win.
+    pipeline_stdout_retention_config: dict[str, Any] | None
     delivery_sentinel: str | None
     loop_intercept_config: LoopInterceptConfig | None
     session_factory: Callable[..., Any] | None
@@ -8568,6 +8574,7 @@ def _build_sandbox_node_config(
     *,
     session_factory: Callable[..., Any] | None,
     single_sandbox_node: bool,
+    pipeline_stdout_retention_config: dict[str, Any] | None = None,
 ) -> _SandboxNodeConfig:
     """Read + validate a sandbox_agent node's config from ``node_def``.
 
@@ -8644,8 +8651,39 @@ def _build_sandbox_node_config(
     # "tail" (legacy 512KB cap) by default; "full" raises the cap to
     # ``stdout_max_bytes`` (or the 5MB default). Coercers fall back silently to
     # the safe legacy defaults on any malformed value.
-    stdout_retention_mode: str = _coerce_stdout_retention_mode(node_def.get("stdout_retention_mode"))
-    stdout_max_bytes: int | None = _coerce_stdout_max_bytes(node_def.get("stdout_max_bytes"))
+    # FAR-811: pipeline-level default (node > pipeline > org ceiling).  When the
+    # node did NOT explicitly set stdout_retention_mode (raw key absent from
+    # node_def), the pipeline default's mode/max_bytes are inherited.  Node-
+    # explicit settings always win — including a node that sets ONLY
+    # stdout_max_bytes without stdout_retention_mode: its explicit max_bytes must
+    # win, while the mode is inherited from the pipeline default (or the legacy
+    # "tail" default when there is no pipeline default).
+    _node_raw_mode = node_def.get("stdout_retention_mode")
+    _node_raw_max_bytes = node_def.get("stdout_max_bytes")
+    if _node_raw_mode is not None:
+        # Node explicitly set its mode — node wins on both mode and max_bytes.
+        stdout_retention_mode = _coerce_stdout_retention_mode(_node_raw_mode)
+        stdout_max_bytes = _coerce_stdout_max_bytes(_node_raw_max_bytes)
+    elif _node_raw_max_bytes is not None:
+        # Node set max_bytes but not mode — the node's explicit max_bytes still
+        # wins; mode inherits the pipeline default (or "tail" with no default).
+        stdout_retention_mode = (
+            _coerce_stdout_retention_mode(pipeline_stdout_retention_config.get("mode"))
+            if pipeline_stdout_retention_config is not None
+            else "tail"
+        )
+        stdout_max_bytes = _coerce_stdout_max_bytes(_node_raw_max_bytes)
+    elif pipeline_stdout_retention_config is not None:
+        # Node set neither — inherit both mode and max_bytes from the pipeline default.
+        stdout_retention_mode = _coerce_stdout_retention_mode(
+            pipeline_stdout_retention_config.get("mode"),
+        )
+        stdout_max_bytes = _coerce_stdout_max_bytes(
+            pipeline_stdout_retention_config.get("max_bytes"),
+        )
+    else:
+        stdout_retention_mode = "tail"
+        stdout_max_bytes = None
     # FAR-228: the opt-in delivery sentinel (full-line marker in sandbox output
     # that proves the side effect — e.g. an email — was sent) and the
     # single-node guard (the gate is inert on multi-node graphs).
@@ -8696,6 +8734,7 @@ def _build_sandbox_node_config(
         watch_globs=watch_globs,
         stdout_retention_mode=stdout_retention_mode,
         stdout_max_bytes=stdout_max_bytes,
+        pipeline_stdout_retention_config=pipeline_stdout_retention_config,
         delivery_sentinel=delivery_sentinel,
         loop_intercept_config=loop_intercept_config,
         session_factory=session_factory,
@@ -8710,6 +8749,7 @@ def make_sandbox_agent_fn(
     timeout: float | None = None,
     session_factory: Callable[..., Any] | None = None,
     single_sandbox_node: bool = False,
+    pipeline_stdout_retention_config: dict[str, Any] | None = None,
 ) -> Any:
     """Return a decorated async node function that dispatches work to an external
     agent runtime in an E2B sandbox.
@@ -8763,6 +8803,7 @@ def make_sandbox_agent_fn(
         node_def,
         session_factory=session_factory,
         single_sandbox_node=single_sandbox_node,
+        pipeline_stdout_retention_config=pipeline_stdout_retention_config,
     )
     node_id = config.node_id
     sandbox_timeout = config.sandbox_timeout

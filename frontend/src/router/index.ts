@@ -641,6 +641,102 @@ const router = createRouter({
   },
 })
 
+/**
+ * Hydrate to.meta fields from the manifest registry so downstream guards
+ * and breadcrumb logic see a single canonical source.  Manifest entries
+ * are keyed by route *name*; the parent path is resolved to a route name
+ * via manifestPathToName.
+ */
+export function hydrateManifestMeta(to: Parameters<Parameters<typeof router.beforeEach>[0]>[0]): void {
+  const routeName = to.name
+  if (typeof routeName !== 'string') return
+
+  const entry = manifestByName.get(routeName)
+  if (!entry) return
+
+  to.meta.breadcrumb = entry.breadcrumb
+  to.meta.testid = entry.testid
+  to.meta.requiredRoles = entry.required_roles ?? undefined
+  to.meta.requiredTier = entry.required_tier
+  to.meta.requiredPermissions = entry.required_permissions ?? undefined
+  to.meta.featureFlag = entry.feature_flag ?? undefined
+  to.meta.visibility = entry.visibility ?? undefined
+  to.meta.parent = entry.parent
+    ? (manifestPathToName.get(entry.parent) ?? entry.parent)
+    : undefined
+}
+
+/**
+ * Enforce role, tier, and devMode/visibility access rules.  Returns a
+ * redirect route-object when access is denied, or `true` when the caller
+ * may continue.  The plan store is lazily fetched so the guard sees the
+ * real tier — the first navigation resolves *before* AppLayout.onMounted
+ * kicks off `fetchPlan()`.
+ */
+export async function enforceRoleTierVisibility(
+  to: Parameters<Parameters<typeof router.beforeEach>[0]>[0],
+  token: string,
+): Promise<{ name: string } | true> {
+  const payload = decodeJwtPayload(token)
+
+  if (to.meta?.requiresSystemAdmin && !payload?.is_system_admin) {
+    return { name: 'dashboard' }
+  }
+
+  if (to.meta?.requiredRoles?.length) {
+    const orgRole = payload?.org_role
+    if (typeof orgRole !== 'string' || !to.meta.requiredRoles.includes(orgRole)) {
+      return { name: 'dashboard' }
+    }
+  }
+
+  const needsTierOrVisibility =
+    to.meta?.requiredTier ||
+    to.meta?.visibility === 'private_preview' ||
+    to.meta?.visibility === 'in_dev'
+
+  if (needsTierOrVisibility) {
+    const planStore = usePlanStore()
+    if (!planStore.loaded) {
+      await planStore.fetchPlan()
+    }
+    if (
+      to.meta?.requiredTier &&
+      Object.keys(planStore.features).length > 0 &&
+      !planStore.isAtMinimumTier(to.meta.requiredTier)
+    ) {
+      return { name: 'dashboard' }
+    }
+    const isPrivateOrDev =
+      to.meta?.visibility === 'private_preview' || to.meta?.visibility === 'in_dev'
+    if (isPrivateOrDev && !planStore.devMode) {
+      return { name: 'dashboard' }
+    }
+  }
+
+  return true
+}
+
+/**
+ * Generalised variant comparison workflow (FAR-332): when the
+ * `variant_batch_compare` feature flag is ON, the legacy model-only
+ * AB Test Models view is HARD-REPLACED by the batch-scoped compare flow.
+ * The legacy view stays reachable only while the flag is OFF.
+ */
+export async function redirectAbTestIfBatchEnabled(
+  to: Parameters<Parameters<typeof router.beforeEach>[0]>[0],
+): Promise<{ name: string } | null> {
+  if (to.name !== 'ab-test-models') return null
+
+  const planStore = usePlanStore()
+  if (!planStore.loaded) {
+    await planStore.fetchPlan()
+  }
+  return planStore.featureEnabled('variant_batch_compare')
+    ? { name: 'variant-compare' }
+    : null
+}
+
 router.beforeEach(async (to) => {
   try {
     // FAR-535 demo auto-login: /demo never renders as a page. The guard owns
@@ -660,64 +756,18 @@ router.beforeEach(async (to) => {
       return { name: await resolveDemoEntry() }
     }
 
-    const routeName = to.name
-    if (typeof routeName === 'string') {
-      const entry = manifestByName.get(routeName)
-      if (entry) {
-        to.meta.breadcrumb = entry.breadcrumb
-        to.meta.testid = entry.testid
-        to.meta.requiredRoles = entry.required_roles ?? undefined
-        to.meta.requiredTier = entry.required_tier
-        to.meta.requiredPermissions = entry.required_permissions ?? undefined
-        to.meta.featureFlag = entry.feature_flag ?? undefined
-        to.meta.visibility = entry.visibility ?? undefined
-        to.meta.parent = entry.parent
-          ? (manifestPathToName.get(entry.parent) ?? entry.parent)
-          : undefined
-      }
-    }
+    hydrateManifestMeta(to)
 
     const token = getAccessToken()
-    if (to.meta?.public) {
-      return true
-    }
-    if (to.name === 'login' && token) {
-      return { name: 'dashboard' }
-    }
-    if (to.name !== 'login' && !token) {
-      return { name: 'login' }
-    }
+    if (to.meta?.public) return true
+    if (to.name === 'login' && token) return { name: 'dashboard' }
+    if (to.name === 'login') return true // login page without token — allowed
+    if (!token) return { name: 'login' }
+
+    // Role / tier / visibility enforcement
     if (to.meta?.requiresSystemAdmin || to.meta?.requiredRoles?.length || to.meta?.requiredTier) {
-      const payload = decodeJwtPayload(token)
-      if (to.meta?.requiresSystemAdmin && !payload?.is_system_admin) {
-        return { name: 'dashboard' }
-      }
-      if (to.meta?.requiredRoles?.length) {
-        const orgRole = payload?.org_role
-        if (typeof orgRole !== 'string' || !to.meta.requiredRoles.includes(orgRole)) {
-          return { name: 'dashboard' }
-        }
-      }
-      if (to.meta?.requiredTier || to.meta?.visibility === 'private_preview' || to.meta?.visibility === 'in_dev') {
-        // devMode/tier are populated by planStore.fetchPlan(), which is only
-        // kicked off from AppLayout.onMounted — AFTER the initial navigation
-        // resolves. A direct load/refresh of a private_preview/in_dev route
-        // runs this guard before the plan fetch starts, so devMode is still
-        // false and the route is spuriously redirected to the dashboard.
-        // Await the plan here so the guard sees the real devMode/tier.
-        const planStore = usePlanStore()
-        if (!planStore.loaded) {
-          await planStore.fetchPlan()
-        }
-        if (to.meta?.requiredTier && Object.keys(planStore.features).length > 0 && !planStore.isAtMinimumTier(to.meta.requiredTier)) {
-          return { name: 'dashboard' }
-        }
-        if (to.meta?.visibility === 'private_preview' || to.meta?.visibility === 'in_dev') {
-          if (!planStore.devMode) {
-            return { name: 'dashboard' }
-          }
-        }
-      }
+      const denied = await enforceRoleTierVisibility(to, token)
+      if (denied !== true) return denied
     }
 
     // Manifest-declared route flags (FAR-656): a route whose manifest entry
@@ -734,19 +784,9 @@ router.beforeEach(async (to) => {
       }
     }
 
-    // Generalised variant comparison workflow (FAR-332): when the
-    // `variant_batch_compare` feature flag is ON, the legacy model-only
-    // AB Test Models view is HARD-REPLACED by the batch-scoped compare flow.
-    // The legacy view stays reachable only while the flag is OFF.
-    if (to.name === 'ab-test-models') {
-      const planStore = usePlanStore()
-      if (!planStore.loaded) {
-        await planStore.fetchPlan()
-      }
-      if (planStore.featureEnabled('variant_batch_compare')) {
-        return { name: 'variant-compare' }
-      }
-    }
+    // FAR-332: redirect legacy AB Test Models to batch compare when flag is on
+    const abRedirect = await redirectAbTestIfBatchEnabled(to)
+    if (abRedirect) return abRedirect
   } catch (err) {
     console.error('[router] navigation guard error:', err)
     return { name: 'dashboard' }

@@ -594,6 +594,21 @@ def test_resolve_stdout_cap_applies_org_ceiling(patch_node_runner) -> None:
     assert runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full", "stdout_max_bytes": 2048}) == 2048
 
 
+def test_resolve_stdout_cap_node_max_bytes_only_wins(patch_node_runner) -> None:
+    """FAR-811: a node that sets only stdout_max_bytes (no mode) keeps its value.
+
+    The explicit max_bytes must not be discarded for the pipeline default's
+    max_bytes; the mode is inherited from the pipeline default.
+    """
+    assert (
+        runner_dispatch._resolve_stdout_cap(
+            {"stdout_max_bytes": 2048},
+            pipeline_default={"mode": "full", "max_bytes": 4096},
+        )
+        == 2048
+    )
+
+
 async def test_run_stdout_full_retention_default_holds_whole_stream(patch_node_runner) -> None:
     """stdout_retention_mode="full" without stdout_max_bytes retains the whole
     stream (default 5MB cap) — no truncation flag for an under-cap stream."""
@@ -793,6 +808,40 @@ def test_resolve_stdout_cap_coercion(patch_node_runner) -> None:
         runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full", "stdout_max_bytes": True})
         == nrm._FULL_MODE_DEFAULT_MAX_BYTES
     )
+
+
+def test_resolve_stdout_cap_pipeline_default(patch_node_runner) -> None:
+    """FAR-811: pipeline default is applied when node didn't set mode."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    # Node didn't set mode -> pipeline default mode=full with max_bytes
+    cap = runner_dispatch._resolve_stdout_cap(
+        {},
+        pipeline_default={"mode": "full", "max_bytes": 4096},
+    )
+    assert cap == 4096
+
+    # Node didn't set mode -> pipeline default mode=tail
+    cap = runner_dispatch._resolve_stdout_cap(
+        {},
+        pipeline_default={"mode": "tail"},
+    )
+    assert cap == nrm._MAX_ARTIFACT_LOG
+
+    # Node explicitly set mode -> pipeline default ignored
+    cap = runner_dispatch._resolve_stdout_cap(
+        {"stdout_retention_mode": "full", "stdout_max_bytes": 2048},
+        pipeline_default={"mode": "tail"},
+    )
+    assert cap == 2048
+
+    # Pipeline default clamped by org ceiling
+    cap = runner_dispatch._resolve_stdout_cap(
+        {},
+        pipeline_default={"mode": "full", "max_bytes": 20_000_000},
+        org_ceiling=5_000_000,
+    )
+    assert cap == 5_000_000
 
 
 def test_combine_raw_outputs(patch_node_runner) -> None:
