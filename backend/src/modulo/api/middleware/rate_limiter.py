@@ -284,11 +284,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if _matches_bypass_token(token, self._bypass_token or ""):
             return False
         path = request.url.path
+        # FAR-856: GET-specific rate limiting for pre-auth anonymous endpoints.
+        # GET /hitl/ reads are exempt from the HITL action budget (PRD §7.18
+        # budgets review ACTIONS, which are POST/PUT/PATCH — not GET reads),
+        # so the GET branch must be resolved before the HITL marker check.
+        if request.method == "GET":
+            if _is_hitl_budget_path(path):
+                return False
+            return any(path.startswith(rule.path_prefix) for rule in self.GET_RULES)
         if _is_hitl_budget_path(path):
             return True
-        # FAR-856: GET-specific rate limiting for pre-auth anonymous endpoints.
-        if request.method == "GET":
-            return any(path.startswith(rule.path_prefix) for rule in self.GET_RULES)
         return any(path.startswith(rule.path_prefix) for rule in self.RULES)
 
     def _rule_for(self, request: Request) -> RateLimitRule:
