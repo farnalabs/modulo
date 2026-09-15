@@ -1175,13 +1175,25 @@ def test_get_run_artifact_resolves_synthetic_full_attempt_key(client) -> None:
     assert resp.content == b"full stdout transcript"
 
 
-def test_get_run_artifact_synthetic_full_attempt_stderr_404(client) -> None:
-    """A synthetic ``:full:<cap>`` key only resolves stdout; stderr on a
-    synthetic key (no row, no fallback) yields 404."""
+def test_get_run_artifact_resolves_synthetic_full_attempt_key_stderr(client) -> None:
+    """FAR-879: a synthetic ``:full:<cap>`` attempt key has no RunNodeOutput
+    row, so the stderr fallback resolves the pointer from the node telemetry
+    (stdout parity) and streams the stored stderr transcript."""
     http, _session = client
-    # No row for the synthetic `:full:` key, and stderr has no telemetry
-    # fallback in the route — so the download 404s.
+    # No row exists for the synthetic `:full:` key — the transcript lives only
+    # in the artifact store, addressed through the telemetry pointer.
     _queue_execute(_session, [_result(scalar_one_or_none=None)])
-    with patch("modulo.core.artifacts.store.get_store", return_value=MagicMock()):
+    store = MagicMock()
+    store.read_bytes = MagicMock(return_value=b"full stderr transcript")
+    blobs = RunBlobs(
+        outputs={},
+        telemetry={str(_RUN_ID): {"stderr_artifact": _artifact_pointer("stderr")}},
+        markers={},
+    )
+    with (
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch.object(runs_module, "read_run_blobs", new=AsyncMock(return_value=blobs)),
+    ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}:full:12345/artifacts/stderr")
-    assert resp.status_code == 404, resp.text
+    assert resp.status_code == 200, resp.text
+    assert resp.content == b"full stderr transcript"

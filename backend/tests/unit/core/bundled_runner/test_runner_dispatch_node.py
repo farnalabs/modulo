@@ -70,6 +70,7 @@ class _FakeOutput:
     stderr_length: int = 0
     stdout_truncated: bool = False
     stdout_artifact: object = None
+    stderr_artifact: object = None
     attempt_key: str | None = None
     agent_status: object = None
     agent_outcome: object = None
@@ -102,6 +103,7 @@ def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
         "_idempotency_gate_skipped_envelope": lambda node_id: {"status": "skipped", "node_id": node_id},
         "_is_sandbox_session_lost_echo": lambda out: False,
         "_marker_delivery_done_for_node": lambda *a, **k: False,
+        "_persist_full_stderr_artifact": lambda **kw: None,
         "_persist_full_stdout_artifact": lambda **kw: None,
         "_read_run_raw_output_markers_for_gate": AsyncMock(return_value=[]),
         "_read_org_stdout_retention_ceiling": AsyncMock(return_value=None),
