@@ -3,20 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import (
-    JSON,
-    Boolean,
-    CheckConstraint,
-    DateTime,
-    ForeignKey,
-    Index,
-    Integer,
-    Numeric,
-    String,
-    Uuid,
-    func,
-    text,
-)
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Index, Integer, Numeric, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -71,22 +58,8 @@ class Organisation(Base):
         DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # FK added by migration 0236_add_organisations_constraints (ondelete=SET NULL
-    # so deleting the creating account nulls the column rather than blocking the
-    # drop — the "first org before first user" ordering concern is satisfied by
-    # the nullable + SET NULL pairing, not by omitting the reference).
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL", name="fk_organisations_created_by")
-    )
-    # Audit columns added by migration 0233_add_updated_at_audit_to_organisations.
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.current_timestamp(),
-        onupdate=func.current_timestamp(),
-        nullable=False,
-    )
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    # This is deliberately not an FK: the first organisation must exist before its first user.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid())
     settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     otel_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     plan_id: Mapped[str | None] = mapped_column(String(255))
