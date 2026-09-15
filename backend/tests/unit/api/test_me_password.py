@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -313,3 +314,69 @@ class TestChangePassword:
         assert kwargs["actor_user_id"] == _USER_ID
         assert kwargs["resource_type"] == "account"
         assert kwargs["resource_id"] == _USER_ID
+
+    def test_password_change_aborts_when_blacklist_fails(self, client: TestClient) -> None:
+        """FAR-882: a token-family blacklist failure must abort the password
+        change (fail-closed) — the password is NOT committed while old refresh
+        tokens remain valid."""
+        user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
+        mock_family = MagicMock()
+        mock_family.family_id = uuid.uuid4()
+
+        with (
+            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch(
+                "modulo.api.routes.me.list_families_for_account",
+                return_value=[mock_family],
+            ),
+            patch(
+                "modulo.api.routes.me.blacklist_family",
+                new_callable=AsyncMock,
+                side_effect=SQLAlchemyError("blacklist failed"),
+            ),
+        ):
+            resp = client.put(
+                "/api/v1/me/password",
+                json={
+                    "current_password": _STRONG_PW,
+                    "new_password": _NEW_PW,
+                },
+            )
+
+        # The endpoint must NOT return 200 — the blacklist failure must
+        # abort the whole password change (transaction rolls back).
+        assert resp.status_code != 200
+
+    def test_password_change_aborts_on_first_blacklist_failure(self, client: TestClient) -> None:
+        """FAR-882: when multiple families exist and the FIRST blacklist call
+        fails, the second must never be attempted — the transaction rolls back
+        immediately."""
+        user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
+        family_1 = MagicMock()
+        family_1.family_id = uuid.uuid4()
+        family_2 = MagicMock()
+        family_2.family_id = uuid.uuid4()
+
+        with (
+            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch(
+                "modulo.api.routes.me.list_families_for_account",
+                return_value=[family_1, family_2],
+            ),
+            patch(
+                "modulo.api.routes.me.blacklist_family",
+                new_callable=AsyncMock,
+                side_effect=SQLAlchemyError("blacklist failed"),
+            ) as mock_blacklist,
+        ):
+            resp = client.put(
+                "/api/v1/me/password",
+                json={
+                    "current_password": _STRONG_PW,
+                    "new_password": _NEW_PW,
+                },
+            )
+
+        assert resp.status_code != 200
+        # Only the first family was attempted — the failure aborted the loop.
+        assert mock_blacklist.call_count == 1
