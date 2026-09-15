@@ -8,9 +8,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.feedback import (
+    _parse_optional_iso,
+    _serialise_record,
+)
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.models.feedback_record import FeedbackRecord
@@ -1094,3 +1099,622 @@ class TestPublishEvalProposal:
             json={"name": "x", "eval_type": "guardrail", "config": {}},
         )
         assert resp.status_code == 422
+
+    def test_publish_returns_422_when_no_run(self, client: TestClient) -> None:
+        """A record with no associated run_id cannot resolve the pipeline (422)."""
+        mock_record = _make_mock_record(eval_gap=True, feedback_status="pending", run_id=None)
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+        ):
+            mock_get.return_value = mock_record
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "x", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+        assert resp.status_code == 422
+
+    def test_publish_returns_404_when_run_not_found(self, client: TestClient) -> None:
+        """The associated run was deleted — 404 on the run lookup."""
+        mock_record = _make_mock_record(eval_gap=True, feedback_status="pending")
+        mock_session = _make_mock_session()
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = None
+        mock_session.execute = AsyncMock(return_value=run_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+        ):
+            mock_get.return_value = mock_record
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "x", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+        assert resp.status_code == 404
+
+
+class TestCreateFeedbackDBErrors:
+    def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.create_feedback_record",
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/feedback",
+                json={"gate_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
+            )
+        assert resp.status_code == 409
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.create_feedback_record",
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/feedback",
+                json={"gate_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
+            )
+        assert resp.status_code == 501
+
+    def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.create_feedback_record",
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/feedback",
+                json={"gate_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
+            )
+        assert resp.status_code == 503
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.create_feedback_record",
+                side_effect=ValueError("unexpected"),
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/feedback",
+                json={"gate_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
+            )
+        assert resp.status_code == 500
+
+
+class TestListFeedbackDBErrors:
+    def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records",
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback")
+        assert resp.status_code == 409
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records",
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback")
+        assert resp.status_code == 501
+
+    def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records",
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback")
+        assert resp.status_code == 503
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records",
+                side_effect=RuntimeError("unexpected"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback")
+        assert resp.status_code == 500
+
+
+class TestListFeedbackInboxDBErrors:
+    def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback/inbox")
+        assert resp.status_code == 409
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback/inbox")
+        assert resp.status_code == 501
+
+    def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback/inbox")
+        assert resp.status_code == 503
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
+                side_effect=RuntimeError("unexpected"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback/inbox")
+        assert resp.status_code == 500
+
+
+class TestGetFeedbackDBErrors:
+    def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get(f"/api/v1/feedback/{_RECORD_ID}")
+        assert resp.status_code == 409
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get(f"/api/v1/feedback/{_RECORD_ID}")
+        assert resp.status_code == 501
+
+    def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get(f"/api/v1/feedback/{_RECORD_ID}")
+        assert resp.status_code == 503
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+            ),
+        ):
+            resp = client.get(f"/api/v1/feedback/{_RECORD_ID}")
+        assert resp.status_code == 500
+
+
+class TestUpdateFeedbackStatusDBErrors:
+    def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.patch(f"/api/v1/feedback/{_RECORD_ID}/status", json={"status": "resolved"})
+        assert resp.status_code == 409
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.patch(f"/api/v1/feedback/{_RECORD_ID}/status", json={"status": "resolved"})
+        assert resp.status_code == 501
+
+    def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.patch(f"/api/v1/feedback/{_RECORD_ID}/status", json={"status": "resolved"})
+        assert resp.status_code == 503
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+            ),
+        ):
+            resp = client.patch(f"/api/v1/feedback/{_RECORD_ID}/status", json={"status": "resolved"})
+        assert resp.status_code == 500
+
+
+class TestDetectEvalGapDBErrors:
+    def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(f"/api/v1/feedback/{_RECORD_ID}/detect-gap")
+        assert resp.status_code == 409
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(f"/api/v1/feedback/{_RECORD_ID}/detect-gap")
+        assert resp.status_code == 501
+
+    def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(f"/api/v1/feedback/{_RECORD_ID}/detect-gap")
+        assert resp.status_code == 503
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+            ),
+        ):
+            resp = client.post(f"/api/v1/feedback/{_RECORD_ID}/detect-gap")
+        assert resp.status_code == 500
+
+    def test_returns_empty_when_no_run_id(self, client: TestClient) -> None:
+        """A record with no run_id returns eval_gap=True without querying eval suite."""
+        mock_record = _make_mock_record(run_id=None)
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.detect_eval_gap") as mock_detect,
+        ):
+            mock_get.return_value = mock_record
+            mock_detect.return_value = True
+            resp = client.post(f"/api/v1/feedback/{_RECORD_ID}/detect-gap")
+        assert resp.status_code == 200
+        assert resp.json()["eval_gap"] is True
+
+
+class TestGetInboxItemDBErrors:
+    def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get(f"/api/v1/feedback/inbox/{_RECORD_ID}")
+        assert resp.status_code == 409
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get(f"/api/v1/feedback/inbox/{_RECORD_ID}")
+        assert resp.status_code == 501
+
+    def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get(f"/api/v1/feedback/inbox/{_RECORD_ID}")
+        assert resp.status_code == 503
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+            ),
+        ):
+            resp = client.get(f"/api/v1/feedback/inbox/{_RECORD_ID}")
+        assert resp.status_code == 500
+
+
+class TestReviewFeedbackDBErrors:
+    def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "mark_reviewed"},
+            )
+        assert resp.status_code == 409
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "mark_reviewed"},
+            )
+        assert resp.status_code == 501
+
+    def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "mark_reviewed"},
+            )
+        assert resp.status_code == 503
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "mark_reviewed"},
+            )
+        assert resp.status_code == 500
+
+    def test_create_correction_run_returns_422_when_no_run(self, client: TestClient) -> None:
+        """Correction run without an associated run_id returns 422."""
+        mock_record = _make_mock_record(feedback_status="pending", run_id=None)
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+        ):
+            mock_get.return_value = mock_record
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "create_correction_run"},
+            )
+        assert resp.status_code == 422
+
+    def test_review_with_annotation(self, client: TestClient) -> None:
+        """Annotating a review action persists the annotation (line 931)."""
+        mock_record = _make_mock_record(feedback_status="resolved")
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+        ):
+            mock_get.return_value = mock_record
+            mock_update.return_value = mock_record
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "mark_reviewed", "annotation": "Looks good after retry"},
+            )
+        assert resp.status_code == 200
+
+
+class TestListEvalProposalsDBErrors:
+    def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_eval_proposals",
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback/proposals")
+        assert resp.status_code == 409
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_eval_proposals",
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback/proposals")
+        assert resp.status_code == 501
+
+    def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_eval_proposals",
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.get("/api/v1/feedback/proposals")
+        assert resp.status_code == 503
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_eval_proposals", side_effect=RuntimeError("unexpected")
+            ),
+        ):
+            resp = client.get("/api/v1/feedback/proposals")
+        assert resp.status_code == 500
+
+
+class TestPublishEvalProposalDBErrors:
+    def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "x", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+        assert resp.status_code == 409
+
+    def test_returns_501_on_programming_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "x", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+        assert resp.status_code == 501
+
+    def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "x", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+        assert resp.status_code == 503
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "x", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+        assert resp.status_code == 500
+
+
+class TestParseOptionalIso:
+    def test_returns_none_for_empty(self) -> None:
+        assert _parse_optional_iso(None, "test") is None
+        assert _parse_optional_iso("", "test") is None
+
+    def test_parses_valid_iso(self) -> None:
+        result = _parse_optional_iso("2025-01-15T10:30:00", "date_from")
+        assert result is not None
+        assert result.year == 2025
+
+    def test_rejects_invalid_format(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            _parse_optional_iso("not-a-date", "date_from")
+        assert exc.value.status_code == 422
+
+
+class TestSerialiseRecord:
+    def test_includes_needs_human_review(self) -> None:
+        r = _make_mock_record()
+        r.needs_human_review = True
+        r.annotation = "Needs review"
+        result = _serialise_record(r, pipeline_name="My Pipeline")
+        assert result["needs_human_review"] is True
+        assert result["annotation"] == "Needs review"
+        assert result["pipeline_name"] == "My Pipeline"
+
+    def test_handles_none_values(self) -> None:
+        r = _make_mock_record(run_id=None, account_id=None, producing_agent_id=None)
+        result = _serialise_record(r)
+        assert result["run_id"] is None
+        assert result["rejected_by"] is None
+        assert result["producing_agent_id"] is None
+        assert result["correction_run_id"] is None

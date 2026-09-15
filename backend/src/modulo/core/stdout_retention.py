@@ -13,6 +13,10 @@ from typing import Any
 from pydantic import field_validator
 
 _STDOUT_MAX_BYTES_ERROR_MSG = "stdout_max_bytes must be a positive integer"
+_STDOUT_RETENTION_CONFIG_ERROR_MSG = (
+    "stdout_retention_config must be null or a dict with 'mode' in ('tail', 'full') "
+    "and optional 'max_bytes' as a positive integer"
+)
 
 
 def validate_stdout_max_bytes(v: Any) -> int | None:
@@ -40,6 +44,33 @@ def validate_stdout_max_bytes(v: Any) -> int | None:
     if value <= 0:
         raise ValueError(_STDOUT_MAX_BYTES_ERROR_MSG)
     return value
+
+
+def validate_stdout_retention_config(v: Any) -> dict[str, Any] | None:
+    """Save-time validation for pipeline-level ``stdout_retention_config``.
+
+    Shape: ``{"mode": "tail"|"full", "max_bytes": <positive int>}`` or None.
+    None means no pipeline override. ``max_bytes`` is optional (defaults to
+    the code-level full-mode default when absent). An empty dict ``{}`` is the
+    documented "clear" operation and normalizes to None (no pipeline override).
+    """
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        raise ValueError(_STDOUT_RETENTION_CONFIG_ERROR_MSG)
+    if not v:
+        # Empty dict is the documented clear operation — normalize to None so a
+        # client following the field/schema description gets a successful clear
+        # instead of a 422 for the missing 'mode' key.
+        return None
+    mode = v.get("mode")
+    if mode not in ("tail", "full"):
+        raise ValueError(_STDOUT_RETENTION_CONFIG_ERROR_MSG)
+    result: dict[str, Any] = {"mode": mode}
+    max_bytes = v.get("max_bytes")
+    if max_bytes is not None:
+        result["max_bytes"] = validate_stdout_max_bytes(max_bytes)
+    return result
 
 
 class StdoutRetentionValidatorMixin:

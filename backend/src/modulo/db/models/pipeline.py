@@ -69,6 +69,10 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     )
     default_feedback_handler: Mapped[str | None] = mapped_column(String(50))
     rate_limit_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # FAR-811: pipeline-level default for sandbox stdout retention.
+    # Shape: {"mode": "tail"|"full", "max_bytes": <positive int>} or None
+    # (no pipeline override — inherit from org ceiling only).
+    stdout_retention_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     retry_policy: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,

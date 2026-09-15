@@ -78,6 +78,10 @@ class PipelineSnapshot(OrgScoped):
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30))
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # FAR-811: pipeline-level default for sandbox stdout retention, frozen at
+    # snapshot time. Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}
+    # or None (no pipeline override).
+    stdout_retention_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
     environment_profile: Mapped["EnvironmentProfile | None"] = relationship()

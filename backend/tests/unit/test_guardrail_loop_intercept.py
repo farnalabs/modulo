@@ -12,6 +12,7 @@ import asyncio
 import json
 import time
 import uuid
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -677,3 +678,259 @@ def test_load_config_resolves_patterns(tmp_path, monkeypatch):
     bad_file = tmp_path / "bad.json"
     bad_file.write_text("not json", encoding="utf-8")
     assert sb._load_config(str(bad_file)) == {"patterns": sb.DEFAULT_PATTERNS}
+
+
+# ---------------------------------------------------------------------------
+# _consume_future — cancelled + exception paths
+# ---------------------------------------------------------------------------
+
+
+def test_consume_future_cancelled():
+    """Cancelled futures are silently consumed."""
+    f = asyncio.Future()
+    f.cancel()
+    li._consume_future(f)
+    assert f.cancelled()
+
+
+def test_consume_future_exception():
+    """Exception retrieval prevents 'never awaited' warnings."""
+    f = asyncio.Future()
+    f.set_exception(RuntimeError("boom"))
+    li._consume_future(f)
+    assert f.done()
+
+
+# ---------------------------------------------------------------------------
+# _redaction_policies — invalid policy guard
+# ---------------------------------------------------------------------------
+
+
+def test_redaction_policies_skips_invalid():
+    """Invalid redaction policy configs are logged and skipped."""
+    gr = _guardrail(name="bad-redact", action="redact", redaction=[{"bad": "config"}])
+    policies, names = li._redaction_policies([gr])
+    assert policies == []
+    assert "bad-redact" in names
+
+
+def test_redaction_policies_skips_non_redact():
+    """Non-redact guardrails are skipped entirely."""
+    gr_block = _guardrail(name="block", action="block")
+    gr_warn = _guardrail(name="warn", action="warn")
+    policies, names = li._redaction_policies([gr_block, gr_warn])
+    assert policies == []
+    assert names == ""
+
+
+# ---------------------------------------------------------------------------
+# _evaluate_event — CancelledError + generic exception
+# ---------------------------------------------------------------------------
+
+
+async def test_evaluate_event_cancelled_error_propagates():
+    """CancelledError must propagate (not swallowed)."""
+
+    async def _cancelled(engine, payload, eval_def, timeout_seconds):
+        raise asyncio.CancelledError
+
+    with patch.object(li, "_detect_one_bounded", _cancelled), pytest.raises(asyncio.CancelledError):
+        await li._evaluate_event(EvalEngine(), [_guardrail()], {}, 1.0)
+
+
+async def test_evaluate_event_generic_exception_returns_error():
+    """A generic detection error returns mechanism_error."""
+
+    async def _boom(engine, payload, eval_def, timeout_seconds):
+        raise RuntimeError("det failed")
+
+    with patch.object(li, "_detect_one_bounded", _boom):
+        fired, err = await li._evaluate_event(EvalEngine(), [_guardrail()], {}, 1.0)
+    assert fired == []
+    assert err is not None
+    assert "RuntimeError" in err
+
+
+# ---------------------------------------------------------------------------
+# run_loop_interception — pass at end (no warn/block/redact)
+# ---------------------------------------------------------------------------
+
+
+async def test_pass_when_no_guardrail_fires():
+    """A tool call that matches patterns but no guardrail fires returns pass."""
+    # Use a guardrail that won't match the event
+    gr = _guardrail(name="non-match", pattern=r"zzz_nomatch")
+    cfg = LoopInterceptConfig()
+    outcome, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
+    assert outcome.action == "pass"
+    assert audit == []
+
+
+# ---------------------------------------------------------------------------
+# LoopInterceptCallbackServer — port before start
+# ---------------------------------------------------------------------------
+
+
+def test_port_returns_none_before_start():
+    """port property returns None when server hasn't started."""
+    server = li.LoopInterceptCallbackServer(EvalEngine(), [], LoopInterceptConfig())
+    assert server.port is None
+
+
+# ---------------------------------------------------------------------------
+# LoopInterceptCallbackServer — close without start
+# ---------------------------------------------------------------------------
+
+
+async def test_close_without_start_is_noop():
+    """close() is idempotent when server was never started."""
+    server = li.LoopInterceptCallbackServer(EvalEngine(), [], LoopInterceptConfig())
+    await server.close()
+    assert server._server is None
+
+
+# ---------------------------------------------------------------------------
+# _spawn_audit — no event loop
+# ---------------------------------------------------------------------------
+
+
+def test_spawn_audit_returns_when_no_loop():
+    """_spawn_audit silently returns when the server has no event loop."""
+    server = li.LoopInterceptCallbackServer(EvalEngine(), [], LoopInterceptConfig())
+    server.loop = None
+    server._spawn_audit([li.LoopInterceptAuditRecord("test", {})])
+    # No task was created because loop is None
+    assert not server._background_tasks
+
+
+# ---------------------------------------------------------------------------
+# _run_audit — no sink configured
+# ---------------------------------------------------------------------------
+
+
+async def test_run_audit_raises_when_no_sink():
+    """_run_audit raises RuntimeError when audit_sink is None."""
+    server = li.LoopInterceptCallbackServer(EvalEngine(), [], LoopInterceptConfig())
+    with patch("modulo.core.guardrails.loop_intercept._log") as mock_log:
+        await server._run_audit([li.LoopInterceptAuditRecord("test", {})])
+    # Should log the exception
+    mock_log.exception.assert_called()
+
+
+async def test_run_audit_catches_sink_exception():
+    """_run_audit catches and logs exceptions from the audit sink."""
+
+    async def _failing_sink(records):
+        raise RuntimeError("sink failed")
+
+    server = li.LoopInterceptCallbackServer(EvalEngine(), [], LoopInterceptConfig(), audit_sink=_failing_sink)
+    with patch("modulo.core.guardrails.loop_intercept._log") as mock_log:
+        await server._run_audit([li.LoopInterceptAuditRecord("test", {})])
+    mock_log.exception.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# _coerce_uuid
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_uuid_valid_string():
+    uid = uuid.uuid4()
+    assert li._coerce_uuid(str(uid)) == uid
+
+
+def test_coerce_uuid_invalid_string():
+    assert li._coerce_uuid("not-a-uuid") is None
+
+
+def test_coerce_uuid_none():
+    assert li._coerce_uuid(None) is None
+
+
+def test_coerce_uuid_passthrough():
+    uid = uuid.uuid4()
+    assert li._coerce_uuid(uid) == uid
+
+
+# ---------------------------------------------------------------------------
+# load_loop_intercept_guardrails
+# ---------------------------------------------------------------------------
+
+
+async def test_load_guardrails_returns_empty_when_no_factory():
+    result = await li.load_loop_intercept_guardrails(None, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4())
+    assert result == []
+
+
+async def test_load_guardrails_returns_empty_when_invalid_ids():
+    result = await li.load_loop_intercept_guardrails(MagicMock(), org_id="bad", pipeline_id="bad")
+    assert result == []
+
+
+async def test_load_guardrails_returns_empty_on_exception():
+    async def _failing_factory():
+        raise RuntimeError("db down")
+
+    class _Ctx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+    factory = MagicMock(return_value=_Ctx())
+    # The try/except in load_loop_intercept_guardrails catches the error
+    with patch("modulo.core.guardrails.loop_intercept._log"):
+        result = await li.load_loop_intercept_guardrails(factory, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4())
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# persist_loop_interception_audit
+# ---------------------------------------------------------------------------
+
+
+async def test_persist_audit_returns_when_no_factory():
+    # Should return without error when no factory is provided
+    result = await li.persist_loop_interception_audit(
+        None, org_id=uuid.uuid4(), run_id=uuid.uuid4(), node_id="n1", records=[]
+    )
+    assert result is None
+
+
+async def test_persist_audit_returns_when_no_records():
+    result = await li.persist_loop_interception_audit(
+        MagicMock(), org_id=uuid.uuid4(), run_id=uuid.uuid4(), node_id="n1", records=[]
+    )
+    assert result is None
+
+
+async def test_persist_audit_returns_when_invalid_ids():
+    result = await li.persist_loop_interception_audit(
+        MagicMock(), org_id="bad", run_id="bad", node_id="n1", records=[li.LoopInterceptAuditRecord("test", {})]
+    )
+    assert result is None
+
+
+async def test_persist_audit_catches_exception():
+    async def _failing_factory():
+        raise RuntimeError("db down")
+
+    class _Ctx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+    factory = MagicMock(return_value=_Ctx())
+    with patch("modulo.core.guardrails.loop_intercept._log") as mock_log:
+        await li.persist_loop_interception_audit(
+            factory,
+            org_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            node_id="n1",
+            records=[li.LoopInterceptAuditRecord("test", {"tool": "x"})],
+        )
+    # Exception was logged, not raised
+    mock_log.exception.assert_called()

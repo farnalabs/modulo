@@ -100,17 +100,87 @@ async def journey_snapshot(
 
 
 @pytest_asyncio.fixture
-async def app_role_rls_session(
+async def containment_org(db_engine: AsyncEngine) -> uuid.UUID:
+    """A freshly committed organisation, isolated from the shared session-scoped
+    ``test_org`` so these journey-run seeding tests cannot collide on the
+    ``uq_runs_org_run_number`` unique constraint with runs committed by other
+    integration tests against ``test_org``."""
+    org_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
+            {"id": str(org_id), "name": f"containment-{org_id}", "slug": f"containment-{org_id}"},
+        )
+    return org_id
+
+
+@pytest_asyncio.fixture
+async def containment_session(
     modulo_app_engine: AsyncEngine,
-    journey_org: uuid.UUID,
+    containment_org: uuid.UUID,
 ) -> AsyncGenerator[AsyncSession, None]:
-    """AsyncSession as the production ``modulo_app`` role (RLS enforced)."""
+    """AsyncSession as the production ``modulo_app`` role (RLS enforced) scoped
+    to a freshly created, isolated organisation."""
     factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
     async with factory() as session:
         await session.begin()
-        await set_rls_org(session, journey_org)
+        await set_rls_org(session, containment_org)
         yield session
         await session.rollback()
+
+
+@pytest_asyncio.fixture
+async def containment_pipeline(
+    db_engine: AsyncEngine,
+    containment_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> uuid.UUID:
+    """Committed pipeline row in ``containment_org``.
+
+    Runs seeded in these tests carry ``organisation_id=containment_org``; the
+    ``enforce_same_organisation`` trigger requires the referenced pipeline to
+    share that org, so a ``test_org``-scoped ``test_pipeline`` would raise a
+    cross-organisation FK violation (the exact failure this PR hit)."""
+    pipeline_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json) "
+                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
+            ),
+            {
+                "id": str(pipeline_id),
+                "oid": str(containment_org),
+                "name": "Containment Test Pipeline",
+                "uid": str(test_user),
+            },
+        )
+    return pipeline_id
+
+
+@pytest_asyncio.fixture
+async def containment_snapshot(
+    db_engine: AsyncEngine,
+    containment_org: uuid.UUID,
+    containment_pipeline: uuid.UUID,
+) -> uuid.UUID:
+    """Committed pipeline_snapshot row in ``containment_org`` (see above)."""
+    snapshot_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
+            ),
+            {"id": str(snapshot_id), "pid": str(containment_pipeline), "oid": str(containment_org)},
+        )
+    return snapshot_id
 
 
 async def _seed_run(
@@ -146,39 +216,39 @@ def _refs(*, kind: str, ref: str, source: str = "derived", **extra: Any) -> list
 
 
 async def test_containment_predicate_surfaces_the_mixing_run(
-    app_role_rls_session: AsyncSession,
-    journey_org: uuid.UUID,
-    journey_pipeline: uuid.UUID,
-    journey_snapshot: uuid.UUID,
+    containment_session: AsyncSession,
+    containment_org: uuid.UUID,
+    containment_pipeline: uuid.UUID,
+    containment_snapshot: uuid.UUID,
 ) -> None:
     """The containment predicate MUST match the stored entry shape: entries
     with the validate_ref_entry keys (kind/ref/source + optional extras) and
     mid-array position are still matched; other journeys' runs do not leak."""
     journey = Journey(
-        organisation_id=journey_org,
+        organisation_id=containment_org,
         kind="jira",
         ref="PAY-77",
-        canonical_work_item_id=canonical_work_item_id(journey_org, "jira", "PAY-77"),
+        canonical_work_item_id=canonical_work_item_id(containment_org, "jira", "PAY-77"),
         latest_status="complete",
         latest_provenance="derived",
     )
-    app_role_rls_session.add(journey)
-    await app_role_rls_session.flush()
+    containment_session.add(journey)
+    await containment_session.flush()
 
     older = await _seed_run(
-        app_role_rls_session,
-        org_id=journey_org,
-        pipeline_id=journey_pipeline,
-        snapshot_id=journey_snapshot,
+        containment_session,
+        org_id=containment_org,
+        pipeline_id=containment_pipeline,
+        snapshot_id=containment_snapshot,
         work_item_refs=_refs(kind="jira", ref="PAY-77"),
         completed_at=datetime(2026, 6, 1, tzinfo=UTC),
         run_number=1,
     )
     newer_rich = await _seed_run(
-        app_role_rls_session,
-        org_id=journey_org,
-        pipeline_id=journey_pipeline,
-        snapshot_id=journey_snapshot,
+        containment_session,
+        org_id=containment_org,
+        pipeline_id=containment_pipeline,
+        snapshot_id=containment_snapshot,
         work_item_refs=[
             _refs(kind="linear", ref="FAR-1", source="caller")[0],
             _refs(kind="jira", ref="PAY-77", source="agent", status="done")[0],
@@ -188,46 +258,46 @@ async def test_containment_predicate_surfaces_the_mixing_run(
     )
     # Unrelated refs — enough to prove the predicate never widens.
     await _seed_run(
-        app_role_rls_session,
-        org_id=journey_org,
-        pipeline_id=journey_pipeline,
-        snapshot_id=journey_snapshot,
+        containment_session,
+        org_id=containment_org,
+        pipeline_id=containment_pipeline,
+        snapshot_id=containment_snapshot,
         work_item_refs=_refs(kind="jira", ref="PAY-40"),
         completed_at=datetime(2026, 6, 3, tzinfo=UTC),
         run_number=3,
     )
     await _seed_run(
-        app_role_rls_session,
-        org_id=journey_org,
-        pipeline_id=journey_pipeline,
-        snapshot_id=journey_snapshot,
+        containment_session,
+        org_id=containment_org,
+        pipeline_id=containment_pipeline,
+        snapshot_id=containment_snapshot,
         work_item_refs=_refs(kind="github_issue", ref="a/b#5"),
         completed_at=datetime(2026, 6, 4, tzinfo=UTC),
         run_number=4,
     )
 
-    runs = await list_journey_runs(app_role_rls_session, journey=journey)
+    runs = await list_journey_runs(containment_session, journey=journey)
     assert [r.id for r in runs] == [newer_rich.id, older.id]
 
 
 async def test_containment_query_respects_order_and_limit_on_postgres(
-    app_role_rls_session: AsyncSession,
-    journey_org: uuid.UUID,
-    journey_pipeline: uuid.UUID,
-    journey_snapshot: uuid.UUID,
+    containment_session: AsyncSession,
+    containment_org: uuid.UUID,
+    containment_pipeline: uuid.UUID,
+    containment_snapshot: uuid.UUID,
 ) -> None:
     """Newest-first ordering plus the SQL-side LIMIT clamp survive the
     migrated-to-Postgres path."""
     journey = Journey(
-        organisation_id=journey_org,
+        organisation_id=containment_org,
         kind="linear",
         ref="FAR-9",
-        canonical_work_item_id=canonical_work_item_id(journey_org, "linear", "FAR-9"),
+        canonical_work_item_id=canonical_work_item_id(containment_org, "linear", "FAR-9"),
         latest_status="complete",
         latest_provenance="derived",
     )
-    app_role_rls_session.add(journey)
-    await app_role_rls_session.flush()
+    containment_session.add(journey)
+    await containment_session.flush()
 
     for index, ts in enumerate(
         [
@@ -237,20 +307,20 @@ async def test_containment_query_respects_order_and_limit_on_postgres(
         ]
     ):
         await _seed_run(
-            app_role_rls_session,
-            org_id=journey_org,
-            pipeline_id=journey_pipeline,
-            snapshot_id=journey_snapshot,
+            containment_session,
+            org_id=containment_org,
+            pipeline_id=containment_pipeline,
+            snapshot_id=containment_snapshot,
             work_item_refs=_refs(kind="linear", ref="FAR-9"),
             completed_at=ts,
             run_number=index + 10,
         )
 
-    newest_first = await list_journey_runs(app_role_rls_session, journey=journey)
+    newest_first = await list_journey_runs(containment_session, journey=journey)
     assert len(newest_first) == 3
     completed_at_values = [r.completed_at for r in newest_first]
     assert completed_at_values[0] > completed_at_values[-1]
 
-    clamped = await list_journey_runs(app_role_rls_session, journey=journey, limit=1)
+    clamped = await list_journey_runs(containment_session, journey=journey, limit=1)
     assert len(clamped) == 1
     assert clamped[0].id == newest_first[0].id

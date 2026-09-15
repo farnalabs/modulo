@@ -511,6 +511,7 @@ def _make_node_fn(
     timeout: int,
     session_factory: Callable[..., Any] | None,
     single_sandbox_node: bool,
+    pipeline_stdout_retention_config: dict[str, Any] | None = None,
     dag_ancestor_ids: frozenset[str] | None = None,
 ) -> Any:
     """Build the LangGraph node function for a single node def (no graph add)."""
@@ -531,6 +532,7 @@ def _make_node_fn(
             timeout=timeout,
             session_factory=session_factory,
             single_sandbox_node=single_sandbox_node,
+            pipeline_stdout_retention_config=pipeline_stdout_retention_config,
         )
     if connector_binding and not (node_type == "agent" and node_def.get("agent_id")):
         return make_connector_fn(node_def, timeout=timeout, session_factory=session_factory)
@@ -576,6 +578,7 @@ def make_scatter_node_fn(
     timeout: int,
     session_factory: Callable[..., Any] | None = None,
     single_sandbox_node: bool = False,
+    pipeline_stdout_retention_config: dict[str, Any] | None = None,
 ) -> Any:
     """Build the runtime node function for a scatter (fan-out) node.
 
@@ -600,6 +603,7 @@ def make_scatter_node_fn(
                 timeout=timeout,
                 session_factory=session_factory,
                 single_sandbox_node=single_sandbox_node,
+                pipeline_stdout_retention_config=pipeline_stdout_retention_config,
             )
             child_id = str(child_def["id"])
             item = child_def.get("scatter_item")
@@ -677,6 +681,7 @@ def _build_raw_node_fn(
     timeout: int,
     session_factory: Callable[..., Any] | None,
     single_sandbox_node: bool,
+    pipeline_stdout_retention_config: dict[str, Any] | None = None,
     dag_ancestor_ids: frozenset[str] | None = None,
 ) -> Any:
     """Return the raw (un-retry-wrapped) callable for a node def.
@@ -701,6 +706,7 @@ def _build_raw_node_fn(
             timeout=timeout,
             session_factory=session_factory,
             single_sandbox_node=single_sandbox_node,
+            pipeline_stdout_retention_config=pipeline_stdout_retention_config,
         )
 
     return _make_node_fn(
@@ -708,6 +714,7 @@ def _build_raw_node_fn(
         timeout=timeout,
         session_factory=session_factory,
         single_sandbox_node=single_sandbox_node,
+        pipeline_stdout_retention_config=pipeline_stdout_retention_config,
         dag_ancestor_ids=dag_ancestor_ids,
     )
 
@@ -943,6 +950,7 @@ def build_graph_from_json(
     pipeline_node_timeout_seconds: int = 300,
     pipeline_retry_policy: dict[str, Any] | None = None,
     node_idempotency_key: Callable[[str, dict[str, Any]], str | None] | None = None,
+    pipeline_stdout_retention_config: dict[str, Any] | None = None,
 ) -> Any:
     """Compile a StateGraph from the serialised graph_json stored in a snapshot.
 
@@ -1027,6 +1035,7 @@ def build_graph_from_json(
             timeout=timeout,
             session_factory=session_factory,
             single_sandbox_node=single_sandbox_node,
+            pipeline_stdout_retention_config=pipeline_stdout_retention_config,
             dag_ancestor_ids=dag_ancestors_by_node.get(str(node_def["id"])),
         )
 

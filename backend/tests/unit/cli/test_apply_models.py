@@ -435,7 +435,11 @@ class TestPipelineEntityContracts:
     def test_graphless_managed_view_excludes_graph(self) -> None:
         entity = PipelineEntity.model_validate({"name": "sample", "max_concurrent_runs": 2})
         view = entity.managed_view()
-        assert view == {"description": None, "max_concurrent_runs": 2}
+        assert view == {
+            "description": None,
+            "max_concurrent_runs": 2,
+            "stdout_retention_config": None,
+        }
 
     def test_declared_graph_managed_view_includes_graph(self) -> None:
         entity = PipelineEntity.model_validate(

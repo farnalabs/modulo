@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 import modulo.api.routes.connectors as connectors_module
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -1558,3 +1559,407 @@ def test_patch_rest_overlay_rejects_missing_basic_secret(client: TestClient) -> 
     assert resp.status_code == 422
     assert "REST basic auth requires creds['username'] and creds['password']" in resp.json()["detail"]
     mock_update.assert_not_awaited()
+
+
+def test_list_connector_types(client: TestClient) -> None:
+    """GET /types returns the connector type catalogue."""
+    resp = client.get("/api/v1/connectors/types")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "items" in body
+    ids = [item["id"] for item in body["items"]]
+    assert "filesystem" in ids
+    assert "github" in ids
+    assert "rest" in ids
+
+
+def test_decrypt_credentials_returns_empty_for_none() -> None:
+    """_decrypt_credentials returns {} when ciphertext is None/empty."""
+    from modulo.api.routes.connectors import _decrypt_credentials
+
+    assert not _decrypt_credentials(None, _FERNET_KEY)
+    assert not _decrypt_credentials(b"", _FERNET_KEY)
+
+
+def test_decrypt_credentials_raises_on_non_dict_json() -> None:
+    """When the decrypted JSON is not a dict, StoredCredentialDecryptError is raised."""
+    from modulo.api.routes.connectors import StoredCredentialDecryptError, _decrypt_credentials
+
+    ciphertext = Fernet(_FERNET_KEY.encode()).encrypt(json.dumps(["not", "a", "dict"]).encode())
+    with pytest.raises(StoredCredentialDecryptError):
+        _decrypt_credentials(ciphertext, _FERNET_KEY)
+
+
+def test_decrypt_credentials_raises_on_invalid_json() -> None:
+    """When the decrypted bytes are not valid JSON, StoredCredentialDecryptError is raised."""
+    from modulo.api.routes.connectors import StoredCredentialDecryptError, _decrypt_credentials
+
+    ciphertext = Fernet(_FERNET_KEY.encode()).encrypt(b"not-json")
+    with pytest.raises(StoredCredentialDecryptError):
+        _decrypt_credentials(ciphertext, _FERNET_KEY)
+
+
+def test_create_connector_integrity_error_returns_409(client: TestClient) -> None:
+    """DB IntegrityError on create maps to 409."""
+    with (
+        patch(
+            "modulo.api.routes.connectors.create_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
+    assert resp.status_code == 409
+
+
+def test_create_connector_programming_error_returns_501(client: TestClient) -> None:
+    with (
+        patch(
+            "modulo.api.routes.connectors.create_connector_instance",
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
+    assert resp.status_code == 501
+
+
+def test_create_connector_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with (
+        patch(
+            "modulo.api.routes.connectors.create_connector_instance",
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
+    assert resp.status_code == 503
+
+
+def test_create_connector_unexpected_error_returns_500(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance", side_effect=RuntimeError("boom")),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
+    assert resp.status_code == 500
+
+
+def test_list_connectors_integrity_error_returns_409(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.list_connector_instances", side_effect=IntegrityError("dup", "dup", "dup")),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors")
+    assert resp.status_code == 409
+
+
+def test_list_connectors_programming_error_returns_501(client: TestClient) -> None:
+    with (
+        patch(
+            "modulo.api.routes.connectors.list_connector_instances",
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors")
+    assert resp.status_code == 501
+
+
+def test_list_connectors_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with (
+        patch(
+            "modulo.api.routes.connectors.list_connector_instances", side_effect=SQLAlchemyError("mock", "mock", "mock")
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors")
+    assert resp.status_code == 503
+
+
+def test_list_connectors_unexpected_error_returns_500(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.list_connector_instances", side_effect=RuntimeError("boom")),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors")
+    assert resp.status_code == 500
+
+
+def test_get_connector_integrity_error_returns_409(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
+    assert resp.status_code == 409
+
+
+def test_get_connector_programming_error_returns_501(client: TestClient) -> None:
+    with (
+        patch(
+            "modulo.api.routes.connectors.get_connector_instance", side_effect=ProgrammingError("mock", "mock", "mock")
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
+    assert resp.status_code == 501
+
+
+def test_get_connector_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with (
+        patch(
+            "modulo.api.routes.connectors.get_connector_instance", side_effect=SQLAlchemyError("mock", "mock", "mock")
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
+    assert resp.status_code == 503
+
+
+def test_get_connector_unexpected_error_returns_500(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", side_effect=RuntimeError("boom")),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
+    assert resp.status_code == 500
+
+
+def test_update_connector_integrity_error_returns_409(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch(
+            "modulo.api.routes.connectors.update_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "x"})
+    assert resp.status_code == 409
+
+
+def test_update_connector_programming_error_returns_501(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch(
+            "modulo.api.routes.connectors.update_connector_instance",
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "x"})
+    assert resp.status_code == 501
+
+
+def test_update_connector_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch(
+            "modulo.api.routes.connectors.update_connector_instance",
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "x"})
+    assert resp.status_code == 503
+
+
+def test_update_connector_unexpected_error_returns_500(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch("modulo.api.routes.connectors.update_connector_instance", side_effect=RuntimeError("boom")),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "x"})
+    assert resp.status_code == 500
+
+
+def test_delete_connector_integrity_error_returns_409(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch(
+            "modulo.api.routes.connectors.delete_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
+    assert resp.status_code == 409
+
+
+def test_delete_connector_programming_error_returns_501(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch(
+            "modulo.api.routes.connectors.delete_connector_instance",
+            side_effect=ProgrammingError("mock", "mock", "mock"),
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
+    assert resp.status_code == 501
+
+
+def test_delete_connector_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch(
+            "modulo.api.routes.connectors.delete_connector_instance",
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
+    assert resp.status_code == 503
+
+
+def test_delete_connector_unexpected_error_returns_500(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch("modulo.api.routes.connectors.delete_connector_instance", side_effect=RuntimeError("boom")),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
+    assert resp.status_code == 500
+
+
+def test_health_check_connector_decrypt_error_returns_502(client: TestClient) -> None:
+    """ConnectorDecryptError maps to 502."""
+    from modulo.core.connector_hub import ConnectorDecryptError
+
+    with (
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.api.routes.connectors.ConnectorHub") as mock_hub_cls,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        mock_hub_cls.return_value.__aenter__ = AsyncMock(side_effect=ConnectorDecryptError("bad"))
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+    assert resp.status_code == 502
+
+
+def test_health_check_connector_generic_error_returns_502(client: TestClient) -> None:
+    """Unexpected exceptions from health check map to 502."""
+    with (
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.api.routes.connectors.ConnectorHub") as mock_hub_cls,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        mock_hub_cls.return_value.__aenter__ = AsyncMock(side_effect=RuntimeError("boom"))
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+    assert resp.status_code == 502
+
+
+def test_health_check_missing_connector_returns_404(client: TestClient) -> None:
+    """Health check on a non-existent connector returns 404."""
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=None),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{uuid.uuid4()}/health")
+    assert resp.status_code == 404
+
+
+def test_github_scope_verification_error_on_create(client: TestClient) -> None:
+    """GitHub token scope verification failure returns 422."""
+    with (
+        patch(
+            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            new=AsyncMock(side_effect=ValueError("API down")),
+        ),
+        patch("modulo.api.routes.connectors.create_connector_instance"),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_make_github_body("ghp_test123"))
+    assert resp.status_code == 422
+    assert "Cannot verify GitHub token" in resp.json()["detail"]
+
+
+def test_patch_github_scope_verification_error_on_update(client: TestClient) -> None:
+    """GitHub token scope verification failure on PATCH returns 422."""
+    existing = _make_github_patch_connector()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance"),
+        patch(
+            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            new=AsyncMock(side_effect=ValueError("API down")),
+        ),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": "ghp_newtoken"})
+    assert resp.status_code == 422
+    assert "Cannot verify GitHub token" in resp.json()["detail"]
+
+
+def test_patch_github_missing_scopes_returns_422(client: TestClient) -> None:
+    """GitHub token missing scopes on PATCH returns 422."""
+    existing = _make_github_patch_connector()
+    with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("modulo.api.routes.connectors.update_connector_instance"),
+        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=AsyncMock(return_value={"repo"})),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": "ghp_newtoken"})
+    assert resp.status_code == 422
+    assert "missing required" in resp.json()["detail"]
+
+
+def test_create_rest_non_json_credentials_rejected(client: TestClient) -> None:
+    """POST a REST connector with non-JSON credentials returns 422."""
+    body = {
+        "name": "REST Connector",
+        "connector_type_id": "rest",
+        "credentials": "not-a-json-string",
+        "config_json": {},
+    }
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance"),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=body)
+    assert resp.status_code == 422
+    assert "must be a JSON object" in resp.json()["detail"]
+
+
+def test_rest_invalid_config_json_on_unknown_rejects(client: TestClient) -> None:
+    """POST a REST connector with invalid on_unknown in config_json returns 422."""
+    body = {
+        "name": "REST Connector",
+        "connector_type_id": "rest",
+        "credentials": json.dumps({"auth_mode": "bearer", "token": "t"}),
+        "config_json": {"on_unknown": "bogus_mode"},
+    }
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance"),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=body)
+    assert resp.status_code == 422
+    assert "on_unknown" in resp.json()["detail"]
