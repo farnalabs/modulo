@@ -1,55 +1,35 @@
-"""Reinstate organisations audit columns + created_by FK dropped by 0239.
+"""No-op retain of organisations audit columns + created_by FK.
 
-Migration 0239_revert_organisations_audit_drift erroneously dropped the
-updated_at/updated_by/deleted_by columns (added by 0233) and the
-fk_organisations_created_by FK (added by 0236) on the grounds that the
-Organisation ORM model did not declare them. That premise was wrong: the
-Organisation model DOES declare these columns/FK (see
-src/modulo/db/models/organisation.py), so dropping them produced schema drift
-vs the ORM and broke every query that touches organisations at runtime
-(UndefinedColumnError: column organisations.updated_at does not exist).
+PR #530 added updated_at/updated_by/deleted_by to organisations (0233) and the
+fk_organisations_created_by FK (0236). Migration 0239_revert_organisations_audit_drift
+was originally written to DROP those columns/FK, but is now itself a no-op retainer:
+the Organisation ORM model declares these columns/FK, so dropping them would reintroduce
+schema drift vs the ORM (UndefinedColumnError: column organisations.updated_at does not
+exist) and break every query that loads an Organisation.
 
-This migration restores the columns/FK so the migrated schema matches the ORM
-metadata again. It chains on top of 0239 (the erroneous revert is retained as
-history, not undone, because it has already been applied to live databases).
+Because 0233 already adds the columns/FK and 0239 (the immediate down_revision) does NOT
+drop them, re-adding them here would raise DuplicateColumn on a fresh database. This
+migration is therefore an explicit no-op that simply documents that the columns/FK are
+retained as part of the intended schema. It chains on top of 0239 so the migration graph
+stays linear.
 
 Revision ID: 0240_reinstate_organisations_audit_columns
 Revises: 0239_revert_organisations_audit_drift
 Create Date: 2026-09-15
 """
 
-import sqlalchemy as sa
-from alembic import op
-
 revision = "0240_reinstate_organisations_audit_columns"
 down_revision = "0239_revert_organisations_audit_drift"
 
 
 def upgrade() -> None:
-    op.add_column(
-        "organisations",
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.current_timestamp(),
-            onupdate=sa.func.current_timestamp(),
-            nullable=False,
-        ),
-    )
-    op.add_column("organisations", sa.Column("updated_by", sa.Uuid(), nullable=True))
-    op.add_column("organisations", sa.Column("deleted_by", sa.Uuid(), nullable=True))
-    op.create_foreign_key(
-        "fk_organisations_created_by",
-        "organisations",
-        "accounts",
-        ["created_by"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    # No-op: the organisations updated_at/updated_by/deleted_by columns and the
+    # fk_organisations_created_by FK are already added by 0233/0236 and retained
+    # by the no-op 0239, so there is nothing to reinstate here. Re-adding them
+    # would raise DuplicateColumn on a fresh database.
+    pass
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_organisations_created_by", "organisations", type_="foreignkey")
-    op.drop_column("organisations", "deleted_by")
-    op.drop_column("organisations", "updated_by")
-    op.drop_column("organisations", "updated_at")
+    # No-op: nothing was added in upgrade, so there is nothing to revert.
+    pass
