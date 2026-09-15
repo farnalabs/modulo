@@ -3077,30 +3077,38 @@ class TestNodelessEarlyDetect:
         assert summary["nodeless_redispatched"] == 1
 
     @pytest.mark.asyncio
-    async def test_early_detect_logs_gap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_early_detect_logs_gap(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """The early-detect re-dispatch log includes the started_at gap for
         diagnosis."""
         run_id = uuid.uuid4()
-        summary, _reenqueue, _ingest, _, _, _ = await _run_reconcile(
-            monkeypatch,
-            [
-                _run_row(
-                    run_id,
-                    "running",
-                    stale=False,
-                    nodeless=True,
-                    dispatched=False,
-                    dispatched_minutes_ago=None,
-                    claim_count=1,
-                )
-            ],
-            settings_overrides={
-                "saq_claimed_nodeless_minutes": 35,
-                "saq_nodeless_early_detect_minutes": 15,
-            },
-        )
+        with caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"):
+            summary, reenqueue, _ingest, _, _, _ = await _run_reconcile(
+                monkeypatch,
+                [
+                    _run_row(
+                        run_id,
+                        "running",
+                        stale=False,
+                        nodeless=True,
+                        dispatched=False,
+                        dispatched_minutes_ago=None,
+                        claim_count=1,
+                    )
+                ],
+                settings_overrides={
+                    "saq_claimed_nodeless_minutes": 35,
+                    "saq_nodeless_early_detect_minutes": 15,
+                },
+            )
         assert summary["nodeless_redispatched"] == 1
-        _reenqueue.assert_awaited_once()
+        reenqueue.assert_awaited_once()
+        gap_records = [r for r in caplog.records if "nodeless_early_detect_redispatched" in r.message]
+        assert gap_records, "expected an early-detect re-dispatch log"
+        assert f"run={run_id}" in gap_records[0].message
+        assert "started_at=" in gap_records[0].message
+        assert "early-detect at 15 min" in gap_records[0].message
 
     @pytest.mark.asyncio
     async def test_early_detect_window_only_matches_early_branch(
@@ -3110,7 +3118,7 @@ class TestNodelessEarlyDetect:
         but OUTSIDE the full nodeless window (35 min), so ONLY the early-detect
         predicate matches.  This proves the early-detect branch — not the full
         window fall-through — is what re-dispatches, and the distinct
-        ``nodeless_early_detect_repatched`` log line is emitted."""
+        ``nodeless_early_detect_redispatched`` log line is emitted."""
         run_id = uuid.uuid4()
         row = _run_row(
             run_id,
@@ -3135,7 +3143,47 @@ class TestNodelessEarlyDetect:
         assert summary["nodeless_redispatched"] == 1
         assert summary["nodeless_failed"] == 0
         reenqueue.assert_awaited_once()
-        assert any("nodeless_early_detect_repatched" in r.message for r in caplog.records)
+        assert any("nodeless_early_detect_redispatched" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_early_detect_obeys_per_tick_fleet_cap(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The early-detect branch obeys NODELESS_REDISPATCH_MAX_PER_TICK — a
+        mass worker wedge making many fresh-heartbeat zombies eligible in the
+        SAME tick must not re-dispatch them unbounded. Rows started 20 min ago
+        are inside the early window (15) but outside the full window (35), so
+        ONLY the early-detect branch is exercised: the cap's worth are enqueued,
+        the rest deferred and counted ``nodeless_capped``, warning once."""
+        monkeypatch.setattr(ch, "NODELESS_REDISPATCH_MAX_PER_TICK", 2)
+        rows = []
+        for _ in range(4):
+            row = _run_row(
+                uuid.uuid4(),
+                "running",
+                stale=False,
+                nodeless=True,
+                dispatched=False,
+                dispatched_minutes_ago=None,
+                claim_count=1,
+            )
+            row.started_at = datetime.now(UTC) - timedelta(minutes=20)
+            rows.append(row)
+        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+            summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
+                monkeypatch,
+                rows,
+                settings_overrides={
+                    "saq_claimed_nodeless_minutes": 35,
+                    "saq_nodeless_early_detect_minutes": 15,
+                },
+            )
+        assert summary["nodeless_redispatched"] == 2
+        assert summary["nodeless_capped"] == 2
+        assert summary["nodeless_failed"] == 0
+        assert reenqueue.await_count == 2
+        ingest.assert_not_awaited()
+        assert sum("nodeless re-dispatch cap hit" in r.message for r in caplog.records) == 1
 
 
 class TestFailNodelessObservability:

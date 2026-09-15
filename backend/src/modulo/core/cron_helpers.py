@@ -4104,6 +4104,25 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
 # double-execute.
 
 
+def resolve_nodeless_early_detect_minutes(settings: Any, nodeless_window: int) -> int | None:
+    """Resolve the FAR-873 early-detect window from settings.
+
+    Returns the configured window ONLY when it is a valid EARLY window
+    (``5 <= value < nodeless_window``), else ``None`` (feature disabled). This
+    is the SINGLE source of that decision: the reconcile scan AND the runner
+    capacity sweep's recovery predicate both call it, so their composed
+    predicates stay identical (parity by construction — qa F3). A defaulted
+    argument at either call site would silently diverge the two.
+    """
+    raw = getattr(settings, "saq_nodeless_early_detect_minutes", None)
+    if raw is None:
+        return None
+    value = int(raw)
+    if 5 <= value < nodeless_window:
+        return value
+    return None
+
+
 def _nodeless_early_detect_predicate(
     early_detect_minutes: int,
     stale_seconds: int,
@@ -4127,20 +4146,6 @@ def _nodeless_early_detect_predicate(
     base = _nodeless_zombie_predicate(early_detect_minutes)
     fresh_heartbeat = Run.heartbeat_at > func_now_minus(stale_seconds)
     return and_(base, fresh_heartbeat)
-
-
-def _is_nodeless_early_detect_row(row: Any, early_detect_minutes: int) -> bool:
-    """Row-level re-check for the early-detect branch.
-
-    Same logic as ``_is_nodeless_zombie_row`` but at the shorter window.
-    """
-    if row.status != "running":
-        return False
-    if row.node_token_usage is not None or not row.outputs_absent:
-        return False
-    if row.started_at is None:
-        return False
-    return bool((datetime.now(UTC) - row.started_at).total_seconds() > early_detect_minutes * 60)
 
 
 def _should_redispatch_nodeless(row: Any) -> bool:
@@ -4441,7 +4446,7 @@ def reconciler_recovery_predicate(
     capacity_redispatch_seconds: int,
     nodeless_window: int,
     enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
-    early_detect_minutes: int | None = None,
+    early_detect_minutes: int | None,
 ) -> Any:
     """The reconciler's COMPOSED recovery predicate (single source, qa F3).
 
@@ -4458,7 +4463,10 @@ def reconciler_recovery_predicate(
 
     FAR-873: ``early_detect_minutes`` adds a shorter-window branch that
     matches running + fresh heartbeat + zero progress.  This catches wedged-
-    worker zombies ~20 min sooner than the full nodeless window.
+    worker zombies ~20 min sooner than the full nodeless window. It is a
+    REQUIRED keyword-only argument (both call sites resolve it through
+    :func:`resolve_nodeless_early_detect_minutes`) so a new call site cannot
+    silently omit the branch and diverge from the scan.
     """
     from sqlalchemy import or_
 
@@ -5265,14 +5273,9 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     reenqueue_window = int(settings.saq_reenqueue_window)
     stale_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
     nodeless_window = int(settings.saq_claimed_nodeless_minutes)
-    # FAR-873: early-detect window — must be < nodeless_window.  When set to
-    # None or >= nodeless_window the early-detect branch is disabled.
-    _early_raw = getattr(settings, "saq_nodeless_early_detect_minutes", None)
-    early_detect_minutes: int | None = None
-    if _early_raw is not None:
-        _early_val = int(_early_raw)
-        if 5 <= _early_val < nodeless_window:
-            early_detect_minutes = _early_val
+    # FAR-873: early-detect window — must be < nodeless_window.  Resolved by
+    # the shared helper so the runner-capacity sweep composes the SAME branch.
+    early_detect_minutes = resolve_nodeless_early_detect_minutes(settings, nodeless_window)
     capacity_redispatch_seconds = CAPACITY_REDISPATCH_SECONDS
     max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
     claim_cap = _saq_run_claim_cap()
@@ -6343,31 +6346,49 @@ async def _reconcile_one_row(
     # cycle — preventing hot-loop re-dispatching while closing the gap.
     if (
         early_detect_minutes is not None
-        and _is_nodeless_early_detect_row(row, early_detect_minutes)
+        and _is_nodeless_zombie_row(row, early_detect_minutes)
         and not _is_nodeless_redispatch_throttled(row, nodeless_window)
     ):
-        # Re-dispatch is safe: zero nodes executed, nothing to double-execute.
-        # Use the FULL nodeless_window for the throttle so at most one
-        # re-dispatch per full cycle (prevents hot-loop).
-        if _should_redispatch_nodeless(row):
-            _log.info(
-                "dispatcher_reconcile.nodeless_early_detect_repatched run=%s org=%s "
-                "started_at=%s (early-detect at %d min, full window %d min)",
-                row.id,
-                org_id,
-                row.started_at.isoformat() if row.started_at is not None else "None",
-                early_detect_minutes,
-                nodeless_window,
-            )
-            job_type = _reconcile_job_type(row.status)
-            key_suffix = uuid.uuid4().hex
-            await _redispatch_nodeless(session, q, org_id, row, job_type, key_suffix, summary, terminalized_run_ids)
+        # Budget first, exactly as the full-window repair: budget exhaustion
+        # terminal-fails REGARDLESS of the cap (terminal-fail reduces load; it
+        # never enqueues), so waiting out the cap could never help.
+        if not _should_redispatch_nodeless(row):
+            summary["nodeless_failed"] += 1
+            await _fail_nodeless_run(session, row.id, org_id, summary)
+            terminalized_run_ids.append((row.id, org_id))
             return enqueue_failed_redispatched
-        # Budget exhausted — terminal-fail exactly as the full window
-        # would (the run cannot be re-dispatched regardless of window).
-        summary["nodeless_failed"] += 1
-        await _fail_nodeless_run(session, row.id, org_id, summary)
-        terminalized_run_ids.append((row.id, org_id))
+        # Per-tick fleet cap (FAR-873/FAR-509 parity): the early-detect branch
+        # must obey the SAME fleet-wide cap as the full-window repair. Without
+        # it, a mass worker wedge makes many fresh-heartbeat zombies eligible in
+        # the SAME tick and this branch re-dispatches them unbounded — exactly
+        # the scenario the cap exists for. Defer the overflow to a later tick
+        # (no enqueue, no terminal-fail; budget/throttle unaffected) and count
+        # ``nodeless_capped`` (warning once per tick).
+        if summary["nodeless_redispatched"] >= NODELESS_REDISPATCH_MAX_PER_TICK:
+            first_capped = summary["nodeless_capped"] == 0
+            summary["nodeless_capped"] += 1
+            if first_capped:
+                _log.warning(
+                    "dispatcher_reconcile: nodeless re-dispatch cap hit (%d/tick); deferring run %s to a later tick",
+                    NODELESS_REDISPATCH_MAX_PER_TICK,
+                    row.id,
+                )
+            return enqueue_failed_redispatched
+        # Re-dispatch is safe: zero nodes executed, nothing to double-execute.
+        # The throttle (above) uses the FULL nodeless_window so at most one
+        # early re-dispatch happens per full cycle (prevents hot-loop).
+        _log.info(
+            "dispatcher_reconcile.nodeless_early_detect_redispatched run=%s org=%s "
+            "started_at=%s (early-detect at %d min, full window %d min)",
+            row.id,
+            org_id,
+            row.started_at.isoformat() if row.started_at is not None else "None",
+            early_detect_minutes,
+            nodeless_window,
+        )
+        job_type = _reconcile_job_type(row.status)
+        key_suffix = uuid.uuid4().hex
+        await _redispatch_nodeless(session, q, org_id, row, job_type, key_suffix, summary, terminalized_run_ids)
         return enqueue_failed_redispatched
     # Throttled or not early-detect — fall through to the full nodeless
     # repair which may handle it via a different branch (stale heartbeat, etc.).
