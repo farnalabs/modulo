@@ -100,9 +100,7 @@ def opsgenie_query_alert_by_id(ctx: dict, resource: str, id_type: str, alert_id:
         respx.get(f"{_BASE}/alerts/{alert_id}", params={"identifierType": id_type}).mock(
             return_value=httpx.Response(200, json={"data": data})
         )
-        result = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource=resource, filters={"id": alert_id}))
-        )
+        result = asyncio.run(ctx["connector"].query(ConnectorQuery(resource=resource, filters={"id": alert_id})))
     ctx["records"] = result.records
     assert ctx["records"][0]["message"] == "Disk full"
 
@@ -169,9 +167,7 @@ def opsgenie_write_alert_by_id(ctx: dict, resource: str, alert_id: str) -> None:
         respx.post(f"{_BASE}/alerts/{alert_id}/{_opsgenie_resource_path(resource)}").mock(
             return_value=httpx.Response(200, json={"data": {"success": True}})
         )
-        result = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource=resource, data={"id": alert_id}))
-        )
+        result = asyncio.run(ctx["connector"].write(ConnectorPayload(resource=resource, data={"id": alert_id})))
     assert result["success"] is True, result
     ctx["write_result"] = result
 
@@ -200,9 +196,7 @@ def opsgenie_write_alert_snooze(ctx: dict, resource: str, alert_id: str, end_tim
             return_value=httpx.Response(200, json={"data": {"success": True}})
         )
         result = asyncio.run(
-            ctx["connector"].write(
-                ConnectorPayload(resource=resource, data={"id": alert_id, "end_time": end_time})
-            )
+            ctx["connector"].write(ConnectorPayload(resource=resource, data={"id": alert_id, "end_time": end_time}))
         )
     assert result["success"] is True, result
     ctx["write_result"] = result

@@ -113,9 +113,7 @@ def jenkins_get_run_status(ctx: dict, build: str) -> None:
         "duration": 120000,
     }
     with respx.mock:
-        respx.get(f"{_BASE}/job/{ctx['job']}/{build}/api/json").mock(
-            return_value=httpx.Response(200, json=body)
-        )
+        respx.get(f"{_BASE}/job/{ctx['job']}/{build}/api/json").mock(return_value=httpx.Response(200, json=body))
         run = asyncio.run(ctx["connector"].get_run_status(f"{ctx['job']}/{build}"))
     assert run.status == CIRunStatus.SUCCESS, run
     assert run.id == build, run
@@ -153,9 +151,7 @@ def jenkins_list_runs(ctx: dict) -> None:
         },
     ]
     with respx.mock:
-        respx.get(f"{_BASE}/job/{ctx['job']}/api/json").mock(
-            return_value=httpx.Response(200, json={"builds": runs})
-        )
+        respx.get(f"{_BASE}/job/{ctx['job']}/api/json").mock(return_value=httpx.Response(200, json={"builds": runs}))
         ctx["runs"] = asyncio.run(ctx["connector"].list_runs(pipeline_id=ctx["job"]))
     assert ctx["runs"][0].status == CIRunStatus.SUCCESS, ctx["runs"][0]
     assert ctx["runs"][1].status == CIRunStatus.FAILURE, ctx["runs"][1]

@@ -97,9 +97,7 @@ def teamcity_query_resource_with_filters(ctx: dict, resource: str, project_id: s
                 },
             )
         )
-        result = asyncio.run(
-            connector.query(ConnectorQuery(resource=resource, filters={"project_id": project_id}))
-        )
+        result = asyncio.run(connector.query(ConnectorQuery(resource=resource, filters={"project_id": project_id})))
     ctx["records"] = result.records
 
 
@@ -112,9 +110,7 @@ def teamcity_write_build(ctx: dict, resource: str, build_type_id: str) -> None:
         respx.post(f"{_BASE}/app/rest/buildQueue").mock(
             return_value=httpx.Response(200, json={"id": 42, "buildTypeId": build_type_id})
         )
-        result = asyncio.run(
-            connector.write(ConnectorPayload(resource=resource, data={"buildTypeId": build_type_id}))
-        )
+        result = asyncio.run(connector.write(ConnectorPayload(resource=resource, data={"buildTypeId": build_type_id})))
     assert result["id"] == "42", result
     assert result["buildTypeId"] == build_type_id, result
     ctx["write_result"] = result
@@ -122,8 +118,7 @@ def teamcity_write_build(ctx: dict, resource: str, build_type_id: str) -> None:
 
 @when(
     parsers.parse(
-        'I write resource "{resource}" with buildTypeId "{build_type_id}", projectId "{project_id}", '
-        'and name "{name}"'
+        'I write resource "{resource}" with buildTypeId "{build_type_id}", projectId "{project_id}", and name "{name}"'
     )
 )
 def teamcity_write_build_type(ctx: dict, resource: str, build_type_id: str, project_id: str, name: str) -> None:

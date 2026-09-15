@@ -73,9 +73,7 @@ def circleci_trigger_run(ctx: dict, branch: str) -> None:
         "vcs": {"branch": branch, "revision": "abc123"},
     }
     with respx.mock:
-        respx.post(f"{_API}/project/{ctx['project']}/pipeline").mock(
-            return_value=httpx.Response(201, json=body)
-        )
+        respx.post(f"{_API}/project/{ctx['project']}/pipeline").mock(return_value=httpx.Response(201, json=body))
         run = asyncio.run(ctx["connector"].trigger_run(pipeline_id=ctx["project"], branch=branch))
     assert run.status == CIRunStatus.QUEUED, run
     assert run.branch == branch, run
