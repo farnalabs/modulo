@@ -959,6 +959,26 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _warn_nodeless_early_detect_disabled(self) -> "Settings":
+        """WARN-only: the early-detect window must stay below the full nodeless window.
+
+        ``dispatcher_reconcile`` only adds the FAR-873 early-detect branch when
+        ``saq_nodeless_early_detect_minutes < saq_claimed_nodeless_minutes``. A
+        value at or above the full window silently disables the branch (the run
+        simply waits the full nodeless window), so warn at Settings load to make
+        the misconfiguration visible instead of a silent no-op.
+        """
+        if self.saq_nodeless_early_detect_minutes >= self.saq_claimed_nodeless_minutes:
+            _log.warning(
+                "settings.nodeless_early_detect_disabled",
+                extra={
+                    "saq_nodeless_early_detect_minutes": self.saq_nodeless_early_detect_minutes,
+                    "saq_claimed_nodeless_minutes": self.saq_claimed_nodeless_minutes,
+                },
+            )
+        return self
+
+    @model_validator(mode="after")
     def _finalize_break_glass_config(self) -> "Settings":
         """Resolve ENABLED default + validate the break-glass config matrix.
 

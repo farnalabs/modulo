@@ -64,4 +64,29 @@ def test_saq_setup_grace_below_claim_stale_no_warning(caplog: pytest.LogCaptureF
     with caplog.at_level(logging.WARNING, logger="modulo.settings"):
         settings = _make(SAQ_SETUP_GRACE_SECONDS="300", RUN_CLAIM_STALE_SECONDS="450")
     assert settings.saq_setup_grace_seconds == 300
+    assert settings.run_claim_stale_seconds == 450
     assert not any("saq_setup_grace_ge_claim_stale" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# saq_nodeless_early_detect_minutes vs saq_claimed_nodeless_minutes — WARN only
+# ---------------------------------------------------------------------------
+
+
+def test_nodeless_early_detect_gte_full_window_warns(caplog: pytest.LogCaptureFixture) -> None:
+    """early-detect >= full nodeless window silently disables the FAR-873
+    branch — warn (no raise) so the misconfiguration is visible at load."""
+    with caplog.at_level(logging.WARNING, logger="modulo.settings"):
+        settings = _make(SAQ_NODELESS_EARLY_DETECT_MINUTES="100", SAQ_CLAIMED_NODELESS_MINUTES="35")
+    assert settings.saq_nodeless_early_detect_minutes == 100
+    assert settings.saq_claimed_nodeless_minutes == 35
+    assert any("nodeless_early_detect_disabled" in r.message for r in caplog.records)
+
+
+def test_nodeless_early_detect_below_full_window_no_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """early-detect < full nodeless window is compliant — no warning."""
+    with caplog.at_level(logging.WARNING, logger="modulo.settings"):
+        settings = _make(SAQ_NODELESS_EARLY_DETECT_MINUTES="15", SAQ_CLAIMED_NODELESS_MINUTES="35")
+    assert settings.saq_nodeless_early_detect_minutes == 15
+    assert settings.saq_claimed_nodeless_minutes == 35
+    assert not any("nodeless_early_detect_disabled" in r.message for r in caplog.records)

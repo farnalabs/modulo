@@ -3102,6 +3102,41 @@ class TestNodelessEarlyDetect:
         assert summary["nodeless_redispatched"] == 1
         _reenqueue.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_early_detect_window_only_matches_early_branch(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A run started 20 min ago is inside the early-detect window (15 min)
+        but OUTSIDE the full nodeless window (35 min), so ONLY the early-detect
+        predicate matches.  This proves the early-detect branch — not the full
+        window fall-through — is what re-dispatches, and the distinct
+        ``nodeless_early_detect_repatched`` log line is emitted."""
+        run_id = uuid.uuid4()
+        row = _run_row(
+            run_id,
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=None,
+            claim_count=1,
+        )
+        # 20 min: > early_detect (15) and < nodeless_window (35).
+        row.started_at = datetime.now(UTC) - timedelta(minutes=20)
+        with caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"):
+            summary, reenqueue, _ingest, _, _, _ = await _run_reconcile(
+                monkeypatch,
+                [row],
+                settings_overrides={
+                    "saq_claimed_nodeless_minutes": 35,
+                    "saq_nodeless_early_detect_minutes": 15,
+                },
+            )
+        assert summary["nodeless_redispatched"] == 1
+        assert summary["nodeless_failed"] == 0
+        reenqueue.assert_awaited_once()
+        assert any("nodeless_early_detect_repatched" in r.message for r in caplog.records)
+
 
 class TestFailNodelessObservability:
     """FAR-873: the claim→dispatch gap observability in _fail_nodeless_run."""
