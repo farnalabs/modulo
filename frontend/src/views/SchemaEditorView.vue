@@ -1,10 +1,10 @@
 <template>
-  <PageTabs :tabs="[
-    { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
-    { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
-    { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
-  ]" />
   <div class="flex h-[calc(100vh-3.5rem)]">
+    <PageTabs :tabs="[
+      { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+      { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+      { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
+    ]" />
     <SchemaEditorSidebar
       :schemas="filteredSchemas"
       :loading="loadingSchemas"

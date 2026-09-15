@@ -11,13 +11,14 @@
 //   - unknown override keys are rejected (no abstract key/value editor in v1)
 
 <template>
-  <PageTabs :tabs="[
-    { label: 'Evals', to: '/evals/editor' },
-    { label: 'Proposals', to: '/evals/proposals' },
-    { label: 'Variants', to: '/variants/compare' },
-    { label: 'AB Test', to: '/variants/ab-test' },
-  ]" />
-  <div class="page-wide">
+  <div>
+    <PageTabs :tabs="[
+      { label: 'Evals', to: '/evals/editor' },
+      { label: 'Proposals', to: '/evals/proposals' },
+      { label: 'Variants', to: '/variants/compare' },
+      { label: 'AB Test', to: '/variants/ab-test' },
+    ]" />
+    <div class="page-wide">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
@@ -290,6 +291,7 @@
       </div>
     </template>
   </Dialog>
+  </div>
 </template>
 
 <script setup lang="ts">

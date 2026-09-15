@@ -1,11 +1,10 @@
 <template>
-  <PageTabs :tabs="[
-    { label: 'Evals', to: '/evals/editor' },
-    { label: 'Proposals', to: '/evals/proposals' },
-    { label: 'Variants', to: '/variants/compare' },
-  ]" />
-
   <div class="page-wide">
+    <PageTabs :tabs="[
+      { label: 'Evals', to: '/evals/editor' },
+      { label: 'Proposals', to: '/evals/proposals' },
+      { label: 'Variants', to: '/variants/compare' },
+    ]" />
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>

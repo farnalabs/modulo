@@ -1,6 +1,6 @@
 <template>
-  <BackLink to="/library" label="Back to Library" />
   <div class="min-h-screen bg-background">
+    <BackLink to="/library" label="Back to Library" />
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
         <button type="button"

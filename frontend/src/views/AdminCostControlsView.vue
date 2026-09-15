@@ -1,11 +1,11 @@
 <template>
-  <PageTabs :tabs="[
-    { label: 'Overview', to: '/admin/costs' },
-    { label: 'Spend Limits', to: '/admin/costs/limits' },
-    { label: 'Cost Components', to: '/admin/costs/components' },
-    { label: 'Cost Controls', to: '/admin/costs/controls' },
-  ]" />
   <div data-theme="agent" class="page-wide">
+    <PageTabs :tabs="[
+      { label: 'Overview', to: '/admin/costs' },
+      { label: 'Spend Limits', to: '/admin/costs/limits' },
+      { label: 'Cost Components', to: '/admin/costs/components' },
+      { label: 'Cost Controls', to: '/admin/costs/controls' },
+    ]" />
     <PageHeader :title="$t('views.AdminCostBreakdownView.cost_controls')" :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')" />
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>

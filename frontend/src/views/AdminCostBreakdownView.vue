@@ -1,11 +1,11 @@
 <template>
-  <PageTabs :tabs="[
-    { label: 'Overview', to: '/admin/costs' },
-    { label: 'Spend Limits', to: '/admin/costs/limits' },
-    { label: 'Cost Components', to: '/admin/costs/components' },
-    { label: 'Cost Controls', to: '/admin/costs/controls' },
-  ]" />
   <div data-theme="agent" class="page-wide">
+    <PageTabs :tabs="[
+      { label: 'Overview', to: '/admin/costs' },
+      { label: 'Spend Limits', to: '/admin/costs/limits' },
+      { label: 'Cost Components', to: '/admin/costs/components' },
+      { label: 'Cost Controls', to: '/admin/costs/controls' },
+    ]" />
     <PageHeader :title="$t('views.AdminCostBreakdownView.cost_breakdown')" :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')" />
 
     <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
