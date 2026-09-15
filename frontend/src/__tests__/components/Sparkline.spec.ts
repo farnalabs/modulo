@@ -123,9 +123,10 @@ describe('Sparkline', () => {
     const withAxis = mount(Sparkline, { props: { data: [1, 4, 2, 8], showYAxis: true } })
     const labels = withAxis.findAll('.sparkline-y-label')
     expect(labels).toHaveLength(3) // default tickCount
-    // Label text spans min..max from the tick value computation.
+    // Y-axis labels now use integer formatting by default (no decimals).
+    // Ticks for [1,4,2,8]: min=1, max=8, range=7, 3 ticks -> 1, 4.5, 8 -> displayed as 1, 5, 8.
     const texts = labels.map(l => l.text()).sort()
-    expect(texts).toEqual(['1', '4.5', '8'])
+    expect(texts).toEqual(['1', '5', '8'])
     // Labels are plain HTML <span> elements outside the svg (never subject to
     // its non-uniform preserveAspectRatio="none" scale), laid out top-to-bottom
     // via flexbox — the highest value renders first.
@@ -142,6 +143,78 @@ describe('Sparkline', () => {
       props: { data: [1, 4, 2, 8], showYAxis: true, tickCount: 0 },
     })
     expect(wrapper.findAll('.sparkline-y-label')).toHaveLength(2)
+  })
+
+  it('formats count y-axis labels as integers (no decimals)', () => {
+    const wrapper = mount(Sparkline, {
+      props: { data: [10, 20, 30, 40], showYAxis: true },
+    })
+    const labels = wrapper.findAll('.sparkline-y-label')
+    const texts = labels.map(l => l.text())
+    // All labels should be integers — no decimal points.
+    texts.forEach(t => expect(t).not.toContain('.'))
+  })
+
+  it('formats percent y-axis labels as integers', () => {
+    const wrapper = mount(Sparkline, {
+      props: { data: [72.5, 85.3, 91.1, 78.9], unit: '%', showYAxis: true },
+    })
+    const labels = wrapper.findAll('.sparkline-y-label')
+    const texts = labels.map(l => l.text())
+    // Percent labels should be integers — no decimal points.
+    texts.forEach(t => expect(t).not.toContain('.'))
+  })
+
+  it('formats dollar y-axis labels as integers for normal spend', () => {
+    const wrapper = mount(Sparkline, {
+      props: { data: [12.5, 15.2, 18.9, 22.1], unit: '$', showYAxis: true },
+    })
+    const labels = wrapper.findAll('.sparkline-y-label')
+    const texts = labels.map(l => l.text())
+    // Dollar labels should be integer with $ prefix — no decimal points.
+    texts.forEach(t => {
+      expect(t.startsWith('$')).toBe(true)
+      // After the $, should be integer (no decimal point).
+      expect(t.slice(1)).not.toContain('.')
+    })
+  })
+
+  it('preserves sub-dollar precision for small spend series', () => {
+    const wrapper = mount(Sparkline, {
+      props: { data: [0.03, 0.07, 0.12, 0.05], unit: '$', showYAxis: true },
+    })
+    const labels = wrapper.findAll('.sparkline-y-label')
+    const texts = labels.map(l => l.text())
+    // Small dollar values should keep decimal precision so labels are not all $0.
+    // At least one label should contain a decimal point.
+    const hasDecimal = texts.some(t => t.slice(1).includes('.'))
+    expect(hasDecimal).toBe(true)
+    // No label should be "$0" — that would be a useless axis.
+    texts.forEach(t => expect(t).not.toBe('$0'))
+  })
+
+  it('bumps precision when integer dollar labels all collapse to the same value', () => {
+    // All values round to $0 as integers — collapse detection should add 1 decimal.
+    const wrapper = mount(Sparkline, {
+      props: { data: [0.3, 0.4, 0.5, 0.6], unit: '$', showYAxis: true },
+    })
+    const labels = wrapper.findAll('.sparkline-y-label')
+    const texts = labels.map(l => l.text())
+    // With collapse detection: at least two distinct labels should exist.
+    const unique = new Set(texts)
+    expect(unique.size).toBeGreaterThan(1)
+  })
+
+  it('bumps precision when integer count labels all collapse to the same value', () => {
+    // All values are between 0 and 1 — they all round to 0 as integers.
+    const wrapper = mount(Sparkline, {
+      props: { data: [0.1, 0.3, 0.5, 0.7], showYAxis: true },
+    })
+    const labels = wrapper.findAll('.sparkline-y-label')
+    const texts = labels.map(l => l.text())
+    // With collapse detection: at least two distinct labels should exist.
+    const unique = new Set(texts)
+    expect(unique.size).toBeGreaterThan(1)
   })
 
   it('renders x-axis tick marks when showXTicks is enabled and omits them otherwise', () => {
