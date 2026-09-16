@@ -15,6 +15,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _evaluate_eval_condition,
     _hitl_gate_autonomy_result,
     _hitl_gate_condition_evaluate,
+    _resolve_subject_parent_and_key,
     make_hitl_gate_fn,
     make_manual_node_fn,
 )
@@ -1521,3 +1522,56 @@ class TestHitlGateAutonomyResult:
         autonomy, result = _hitl_gate_autonomy_result("g1", state, human_only=True)
         assert autonomy.value == "fully_autonomous"
         assert result is None
+
+
+class TestResolveSubjectParentAndKey:
+    """FAR-862: resolve the container holding the subject leaf.
+
+    The frontend needs the raw parent dict + leaf key to reconstruct a
+    shape-preserving modified_output; every unresolvable path is fail-safe
+    ``(None, None)`` so the editor is hidden rather than seeded wrongly.
+    """
+
+    def test_resolves_parent_and_leaf_key(self) -> None:
+        state = {"node": {"output": {"comment": "hi", "priority": "high"}}}
+        parent, key = _resolve_subject_parent_and_key("node.output.comment", state)
+        assert parent == {"comment": "hi", "priority": "high"}
+        assert key == "comment"
+
+    def test_parent_is_the_actual_container_so_siblings_survive(self) -> None:
+        state = {"node": {"output": {"comment": "hi", "draft": True}}}
+        parent, key = _resolve_subject_parent_and_key("node.output.comment", state)
+        assert parent is not None
+        assert set(parent) == {"comment", "draft"}
+        assert key == "comment"
+
+    def test_bracket_access_is_unresolvable(self) -> None:
+        state = {"node": {"output": {"comment": "hi"}}}
+        assert _resolve_subject_parent_and_key('node.output["comment"]', state) == (None, None)
+
+    def test_filter_path_is_unresolvable(self) -> None:
+        state = {"items": [{"name": "a", "value": "v"}]}
+        assert _resolve_subject_parent_and_key("items[?name=='a'].value", state) == (None, None)
+
+    def test_non_identifier_leaf_is_unresolvable(self) -> None:
+        state = {"node": {"output": {"a b": "hi"}}}
+        assert _resolve_subject_parent_and_key("node.output.a b", state) == (None, None)
+
+    def test_missing_prefix_is_unresolvable(self) -> None:
+        state = {"node": {"output": {"comment": "hi"}}}
+        assert _resolve_subject_parent_and_key("node.missing.comment", state) == (None, None)
+
+    def test_non_dict_parent_is_unresolvable(self) -> None:
+        state = {"node": {"output": "scalar"}}
+        assert _resolve_subject_parent_and_key("node.output.comment", state) == (None, None)
+
+    def test_leaf_absent_from_parent_is_unresolvable(self) -> None:
+        state = {"node": {"output": {"other": "hi"}}}
+        assert _resolve_subject_parent_and_key("node.output.comment", state) == (None, None)
+
+    def test_path_without_a_parent_segment_is_unresolvable(self) -> None:
+        assert _resolve_subject_parent_and_key("comment", {"comment": "hi"}) == (None, None)
+
+    def test_invalid_jmespath_prefix_is_unresolvable(self) -> None:
+        state = {"node": {"output": {"comment": "hi"}}}
+        assert _resolve_subject_parent_and_key("node.output[.comment", state) == (None, None)

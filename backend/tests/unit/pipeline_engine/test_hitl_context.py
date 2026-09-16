@@ -76,6 +76,8 @@ async def _build(
     pipeline_name: str | None = "PR Reviewer",
     condition_result: dict[str, Any] | None = None,
     subject: str | None = None,
+    subject_parent: dict[str, Any] | None = None,
+    subject_leaf_key: str | None = None,
 ) -> dict[str, Any] | None:
     session = _make_session(graph_json)
     with (
@@ -90,6 +92,8 @@ async def _build(
             completed_node_outputs=completed_node_outputs or {},
             condition_result=condition_result,
             subject=subject,
+            subject_parent=subject_parent,
+            subject_leaf_key=subject_leaf_key,
         )
 
 
@@ -539,6 +543,67 @@ class TestSubjectCapture:
         assert context is not None
         # total=False TypedDict: key absent or None
         assert context.get("subject") is None
+
+    # FAR-862: the parent container holding the subject is captured so the
+    # frontend can reconstruct a shape-preserving modified_output.
+
+    async def test_subject_parent_captured_with_leaf_key(self):
+        config = {"description": "Approve the comments.", "condition": f"node_id=='{_UUID_OTHER}'"}
+        parent = {"body": "Review this comment.", "priority": "high"}
+        context = await _build(
+            _edge_graph(config),
+            subject='"Review this comment."',
+            subject_parent=parent,
+            subject_leaf_key="body",
+        )
+        assert context is not None
+        # Sibling keys survive the capture (shape-preserving reconstruction
+        # depends on them).
+        assert context["subject_parent"] == parent
+        assert context["subject_leaf_key"] == "body"
+
+    async def test_subject_parent_redacted_for_credentials(self):
+        """The parent is node-output content, so it is redacted (FAR-188)."""
+        config = {"description": "Approve the comments.", "condition": f"node_id=='{_UUID_OTHER}'"}
+        context = await _build(
+            _edge_graph(config),
+            subject="ship it",
+            subject_parent={"body": f"ghp_{'a' * 30}", "priority": "high"},
+            subject_leaf_key="body",
+        )
+        assert context is not None
+        parent = context["subject_parent"]
+        assert parent is not None
+        assert "ghp_" not in json.dumps(parent)
+        assert parent["priority"] == "high"
+
+    async def test_subject_parent_over_budget_is_dropped_not_partially_captured(self):
+        """Fail-safe: a parent whose serialised form exceeds the budget cannot
+        be bounded into valid JSON, so it is dropped entirely (None) rather
+        than captured as a lossy partial dict."""
+        config = {"description": "Approve the comments.", "condition": f"node_id=='{_UUID_OTHER}'"}
+        context = await _build(
+            _edge_graph(config),
+            subject="s" * (ARTIFACTS_BUDGET_CHARS + 100),
+            subject_parent={"body": "s" * (ARTIFACTS_BUDGET_CHARS + 100)},
+            subject_leaf_key="body",
+        )
+        assert context is not None
+        assert context["subject_parent"] is None
+        assert context["subject_leaf_key"] is None
+
+    async def test_subject_parent_absent_when_leaf_key_missing(self):
+        """No leaf key means no shape-preserving reconstruction is possible, so
+        the parent is not captured (fail-safe)."""
+        config = {"description": "Approve the comments.", "condition": f"node_id=='{_UUID_OTHER}'"}
+        context = await _build(
+            _edge_graph(config),
+            subject="ship it",
+            subject_parent={"body": "ship it"},
+        )
+        assert context is not None
+        assert context["subject_parent"] is None
+        assert context["subject_leaf_key"] is None
 
 
 class TestConsequences:

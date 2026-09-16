@@ -37,7 +37,12 @@ export default {
       "gate_claimed_you_can_now_approve_or_reject": "Gate claimed. You can now approve or reject.",
       "gate_approved_pipeline_resuming": "Gate approved. Pipeline resuming.",
       "gate_rejected_pipeline_routed_to_reject_target": "Gate rejected. Pipeline routed to reject target.",
-      "rejected_by_reviewer": "Rejected by reviewer"
+      "rejected_by_reviewer": "Rejected by reviewer",
+      "edit_subject": "Edit subject",
+      "save_and_approve": "Save & approve",
+      "save_and_approving": "Saving & approving...",
+      "modified_subject_label": "Modified subject (downstream nodes receive this)",
+      "cancel_edit": "Cancel"
     }
   },
   "views": {

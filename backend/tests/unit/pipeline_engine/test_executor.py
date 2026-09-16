@@ -1547,6 +1547,8 @@ async def test_interrupt_persists_fire_time_context_on_the_gate_row():
         "reason",
         "pipeline_name",
         "subject",
+        "subject_parent",
+        "subject_leaf_key",
         "consequences",
         "response_contract",
     }

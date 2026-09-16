@@ -4061,6 +4061,44 @@ def _hitl_gate_autonomy_result(
     return (autonomy, None)
 
 
+def _resolve_subject_parent_and_key(
+    subject_path: str,
+    state: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve the parent container and leaf key for a JMESPath subject_path.
+
+    Walks the path prefix (everything before the last ``.key`` segment) to
+    find the dict that holds the subject value, and returns that dict plus
+    the leaf key.  Used by FAR-862 so the frontend can reconstruct a
+    shape-preserving ``modified_output``.
+
+    Failure-isolated by contract: any resolution error returns ``(None, None)``
+    — the frontend then hides the editor (fail-safe).
+    """
+    # Find the last `.` that separates a parent expression from a leaf key.
+    # The leaf must be a simple identifier after the last dot.  Expressions
+    # like `a.b["key"]` or filter syntax are treated as unresolvable.
+    last_dot = subject_path.rfind(".")
+    if last_dot <= 0:
+        return None, None
+    prefix = subject_path[:last_dot]
+    leaf_key = subject_path[last_dot + 1 :]
+    if not leaf_key or not leaf_key.isidentifier():
+        return None, None
+    try:
+        compiled_prefix = compile_jmespath(prefix)
+        parent = compiled_prefix.search(state)
+        if isinstance(parent, dict) and leaf_key in parent:
+            return parent, leaf_key
+    except Exception:
+        _log.debug(
+            "hitl_gate.subject_parent_resolution_failed",
+            extra={"subject_path": subject_path, "prefix": prefix, "leaf_key": leaf_key},
+            exc_info=True,
+        )
+    return None, None
+
+
 def make_hitl_gate_fn(
     hitl_gate_config: dict[str, Any],
     *,
@@ -4185,12 +4223,21 @@ def make_hitl_gate_fn(
         # condition evaluates against (failure-isolated — a bad path or
         # unresolvable value yields None).
         resolved_subject: str | None = None
+        resolved_subject_parent: dict[str, Any] | None = None
+        resolved_subject_leaf_key: str | None = None
         if subject_path:
             try:
                 compiled_subject = compile_jmespath(subject_path)
                 subject_value = compiled_subject.search(state)
                 if subject_value is not None:
                     resolved_subject = serialize_value(subject_value)
+                    # FAR-862: capture the parent container + leaf key so the
+                    # frontend can reconstruct a shape-preserving modified_output.
+                    # Walk the JMESPath prefix (everything before the last `.`
+                    # segment access) to find the dict that holds the subject.
+                    resolved_subject_parent, resolved_subject_leaf_key = _resolve_subject_parent_and_key(
+                        subject_path, state
+                    )
             except Exception:
                 _log.debug(
                     "hitl_gate.subject_path_resolution_failed",
@@ -4213,6 +4260,13 @@ def make_hitl_gate_fn(
                 # redacted by the builder. None when subject_path is absent
                 # or unresolvable.
                 "subject": resolved_subject,
+                # FAR-862: the parent container holding the subject + the leaf
+                # key, so the frontend can reconstruct a shape-preserving
+                # modified_output (replacing only the subject, never dropping
+                # sibling keys). None when the parent is unresolvable — the
+                # frontend hides the editor in that case (fail-safe).
+                "subject_parent": resolved_subject_parent,
+                "subject_leaf_key": resolved_subject_leaf_key,
             }
         )
         return await _hitl_gate({**state, "_hitl_decision": decision})

@@ -75,6 +75,61 @@
          reviewer is looking at, always visible before the controls. -->
     <HitlBriefing :description="gate.description" :context="gate.context" class="mb-3" />
 
+    <!-- FAR-862: inline subject editor — only when the gate has a subject,
+         is claimed by the current user, and is not yet decided. -->
+    <div
+      v-if="subject && subjectParent && subjectLeafKey && status === 'claimed' && claimToken"
+      class="space-y-2"
+      data-testid="hitl-gate-subject-editor"
+    >
+      <div v-if="!editingSubject" class="flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+        <span class="text-xs font-semibold text-muted-foreground">{{ $t('hitl.gate.edit_subject') }}</span>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+          data-testid="hitl-gate-edit-subject"
+          :aria-label="$t('hitl.gate.edit_subject')"
+          @click="startEditSubject"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+          {{ $t('hitl.gate.edit_subject') }}
+        </button>
+      </div>
+      <div v-else class="space-y-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
+        <label for="hitl-subject-editor" class="text-xs font-semibold text-muted-foreground">
+          {{ $t('hitl.gate.modified_subject_label') }}
+        </label>
+        <textarea
+          id="hitl-subject-editor"
+          v-model="modifiedSubject"
+          rows="4"
+          data-testid="hitl-gate-subject-textarea"
+          :aria-label="$t('hitl.gate.modified_subject_label')"
+          class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+        <div class="flex gap-2">
+          <button
+            type="button"
+            :disabled="Boolean(actioning)"
+            data-testid="hitl-gate-save-approve"
+            class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
+            @click="modifyAndApprove"
+          >
+            {{ actioning === 'modify-approve' ? $t('hitl.gate.save_and_approving') : $t('hitl.gate.save_and_approve') }}
+          </button>
+          <button
+            type="button"
+            :disabled="Boolean(actioning)"
+            data-testid="hitl-gate-cancel-edit"
+            class="rounded-lg border border-input px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted"
+            @click="cancelEditSubject"
+          >
+            {{ $t('hitl.gate.cancel_edit') }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Actions -->
     <div
       v-if="status === 'pending'"
@@ -229,9 +284,11 @@ if (!props.gate.claimed_by) gateState.clear()
 
 const claimToken = gateState.claimToken
 const notes = gateState.notes
+const editingSubject = gateState.editingSubject
+const modifiedSubject = gateState.modifiedSubject
 const claimedByYou = ref(false)
 const claiming = ref(false)
-const actioning = ref<'approve' | 'reject' | null>(null)
+const actioning = ref<'approve' | 'reject' | 'modify-approve' | null>(null)
 const message = ref<HitlMessage | null>(null)
 let messageTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -272,6 +329,39 @@ const claimedByDisplay = computed(() => {
 })
 
 const pipelineName = computed(() => props.gate.pipeline_name || '')
+
+/**
+ * FAR-859: the resolved subject under review — extracted from the gate's
+ * fire-time briefing context. The subject is a pre-resolved string (the
+ * backend evaluated the JMESPath subject_path against the run state at
+ * gate-fire time).
+ */
+const subject = computed(() => {
+  const ctx = props.gate.context
+  if (!ctx || typeof ctx !== 'object' || Array.isArray(ctx)) return null
+  const value = (ctx as Record<string, unknown>).subject
+  return typeof value === 'string' && value.trim() ? value : null
+})
+
+/**
+ * FAR-862: the container holding the subject and the leaf key within it,
+ * captured at gate-fire time so the frontend can reconstruct a
+ * shape-preserving modified_output (replacing only the subject, never
+ * dropping sibling keys).
+ */
+const subjectParent = computed(() => {
+  const ctx = props.gate.context
+  if (!ctx || typeof ctx !== 'object' || Array.isArray(ctx)) return null
+  const value = (ctx as Record<string, unknown>).subject_parent
+  return value != null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+})
+
+const subjectLeafKey = computed(() => {
+  const ctx = props.gate.context
+  if (!ctx || typeof ctx !== 'object' || Array.isArray(ctx)) return null
+  const value = (ctx as Record<string, unknown>).subject_leaf_key
+  return typeof value === 'string' && value.trim() ? value : null
+})
 
 function statusBadgeClass(state: string): string {
   const classMap: Record<string, string> = {
@@ -425,5 +515,91 @@ async function approveGate() {
 
 async function rejectGate() {
   await decideGate('reject')
+}
+
+// FAR-862: subject editing — "I am about to post this PR comment as you"
+function startEditSubject() {
+  // Prefill from the RAW subject leaf, not the serialized `subject` string:
+  // the backend derives `subject` via serialize_value() (json.dumps), so a
+  // string leaf arrives as '"Review this comment."' — literal quotes around
+  // the real value. Prefilling from that would seed the editor with the
+  // quoted JSON repr, which Save & approve would persist into
+  // modified_output as real data. The raw value lives in
+  // subject_parent[subject_leaf_key]; fall back to `subject` only when the
+  // leaf is not a plain string (complex subject), where the serialized form
+  // is the value the reviewer edits.
+  const parent = subjectParent.value
+  const leafKey = subjectLeafKey.value
+  const rawLeaf = parent && leafKey ? parent[leafKey] : undefined
+  modifiedSubject.value = typeof rawLeaf === 'string' ? rawLeaf : (subject.value ?? '')
+  editingSubject.value = true
+}
+
+function cancelEditSubject() {
+  editingSubject.value = false
+  modifiedSubject.value = ''
+}
+
+/**
+ * FAR-862: approve-with-modification — the edited subject replaces the
+ * gate node's output. The reconstruction is shape-preserving: the parent
+ * container (captured at gate-fire time) is cloned with ONLY the subject
+ * leaf key replaced by the edited text. This preserves every sibling key
+ * that downstream nodes may depend on.
+ *
+ * Fail-safe: if the parent container is unavailable (legacy gate, capture
+ * failed, or subject is not a plain string leaf), the editor is hidden
+ * entirely — we never send a lossy partial dict.
+ */
+async function modifyAndApprove() {
+  const token = claimToken.value
+  if (!token) {
+    showMessage({ type: 'error', text: t('hitl.gate.no_claim_token_claim_the_gate_first') }, false)
+    return
+  }
+  if (!modifiedSubject.value.trim()) {
+    showMessage({ type: 'error', text: t('hitl.gate.modified_subject_label') }, false)
+    return
+  }
+  const parent = subjectParent.value
+  const leafKey = subjectLeafKey.value
+  if (!parent || !leafKey) {
+    showMessage({ type: 'error', text: t('hitl.gate.modified_subject_label') }, false)
+    return
+  }
+  actioning.value = 'modify-approve'
+  message.value = null
+  // Shape-preserving reconstruction: clone the parent, replace only the
+  // subject leaf.  JSON round-trip gives a deep plain-object copy — safe
+  // because the backend already serialised the parent to JSON at capture time.
+  const reconstructedOutput = { ...JSON.parse(JSON.stringify(parent)), [leafKey]: modifiedSubject.value }
+  try {
+    const { error: err } = await api.POST(
+      '/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification',
+      {
+        params: { path: { run_id: props.gate.run_id, gate_id: props.gate.gate_id } },
+        body: {
+          claim_token: token,
+          modified_output: reconstructedOutput,
+          notes: notes.value || null,
+        },
+      },
+    )
+    if (err) {
+      showMessage({ type: 'error', text: `${t('hitl.gate.approve_failed')} ${formatApiError(err)}` }, false)
+    } else {
+      gateState.clear()
+      editingSubject.value = false
+      modifiedSubject.value = ''
+      claimedByYou.value = false
+      const payload: HitlMessage = { type: 'success', text: t('hitl.gate.gate_approved_pipeline_resuming') }
+      showMessage(payload)
+      emit('decided', payload)
+    }
+  } catch (e: unknown) {
+    showMessage({ type: 'error', text: `${t('hitl.gate.approve_failed')} ${formatApiError(e)}` }, false)
+  } finally {
+    actioning.value = null
+  }
 }
 </script>
