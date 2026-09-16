@@ -386,17 +386,23 @@ jobs:
     # pre-deploy gate. The original condition only checked
     # needs.pre-deploy-gate.result == 'failure', so failures at staging E2E,
     # staging deploy, prod deploy, or prod smoke were never routed to the
-    # Branch Fixer via this job. (The separate notify-staging-e2e-failure etc.
-    # jobs existed but had narrower remits; this job is the single point of
-    # dispatch for ALL deploy-stage failures.)
+    # Branch Fixer via this job. This job is the broad catch-all dispatch for
+    # ALL deploy-stage failures, including mixed runs where an earlier stage
+    # succeeded (e.g. deploy-staging succeeds then staging-e2e fails). The
+    # per-stage notify-* jobs dispatch additional stage-specific feedback; the
+    # overlap is intentional belt-and-braces — a duplicate dispatch is cheap,
+    # a missed one is not.
     #
-    # Condition: at least one job failed AND none succeeded. A throttled run
-    # skips every downstream job (all results 'skipped'), so this job stays
-    # skipped too — correct because there is nothing to fix.
+    # Condition: at least one job failed AND the deploy was actually attempted
+    # (deploy-throttle succeeded with should_deploy == 'true'). A throttled run
+    # skips every downstream job (all results 'skipped'), so it can never match
+    # (no 'failure' exists). deploy-throttle failing itself is signalled loudly
+    # to the Actions tab (see the audit table below), not routed here, so
+    # FAILED_STAGES below is never empty when this job runs.
     # This job sends the Branch Fixer webhook pointing at main
     # (branchName: main, prNumber: 0). The Branch Fixer creates its own fix
     # branch from main, diagnoses the failure, fixes it, and raises the PR.
-    if: always() && !contains(needs.*.result, 'success') && contains(needs.*.result, 'failure')
+    if: always() && needs.deploy-throttle.outputs.should_deploy == 'true' && contains(needs.*.result, 'failure')
     runs-on: ubicloud-standard-2
     steps:
       - name: Dispatch Branch Fixer webhook
@@ -2909,7 +2915,7 @@ jobs:
           ### Coverage rules
           - **Code failures** (tests, lint): routed to Branch Fixer via webhook → Modulo pipeline run
           - **Infrastructure failures** (deploy-staging, deploy-production): routed to Branch Fixer as triage + deploy-watchdog re-dispatches + deploy-staleness-check escalates
-          - **ALL deploy-stage failures** (FAR-912): `notify-deploy-failure` now fires on ANY downstream failure (pre-deploy-gate, deploy-staging, staging-e2e, deploy-production, prod-smoke) — the single dispatch point for the Branch Fixer
+          - **ALL deploy-stage failures** (FAR-912): `notify-deploy-failure` now fires on ANY downstream failure (pre-deploy-gate, deploy-staging, staging-e2e, deploy-production, prod-smoke) — the broad catch-all dispatch for the Branch Fixer; the per-stage notify-* jobs add stage-specific feedback
           - **Notification-only jobs** (notify-*): always succeed; their purpose IS the signal
 
           ### Adding a new job?
