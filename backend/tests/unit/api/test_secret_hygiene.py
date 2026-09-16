@@ -96,6 +96,41 @@ class TestIsSensitiveKey:
         assert _is_sensitive_key("A:B:API_KEY") is True
 
 
+class TestIsSensitiveKeySharedMatcher:
+    """Keys caught by the shared HTTP matcher, not the old prefix vocabulary."""
+
+    def test_product_analytics_instance_secret(self) -> None:
+        assert _is_sensitive_key("product_analytics_instance_secret") is True
+
+    def test_suffixed_password_key(self) -> None:
+        assert _is_sensitive_key("smtp_password") is True
+
+    def test_suffixed_token_key(self) -> None:
+        assert _is_sensitive_key("slack_broadcast_token") is True
+
+    def test_credential_key(self) -> None:
+        assert _is_sensitive_key("db_credential") is True
+
+    def test_normalized_dash_key(self) -> None:
+        assert _is_sensitive_key("api-token") is True
+
+
+class TestValueLooksSensitiveCharCap:
+    def test_patterns_only_run_over_capped_slice(self) -> None:
+        """SECRET_VALUE_PATTERNS must never be searched over an unbounded string."""
+        from modulo.core.secret_patterns import SECRET_VALUE_REDACT_CHAR_CAP
+
+        with patch("modulo.core.secret_patterns.SECRET_VALUE_PATTERNS") as mock_patterns:
+            pattern = MagicMock()
+            mock_patterns.__iter__.return_value = [(pattern, "...")]
+
+            _value_looks_sensitive("x" * (SECRET_VALUE_REDACT_CHAR_CAP + 100))
+
+            assert pattern.search.call_count == 1
+            searched = pattern.search.call_args[0][0]
+            assert len(searched) == SECRET_VALUE_REDACT_CHAR_CAP
+
+
 class TestValueLooksSensitive:
     def test_github_pat_masked(self) -> None:
         val = "ghp_abc123def456ghi789jkl012mno345pqr678stu"
@@ -183,6 +218,36 @@ class TestGetOrgConfigMasking(AuthContext):
         assert result["count"] == 2
         assert "| APP_NAME | modulo |" in result["results"]
         assert "| LOG_LEVEL | info |" in result["results"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.system_config.list_config")
+    async def test_suffixed_secret_keys_filtered_out(
+        self,
+        mock_list_config: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """SystemConfig secrets whose keys carry no known prefix must not leak (#95)."""
+        mock_list_config.return_value = [
+            _make_config(
+                key="product_analytics_instance_secret",
+                value="2f1c6a3e-9c28-4a67-a5f4-8e6f1a2b3c4d",
+            ),
+            _make_config(key="smtp_password", value="hunter2hunter2hunter2"),
+            _make_config(key="slack_broadcast_token", value="xoxb-something"),
+            _make_config(key="APP_NAME", value="modulo"),
+        ]
+        mock_session.return_value = make_session_context(AsyncMock())
+
+        result = await get_org_config()
+
+        assert result["count"] == 1
+        assert "product_analytics_instance_secret" not in result["results"]
+        assert "smtp_password" not in result["results"]
+        assert "slack_broadcast_token" not in result["results"]
+        assert "hunter2hunter2hunter2" not in result["results"]
+        assert "| APP_NAME | modulo |" in result["results"]
 
 
 # ---------------------------------------------------------------------------
