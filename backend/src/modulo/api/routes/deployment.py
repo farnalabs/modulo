@@ -20,21 +20,23 @@ _started_at = datetime.now(UTC)
 async def deployment_info() -> dict[str, object]:
     """Return deployment metadata for operational visibility.
 
-    Build-time values (git_sha, git_branch, build_timestamp, etc.) are injected
-    via Docker build args in the CI/CD pipeline.  If absent they fall back to
-    empty strings so the endpoint is always safe to call.
+    Served unauthenticated on purpose: the CI/CD deploy pipelines
+    (deploy.yml, rc-validate.yml, deploy-watchdog.yml,
+    deploy-staleness-check.yml) call it without a principal to verify which
+    build is live. The repo is public, so the git metadata is already
+    world-readable. Only genuinely non-public locals (hostname, ci_job_url)
+    are omitted. If values are absent they fall back to empty strings so the
+    endpoint is always safe to call.
     """
     return {
         "version": get_version(),
         "uptime_seconds": int(time.time() - _start_time),
         "started_at": _started_at.isoformat(),
         "python_version": os.environ.get("PYTHON_VERSION", ""),
-        "hostname": os.environ.get("HOSTNAME", ""),
         "environment": os.environ.get("MODULO_ENV", "development"),
         "git_sha": os.environ.get("GIT_SHA", ""),
         "git_branch": os.environ.get("GIT_BRANCH", ""),
         "git_commit_timestamp": os.environ.get("GIT_COMMIT_TIMESTAMP", ""),
         "git_commit_message": os.environ.get("GIT_COMMIT_MESSAGE", ""),
         "build_timestamp": os.environ.get("BUILD_TIMESTAMP", ""),
-        "ci_job_url": os.environ.get("CI_JOB_URL", ""),
     }
