@@ -844,7 +844,26 @@ jobs:
               HEAD_REF=$(gh pr view "$NUM" --json headRefName --jq '.headRefName' 2>/dev/null || echo "")
               HEAD_REPO=$(gh pr view "$NUM" --json headRepositoryOwner --jq '.headRepositoryOwner.login' 2>/dev/null || echo "")
               if [ -n "$HEAD_REF" ] && [ "$HEAD_REF" != "main" ] && [ "$HEAD_REPO" = "${{ github.repository_owner }}" ]; then
-                gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$HEAD_REF" 2>/dev/null && echo "    Deleted source branch $HEAD_REF for PR #$NUM" || echo "    Could not delete branch $HEAD_REF (may already be gone)"
+                # FAR-917: before deleting, check if any open PR uses this branch as
+                # its base. GitHub auto-closes a PR when its base branch is deleted,
+                # so a stacked/child PR would silently vanish (PR #597 -> #602 incident).
+                # FAIL SAFE on the query: a failed `gh pr list` must NOT be read as
+                # "zero children" -- the previous `|| echo "0"` did exactly that and
+                # deleted the branch, silently closing the child PR. Only a clean
+                # numeric 0 permits deletion; empty/non-numeric protects the branch.
+                CHILD_PRS=$(gh pr list --state open --json number,baseRefName \
+                  --jq "[.[] | select(.baseRefName == \"$HEAD_REF\")] | length" 2>/dev/null) || CHILD_PRS=""
+                case "$CHILD_PRS" in
+                  '' )
+                    echo "::warning::FAR-917: could not determine open child PRs for $HEAD_REF - keeping branch (fail safe)"
+                    ;;
+                  0 )
+                    gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$HEAD_REF" 2>/dev/null && echo "    Deleted source branch $HEAD_REF for PR #$NUM" || echo "    Could not delete branch $HEAD_REF (may already be gone)"
+                    ;;
+                  * )
+                    echo "    FAR-917: branch $HEAD_REF is base of $CHILD_PRS open PR(s) -- skipping deletion (see stacked-pr-guard step)"
+                    ;;
+                esac
               fi
             else
               echo "    PR #$NUM failed to merge via gh -- will close with comment"
@@ -1074,10 +1093,62 @@ jobs:
             done
           done
 
+      # FAR-917: Before deleting any branch, detect open PRs whose BASE is that
+      # branch. GitHub auto-closes a PR when its base branch is deleted, so a
+      # stacked/child PR would silently vanish. The script retargets child PRs to
+      # main when possible; when not, it protects the branch (skips deletion) and
+      # posts a loud explanation on the child PR.
+      - name: Find and retarget stacked PRs (FAR-917)
+        id: stacked_pr_guard
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # Collect all branches we are about to delete: merged PR head refs
+          # (same source as the defense-in-depth sweep). FAIL SAFE: if this query
+          # fails we cannot know which branches might have child PRs, so we set
+          # skip_deletions and the sweep deletes NOTHING this tick. The previous
+          # `|| true` treated a failed query as an EMPTY branch list and let the
+          # sweep (which re-queries independently) delete unprotected branches.
+          if gh api "repos/${{ github.repository }}/pulls?state=closed&per_page=100&sort=updated&direction=desc" --paginate \
+               --jq '.[] | select(.merged_at != null) | select(.head.repo.id == .base.repo.id) | .head.ref' \
+               2>/tmp/branches_to_delete.err | sort -u > /tmp/branches_to_delete.txt; then
+            : # enumeration succeeded
+          else
+            echo "::error title=FAR-917 stacked-PR guard::could not enumerate branches slated for deletion ($(head -1 /tmp/branches_to_delete.err 2>/dev/null)) -- skipping ALL branch deletions this tick (fail safe)"
+            {
+              echo "protected_branches="
+              echo "retargeted_prs="
+              echo "skip_deletions=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BRANCH_COUNT=$(wc -l < /tmp/branches_to_delete.txt 2>/dev/null || echo 0)
+          echo "Branches slated for deletion: $BRANCH_COUNT"
+
+          if [ "$BRANCH_COUNT" -eq 0 ]; then
+            echo "No branches to check -- skipping stacked PR detection."
+            echo "protected_branches=" >> "$GITHUB_OUTPUT"
+            echo "retargeted_prs=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Run the retarget script: it finds open PRs whose base matches any
+          # branch in the list, retargets them to main, and outputs protected
+          # branches. On any query failure the script protects EVERY slated
+          # branch (it never exits non-zero for that, so the post-merge CI/deploy
+          # dispatch below still runs).
+          ARGS=$(cat /tmp/branches_to_delete.txt | tr '\n' ' ')
+          python3 .github/scripts/retarget-stacked-prs.py $ARGS main
+
       - name: Delete branches whose PRs are already merged (defense-in-depth)
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
+          PROTECTED_BRANCHES: ${{ steps.stacked_pr_guard.outputs.protected_branches }}
+          SKIP_DELETIONS: ${{ steps.stacked_pr_guard.outputs.skip_deletions }}
         shell: bash
         run: |
           # Defense-in-depth sweep: catch (a) branches whose PR was merged outside
@@ -1085,6 +1156,13 @@ jobs:
           # failed in the per-PR step above. Every delete is best-effort so a
           # failure can never fail the queue. Never delete main, and never delete
           # a branch that is the head of an OPEN PR (a merged branch can be reused).
+          # FAR-917: also skip branches that are the BASE of an open stacked PR
+          # (protected by the retarget step above -- child PRs could not be
+          # retargeted, so the base must stay to prevent silent closure).
+          if [ "${SKIP_DELETIONS:-false}" = "true" ]; then
+            echo "::warning::FAR-917: the stacked-PR guard could not enumerate merged branches -- skipping the branch sweep this tick (fail safe)."
+            exit 0
+          fi
           echo "Sweeping for branches whose PRs are already merged..."
           # List merged PRs (paginated) and collect their head branches -- but only
           # branches that live on THIS repo (skip fork PRs: a fork head ref may
@@ -1094,11 +1172,18 @@ jobs:
           gh api "repos/${{ github.repository }}/branches" --paginate --jq '.[].name' 2>/dev/null | sort -u > /tmp/remote_branches.txt || true
           # Open PR head refs -- never delete a branch an open PR points at
           gh api "repos/${{ github.repository }}/pulls?state=open&per_page=100" --paginate --jq '.[].head.ref' 2>/dev/null | sort -u > /tmp/open_heads.txt || true
+          # FAR-917: protected base branches -- child PRs could not be retargeted
+          echo "$PROTECTED_BRANCHES" | tr ' ' '\n' | sort -u > /tmp/protected_bases.txt 2>/dev/null || true
           # Delete every branch that has a merged PR (guard each delete; never fail the queue)
           while IFS= read -r branch; do
             [ -z "$branch" ] && continue
             [ "$branch" = "main" ] && continue
             if grep -qx "$branch" /tmp/open_heads.txt 2>/dev/null; then
+              echo "  Skipping $branch (head of an open PR)"
+              continue
+            fi
+            if grep -qx "$branch" /tmp/protected_bases.txt 2>/dev/null; then
+              echo "  Skipping $branch (FAR-917: base of an open stacked PR that could not be retargeted)"
               continue
             fi
             if grep -qx "$branch" /tmp/merged_heads.txt 2>/dev/null; then
