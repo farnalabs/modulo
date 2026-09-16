@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 const SelectStub = {
@@ -161,8 +161,26 @@ describe('SsoProviderForm — preset selection', () => {
     expect(wrapper.text()).toContain('https://login.microsoftonline.com/my-tenant-id/v2.0/.well-known/openid-configuration')
   })
 
+  it('derives discovery URL for onelogin with tenant domain', async () => {
+    const wrapper = mountForm(makeData({ preset: 'onelogin', tenant_domain: 'acme' }))
+    await nextTick()
+    expect(wrapper.text()).toContain('https://acme.onelogin.com/oidc/2/.well-known/openid-configuration')
+  })
+
+  it('does not show a derived discovery URL for a native preset without a tenant domain', async () => {
+    const wrapper = mountForm(makeData({ preset: 'onelogin', tenant_domain: '' }))
+    await nextTick()
+    expect(wrapper.text()).not.toContain('Discovery URL (derived)')
+  })
+
   it('does not show derived discovery URL for custom preset', async () => {
     const wrapper = mountForm(makeData({ preset: 'custom' }))
+    await nextTick()
+    expect(wrapper.text()).not.toContain('Discovery URL (derived)')
+  })
+
+  it('does not show derived discovery URL for an unrecognised preset', async () => {
+    const wrapper = mountForm(makeData({ preset: 'unknown-preset' }))
     await nextTick()
     expect(wrapper.text()).not.toContain('Discovery URL (derived)')
   })
@@ -199,6 +217,39 @@ describe('SsoProviderForm — callback URL', () => {
     })
     const copyBtn = wrapper.find('[data-testid="sso-callback-url-copy"]')
     expect(copyBtn.attributes('aria-label')).toBeDefined()
+  })
+
+  it('copies the callback URL via the async clipboard API and shows the copied state', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const wrapper = mountForm(makeData(), { callbackUrl })
+    await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith(callbackUrl)
+    expect(wrapper.find('[data-testid="sso-callback-url-copied"]').exists()).toBe(true)
+  })
+
+  it('falls back to execCommand when the async clipboard API rejects', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard denied'))
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+    const execCommand = vi.fn().mockReturnValue(true)
+    Object.defineProperty(document, 'execCommand', {
+      value: execCommand,
+      configurable: true,
+    })
+    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const wrapper = mountForm(makeData(), { callbackUrl })
+    await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
+    await flushPromises()
+    expect(execCommand).toHaveBeenCalledWith('copy')
+    expect(wrapper.find('[data-testid="sso-callback-url-copied"]').exists()).toBe(true)
   })
 })
 
