@@ -7,7 +7,9 @@ revisions are present.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from modulo.db.migration_guard import (
     DivergenceCheckResult,
@@ -27,6 +29,39 @@ class TestLoadRepoRevisions:
         """The repo's migration tree must contain at least one revision."""
         revisions = _load_repo_revisions()
         assert len(revisions) > 0
+
+
+class _FakeWalk:
+    """Minimal stand-in for an Alembic revision walk node."""
+
+    def __init__(self, revision: str, down_revision: str | tuple[str, ...] | None = None) -> None:
+        self.revision = revision
+        self.down_revision = down_revision
+
+
+class TestLoadRepoRevisionsEdgeCases:
+    """FAR-872 fail-open + merge-tuple handling for the repo revision loader."""
+
+    def test_merge_tuple_down_revisions_are_collected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo.db.migration_guard as mg
+
+        monkeypatch.setattr(mg, "_REPO_REVISIONS", None)
+        walks = [
+            _FakeWalk("0003", ("0001", "0002")),
+            _FakeWalk("0001"),
+        ]
+        fake_script = MagicMock()
+        fake_script.walk_revisions.return_value = walks
+        with patch("alembic.script.ScriptDirectory.from_config", return_value=fake_script):
+            revisions = _load_repo_revisions()
+        assert revisions == {"0001", "0002", "0003"}
+
+    def test_tree_load_failure_returns_empty_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo.db.migration_guard as mg
+
+        monkeypatch.setattr(mg, "_REPO_REVISIONS", None)
+        with patch("alembic.script.ScriptDirectory.from_config", side_effect=RuntimeError("boom")):
+            assert not _load_repo_revisions()
 
 
 class TestCheckMigrationDivergence:

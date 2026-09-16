@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
+import pytest
+
 from modulo.core.pipeline_engine.failure_context import (
     _extract_column_info,
     _extract_tables_from_query,
@@ -194,3 +196,78 @@ class TestEnrichErrorDetail:
         original = "traceback text here"
         result = enrich_error_detail(original, exc)
         assert result.startswith(original)
+
+
+class _UnstringableError(Exception):
+    """An exception whose ``str()`` raises, exercising the fail-open guards."""
+
+    def __str__(self) -> str:
+        raise ValueError("cannot stringify this exception")
+
+
+def _raise(*_args: object, **_kwargs: object) -> None:
+    raise RuntimeError("forced failure for fail-open coverage")
+
+
+class TestFailOpenBranches:
+    """FAR-872 fail-open contract: every internal error degrades, never raises."""
+
+    def test_build_tag_preferred_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo
+
+        monkeypatch.setattr(modulo, "__build_tag__", "build-deadbe")
+        assert _get_build_sha() == "build-deadbe"
+
+    def test_build_tag_import_failure_is_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sys
+
+        monkeypatch.setitem(sys.modules, "modulo", None)
+        assert _get_build_sha() == "unknown"
+
+    def test_column_extraction_never_raises_on_unstringable(self) -> None:
+        table, column = _extract_column_info(_UnstringableError())
+        assert table is None
+        assert column is None
+
+    def test_table_extraction_never_raises_on_unstringable(self) -> None:
+        assert _extract_tables_from_query(_UnstringableError()) is None
+
+    def test_build_context_swallows_build_sha_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo.core.pipeline_engine.failure_context as fc
+
+        monkeypatch.setattr(fc, "_get_build_sha", _raise)
+        ctx = build_failure_context(RuntimeError("x"))
+        assert ctx["build_sha"] == "unknown"
+
+    def test_build_context_swallows_column_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo.core.pipeline_engine.failure_context as fc
+
+        monkeypatch.setattr(fc, "_extract_column_info", _raise)
+        ctx = build_failure_context(RuntimeError("x"))
+        assert ctx["failing_column"] is None
+        assert ctx["failing_table"] is None
+
+    def test_build_context_swallows_table_query_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo.core.pipeline_engine.failure_context as fc
+
+        monkeypatch.setattr(fc, "_extract_tables_from_query", _raise)
+        ctx = build_failure_context(RuntimeError("x"))
+        assert ctx["query_tables"] is None
+
+    def test_enrich_includes_build_when_only_sha_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo.core.pipeline_engine.failure_context as fc
+
+        monkeypatch.setattr(
+            fc,
+            "build_failure_context",
+            lambda _exc: {"build_sha": "build-abc1234", "failing_table": None, "failing_column": None},
+        )
+        result = enrich_error_detail("original", RuntimeError("x"))
+        assert "build=build-abc1234" in result
+
+    def test_enrich_swallows_context_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo.core.pipeline_engine.failure_context as fc
+
+        monkeypatch.setattr(fc, "build_failure_context", _raise)
+        result = enrich_error_detail("original", RuntimeError("x"))
+        assert result == "original"
