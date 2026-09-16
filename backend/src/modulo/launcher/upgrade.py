@@ -794,7 +794,7 @@ def _urllib_fetch(url: str, target: Path) -> None:
     """argv-free pinned-https fetch (urllib only - no shell, no curl argv)."""
     import urllib.request
 
-    with urllib.request.urlopen(url, timeout=60) as response, target.open("wb") as handle:  # nosec B310 - pinned https release base
+    with urllib.request.urlopen(url, timeout=60) as response, target.open("wb") as handle:  # nosec B310 - pinned https release base  # noqa: S310
         shutil.copyfileobj(response, handle)
 
 
@@ -1131,7 +1131,7 @@ def run_boot(
     try:
         while process.poll() is None:
             try:
-                with urllib.request.urlopen(health_url, timeout=2) as response:  # nosec B310
+                with urllib.request.urlopen(health_url, timeout=2) as response:  # nosec B310 - loopback health probe
                     if response.status == 200:
                         body = json.loads(response.read().decode("utf-8", errors="replace"))
                         if isinstance(body, dict) and body.get("status") == "ok":
