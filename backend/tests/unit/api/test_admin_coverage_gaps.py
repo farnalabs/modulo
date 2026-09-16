@@ -222,11 +222,11 @@ def test_create_user_weak_password_422(api: tuple[TestClient, AsyncMock]) -> Non
     assert "entropy" in resp.json()["detail"]
 
 
-# NOTE: admin_create_user catches ProgrammingError/SQLAlchemyError itself and
-# has no IntegrityError clause, so IntegrityError lands in the 503 mapping
-# before handle_db_errors could turn it into a 409.
+# NOTE: admin_create_user catches IntegrityError itself (TOCTOU race guard:
+# concurrent duplicate email) and maps it to 409.  ProgrammingError → 501,
+# generic SQLAlchemyError → 503.
 _CREATE_USER_ERROR_PARAMS = [
-    pytest.param(IntegrityError("stmt", {}, Exception("dup")), 503, id="integrity-503"),
+    pytest.param(IntegrityError("stmt", {}, Exception("dup")), 409, id="integrity-409"),
     pytest.param(ProgrammingError("stmt", {}, Exception("missing table")), 501, id="programming-501"),
     pytest.param(SQLAlchemyError("boom"), 503, id="sqlalchemy-503"),
 ]
