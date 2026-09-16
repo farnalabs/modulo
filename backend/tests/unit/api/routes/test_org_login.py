@@ -280,15 +280,20 @@ class TestOrgLogin:
 
         session.execute = mock_execute
 
-        resp = http.get("/api/v1/auth/org-login/acme")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["org"]["slug"] == "acme"
-        assert data["org"]["name"] == "Acme Corp"
-        assert len(data["providers"]) == 1
-        assert data["providers"][0]["provider_id"] == "google"
-        assert data["providers"][0]["display_name"] == "Google"
-        assert data["password_enabled"] is True
+        with patch(
+            "modulo.api.routes.org_login.is_saml_available",
+            new=AsyncMock(return_value=False),
+        ):
+            resp = http.get("/api/v1/auth/org-login/acme")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["org"]["slug"] == "acme"
+            assert data["org"]["name"] == "Acme Corp"
+            assert len(data["providers"]) == 1
+            assert data["providers"][0]["provider_id"] == "google"
+            assert data["providers"][0]["display_name"] == "Google"
+            assert data["password_enabled"] is True
+            assert data["saml"] is False
 
     def test_unknown_slug_returns_404(self, client: tuple[TestClient, AsyncMock]) -> None:
         """An unknown slug returns a generic 404."""
@@ -349,12 +354,16 @@ class TestOrgLogin:
 
         session.execute = mock_execute
 
-        resp = http.get("/api/v1/auth/org-login/acme")
-        assert resp.status_code == 200
-        data = resp.json()
-        provider_ids = [p["provider_id"] for p in data["providers"]]
-        assert "google" in provider_ids
-        assert "azure-ad" not in provider_ids
+        with patch(
+            "modulo.api.routes.org_login.is_saml_available",
+            new=AsyncMock(return_value=False),
+        ):
+            resp = http.get("/api/v1/auth/org-login/acme")
+            assert resp.status_code == 200
+            data = resp.json()
+            provider_ids = [p["provider_id"] for p in data["providers"]]
+            assert "google" in provider_ids
+            assert "azure-ad" not in provider_ids
 
     def test_response_contains_no_secret_fields(self, client: tuple[TestClient, AsyncMock]) -> None:
         """The serialised response must never contain client_secret or client_id."""
@@ -376,11 +385,71 @@ class TestOrgLogin:
 
         session.execute = mock_execute
 
-        resp = http.get("/api/v1/auth/org-login/acme")
-        assert resp.status_code == 200
-        body = resp.text
-        assert "client_secret" not in body.lower()
-        assert "client_id" not in body.lower()
+        with patch(
+            "modulo.api.routes.org_login.is_saml_available",
+            new=AsyncMock(return_value=False),
+        ):
+            resp = http.get("/api/v1/auth/org-login/acme")
+            assert resp.status_code == 200
+            body = resp.text
+            assert "client_secret" not in body.lower()
+            assert "client_id" not in body.lower()
+
+    def test_saml_true_when_provider_configured(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """org-login returns saml=true when a SAML provider is available."""
+        http, session = client
+        org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme")
+
+        call_count = 0
+
+        async def mock_execute(stmt: object, *args: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalars.return_value.first.return_value = org
+            else:
+                result.scalars.return_value.all.return_value = []
+            return result
+
+        session.execute = mock_execute
+
+        with patch(
+            "modulo.api.routes.org_login.is_saml_available",
+            new=AsyncMock(return_value=True),
+        ):
+            resp = http.get("/api/v1/auth/org-login/acme")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["saml"] is True
+
+    def test_saml_false_when_no_provider(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """org-login returns saml=false when no SAML provider is configured."""
+        http, session = client
+        org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme")
+
+        call_count = 0
+
+        async def mock_execute(stmt: object, *args: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalars.return_value.first.return_value = org
+            else:
+                result.scalars.return_value.all.return_value = []
+            return result
+
+        session.execute = mock_execute
+
+        with patch(
+            "modulo.api.routes.org_login.is_saml_available",
+            new=AsyncMock(return_value=False),
+        ):
+            resp = http.get("/api/v1/auth/org-login/acme")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["saml"] is False
 
 
 # ---------------------------------------------------------------------------

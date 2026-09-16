@@ -92,6 +92,30 @@ async def _get_enabled_saml_global(
     return provider
 
 
+async def is_saml_available(
+    settings: Settings,
+    system_session: AsyncSession | None,
+    app_session: AsyncSession,
+) -> bool:
+    """Return whether SAML sign-in is available on this instance.
+
+    SAML is available when either:
+    1. An enabled SAML provider exists in the DB with metadata configured, OR
+    2. The env-var SAML config is fully set (enabled + license + metadata URL/XML).
+
+    NOTE: SAML is single-provider-per-instance (``get_enabled_saml_provider``
+    returns the first enabled provider globally via ``.limit(1)``).  This is
+    therefore an instance-wide boolean — there is no per-org SAML support yet.
+    """
+    db_saml = await _get_enabled_saml_global(system_session, app_session)
+    db_saml_ok = db_saml is not None and bool(db_saml.metadata_xml or db_saml.metadata_url)
+    return db_saml_ok or (
+        settings.modulo_saml_enabled
+        and bool(settings.modulo_license_key)
+        and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
+    )
+
+
 async def _anonymous_plan_context(settings: Settings, session: AsyncSession) -> Any:
     """Resolve the plan context WITHOUT a user (pre-auth login-page surface).
 
@@ -144,13 +168,7 @@ async def sso_providers(
                 if env_id not in db_ids:
                     oidc_list.append({"provider_id": env_id})
 
-            db_saml = await _get_enabled_saml_global(system_session, session)
-            db_saml_ok = db_saml is not None and bool(db_saml.metadata_xml or db_saml.metadata_url)
-            saml_enabled = db_saml_ok or (
-                settings.modulo_saml_enabled
-                and bool(settings.modulo_license_key)
-                and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
-            )
+            saml_enabled = await is_saml_available(settings, system_session, session)
             return SsoProvidersResponse(
                 oidc=[OidcProviderInfo(**p) for p in oidc_list],
                 saml=saml_enabled,

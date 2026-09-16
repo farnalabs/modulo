@@ -213,4 +213,59 @@ describe('OrgLoginView', () => {
       expect(wrapper.text()).toContain('Invalid credentials')
     })
   })
+
+  it('renders SAML button when saml is true', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        org: { slug: 'test-org', name: 'Test Org' },
+        providers: [],
+        password_enabled: true,
+        saml: true,
+      }),
+    } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-sso-saml"]').exists()).toBe(true)
+    })
+    const samlLink = wrapper.find('[data-testid="org-login-sso-saml"]')
+    expect(samlLink.attributes('href')).toBe('/api/v1/auth/saml/login')
+  })
+
+  it('hides SAML button when saml is false', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        org: { slug: 'test-org', name: 'Test Org' },
+        providers: [],
+        password_enabled: true,
+        saml: false,
+      }),
+    } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-email"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-testid="org-login-sso-saml"]').exists()).toBe(false)
+  })
+
+  it('shows SSO section when only SAML is available (no OIDC providers)', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        org: { slug: 'test-org', name: 'Test Org' },
+        providers: [],
+        password_enabled: true,
+        saml: true,
+      }),
+    } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-sso-section"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-testid="org-login-sso-saml"]').exists()).toBe(true)
+  })
 })
