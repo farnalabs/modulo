@@ -47,6 +47,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
+from modulo.db.migration_guard import check_migration_divergence
 from modulo.settings import Settings, break_glass_boot_findings, get_settings
 from modulo.version import get_version
 
@@ -339,10 +340,28 @@ async def _check_migrations() -> CheckResult:
             result = await conn.execute(text("SELECT version_num FROM alembic_version"))
             applied = {row[0] for row in result.fetchall()}
 
-        if heads.issubset(applied):
+        # FAR-872: check for repo-vs-DB migration divergence (DB has applied
+        # revisions the repo does not ship).  Logged at ERROR in
+        # migration_guard; surfaced here so it is visible without grepping logs.
+        try:
+            divergence = check_migration_divergence(applied)
+        except Exception:
+            # Contractually fail-open, but never silent: a failure here would
+            # otherwise hide a real bug behind the "migrations up to date" path.
+            _log.exception("health._check_migrations divergence check failed")
+            divergence = None
+
+        pending = heads - applied
+        parts: list[str] = []
+        if pending:
+            parts.append(f"pending migrations: {', '.join(sorted(pending))}")
+        if divergence is not None and divergence.diverged:
+            parts.append(
+                f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}"
+            )
+        if not parts:
             return "ok", "migrations up to date"
-        missing = heads - applied
-        return "degraded", f"pending migrations: {', '.join(sorted(missing))}"
+        return "degraded", "; ".join(parts)
 
     try:
         status, detail = await asyncio.wait_for(_probe(), timeout=timeout)
