@@ -12,6 +12,7 @@ Covers:
 from collections.abc import Callable
 from typing import Any
 
+import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
 from modulo.model_backends.base import ModelBackendBase
@@ -68,6 +69,7 @@ class FakeStructuredOutputBackend(ModelBackendBase):
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
         self.invoke_kwargs_received.append(kwargs)
@@ -98,6 +100,7 @@ class TestFlagDeclaration:
     def test_fake_backend_flag_is_false(self) -> None:
         assert FakeStructuredOutputBackend.supports_native_structured_output is False
 
+    @pytest.mark.timeout(300)
     def test_flag_declared_on_all_subclasses(self) -> None:
         """Every ModelBackendBase subclass must explicitly declare the flag.
 

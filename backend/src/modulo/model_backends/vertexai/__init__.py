@@ -41,13 +41,19 @@ class VertexAIBackend(ModelBackendBase):
     def __repr__(self) -> str:
         return f"VertexAIBackend(model_id={self._backend_id!r})"
 
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
 
     def stream(
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, tools=tools, **kwargs)

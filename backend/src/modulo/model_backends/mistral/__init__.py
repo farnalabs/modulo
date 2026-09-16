@@ -40,13 +40,19 @@ class MistralBackend(ModelBackendBase):
             api_key=self._api_key,
         )
 
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
 
     def stream(
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, tools=tools, **kwargs)

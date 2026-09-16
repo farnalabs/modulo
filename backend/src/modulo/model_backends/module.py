@@ -140,7 +140,7 @@ class OpenAICompatibleBackend(ModelBackendBase):
     ) -> AsyncIterator[BaseMessage]:
         async def _iter() -> AsyncIterator[BaseMessage]:
             try:
-                target = self._model
+                target: Any = self._model
                 if output_schema is not None:
                     target = self._model.bind(response_format={"type": "json_schema", "json_schema": output_schema})
                 async for chunk in target.astream(messages, tools=tools, **kwargs):
