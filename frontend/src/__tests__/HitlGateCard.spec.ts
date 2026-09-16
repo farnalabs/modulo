@@ -590,17 +590,18 @@ describe('HitlGateCard', () => {
         }
         return Promise.resolve({ data: { ok: true }, error: undefined })
       })
-      wrapper = mount(HitlGateCard, {
+      const mounted = mount(HitlGateCard, {
         props: { gate: gate({ context }) },
         global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
       })
-      await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+      wrapper = mounted
+      await mounted.find('[data-testid="hitl-gate-claim"]').trigger('click')
       await flushPromises()
-      return api
+      return { api, wrapper: mounted }
     }
 
     it('renders the declared choice options for a choice gate', async () => {
-      await mountClaimedChoiceGate()
+      const { wrapper } = await mountClaimedChoiceGate()
       const picker = wrapper.find('[data-testid="hitl-gate-choice-options"]')
       expect(picker.exists()).toBe(true)
       const options = wrapper.findAll('[data-testid="hitl-gate-option"]')
@@ -610,7 +611,7 @@ describe('HitlGateCard', () => {
     })
 
     it('blocks approve until an option is selected, then sends the answer', async () => {
-      const api = await mountClaimedChoiceGate()
+      const { api, wrapper } = await mountClaimedChoiceGate()
 
       const approve = wrapper.find('[data-testid="hitl-gate-approve"]')
       expect((approve.element as HTMLButtonElement).disabled).toBe(true)
@@ -621,7 +622,7 @@ describe('HitlGateCard', () => {
       await approve.trigger('click')
       await flushPromises()
 
-      const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0]!.includes('/hitl/{gate_id}/approve') && !c[0].includes('modification'))
+      const post = (api.POST as any).mock.calls.find((c: unknown[]) => (c[0] as string).includes('/hitl/{gate_id}/approve') && !(c[0] as string).includes('modification'))
       expect(post).toBeTruthy()
       expect((post as unknown[])[1]).toEqual({
         params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
@@ -630,7 +631,7 @@ describe('HitlGateCard', () => {
     })
 
     it('sends the answer with Save & approve on a choice gate with a subject', async () => {
-      const api = await mountClaimedChoiceGate({
+      const { api, wrapper } = await mountClaimedChoiceGate({
         subject: '"Review this comment."',
         subject_parent: { body: 'Review this comment.', priority: 'high' },
         subject_leaf_key: 'body',
@@ -664,7 +665,7 @@ describe('HitlGateCard', () => {
     })
 
     it('keeps approve always enabled for approval-kind gates (no picker, no answer)', async () => {
-      const api = await mountClaimedChoiceGate({ response_contract: { kind: 'approval' } })
+      const { api, wrapper } = await mountClaimedChoiceGate({ response_contract: { kind: 'approval' } })
 
       expect(wrapper.find('[data-testid="hitl-gate-choice-options"]').exists()).toBe(false)
       const approve = wrapper.find('[data-testid="hitl-gate-approve"]')
@@ -673,8 +674,8 @@ describe('HitlGateCard', () => {
       await approve.trigger('click')
       await flushPromises()
 
-      const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0]!.endsWith('hitl/{gate_id}/approve'))
-      expect((post as unknown[])[1].body).toEqual({
+      const post = (api.POST as any).mock.calls.find((c: unknown[]) => (c[0] as string).endsWith('hitl/{gate_id}/approve'))
+      expect(((post as unknown[])[1] as { body: unknown }).body).toEqual({
         claim_token: 'tok-1',
         notes: null,
         answer: undefined,

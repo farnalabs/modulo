@@ -3339,6 +3339,12 @@ elements:
       - testid: hitl-gate-foreign-claim
         type: element
         dynamic_testid: false
+      - testid: hitl-gate-choice-options
+        type: element
+        dynamic_testid: false
+      - testid: hitl-gate-option
+        type: button
+        dynamic_testid: false
       - testid: hitl-gate-subject-editor
         type: element
         dynamic_testid: false
@@ -3956,6 +3962,12 @@ elements:
         dynamic_testid: false
       - testid: hitl-gate-foreign-claim
         type: element
+        dynamic_testid: false
+      - testid: hitl-gate-choice-options
+        type: element
+        dynamic_testid: false
+      - testid: hitl-gate-option
+        type: button
         dynamic_testid: false
       - testid: hitl-gate-subject-editor
         type: element
