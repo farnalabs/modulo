@@ -301,7 +301,7 @@ installed as a global uv tool):
 ```powershell
 pre-commit install
 # CI-parity pre-push gate (mypy, vue-tsc, schema freshness, affected tests,
-# rebase-before-first-push check) — must be installed separately:
+# merge-conflict-with-main check) — must be installed separately:
 pre-commit install --hook-type pre-push
 ```
 
