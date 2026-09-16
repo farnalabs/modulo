@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from langchain_core.messages import BaseMessage
@@ -15,18 +15,6 @@ from modulo.model_backends.base import (
 )
 
 
-class ProviderUnavailableError(RuntimeError):
-    """The provider gateway is unavailable or returned an upstream HTTP 5xx.
-
-    Raised instead of the raw ``openai`` error (``InternalServerError`` /
-    ``APIConnectionError`` / a gateway's misleading ``AuthenticationError``)
-    when the provider's model endpoint is down. The run error mapper derives
-    the run's ``error_code`` from the exception type name, so this type
-    distinguishes a gateway outage from a genuinely bad API key — which still
-    surfaces as ``openai.AuthenticationError``.
-    """
-
-
 class OpenAICompatibleBackend(ModelBackendBase):
     """Single backend for all OpenAI-compatible providers.
     Parameterized by base_url, api_key, and provider name.
@@ -34,6 +22,7 @@ class OpenAICompatibleBackend(ModelBackendBase):
 
     supports_tools: bool = True
     supports_native_structured_output: bool = True
+    _status_error_types: ClassVar[tuple[type[Exception], ...]] = (APIStatusError,)
 
     def __init__(
         self,
@@ -100,24 +89,9 @@ class OpenAICompatibleBackend(ModelBackendBase):
             api_key=self._api_key,
         )
 
-    def _classify_gateway_error(self, exc: Exception) -> Exception:
-        """Return the exception to raise for an OpenAI-compatible call failure.
-
-        HTTP 4xx (including ``AuthenticationError``) and 429 pass through
-        unchanged — those are actionable as-is. HTTP 5xx and connection
-        failures mean the provider gateway/completions path is down, not that
-        the key is wrong, so they are re-raised as ``ProviderUnavailableError``.
-        """
-        if isinstance(exc, APIStatusError) and exc.status_code < 500:
-            return exc
-        status = getattr(exc, "status_code", None)
-        detail = getattr(exc, "message", None) or str(exc)
-        status_desc = f"HTTP {status}" if status else "connection failure"
+    def _gateway_error_context(self) -> str:
         base_url = self._base_url or "https://api.openai.com/v1"
-        return ProviderUnavailableError(
-            f"{self._backend_id} provider gateway ({base_url}) returned {status_desc} "
-            f"on the model endpoint — upstream outage, not an auth failure. Detail: {detail}"
-        )
+        return f" ({base_url})"
 
     async def invoke(
         self,

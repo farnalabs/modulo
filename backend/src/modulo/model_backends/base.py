@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -15,6 +15,18 @@ logger = logging.getLogger(__name__)
 
 HEALTH_CHECK_TIMEOUT = 10.0
 HEALTH_DETAIL_MAX_LENGTH = 500
+
+
+class ProviderUnavailableError(RuntimeError):
+    """The provider gateway is unavailable or returned an upstream HTTP 5xx.
+
+    Raised instead of the raw SDK error (``InternalServerError`` /
+    ``APIConnectionError`` / a gateway's misleading ``AuthenticationError``)
+    when the provider's model endpoint is down. The run error mapper derives
+    the run's ``error_code`` from the exception type name, so this type
+    distinguishes a gateway outage from a genuinely bad API key — which still
+    surfaces as the SDK's authentication error.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +109,13 @@ class ModelBackendBase(ABC):
     supports_tools: bool = False
     supports_native_structured_output: bool = False
 
+    # SDK status-error classes that a concrete backend catches in ``invoke`` /
+    # ``stream``. Used by the shared ``_classify_gateway_error`` below to
+    # distinguish a 4xx (pass through) from a 5xx (upstream outage). Empty by
+    # default — backends that classify gateway failures set it to their SDK's
+    # status-error type(s).
+    _status_error_types: ClassVar[tuple[type[Exception], ...]] = ()
+
     @abstractmethod
     async def invoke(
         self,
@@ -127,6 +146,38 @@ class ModelBackendBase(ABC):
     @abstractmethod
     def backend_id(self) -> str:
         """Stable identifier for this backend (e.g. 'anthropic/claude-sonnet-4-6')."""
+
+    def _gateway_error_context(self) -> str:
+        """Provider-specific context appended to a gateway-outage message.
+
+        Returns a string that includes its own leading separator (for example
+        ``" (https://api.example.com/v1)"``), or ``""`` when a backend has no
+        extra context to add.
+        """
+        return ""
+
+    def _classify_gateway_error(self, exc: Exception) -> Exception:
+        """Return the exception to raise for a provider-gateway call failure.
+
+        HTTP 4xx (including authentication errors) and 429 pass through
+        unchanged — those are actionable as-is. HTTP 5xx and connection
+        failures mean the provider gateway is down, not that the key is wrong,
+        so they are re-raised as ``ProviderUnavailableError``.
+
+        Concrete backends narrow the caught exceptions to their SDK's status
+        and connection error types in the surrounding ``except`` clause and
+        declare the status-error type(s) in ``_status_error_types``.
+        """
+        status = getattr(exc, "status_code", None)
+        if isinstance(exc, self._status_error_types) and status is not None and status < 500:
+            return exc
+        detail = getattr(exc, "message", None) or str(exc)
+        status_desc = f"HTTP {status}" if status else "connection failure"
+        return ProviderUnavailableError(
+            f"{self.backend_id} provider gateway{self._gateway_error_context()} "
+            f"returned {status_desc} on the model endpoint — upstream outage, "
+            f"not an auth failure. Detail: {detail}"
+        )
 
     async def health_check(self) -> HealthResult:
         """Verify connectivity. Default: minimal ping invoke. Override for efficiency."""

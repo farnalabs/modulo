@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, ClassVar
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import BaseMessage
@@ -10,7 +10,6 @@ from modulo.model_backends.base import (
     openai_compatible_health_check,
     serialize_structured_output,
 )
-from modulo.model_backends.module import ProviderUnavailableError
 
 try:
     from anthropic import APIConnectionError as AnthropicConnectionError
@@ -27,6 +26,7 @@ class AnthropicBackend(ModelBackendBase):
 
     supports_tools: bool = True
     supports_native_structured_output: bool = True
+    _status_error_types: ClassVar[tuple[type[Exception], ...]] = (AnthropicStatusError,)
 
     def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
         self._model = ChatAnthropic(model=model_id, api_key=api_key, **default_params)
@@ -45,24 +45,6 @@ class AnthropicBackend(ModelBackendBase):
             base_url=ANTHROPIC_BASE_URL,
             api_key=None,
             extra_headers={"x-api-key": self._api_key, "anthropic-version": "2023-06-01"},
-        )
-
-    def _classify_gateway_error(self, exc: Exception) -> Exception:
-        """Return the exception to raise for an Anthropic call failure.
-
-        HTTP 4xx (including ``AuthenticationError``) and 429 pass through
-        unchanged — those are actionable as-is. HTTP 5xx and connection
-        failures mean the provider gateway is down, not that the key is wrong,
-        so they are re-raised as ``ProviderUnavailableError``.
-        """
-        if isinstance(exc, AnthropicStatusError) and exc.status_code < 500:
-            return exc
-        status = getattr(exc, "status_code", None)
-        detail = getattr(exc, "message", None) or str(exc)
-        status_desc = f"HTTP {status}" if status else "connection failure"
-        return ProviderUnavailableError(
-            f"{self._backend_id} provider gateway returned {status_desc} "
-            f"on the model endpoint — upstream outage, not an auth failure. Detail: {detail}"
         )
 
     async def invoke(

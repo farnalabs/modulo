@@ -2,10 +2,19 @@
 
 from unittest.mock import AsyncMock, patch
 
+import httpx2
 import pytest
+from anthropic import APIConnectionError, APIStatusError
+from langchain_core.messages import HumanMessage
 
 from modulo.model_backends.anthropic import ANTHROPIC_BASE_URL, AnthropicBackend
-from modulo.model_backends.base import HealthResult
+from modulo.model_backends.base import HealthResult, ProviderUnavailableError
+
+_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+
+
+def _request() -> httpx2.Request:
+    return httpx2.Request("POST", _MESSAGES_URL)
 
 
 @pytest.fixture
@@ -46,3 +55,41 @@ async def test_health_check_uses_anthropic_headers():
         api_key=None,
         extra_headers={"x-api-key": "sk-ant-test", "anthropic-version": "2023-06-01"},
     )
+
+
+async def test_invoke_http_5xx_raises_provider_unavailable(backend):
+    """A gateway 5xx is an upstream outage, not a bad key."""
+    backend._model.ainvoke = AsyncMock(
+        side_effect=APIStatusError(
+            message="boom",
+            response=httpx2.Response(503, request=_request()),
+            body={"error": {"message": "boom"}},
+        )
+    )
+    with pytest.raises(ProviderUnavailableError) as exc_info:
+        await backend.invoke([HumanMessage(content="hi")])
+    message = str(exc_info.value)
+    assert "anthropic/claude-haiku-4-5 provider gateway" in message
+    assert "HTTP 503" in message
+    assert "upstream" in message
+
+
+async def test_invoke_http_4xx_passes_through(backend):
+    """A 4xx (e.g. 429) is actionable as-is and must not be re-wrapped."""
+    backend._model.ainvoke = AsyncMock(
+        side_effect=APIStatusError(
+            message="rate limited",
+            response=httpx2.Response(429, request=_request()),
+            body={"error": {"message": "rate limited"}},
+        )
+    )
+    with pytest.raises(APIStatusError) as exc_info:
+        await backend.invoke([HumanMessage(content="hi")])
+    assert exc_info.value.status_code == 429
+
+
+async def test_invoke_connection_failure_raises_provider_unavailable(backend):
+    backend._model.ainvoke = AsyncMock(side_effect=APIConnectionError(message="Connection error.", request=_request()))
+    with pytest.raises(ProviderUnavailableError) as exc_info:
+        await backend.invoke([HumanMessage(content="hi")])
+    assert "connection failure" in str(exc_info.value)
