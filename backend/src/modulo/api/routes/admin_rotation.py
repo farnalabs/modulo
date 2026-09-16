@@ -33,6 +33,14 @@ _MIN_KEY_LEN = 32
 # within the same worker so two coroutines don't race on the Redis roundtrip.
 # When Redis is not configured, the asyncio.Lock alone would not span the
 # background task, so _rotation_owner below provides the in-process guard.
+#
+# Deliberately not reusing the Postgres advisory locks in
+# db/repositories/locks.py (PostgresLock / pg_advisory_lock): those locks are
+# session-scoped — they release when the acquiring DB session ends and
+# acquire/release must share one connection in a single transaction.  This
+# lock must outlive the HTTP request and be held by a background task that runs
+# on its own modulo_system session, so a session-scoped advisory lock cannot
+# span it.  The Redis key is schema-level (SET NX + TTL) and self-heals.
 _ROTATION_LOCK_KEY = "modulo:fernet_rotation:lock"
 _ROTATION_LOCK_TTL_SECONDS = 1800  # 30 minutes — generous for large orgs
 
