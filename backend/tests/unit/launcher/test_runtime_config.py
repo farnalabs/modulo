@@ -55,6 +55,45 @@ def test_auto_login_pair_requires_both_values() -> None:
     assert set(payload) == {"autoLogin"}
 
 
+def test_auto_login_org_slug_is_forwarded_when_supplied() -> None:
+    """FAR-865: MODULO_AUTO_LOGIN_ORG_SLUG binds the session to that org."""
+    payload = build_runtime_config_payload(
+        {
+            "MODULO_AUTO_LOGIN_USERNAME": "demo",
+            "MODULO_AUTO_LOGIN_PASSWORD": "demo",
+            "MODULO_AUTO_LOGIN_ORG_SLUG": "acme",
+        }
+    )
+    auto_login = payload["autoLogin"]
+    assert isinstance(auto_login, dict)
+    assert auto_login["username"] == "demo"
+    assert auto_login["password"] == "demo"
+    assert auto_login["orgSlug"] == "acme"
+
+
+def test_auto_login_org_slug_is_omitted_when_unset() -> None:
+    """Unset org slug keeps the pre-FAR-865 payload shape (SPA falls back)."""
+    payload = build_runtime_config_payload({"MODULO_AUTO_LOGIN_USERNAME": "demo", "MODULO_AUTO_LOGIN_PASSWORD": "demo"})
+    auto_login = payload["autoLogin"]
+    assert isinstance(auto_login, dict)
+    assert auto_login["username"] == "demo"
+    assert auto_login["password"] == "demo"
+    assert "orgSlug" not in auto_login
+
+
+def test_auto_login_org_slug_round_trips_through_render() -> None:
+    payload = build_runtime_config_payload(
+        {
+            "MODULO_AUTO_LOGIN_USERNAME": "demo",
+            "MODULO_AUTO_LOGIN_PASSWORD": "demo",
+            "MODULO_AUTO_LOGIN_ORG_SLUG": "acme",
+        }
+    )
+    rendered = render_runtime_config_js(payload)
+    assert '"autoLogin":{"username":"demo","password":"demo","orgSlug":"acme"}' in rendered
+    assert "MODULO_AUTO_LOGIN_ORG_SLUG" not in rendered
+
+
 def test_payload_never_contains_credential_shaped_values() -> None:
     payload = build_runtime_config_payload(_CREDENTIAL_ENV)
     rendered = render_runtime_config_js(payload)

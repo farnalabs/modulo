@@ -5,6 +5,7 @@ interface Window {
     autoLogin?: {
       username?: unknown
       password?: unknown
+      orgSlug?: unknown
     }
     monitor?: Record<string, unknown>
   }
