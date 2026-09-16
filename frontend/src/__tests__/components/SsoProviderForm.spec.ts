@@ -26,6 +26,8 @@ interface SsoFormState {
   scopes: string
   auto_provision: boolean
   default_role: string
+  preset: string
+  tenant_domain: string
 }
 
 function makeData(overrides: Partial<SsoFormState> = {}): SsoFormState {
@@ -41,6 +43,8 @@ function makeData(overrides: Partial<SsoFormState> = {}): SsoFormState {
     scopes: 'openid profile email',
     auto_provision: false,
     default_role: 'operator',
+    preset: 'custom',
+    tenant_domain: '',
     ...overrides,
   }
 }
@@ -53,6 +57,7 @@ function mountForm(data: SsoFormState = makeData(), overrides: Record<string, un
       submitLabel: 'Create Provider',
       savingLabel: 'Creating...',
       error: null,
+      presets: [],
       ...overrides,
     },
     global: { stubs: { Select: SelectStub } },
