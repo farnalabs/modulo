@@ -54,7 +54,7 @@ SVG_ICON_PATH = REPO_ROOT / "frontend" / "src" / "components" / "SvgIcon.vue"
 
 # Auth / public / dev / error plumbing that is intentionally not part of the
 # product map (no breadcrumb or sidebar surface a user navigates to).
-NON_PRODUCT_ROUTES = frozenset({"login", "auth-callback", "not-found", "dev-metrics", "demo"})
+NON_PRODUCT_ROUTES = frozenset({"login", "org-login", "auth-callback", "not-found", "dev-metrics", "demo"})
 
 #: The frontend router file defines every route at a ``path:`` key indented at
 #: least six spaces (top-level records sit at six, NESTED children — e.g. the

@@ -417,6 +417,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/modulo/api/mcp_server.py" = ["RET503"]
 "tests/**" = ["S101", "S105", "S106", "S107", "S108", "S112", "S311", "B007", "B008", "PERF", "ISC", "DTZ"]
+# S310: loopback-only health probe (already guarded by bandit # nosec B310)
+"src/modulo/launcher/upgrade.py" = ["S310"]
 
 "src/modulo/api/routes/scim.py" = ["N815", "N803"]
 "tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
