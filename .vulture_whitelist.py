@@ -397,4 +397,8 @@ __all__ = [
     # --- FAR-853 SSO presets (Pydantic response attribute set in _provider_response;
     #     vulture cannot see it consumed by model_dump/serialization) ---
     "callback_url",
+    # --- FAR-899 schema validation + repair loop (test-referenced;
+    #     production callers wired in node_runner.py) ---
+    "_clear_validator_cache",  # test isolation helper: resets the compiled-validator LRU
+    "_query_recent_lenient_failures",  # flip-guard query: unit-testable in isolation
 ]
