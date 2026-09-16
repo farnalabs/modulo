@@ -1794,9 +1794,13 @@ export interface paths {
          * Deployment Info
          * @description Return deployment metadata for operational visibility.
          *
-         *     Build-time values (git_sha, git_branch, build_timestamp, etc.) are injected
-         *     via Docker build args in the CI/CD pipeline.  If absent they fall back to
-         *     empty strings so the endpoint is always safe to call.
+         *     Served unauthenticated on purpose: the CI/CD deploy pipelines
+         *     (deploy.yml, rc-validate.yml, deploy-watchdog.yml,
+         *     deploy-staleness-check.yml) call it without a principal to verify which
+         *     build is live. The repo is public, so the git metadata is already
+         *     world-readable. Only genuinely non-public locals (hostname, ci_job_url)
+         *     are omitted. If values are absent they fall back to empty strings so the
+         *     endpoint is always safe to call.
          */
         get: operations["deployment_info_api_v1_deployment_get"];
         put?: never;
