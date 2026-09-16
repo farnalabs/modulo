@@ -436,8 +436,7 @@ class TestAdminEmailDecryptFailure:
             redis_url="redis://localhost:6379/0",
         )
 
-    @pytest.mark.asyncio
-    async def test_decrypt_failure_returns_500_not_ciphertext(self) -> None:
+    def test_decrypt_failure_returns_500_not_ciphertext(self) -> None:
         from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
@@ -499,8 +498,7 @@ class TestAdminEmailDecryptFailure:
             admin_email.get_organisation = original_get
             app.dependency_overrides.clear()
 
-    @pytest.mark.asyncio
-    async def test_decrypt_failure_does_not_attempt_send(self) -> None:
+    def test_decrypt_failure_does_not_attempt_send(self) -> None:
         from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
