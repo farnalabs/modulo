@@ -40,7 +40,6 @@ class TestGetBuildSha:
 
     def test_falls_back_to_unknown_when_no_env(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("GIT_SHA", None)
             result = _get_build_sha()
         assert result == "unknown"
 
