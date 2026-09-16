@@ -339,10 +339,27 @@ async def _check_migrations() -> CheckResult:
             result = await conn.execute(text("SELECT version_num FROM alembic_version"))
             applied = {row[0] for row in result.fetchall()}
 
-        if heads.issubset(applied):
+        # FAR-872: check for repo-vs-DB migration divergence (DB has applied
+        # revisions the repo does not ship).  Logged at ERROR in
+        # migration_guard; surfaced here so it is visible without grepping logs.
+        try:
+            from modulo.db.migration_guard import check_migration_divergence
+
+            divergence = check_migration_divergence(applied)
+        except Exception:
+            divergence = None
+
+        pending = heads - applied
+        parts: list[str] = []
+        if pending:
+            parts.append(f"pending migrations: {', '.join(sorted(pending))}")
+        if divergence is not None and divergence.diverged:
+            parts.append(
+                f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}"
+            )
+        if not parts:
             return "ok", "migrations up to date"
-        missing = heads - applied
-        return "degraded", f"pending migrations: {', '.join(sorted(missing))}"
+        return "degraded", "; ".join(parts)
 
     try:
         status, detail = await asyncio.wait_for(_probe(), timeout=timeout)

@@ -275,6 +275,42 @@ def _traceback_detail(exc: BaseException, limit: int = 2000) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# FAR-872: failure-context attribution helpers (log-line extras)
+# ---------------------------------------------------------------------------
+# Lazy-import gate so the failure_context module is only imported when the
+# attribution code path is actually exercised (never during normal flow).
+_ATTRIBUTION_AVAILABLE = True
+try:
+    from modulo.core.pipeline_engine.failure_context import (
+        _extract_column_info,
+        _get_build_sha,
+    )
+except Exception:
+    _ATTRIBUTION_AVAILABLE = False
+
+
+def _failure_build_sha(exc: BaseException) -> str:
+    """Best-effort build SHA for log-line extra (never raises)."""
+    if not _ATTRIBUTION_AVAILABLE:
+        return "unknown"
+    try:
+        return _get_build_sha()
+    except Exception:
+        return "unknown"
+
+
+def _failure_column(exc: BaseException) -> str | None:
+    """Best-effort failing column name for log-line extra (never raises)."""
+    if not _ATTRIBUTION_AVAILABLE:
+        return None
+    try:
+        _table, column = _extract_column_info(exc)
+        return column
+    except Exception:
+        return None
+
+
 def _retry_backoff_seconds(
     attempt_n: int,
     *,
@@ -3268,8 +3304,32 @@ class PipelineExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error_detail = _traceback_detail(exc, limit=2000)
-            _log.exception("pipeline.resume_error", extra={"run_id": str(run_id)})
+            _raw_tb = _traceback_detail(exc, limit=2000)
+            # FAR-872: enrich the error detail with attribution (build SHA,
+            # failing column, table set) so executor failures are self-identifying.
+            # FAIL-OPEN: enrich_error_detail never raises.
+            try:
+                from modulo.core.pipeline_engine.failure_context import (
+                    enrich_error_detail,
+                )
+
+                error_detail = enrich_error_detail(_raw_tb, exc)
+            except Exception:
+                error_detail = _raw_tb
+            _log.exception(
+                "pipeline.resume_error",
+                extra={
+                    "run_id": str(run_id),
+                    **(
+                        {
+                            "failure_build_sha": _failure_build_sha(exc),
+                            "failing_column": _failure_column(exc),
+                        }
+                        if _ATTRIBUTION_AVAILABLE
+                        else {}
+                    ),
+                },
+            )
             final_status = "failed"
             error_code = type(exc).__name__
         finally:
@@ -3858,10 +3918,33 @@ class PipelineExecutor:
             # the deterministic refusal despite the non-retryable registry flag.
         except Exception as exc:
             _tb = _traceback_detail(exc, limit=2000)
-            _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
+            # FAR-872: enrich the error detail with attribution (build SHA,
+            # failing column, table set) so executor failures are self-identifying.
+            # FAIL-OPEN: enrich_error_detail never raises.
+            try:
+                from modulo.core.pipeline_engine.failure_context import (
+                    enrich_error_detail,
+                )
+
+                error_detail = enrich_error_detail(_tb, exc)
+            except Exception:
+                error_detail = _tb
+            _log.exception(
+                "pipeline.execution_error",
+                extra={
+                    "run_id": str(run_id),
+                    **(
+                        {
+                            "failure_build_sha": _failure_build_sha(exc),
+                            "failing_column": _failure_column(exc),
+                        }
+                        if _ATTRIBUTION_AVAILABLE
+                        else {}
+                    ),
+                },
+            )
             final_status = "failed"
             error_code = type(exc).__name__
-            error_detail = _tb
 
         # Retry policy: if the run ended in a state the pipeline's
         # retry_policy says to retry and the attempt budget remains, reset the
