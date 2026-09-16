@@ -682,4 +682,44 @@ describe('HitlGateCard', () => {
     // An unanswerable choice gate must stay locked.
     expect((wrapper.find('[data-testid="hitl-gate-approve"]').element as HTMLButtonElement).disabled).toBe(true)
   })
+
+  it('restores the selected option across a remount and drops it when the gate reverts to pending (FAR-860)', async () => {
+    const { useHitlGateState } = await import('../composables/useHitlGateState')
+    await mockClaimThenDecide()
+    const context = {
+      response_contract: {
+        kind: 'choice',
+        options: [
+          { id: 'ship', label: 'Ship it' },
+          { id: 'hold', label: 'Hold' },
+        ],
+      },
+    }
+    const mountOptions = (gateProps: HitlGate) => ({ props: { gate: gateProps }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+
+    wrapper = mount(HitlGateCard, mountOptions(gate({ context })))
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-option-ship"]').trigger('click')
+
+    // The page auto-refresh remounts the card: the selection must survive and
+    // keep approve enabled, like the notes/claim token (FAR-686).
+    const firstInstance = wrapper
+    wrapper = null
+    firstInstance.unmount()
+    wrapper = mount(HitlGateCard, mountOptions(gate({ context, claimed_by: 'reviewer@team' })))
+    expect(wrapper.find('[data-testid="hitl-gate-option-ship"]').attributes('aria-checked')).toBe('true')
+    expect((wrapper.find('[data-testid="hitl-gate-approve"]').element as HTMLButtonElement).disabled).toBe(false)
+
+    // A pending gate has no live claim: the whole session (selection included)
+    // is cleared rather than resurrected on the claim controls.
+    const secondInstance = wrapper
+    wrapper = null
+    secondInstance.unmount()
+    wrapper = mount(HitlGateCard, mountOptions(gate({ context })))
+    const state = useHitlGateState(gate().run_id, 'approval-gate-1')
+    expect(state.selectedOption.value).toBeNull()
+    expect(wrapper.find('[data-testid="hitl-gate-choice-options"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
+  })
 })
