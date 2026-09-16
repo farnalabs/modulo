@@ -1462,7 +1462,8 @@ async def runner_health_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
     Liveness contract (qa F3, mirrors the sibling sweeps): the outcome
     (last_run_at + orgs probed/failed + transitions) is persisted to the
     shared Redis key every tick — on SUCCESS with the tick's counts, and
-    on FAILURE with zero counts + ``"error": "probe_failed"`` (the
+    on FAILURE with zero counts + an enriched
+    ``"error": "probe_failed (<ExceptionType>: <message>)"`` (the
     ``last_run_at`` refresh is what keeps /healthz/ready's staleness
     warning honest) — so /healthz/ready can warn when the probe is stale
     or missing. An infrastructure failure is persisted (zero counts +

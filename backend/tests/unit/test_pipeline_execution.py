@@ -1229,7 +1229,7 @@ class TestStaleRunRecoverySweep:
         with patch.object(pe._log, "exception"):
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
-        assert result["error"] == "sweep_failed"
+        assert result["error"] == "sweep_failed (RuntimeError: db down)"
 
 
 # ---------------------------------------------------------------------------
