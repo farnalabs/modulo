@@ -293,6 +293,7 @@ function buildCreateBody(): SsoProviderCreate {
     auto_provision: formData.auto_provision,
     default_role: formData.default_role,
     enabled: true,
+    preset: 'custom',
   }
 
   if (formData.provider_type === 'oidc') {

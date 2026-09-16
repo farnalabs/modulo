@@ -1575,7 +1575,7 @@ class TestSystemJobDelegates:
         stats = _json.loads(redis_client.set.await_args.args[1])
         assert stats["released"] == 1
         assert stats["per_pipeline"] == {"p1": 1}
-        assert stats["error"] == "sweep_failed"
+        assert stats["error"] == "sweep_failed (SlotReconciliationError: sweep failed)"
         assert stats["last_run_at"]
 
     @pytest.mark.asyncio
@@ -1661,7 +1661,7 @@ class TestSystemJobDelegates:
 
         stats = _json.loads(redis_client.set.await_args.args[1])
         assert stats["parked"] == 2
-        assert stats["error"] == "sweep_failed"
+        assert stats["error"] == "sweep_failed (HitlParkError: sweep failed)"
         assert stats["last_run_at"]
 
     @pytest.mark.asyncio
@@ -1795,7 +1795,7 @@ class TestSystemJobDelegates:
         ):
             result = await sw.library_sync({})
 
-        assert result == {"status": "failed", "error": "unexpected cron failure"}
+        assert result == {"status": "failed", "error": "unexpected cron failure (RuntimeError: redis down)"}
 
 
 class TestRunnerHealthProbeWrapper:
@@ -1856,7 +1856,7 @@ class TestRunnerHealthProbeWrapper:
 
         assert redis_client.set.await_count == 1
         stats = json.loads(redis_client.set.await_args.args[1])
-        assert stats["error"] == "probe_failed"
+        assert stats["error"] == "probe_failed (RuntimeError: session factory down)"
         assert stats["last_run_at"]
 
 

@@ -475,10 +475,6 @@ def test_bdd_citations_are_registered_coverage():
 #: delete the file. New orphans fail ``test_no_unregistered_bdd_feature_files``.
 _ORPHANED_BDD_FEATURES = frozenset(
     {
-        "backend/tests/bdd/features/connectors/azure_repos.feature",
-        "backend/tests/bdd/features/connectors/discord.feature",
-        "backend/tests/bdd/features/connectors/microsoft_teams.feature",
-        "backend/tests/bdd/features/connectors/sharepoint.feature",
         "backend/tests/bdd/features/connectors/swappable_binding.feature",
         "backend/tests/bdd/features/pipelines/pipeline_config_validation.feature",
         "backend/tests/bdd/features/pipelines/validation.feature",

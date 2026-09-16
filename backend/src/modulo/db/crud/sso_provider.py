@@ -31,6 +31,8 @@ _UPDATABLE_SSO_FIELDS = frozenset(
         "auto_provision",
         "default_role",
         "allowed_domains",
+        "preset",
+        "tenant_domain",
     }
 )
 
@@ -179,6 +181,8 @@ async def create_provider(
     enabled: bool = True,
     auto_provision: bool = True,
     default_role: str = "runner",
+    preset: str = "custom",
+    tenant_domain: str | None = None,
     fernet_key: str,
     org_id: uuid.UUID,
     actor_user_id: uuid.UUID | None = None,
@@ -186,6 +190,7 @@ async def create_provider(
     system_session: AsyncSession | None = None,
 ) -> SsoProvider:
     normalized_allowed_domains = validate_allowed_domains(allowed_domains)
+
     result = await session.execute(
         select(SsoProvider).where(SsoProvider.name == name, SsoProvider.organisation_id == org_id).with_for_update()
     )
@@ -240,6 +245,8 @@ async def create_provider(
         auto_provision=auto_provision,
         default_role=default_role,
         organisation_id=org_id,
+        preset=preset,
+        tenant_domain=tenant_domain,
     )
     session.add(provider)
     await session.flush()

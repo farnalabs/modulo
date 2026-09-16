@@ -571,115 +571,202 @@ describe('HitlGateCard', () => {
     expect(wrapper.find('[data-testid="hitl-gate-subject-editor"]').exists()).toBe(false)
   })
 
-  describe('FAR-907 choice gates', () => {
-    const CHOICE_CONTEXT = {
+  // FAR-860: kind:choice gates render agent-defined options and submit the
+  // reviewer's selection as the approve answer.
+  function choiceGate(context: Record<string, unknown> = {}): HitlGate {
+    return gate({
+      context: {
+        response_contract: {
+          kind: 'choice',
+          options: [
+            { id: 'ship', label: 'Ship it' },
+            { id: 'hold', label: 'Hold' },
+          ],
+        },
+        ...context,
+      },
+    })
+  }
+
+  async function mockClaimThenDecide() {
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+      }
+      return Promise.resolve({ data: { ok: true }, error: undefined })
+    })
+  }
+
+  it('requires an option selection before a choice gate can be approved (FAR-860)', async () => {
+    await mockClaimThenDecide()
+    wrapper = mount(HitlGateCard, { props: { gate: choiceGate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+
+    // Nothing renders while the gate is still pending.
+    expect(wrapper.find('[data-testid="hitl-gate-choice-options"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+
+    const options = wrapper.find('[data-testid="hitl-gate-choice-options"]')
+    expect(options.exists()).toBe(true)
+    expect(options.attributes('role')).toBe('radiogroup')
+    expect(wrapper.find('[data-testid="hitl-gate-option-ship"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-option-hold"]').exists()).toBe(true)
+
+    // The guard under test: with no selection the required-choice gate must
+    // not be approvable. Removing the `:disabled` guard fails this assertion.
+    const approve = wrapper.find('[data-testid="hitl-gate-approve"]')
+    expect((approve.element as HTMLButtonElement).disabled).toBe(true)
+
+    await wrapper.find('[data-testid="hitl-gate-option-ship"]').trigger('click')
+    expect(wrapper.find('[data-testid="hitl-gate-option-ship"]').attributes('aria-checked')).toBe('true')
+    expect((approve.element as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('submits the selected option as the approve answer (FAR-860)', async () => {
+    await mockClaimThenDecide()
+    wrapper = mount(HitlGateCard, { props: { gate: choiceGate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-option-hold"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-approve"]').trigger('click')
+    await flushPromises()
+
+    const { api } = await import('../lib/api/client')
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve')
+    expect(post).toBeTruthy()
+    expect((post as unknown[])[1]).toEqual({
+      params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
+      body: { claim_token: 'tok-1', notes: null, answer: { kind: 'choice', option_id: 'hold' } },
+    })
+  })
+
+  it('navigates the choice radiogroup with arrow keys and a roving tabindex (FAR-860)', async () => {
+    await mockClaimThenDecide()
+    wrapper = mount(HitlGateCard, { props: { gate: choiceGate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+
+    const first = wrapper.find('[data-testid="hitl-gate-option-ship"]')
+    const second = wrapper.find('[data-testid="hitl-gate-option-hold"]')
+    // Roving tabindex: with nothing selected only the first option is tabbable.
+    expect(first.attributes('tabindex')).toBe('0')
+    expect(second.attributes('tabindex')).toBe('-1')
+
+    await first.trigger('keydown', { key: 'ArrowDown' })
+    expect(second.attributes('aria-checked')).toBe('true')
+    expect(second.attributes('tabindex')).toBe('0')
+    expect(first.attributes('tabindex')).toBe('-1')
+
+    await second.trigger('keydown', { key: 'ArrowUp' })
+    expect(first.attributes('aria-checked')).toBe('true')
+  })
+
+  it('renders a visible fallback when a choice gate ships no options (FAR-860)', async () => {
+    await mockClaimThenDecide()
+    wrapper = mount(HitlGateCard, {
+      props: { gate: gate({ context: { response_contract: { kind: 'choice', options: [] } } }) },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+
+    const fallback = wrapper.find('[data-testid="hitl-gate-choice-fallback"]')
+    expect(fallback.exists()).toBe(true)
+    expect(fallback.attributes('role')).toBe('status')
+    expect(wrapper.find('[data-testid="hitl-gate-option-ship"]').exists()).toBe(false)
+    // An unanswerable choice gate must stay locked.
+    expect((wrapper.find('[data-testid="hitl-gate-approve"]').element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('restores the selected option across a remount and drops it when the gate reverts to pending (FAR-860)', async () => {
+    const { useHitlGateState } = await import('../composables/useHitlGateState')
+    await mockClaimThenDecide()
+    const context = {
       response_contract: {
         kind: 'choice',
         options: [
           { id: 'ship', label: 'Ship it' },
-          { id: 'fix', label: 'Fix first' },
+          { id: 'hold', label: 'Hold' },
         ],
       },
     }
+    const mountOptions = (gateProps: HitlGate) => ({ props: { gate: gateProps }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
 
-    async function mountClaimedChoiceGate(context: Record<string, unknown> = CHOICE_CONTEXT) {
-      const { api } = await import('../lib/api/client')
-      ;(api.POST as any).mockImplementation((url: string) => {
-        if (url.endsWith('/claim')) {
-          return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
-        }
-        return Promise.resolve({ data: { ok: true }, error: undefined })
-      })
-      const mounted = mount(HitlGateCard, {
-        props: { gate: gate({ context }) },
-        global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
-      })
-      wrapper = mounted
-      await mounted.find('[data-testid="hitl-gate-claim"]').trigger('click')
-      await flushPromises()
-      return { api, wrapper: mounted }
-    }
+    wrapper = mount(HitlGateCard, mountOptions(gate({ context })))
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-option-ship"]').trigger('click')
 
-    it('renders the declared choice options for a choice gate', async () => {
-      const { wrapper } = await mountClaimedChoiceGate()
-      const picker = wrapper.find('[data-testid="hitl-gate-choice-options"]')
-      expect(picker.exists()).toBe(true)
-      const options = wrapper.findAll('[data-testid="hitl-gate-option"]')
-      expect(options).toHaveLength(2)
-      expect(options[0].text()).toContain('Ship it')
-      expect(options[0].attributes('data-option-id')).toBe('ship')
+    // The page auto-refresh remounts the card: the selection must survive and
+    // keep approve enabled, like the notes/claim token (FAR-686).
+    const firstInstance = wrapper
+    wrapper = null
+    firstInstance.unmount()
+    wrapper = mount(HitlGateCard, mountOptions(gate({ context, claimed_by: 'reviewer@team' })))
+    expect(wrapper.find('[data-testid="hitl-gate-option-ship"]').attributes('aria-checked')).toBe('true')
+    expect((wrapper.find('[data-testid="hitl-gate-approve"]').element as HTMLButtonElement).disabled).toBe(false)
+
+    // A pending gate has no live claim: the whole session (selection included)
+    // is cleared rather than resurrected on the claim controls.
+    const secondInstance = wrapper
+    wrapper = null
+    secondInstance.unmount()
+    wrapper = mount(HitlGateCard, mountOptions(gate({ context })))
+    const state = useHitlGateState(gate().run_id, 'approval-gate-1')
+    expect(state.selectedOption.value).toBeNull()
+    expect(wrapper.find('[data-testid="hitl-gate-choice-options"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
+  })
+
+  // FAR-907: the choice rides with the modification too — a choice gate cannot
+  // be modify-approved without a selected option, so Save & approve is locked
+  // until one is picked and the answer is included in the wire body.
+  it('requires a selection before Save & approve and sends the answer with the modification (FAR-907)', async () => {
+    await mockClaimThenDecide()
+    wrapper = mount(HitlGateCard, {
+      props: {
+        gate: choiceGate({
+          subject: '{"body":"Review this comment."}',
+          subject_parent: { body: 'Review this comment.', priority: 'high' },
+          subject_leaf_key: 'body',
+        }),
+      },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
 
-    it('blocks approve until an option is selected, then sends the answer', async () => {
-      const { api, wrapper } = await mountClaimedChoiceGate()
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-edit-subject"]').trigger('click')
+    await flushPromises()
 
-      const approve = wrapper.find('[data-testid="hitl-gate-approve"]')
-      expect((approve.element as HTMLButtonElement).disabled).toBe(true)
+    const save = wrapper.find('[data-testid="hitl-gate-save-approve"]')
+    expect((save.element as HTMLButtonElement).disabled).toBe(true)
 
-      await wrapper.find('[data-testid="hitl-gate-option"][data-option-id="ship"]').trigger('click')
-      expect((approve.element as HTMLButtonElement).disabled).toBe(false)
+    await wrapper.find('[data-testid="hitl-gate-option-hold"]').trigger('click')
+    expect((save.element as HTMLButtonElement).disabled).toBe(false)
 
-      await approve.trigger('click')
-      await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-subject-textarea"]').setValue('Updated comment.')
+    await save.trigger('click')
+    await flushPromises()
 
-      const post = (api.POST as any).mock.calls.find((c: unknown[]) => (c[0] as string).includes('/hitl/{gate_id}/approve') && !(c[0] as string).includes('modification'))
-      expect(post).toBeTruthy()
-      expect((post as unknown[])[1]).toEqual({
-        params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
-        body: { claim_token: 'tok-1', notes: null, answer: { kind: 'choice', option_id: 'ship' } },
-      })
-    })
-
-    it('sends the answer with Save & approve on a choice gate with a subject', async () => {
-      const { api, wrapper } = await mountClaimedChoiceGate({
-        subject: '"Review this comment."',
-        subject_parent: { body: 'Review this comment.', priority: 'high' },
-        subject_leaf_key: 'body',
-        response_contract: CHOICE_CONTEXT.response_contract,
-      })
-
-      await wrapper.find('[data-testid="hitl-gate-edit-subject"]').trigger('click')
-      await flushPromises()
-
-      const save = wrapper.find('[data-testid="hitl-gate-save-approve"]')
-      expect((save.element as HTMLButtonElement).disabled).toBe(true)
-
-      await wrapper.find('[data-testid="hitl-gate-option"][data-option-id="fix"]').trigger('click')
-      expect((save.element as HTMLButtonElement).disabled).toBe(false)
-
-      await wrapper.find('[data-testid="hitl-gate-subject-textarea"]').setValue('Updated comment.')
-      await save.trigger('click')
-      await flushPromises()
-
-      const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification')
-      expect(post).toBeTruthy()
-      expect((post as unknown[])[1]).toEqual({
-        params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
-        body: {
-          claim_token: 'tok-1',
-          modified_output: { body: 'Updated comment.', priority: 'high' },
-          notes: null,
-          answer: { kind: 'choice', option_id: 'fix' },
-        },
-      })
-    })
-
-    it('keeps approve always enabled for approval-kind gates (no picker, no answer)', async () => {
-      const { api, wrapper } = await mountClaimedChoiceGate({ response_contract: { kind: 'approval' } })
-
-      expect(wrapper.find('[data-testid="hitl-gate-choice-options"]').exists()).toBe(false)
-      const approve = wrapper.find('[data-testid="hitl-gate-approve"]')
-      expect((approve.element as HTMLButtonElement).disabled).toBe(false)
-
-      await approve.trigger('click')
-      await flushPromises()
-
-      const post = (api.POST as any).mock.calls.find((c: unknown[]) => (c[0] as string).endsWith('hitl/{gate_id}/approve'))
-      expect(((post as unknown[])[1] as { body: unknown }).body).toEqual({
+    const { api } = await import('../lib/api/client')
+    const post = (api.POST as any).mock.calls.find(
+      (c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification',
+    )
+    expect(post).toBeTruthy()
+    expect((post as unknown[])[1]).toEqual({
+      params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
+      body: {
         claim_token: 'tok-1',
+        modified_output: { body: 'Updated comment.', priority: 'high' },
         notes: null,
-        answer: undefined,
-      })
+        answer: { kind: 'choice', option_id: 'hold' },
+      },
     })
   })
 })

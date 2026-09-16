@@ -41,7 +41,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_claim_token as _create_claim_jwt
 from modulo.auth.jwt import decode_claim_token as _decode_claim_jwt
-from modulo.core import hitl_email_alerts
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.hitl_manager.sweep_alarm import maybe_alarm_approve_sweep
 from modulo.db.crud.run import unpark_parked_run
@@ -260,6 +259,10 @@ class HITLManager:
         # background task opens its OWN session because this one belongs to
         # the interrupt transaction. Only the fresh-insert path dispatches:
         # the idempotent re-entry path above is a replay, not a new gate.
+        # Lazy import to avoid circular dependency:
+        # hitl_manager -> hitl_email_alerts -> pipeline_engine -> executor -> hitl_manager
+        from modulo.core import hitl_email_alerts
+
         try:
             hitl_email_alerts.schedule_hitl_email_dispatch(
                 org_id=org_id,

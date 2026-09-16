@@ -111,6 +111,12 @@ def _run_windows() -> int:
         return 0
 
     env = {k: v for k, v in os.environ.items() if k not in _GIT_STATE_ENV}
+    # On Windows, semgrep's pip package may not install a .exe wrapper, so
+    # `uv run semgrep` fails with "Failed to spawn: program not found".
+    # `python -m semgrep` is a dead stub (prints deprecation + exits 2).
+    # CI (Linux) runs the full baseline scan on every push, so the local
+    # Windows check is a convenience gate — fail open with a loud warning
+    # rather than blocking the developer.
     cmd = [
         "uv",
         "run",
@@ -124,13 +130,35 @@ def _run_windows() -> int:
         *changed,
     ]
 
+    def _is_spawn_failure(result: subprocess.CompletedProcess[str]) -> bool:
+        """Return True when uv failed because the tool binary was not found."""
+        return result.returncode != 0 and "Failed to spawn" in (result.stderr or "")
+
     try:
         result = subprocess.run(
             cmd,
             env=env,
             check=False,
             timeout=_SEMGREP_TIMEOUT,
+            capture_output=True,
+            text=True,
         )
+        if _is_spawn_failure(result):
+            print(
+                _SEMGREP_WARN.format(
+                    reason=(
+                        "semgrep binary not found in venv (no .exe wrapper on "
+                        "Windows). CI (Linux) still runs the full scan on push."
+                    )
+                ),
+                file=sys.stderr,
+            )
+            return 0
+        # Semgrep ran successfully — print its output and propagate its exit code.
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
         return result.returncode
     except subprocess.TimeoutExpired:
         print(

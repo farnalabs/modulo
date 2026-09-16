@@ -95,3 +95,14 @@ Rules:
 2. A dependency that composes an authenticated dependency (`require_feature`, `get_plan_context`, `get_current_user`) must never guard a pre-auth route; use an anonymous resolver instead.
 3. "Covered" is a claim about user-reachable behaviour, not about the existence of tests. A feature whose primary entry point is unreachable is not covered.
 4. A mocked or authenticated test client does not exercise the unauthenticated path — add the unauthenticated case explicitly.
+
+### Semgrep cannot run on Windows via pip — fail-open in run_semgrep.py (2026-09-16)
+
+The semgrep pip package on Windows ships a Linux ELF `semgrep-core` binary and a Python entry-point script that imports the Unix-only `resource` module. Neither works on Windows: the bare `semgrep` command has no `.exe` wrapper (so `uv run semgrep` fails with "Failed to spawn"), and `python -m semgrep` is a dead stub (prints deprecation warning, exits 2). This caused the pre-commit hook chain to abort on every Windows commit touching `backend/src/`, pushing agents toward `--no-verify` — which also bypasses gitleaks.
+
+Rules:
+
+1. `run_semgrep.py` is the fail-open wrapper. On Windows, it detects the spawn failure (`"Failed to spawn"` in uv stderr) and exits 0 with a loud warning. CI (Linux) runs the full baseline scan on every push, so no enforcement is lost. The script must never exit non-zero on a tool error — only on actual findings.
+2. Fresh worktrees need `uv sync --project backend` before pre-commit hooks work. The venv is empty until synced. Without it, semgrep, vulture, and import-linter all fail because their executables aren't installed. The Worker template must include this step.
+3. `python -m semgrep` is NOT a valid fallback on semgrep >=1.38.0 — it's a dead stub that just exits 2. Do not add it as a fallback path.
+4. CI's `gitleaks` job (`.github/workflows/ci.yml`, `fetch-depth: 0`) catches secrets even when the pre-commit hook is bypassed. The exposure window is bounded (minutes). But `--no-verify` still bypasses ruff, bandit, vulture, import-linter, and all other quality gates — gitleaks is not the only concern.
