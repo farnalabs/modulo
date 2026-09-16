@@ -3312,9 +3312,6 @@ elements:
       - testid: hitl-gate-choice-options
         type: element
         dynamic_testid: false
-      - testid: hitl-gate-option-{id}
-        type: element
-        dynamic_testid: true
       - testid: hitl-gate-copy-id
         type: button
         dynamic_testid: false
@@ -3936,9 +3933,6 @@ elements:
       - testid: hitl-gate-choice-options
         type: element
         dynamic_testid: false
-      - testid: hitl-gate-option-{id}
-        type: element
-        dynamic_testid: true
       - testid: hitl-gate-copy-id
         type: button
         dynamic_testid: false
