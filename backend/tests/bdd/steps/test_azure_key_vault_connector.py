@@ -186,9 +186,7 @@ def akv_create_secret(ctx: dict, name: str, value: str) -> None:
         respx.put(f"{VAULT_URL}/secrets/{name}", params={"api-version": _API_VERSION}).mock(
             return_value=httpx.Response(200, json=body)
         )
-        result = asyncio.run(
-            connector.write(ConnectorPayload(resource="secret", data={"name": name, "value": value}))
-        )
+        result = asyncio.run(connector.write(ConnectorPayload(resource="secret", data={"name": name, "value": value})))
     ctx["write_result"] = result
     assert result["value"] == value, result
 

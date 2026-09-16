@@ -39,6 +39,8 @@ bdd:
   - backend/tests/bdd/steps/test_azure_key_vault_connector.py
   - backend/tests/bdd/features/connectors/azure_pipelines.feature
   - backend/tests/bdd/steps/test_azure_pipelines_connector.py
+  - backend/tests/bdd/features/connectors/dropbox_paper.feature
+  - backend/tests/bdd/steps/test_dropbox_paper_connector.py
 depends-on:
   - feat-model-backends
 status: covered
@@ -131,6 +133,14 @@ and per-destination rate limiting.
       run (pipeline_id + branch) and a release (definition_id), and failing
       closed on an unsupported query resource
       (`azure_pipelines.feature`, `steps/test_azure_pipelines_connector.py`)
+- [x] The Dropbox Paper connector is BDD-exercised against the real
+      `DropboxPaperConnector` (respx-mocked Dropbox API v2 ``api.dropboxapi.com``):
+      account validation via `/users/get_current_account` (200 => healthy with the
+      authenticated email, 401 => unhealthy), listing Paper docs (``docs`` resource
+      with ``filter_by``), downloading a Paper doc as markdown (``doc`` resource),
+      listing folders (``folders`` resource), creating a Paper doc via markdown
+      import (``doc`` write resource), and failing closed on unsupported query/write
+      resources (`dropbox_paper.feature`, `steps/test_dropbox_paper_connector.py`)
 
 ## Known Gaps
 
@@ -175,6 +185,21 @@ and per-destination rate limiting.
   orphans (`azure_key_vault`, `azure_pipelines`, `azure_repos`, `discord`,
   `dropbox_paper`, `microsoft_teams`, `sharepoint`, `swappable_binding`) and
   the two pipeline-validation orphans still await step modules.
+- 2026-09-16: **improve-architecture (product-map walk)** — closed the
+  `dropbox_paper.feature` orphan gap: the feature shipped under
+  `tests/bdd/features/connectors/` but no step module registered it via
+  `scenarios(...)`, so it never executed. The feature is now wired from the new
+  `steps/test_dropbox_paper_connector.py`, which drives the REAL
+  `DropboxPaperConnector` against a respx-mocked Dropbox API v2 (mirroring
+  `tests/unit/connectors/test_dropbox_paper.py`): eight scenarios covering
+  account validation via `/users/get_current_account` (200 => healthy reporting
+  the authenticated email, 401 => unhealthy), listing Paper docs, downloading a
+  Paper doc as markdown, listing folders, creating a Paper doc via markdown
+  import, and failing closed on unsupported query/write resources all collect
+  and execute. `_ORPHANED_BDD_FEATURES` shrinks by one; the remaining connector
+  orphans (`azure_key_vault`, `azure_pipelines`, `azure_repos`, `discord`,
+  `microsoft_teams`, `sharepoint`, `swappable_binding`) and the two
+  pipeline-validation orphans still await step modules.
 - 2026-09-14: **improve-architecture (product-map walk)** — closed the
   `buildkite.feature` orphan gap: the feature shipped under
   `tests/bdd/features/connectors/` but no step module registered it via

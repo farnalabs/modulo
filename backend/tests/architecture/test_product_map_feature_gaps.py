@@ -477,7 +477,6 @@ _ORPHANED_BDD_FEATURES = frozenset(
     {
         "backend/tests/bdd/features/connectors/azure_repos.feature",
         "backend/tests/bdd/features/connectors/discord.feature",
-        "backend/tests/bdd/features/connectors/dropbox_paper.feature",
         "backend/tests/bdd/features/connectors/microsoft_teams.feature",
         "backend/tests/bdd/features/connectors/sharepoint.feature",
         "backend/tests/bdd/features/connectors/swappable_binding.feature",

@@ -196,6 +196,11 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `steps/test_azure_pipelines_connector.py`), shrunk `_ORPHANED_BDD_FEATURES`
 > by two, and closed `feat-connectors`'s Azure Key Vault / Azure Pipelines
 > per-connector BDD gaps (`configure/connectors.md`).
+>
+> **Closed this walk (2026-09-16):** wired `connectors/dropbox_paper.feature`
+> into the executing BDD suite (`steps/test_dropbox_paper_connector.py`),
+> shrunk `_ORPHANED_BDD_FEATURES` by one more, and closed `feat-connectors`'s
+> Dropbox Paper per-connector BDD gap (`configure/connectors.md`).
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
