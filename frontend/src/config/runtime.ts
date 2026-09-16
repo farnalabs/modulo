@@ -5,7 +5,11 @@ export interface AutoLoginConfig {
   org_slug: string
 }
 
-/** Default demo org slug — single source of truth on the frontend side. */
+/**
+ * Default demo org slug — must stay in lockstep with the backend constant
+ * `DEMO_ORG_SLUG` (backend/src/modulo/core/demo.py), which names the org the
+ * demo seed creates and the org the login route binds to (FAR-865).
+ */
 const DEFAULT_DEMO_ORG_SLUG = 'demo'
 
 export function getAutoLoginConfig(): AutoLoginConfig | undefined {

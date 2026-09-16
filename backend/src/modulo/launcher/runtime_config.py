@@ -14,7 +14,8 @@ ONE allowlist backs both: its top-level keys are exactly
 is reported (stdout) and dropped, never partially served. The allowlist is
 deliberately tiny: ``monitor`` (parsed monitor config) and ``autoLogin`` (the
 demo auto-login pair, which is BY DESIGN a credential delivered to the
-browser, exactly as the existing deploy path already ships it). Nothing else
+browser, exactly as the existing deploy path already ships it; an optional
+``orgSlug`` binds the session to a specific organisation, FAR-865). Nothing else
 in the environment is ever copied into the page — no ``DATABASE_URL``, no
 ``REDIS_URL``, no fernet/secret values (locked by
 ``tests/unit/launcher/test_runtime_config.py``).
@@ -34,6 +35,7 @@ RUNTIME_CONFIG_FILENAME = "runtime-config.js"
 _MONITOR_ENV = "MODULO_MONITOR_CONFIG"
 _AUTO_LOGIN_USERNAME_ENV = "MODULO_AUTO_LOGIN_USERNAME"
 _AUTO_LOGIN_PASSWORD_ENV = "MODULO_AUTO_LOGIN_PASSWORD"
+_AUTO_LOGIN_ORG_SLUG_ENV = "MODULO_AUTO_LOGIN_ORG_SLUG"
 
 # The launcher-owned public surface (consumed by the deploy entrypoint, the
 # serve_spa mount, and the tests; vulture's dead-code gate special-cases
@@ -65,7 +67,14 @@ def build_runtime_config_payload(env: Mapping[str, str] | None = None) -> dict[s
     username = source.get(_AUTO_LOGIN_USERNAME_ENV)
     password = source.get(_AUTO_LOGIN_PASSWORD_ENV)
     if username and password:
-        payload["autoLogin"] = {"username": username, "password": password}
+        auto_login: dict[str, str] = {"username": username, "password": password}
+        # FAR-865: optional explicit org binding. When unset the SPA falls back
+        # to the demo org (``modulo.core.demo.DEMO_ORG_SLUG``), preserving the
+        # pre-FAR-865 legacy first-membership behaviour for existing deploys.
+        org_slug = source.get(_AUTO_LOGIN_ORG_SLUG_ENV)
+        if org_slug:
+            auto_login["orgSlug"] = org_slug
+        payload["autoLogin"] = auto_login
     return payload
 
 
