@@ -43,7 +43,7 @@ describe('useRemyStore', () => {
 
   it('starts with panel closed', () => {
     const store = useRemyStore()
-    expect(store.panelState).toBe('docked')
+    expect(store.panelState).toBe('closed')
   })
 
   it('starts with empty sessions', () => {

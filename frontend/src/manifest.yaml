@@ -3309,6 +3309,12 @@ elements:
       - testid: hitl-gate-card
         type: element
         dynamic_testid: false
+      - testid: hitl-gate-choice-options
+        type: element
+        dynamic_testid: false
+      - testid: hitl-gate-choice-fallback
+        type: element
+        dynamic_testid: false
       - testid: hitl-gate-copy-id
         type: button
         dynamic_testid: false
@@ -3316,12 +3322,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: hitl-gate-reclaim
-        type: button
-        dynamic_testid: false
-      - testid: hitl-gate-choice-options
-        type: element
-        dynamic_testid: false
-      - testid: hitl-gate-option
         type: button
         dynamic_testid: false
       - testid: hitl-gate-notes
@@ -3933,6 +3933,12 @@ elements:
       - testid: hitl-gate-card
         type: element
         dynamic_testid: false
+      - testid: hitl-gate-choice-options
+        type: element
+        dynamic_testid: false
+      - testid: hitl-gate-choice-fallback
+        type: element
+        dynamic_testid: false
       - testid: hitl-gate-copy-id
         type: button
         dynamic_testid: false
@@ -3943,12 +3949,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: hitl-gate-reclaim
-        type: button
-        dynamic_testid: false
-      - testid: hitl-gate-choice-options
-        type: element
-        dynamic_testid: false
-      - testid: hitl-gate-option
         type: button
         dynamic_testid: false
       - testid: hitl-gate-notes
