@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import type { Stubs } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 const testRoute = vi.hoisted(() => ({
@@ -63,6 +64,13 @@ vi.mock('../lib/api/runs', () => ({
   }),
 }))
 
+// Deterministic operator session so `isOrgOperator` is true and the guardrail
+// override button always renders — this lets the override tests assert one
+// branch unconditionally instead of falling through a runtime `if (btn.exists())`.
+vi.mock('../lib/jwt', () => ({
+  decodeJwtPayload: () => ({ org_role: 'operator' }),
+}))
+
 import RunDetailView from '../views/RunDetailView.vue'
 
 function baseRun(overrides: Record<string, unknown> = {}) {
@@ -77,8 +85,17 @@ function baseRun(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function mountView() {
-  return mount(RunDetailView)
+function mountView(options: { stubs?: Stubs; attachTo?: boolean } = {}) {
+  return mount(RunDetailView, {
+    attachTo: options.attachTo ? document.body : undefined,
+    global: options.stubs ? { stubs: options.stubs } : undefined,
+  })
+}
+
+/** PrimeVue's Dialog teleports to <body>; inline the slots so the wrapper can
+ *  find the override form. Mirrors the stub used in RunDetailGuardrail.spec.ts. */
+const overrideDialogStub = {
+  template: '<div class="p-dialog"><slot name="header" /><slot /><slot name="footer" /></div>',
 }
 
 /** Set up the mock for run + IO and mount the component. */
@@ -608,26 +625,21 @@ describe('RunDetailView coverage — script logic branches', () => {
       if (url === '/api/v1/runs/{run_id}/guardrail-override') return Promise.resolve({ data: { status: 'pending' }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
-    const wrapper = mountView()
+    const wrapper = mountView({ stubs: { Dialog: overrideDialogStub } })
     await flushPromises()
     await nextTick()
-    // The override panel renders when isGuardrailBlocked is true
+    // Operator session (see lib/jwt mock) → the override button renders.
     const panel = wrapper.find('[data-testid="run-detail-guardrail-override-panel"]')
     expect(panel.exists()).toBe(true)
-    // The override button may or may not render depending on isOrgOperator
     const btn = wrapper.find('[data-testid="run-detail-override-guardrail"]')
-    if (btn.exists()) {
-      await btn.trigger('click')
-      await nextTick()
-      await wrapper.find('[data-testid="run-detail-override-input"]').setValue('{}')
-      await wrapper.find('[data-testid="run-detail-override-submit"]').trigger('click')
-      await flushPromises()
-      await nextTick()
-      expect(wrapper.find('[data-testid="run-detail-override-success"]').exists()).toBe(true)
-    } else {
-      // Non-operator: the role note is shown instead
-      expect(wrapper.find('[data-testid="run-detail-override-role-note"]').exists()).toBe(true)
-    }
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="run-detail-override-input"]').setValue('{}')
+    await wrapper.find('[data-testid="run-detail-override-submit"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="run-detail-override-success"]').exists()).toBe(true)
   })
 
   // ── guardrail override: non-422 error ──────────────────────────
@@ -641,19 +653,18 @@ describe('RunDetailView coverage — script logic branches', () => {
       if (url === '/api/v1/runs/{run_id}/guardrail-override') return Promise.resolve({ data: null, error: { status: 500, detail: 'internal error' } })
       return Promise.resolve({ data: null, error: undefined })
     })
-    const wrapper = mountView()
+    const wrapper = mountView({ stubs: { Dialog: overrideDialogStub } })
     await flushPromises()
     await nextTick()
     const btn = wrapper.find('[data-testid="run-detail-override-guardrail"]')
-    if (btn.exists()) {
-      await btn.trigger('click')
-      await nextTick()
-      await wrapper.find('[data-testid="run-detail-override-input"]').setValue('{}')
-      await wrapper.find('[data-testid="run-detail-override-submit"]').trigger('click')
-      await flushPromises()
-      await nextTick()
-      expect(wrapper.find('[data-testid="run-detail-override-error"]').text()).toContain('internal error')
-    }
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="run-detail-override-input"]').setValue('{}')
+    await wrapper.find('[data-testid="run-detail-override-submit"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="run-detail-override-error"]').text()).toContain('internal error')
   })
 
   // ── guardrail override: exception ───────────────────────────────
@@ -667,19 +678,18 @@ describe('RunDetailView coverage — script logic branches', () => {
       if (url === '/api/v1/runs/{run_id}/guardrail-override') return Promise.reject(new Error('network failure'))
       return Promise.resolve({ data: null, error: undefined })
     })
-    const wrapper = mountView()
+    const wrapper = mountView({ stubs: { Dialog: overrideDialogStub } })
     await flushPromises()
     await nextTick()
     const btn = wrapper.find('[data-testid="run-detail-override-guardrail"]')
-    if (btn.exists()) {
-      await btn.trigger('click')
-      await nextTick()
-      await wrapper.find('[data-testid="run-detail-override-input"]').setValue('{}')
-      await wrapper.find('[data-testid="run-detail-override-submit"]').trigger('click')
-      await flushPromises()
-      await nextTick()
-      expect(wrapper.find('[data-testid="run-detail-override-error"]').exists()).toBe(true)
-    }
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="run-detail-override-input"]').setValue('{}')
+    await wrapper.find('[data-testid="run-detail-override-submit"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="run-detail-override-error"]').exists()).toBe(true)
   })
 
   // ── breakdownBasisLine: missing_self_report ─────────────────────
