@@ -553,6 +553,12 @@ class TestSerializeStructuredOutput:
         message = serialize_structured_output(_Out(name="x", count=2))
         assert json.loads(message.content) == {"name": "x", "count": 2}
 
+    def test_list_round_trips(self) -> None:
+        from modulo.model_backends.base import serialize_structured_output
+
+        message = serialize_structured_output([{"a": 1}, {"b": 2}])
+        assert json.loads(message.content) == [{"a": 1}, {"b": 2}]
+
     def test_non_dict_fallback_round_trips_as_string(self) -> None:
         """A non-dict/non-BaseModel result is str()-wrapped so loads never raises."""
         from modulo.model_backends.base import serialize_structured_output

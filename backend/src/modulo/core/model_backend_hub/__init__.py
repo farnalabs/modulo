@@ -446,6 +446,10 @@ def _build_custom_stub_backend(fixture_map: dict[str, str]) -> ModelBackendBase:
     from modulo.model_backends.stub.backend import StubModelBackend
 
     class _CustomStubBackend(ModelBackendBase):
+        # NOTE: invoke()/stream() accept output_schema only to satisfy the
+        # ModelBackendBase contract; they intentionally discard it. The stub
+        # declares supports_native_structured_output = False, so node_runner
+        # (_invoke_node_model) never forwards a schema here anyway.
         def __init__(self, fixture_map: Mapping[str, str] | None = None, **kwargs: Any) -> None:
             del kwargs
             self._stub = StubModelBackend(fixture_map)

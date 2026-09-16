@@ -38,14 +38,18 @@ def serialize_structured_output(result: Any) -> AIMessage:
     """Serialise a ``with_structured_output()`` result into an ``AIMessage``.
 
     Both the OpenAI-compatible and Anthropic structured-output paths produce
-    a dict or Pydantic BaseModel; callers (``_invoke_node_model``) always
-    ``json.loads(response.content)`` to recover the data.  This helper
+    a dict, list, or Pydantic BaseModel; callers (``_invoke_node_model``)
+    always ``json.loads(response.content)`` to recover the data.  This helper
     guarantees that round-trip by JSON-encoding the result into the
     ``AIMessage.content`` field — a single contract both backends share.
     """
     if hasattr(result, "model_dump"):
         content = json.dumps(result.model_dump())
-    elif isinstance(result, dict):
+    elif isinstance(result, (dict, list)):
+        # dict/list are JSON-native, so json.loads recovers the original shape.
+        # A list must NOT fall through to the str() branch below: str([1, 2])
+        # emits a Python repr with single quotes ('[1, 2]') that json.loads does
+        # not parse back into a list.
         content = json.dumps(result)
     else:
         # Defensive fallback for an unexpected result shape (e.g. a bare
