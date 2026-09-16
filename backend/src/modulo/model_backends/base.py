@@ -36,6 +36,13 @@ def serialize_structured_output(result: Any) -> AIMessage:
     elif isinstance(result, dict):
         content = json.dumps(result)
     else:
+        # Defensive fallback for an unexpected result shape (e.g. a bare
+        # scalar): ``str()`` guarantees ``json.dumps`` succeeds, so the
+        # ``json.loads(content)`` round-trip callers rely on never raises.
+        # The trade-off is that a scalar round-trips as a string rather than
+        # the raw value — acceptable because every current caller supplies a
+        # dict- or BaseModel-producing schema, so this branch is unreachable
+        # in practice.
         content = json.dumps(str(result))
     return AIMessage(content=content)
 

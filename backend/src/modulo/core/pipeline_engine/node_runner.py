@@ -3182,16 +3182,23 @@ _MAX_SCHEMA_DEPTH = 10  # prevents pathological nesting
 def _is_safe_schema(schema: dict[str, Any]) -> tuple[bool, str]:
     """Return ``(True, "")`` when *schema* is within provider-safe bounds.
 
-    Rejects schemas that are not a dict, exceed a max serialised size,
-    exceed a max nesting depth, or contain an external ``$ref`` (a ``$ref``
-    whose value is not a local ``#...`` pointer).  On rejection the caller
-    falls back to no native structured output — the schema is NOT sent to
-    the provider.
+    Rejects schemas that are not a dict, are not JSON-serialisable, exceed
+    a max serialised size, exceed a max nesting depth, or contain an
+    external ``$ref`` (a ``$ref`` whose value is not a local ``#...``
+    pointer).  On rejection the caller falls back to no native structured
+    output — the schema is NOT sent to the provider.
     """
     if not isinstance(schema, dict):
         return False, "schema is not a dict"
 
-    serialised = json.dumps(schema)
+    try:
+        serialised = json.dumps(schema)
+    except (TypeError, ValueError):
+        # Defensive: output_schema_json is sourced from node_def JSON and is
+        # therefore serialisable today, but a TypeError (non-serialisable
+        # value) or ValueError (e.g. a circular reference) must fall back to
+        # no native structured output rather than raise before dispatch.
+        return False, "schema is not JSON-serialisable"
     if len(serialised) > _MAX_SCHEMA_BYTES:
         return False, f"schema serialises to {len(serialised)} bytes (max {_MAX_SCHEMA_BYTES})"
 

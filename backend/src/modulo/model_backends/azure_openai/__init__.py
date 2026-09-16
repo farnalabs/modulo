@@ -11,6 +11,13 @@ class AzureOpenAIBackend(ModelBackendBase):
     """Thin adapter over ChatOpenAI configured for Azure OpenAI."""
 
     supports_tools: bool = True
+    # Deliberately False: recent Azure OpenAI API versions *do* accept
+    # ``response_format`` json_schema, but this adapter's invoke() has no
+    # structured-output path (it forwards straight to ChatOpenAI).  Setting
+    # the flag True would make _invoke_node_model forward output_schema to an
+    # adapter that ignores it, silently skipping native decoding.  Revisit
+    # only when invoke() gains a with_structured_output branch like
+    # OpenAICompatibleBackend.
     supports_native_structured_output: bool = False
 
     def __init__(

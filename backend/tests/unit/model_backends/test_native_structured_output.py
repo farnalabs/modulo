@@ -9,6 +9,7 @@ Covers:
 - FakeStructuredOutputBackend reusable test double
 """
 
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -441,6 +442,23 @@ class TestSchemaBounds:
         assert ok is False
         assert "not a dict" in reason
 
+    def test_non_serialisable_schema_rejected(self) -> None:
+        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+
+        schema: dict[str, Any] = {"type": "object", "value": object()}
+        ok, reason = _is_safe_schema(schema)
+        assert ok is False
+        assert "JSON-serialisable" in reason
+
+    def test_circular_schema_rejected(self) -> None:
+        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+
+        schema: dict[str, Any] = {"type": "object"}
+        schema["self"] = schema
+        ok, reason = _is_safe_schema(schema)
+        assert ok is False
+        assert "JSON-serialisable" in reason
+
     def test_oversized_schema_rejected(self) -> None:
         from modulo.core.pipeline_engine.node_runner import _is_safe_schema
 
@@ -507,3 +525,37 @@ class TestSchemaBounds:
         # Backend was called but output_schema was NOT forwarded
         assert len(backend.invoke_kwargs_received) == 1
         assert "output_schema" not in backend.invoke_kwargs_received[0]
+
+
+# ---------------------------------------------------------------------------
+# FIX 7: shared structured-output serialisation
+# ---------------------------------------------------------------------------
+
+
+class TestSerializeStructuredOutput:
+    """serialize_structured_output keeps the json.loads(content) round-trip."""
+
+    def test_dict_round_trips(self) -> None:
+        from modulo.model_backends.base import serialize_structured_output
+
+        message = serialize_structured_output({"a": 1, "b": [2, 3]})
+        assert json.loads(message.content) == {"a": 1, "b": [2, 3]}
+
+    def test_pydantic_model_round_trips(self) -> None:
+        from pydantic import BaseModel
+
+        from modulo.model_backends.base import serialize_structured_output
+
+        class _Out(BaseModel):
+            name: str
+            count: int
+
+        message = serialize_structured_output(_Out(name="x", count=2))
+        assert json.loads(message.content) == {"name": "x", "count": 2}
+
+    def test_non_dict_fallback_round_trips_as_string(self) -> None:
+        """A non-dict/non-BaseModel result is str()-wrapped so loads never raises."""
+        from modulo.model_backends.base import serialize_structured_output
+
+        message = serialize_structured_output(42)
+        assert json.loads(message.content) == "42"
