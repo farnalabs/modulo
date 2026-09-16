@@ -548,7 +548,8 @@ export default {
       "enter_your_password": "Enter your password",
       "modulo": "Modulo",
       "or_continue_with": "or continue with",
-      "sign_in_to_org": "Sign in to {orgName}"
+      "sign_in_to_org": "Sign in to {orgName}",
+      "sign_in_with": "Sign in with {provider}"
     },
     "OrgLoginView": {
       "sign_in_to_your_organisation": "Sign in to your organisation",
@@ -3665,7 +3666,15 @@ export default {
       "default_role": "Default Role",
       "role_runner": "Runner",
       "role_operator": "Operator",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "sso_preset": "Identity Provider",
+      "tenant_domain": "Tenant Domain",
+      "tenant_domain_placeholder": "e.g. acme.auth0.com",
+      "callback_url_label": "Callback URL — register this at your IdP",
+      "copy_callback_url": "Copy callback URL",
+      "copied": "Copied!",
+      "derived_discovery_url": "Discovery URL (derived)",
+      "derived_scopes": "Scopes (derived)"
     },
     "DismissDialog": {
       "dismiss_this_notification": "Dismiss this notification?",

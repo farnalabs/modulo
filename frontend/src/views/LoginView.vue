@@ -99,7 +99,8 @@
               class="flex w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
               :data-testid="`login-sso-oidc-${provider.provider_id}`"
             >
-              {{ provider.provider_id }}
+              <SsoBrandMark :preset="provider.preset ?? 'custom'" />
+              {{ $t('views.LoginView.sign_in_with', { provider: provider.display_name || provider.provider_id }) }}
             </a>
             <a
               v-if="samlEnabled"
@@ -124,9 +125,12 @@ import { useMutation } from '../composables/useMutation'
 import { setAccessToken, setRefreshToken } from '../lib/api/client'
 import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
+import SsoBrandMark from '../components/SsoBrandMark.vue'
 
 interface SsoProviderInfo {
   provider_id: string
+  display_name: string
+  preset?: string | null
 }
 
 interface SsoProvidersResponse {
