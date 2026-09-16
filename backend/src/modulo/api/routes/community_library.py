@@ -57,7 +57,7 @@ async def list_community(
             generated = manifest.get("generated_at")
             if isinstance(generated, str):
                 synced_at = generated
-    except Exception:
+    except SQLAlchemyError:
         _log.exception("community_library.list_community")
         items = []
         synced_at = None
@@ -65,7 +65,15 @@ async def list_community(
 
 
 async def _fetch_entry_content(content_sha256: str) -> Any:
-    """Fetch and parse an entry blob, failing open to ``None`` on any error."""
+    """Fetch and parse an entry blob, degrading ``content`` to ``None`` when the
+    blob cannot be retrieved or parsed.
+
+    ``LibraryClient`` is itself fail-open (it returns ``None`` on network, HTTP,
+    SSRF, signature, and hash-mismatch failures rather than raising), so a
+    library outage already degrades ``content`` to ``None`` here. Only a
+    ``ValueError`` from decoding/parsing the fetched bytes is caught; any other
+    exception is a programming error and propagates (fail-closed).
+    """
     settings = get_settings()
     client = LibraryClient(
         endpoint=settings.modulo_library_endpoint,
@@ -76,7 +84,7 @@ async def _fetch_entry_content(content_sha256: str) -> Any:
         blob = await client.fetch_blob(content_sha256)
         if blob is not None:
             return json.loads(blob.decode("utf-8"))
-    except Exception:
+    except ValueError:
         _log.exception("community_library.get_entry_blob")
     finally:
         await client.close()
@@ -92,7 +100,7 @@ async def get_entry(
     """Return a single community entry, including its parsed blob content."""
     try:
         entry = await get_community_entry(session, entry_id)
-    except Exception:
+    except (ValueError, KeyError):
         _log.exception("community_library.get_entry")
         entry = None
     if entry is None:
