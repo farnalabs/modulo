@@ -31,6 +31,8 @@ _MIN_KEY_LEN = 32
 # cross-process atomic guard with self-healing on crash (the key expires
 # automatically).  An in-process asyncio.Lock serialises concurrent callers
 # within the same worker so two coroutines don't race on the Redis roundtrip.
+# When Redis is not configured, the asyncio.Lock alone would not span the
+# background task, so _rotation_owner below provides the in-process guard.
 _ROTATION_LOCK_KEY = "modulo:fernet_rotation:lock"
 _ROTATION_LOCK_TTL_SECONDS = 1800  # 30 minutes — generous for large orgs
 
@@ -40,6 +42,17 @@ router = APIRouter(prefix="/api/v1/admin/rotation", tags=["admin-rotation"])
 
 # ── In-memory rotation state ──────────────────────────────────────────────
 
+# In-process fallback guard, used only when Redis is not configured
+# (settings.redis_url == "").  Holds the owner token of the rotation that
+# currently holds the in-process lock, or None when free.  It is set at
+# acquire time and cleared in _run_rotation_background's finally, so it spans
+# the entire background rotation — two concurrent rotate_key calls cannot both
+# start one.  asyncio runs callbacks on a single thread and there is no await
+# between the check and the set in _acquire_rotation_lock, so the
+# check-then-set is atomic within the event loop.  This is single-process only:
+# a multi-worker deployment without Redis cannot serialise rotations, which is
+# why Redis is the supported configuration.
+_rotation_owner: str | None = None
 _last_rotation_result: dict[str, Any] | None = None
 _rotation_lock = asyncio.Lock()
 
@@ -118,7 +131,8 @@ async def rotate_key(
     # serialises concurrent callers within one process so two coroutines
     # don't race the Redis roundtrip, and the Redis key provides the
     # cross-process invariant.  The TTL self-heals if a crash prevents
-    # release.
+    # release.  Without Redis the _rotation_owner token provides the
+    # in-process invariant (held until the background task finishes).
     async with _rotation_lock:
         # Fast in-memory check (avoids Redis roundtrip in the common case)
         if await _is_rotation_active(settings):
@@ -126,20 +140,6 @@ async def rotate_key(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A key rotation is already in progress",
             )
-
-        # Log the rotation start to audit log FIRST
-        await append_audit_event(
-            session,
-            org_id=current_user.organisation_id,
-            event_type="fernet_key_rotation_started",
-            actor_user_id=current_user.account_id,
-            resource_type="encryption",
-            resource_id=current_user.organisation_id,
-            payload_json={
-                "initiated_by": str(current_user.account_id),
-                "old_key_provided": bool(req.old_fernet_key),
-            },
-        )
 
         # Acquire the distributed lock (atomic SET NX + TTL).  The returned
         # owner token is threaded into the background task so its release only
@@ -151,8 +151,31 @@ async def rotate_key(
                 detail="A key rotation is already in progress",
             )
 
-    # Launch background rotation task (lock is held by the Redis key, not
-    # the asyncio.Lock — the asyncio.Lock scope has ended).
+        try:
+            # Log the rotation start to the audit log only once the lock is
+            # held: a request that loses the race must not record a "started"
+            # event for a rotation that never runs.
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="fernet_key_rotation_started",
+                actor_user_id=current_user.account_id,
+                resource_type="encryption",
+                resource_id=current_user.organisation_id,
+                payload_json={
+                    "initiated_by": str(current_user.account_id),
+                    "old_key_provided": bool(req.old_fernet_key),
+                },
+            )
+        except Exception:
+            # The background task is what normally releases the lock. If the
+            # audit write fails before it is launched, release the lock here
+            # so it is not held for the full TTL with no rotation running.
+            await _release_rotation_lock(settings, lock_owner)
+            raise
+
+    # Launch background rotation task (lock is held by the Redis key / the
+    # in-process owner token, not the asyncio.Lock — its scope has ended).
     task = asyncio.create_task(
         _run_rotation_background(
             new_key=req.new_fernet_key,
@@ -185,8 +208,9 @@ async def rotation_status(
 ) -> RotationStatusResponse:
     """Return the current rotation state.
 
-    Checks both the Redis distributed lock (cross-process) and the
-    in-memory flag (fast path for same-process).
+    Reads the Redis distributed lock when Redis is configured; otherwise reads
+    the in-process fallback guard (``_rotation_owner``), which spans the whole
+    background rotation.
     """
     settings = get_settings()
     is_active = await _is_rotation_active(settings)
@@ -200,13 +224,18 @@ async def rotation_status(
 
 
 async def _is_rotation_active(settings: Settings) -> bool:
-    """Check if rotation is in progress via Redis (cross-process safe).
+    """Check if a rotation is in progress.
+
+    With Redis configured, reads the Redis lock key (cross-process safe).
+    Without Redis, reads the in-process fallback guard so status still reports
+    a running background rotation.
 
     Falls back to False if Redis is unavailable (fail-open — a Redis blip
-    should not wedge the status endpoint).
+    should not wedge the status endpoint; the acquire path is the
+    authoritative gate).
     """
     if not settings.redis_url:
-        return False
+        return _rotation_owner is not None
     try:
         r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
         try:
@@ -231,10 +260,18 @@ async def _acquire_rotation_lock(settings: Settings) -> str | None:
     transient Redis blip as "already in progress" would be misleading, and
     proceeding without the lock would allow two concurrent rotations.
     """
+    global _rotation_owner
     if not settings.redis_url:
-        # No Redis — fall back to in-memory asyncio.Lock (single-process).
-        # Return a token so the caller's success check is uniform.
-        return uuid.uuid4().hex
+        # No Redis — acquire the in-process fallback guard.  Callers hold
+        # _rotation_lock across this call and there is no await between the
+        # check and the set, so the check-then-set is atomic within the event
+        # loop.  The guard is held until _run_rotation_background releases it,
+        # so it spans the whole background rotation rather than being dropped
+        # when the caller's `async with _rotation_lock` block exits.
+        if _rotation_owner is not None:
+            return None
+        _rotation_owner = uuid.uuid4().hex
+        return _rotation_owner
     owner = uuid.uuid4().hex
     r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
     try:
@@ -263,7 +300,11 @@ async def _release_rotation_lock(settings: Settings, owner: str) -> None:
     stale rotation cannot delete a successor's lock.  Uses a Lua script for
     atomicity.
     """
+    global _rotation_owner
     if not settings.redis_url:
+        # Clear the in-process fallback guard only if we still own it.
+        if _rotation_owner == owner:
+            _rotation_owner = None
         return
     r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
     try:

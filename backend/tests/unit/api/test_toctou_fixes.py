@@ -52,12 +52,13 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-def _principal() -> AuthenticatedPrincipal:
+def _principal(*, is_system_admin: bool = False) -> AuthenticatedPrincipal:
     return AuthenticatedPrincipal(
         username="admin",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
         org_role="admin",
+        is_system_admin=is_system_admin,
     )
 
 
@@ -267,6 +268,110 @@ class TestRotationGuardRedisLock:
         settings = _make_settings()
         result = await _is_rotation_active(settings)
         assert result is True
+
+
+class TestRotationGuardInMemoryFallback:
+    """Without Redis the in-process guard must still serialise rotations.
+
+    Regression for the M finding on PR #662: the asyncio.Lock in ``rotate_key``
+    is released before ``asyncio.create_task(_run_rotation_background)``, so
+    the no-Redis fallback needs a token held until the background task
+    releases it — otherwise two concurrent rotate_key calls both start.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_in_memory_guard(self) -> Generator[None, None, None]:
+        from modulo.api.routes import admin_rotation
+
+        admin_rotation._rotation_owner = None
+        yield
+        admin_rotation._rotation_owner = None
+
+    @pytest.mark.asyncio
+    async def test_second_acquire_fails_while_held_without_redis(self) -> None:
+        from modulo.api.routes.admin_rotation import _acquire_rotation_lock
+
+        settings = _make_settings(redis_url="")
+        first = await _acquire_rotation_lock(settings)
+        assert isinstance(first, str) and first
+        # While the guard is held the second caller must be refused.
+        assert await _acquire_rotation_lock(settings) is None
+
+    @pytest.mark.asyncio
+    async def test_is_rotation_active_reports_in_memory_guard(self) -> None:
+        from modulo.api.routes import admin_rotation
+        from modulo.api.routes.admin_rotation import _is_rotation_active
+
+        settings = _make_settings(redis_url="")
+        assert await _is_rotation_active(settings) is False
+        admin_rotation._rotation_owner = "held"
+        assert await _is_rotation_active(settings) is True
+
+    @pytest.mark.asyncio
+    async def test_release_clears_guard_only_for_owner(self) -> None:
+        from modulo.api.routes.admin_rotation import (
+            _acquire_rotation_lock,
+            _is_rotation_active,
+            _release_rotation_lock,
+        )
+
+        settings = _make_settings(redis_url="")
+        owner = await _acquire_rotation_lock(settings)
+        assert owner is not None
+
+        # A stale rotation must not clear a successor's guard.
+        await _release_rotation_lock(settings, "some-other-owner")
+        assert await _is_rotation_active(settings) is True
+
+        await _release_rotation_lock(settings, owner)
+        assert await _is_rotation_active(settings) is False
+
+
+def test_rotate_key_conflict_writes_no_started_audit_event() -> None:
+    """A request that loses the lock race must not record a 'started' audit
+    event for a rotation that never runs."""
+    from collections.abc import AsyncGenerator
+
+    from modulo.api.routes import admin_rotation
+
+    admin_rotation._rotation_owner = "held-by-another-rotation"
+
+    def _no_redis_settings() -> Settings:
+        return Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_system_database_url="postgresql+asyncpg://localhost/system",
+            redis_url="",
+        )
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield _make_mock_session()
+
+    app.dependency_overrides[get_settings] = _no_redis_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: _principal(is_system_admin=True)
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    try:
+        tc = TestClient(app)
+        with (
+            patch("modulo.api.routes.admin_rotation.append_audit_event", new=AsyncMock()) as mock_audit,
+            patch("modulo.api.routes.admin_rotation._run_rotation_background", new=AsyncMock()) as mock_bg,
+        ):
+            resp = tc.post(
+                "/api/v1/admin/rotation/rotate-key",
+                json={"new_fernet_key": _VALID_32},
+            )
+        assert resp.status_code == 409, f"Expected 409, got {resp.status_code}: {resp.text}"
+        mock_audit.assert_not_awaited()
+        mock_bg.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+        admin_rotation._rotation_owner = None
 
 
 # ---------------------------------------------------------------------------
