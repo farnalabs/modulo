@@ -130,6 +130,61 @@
       </div>
     </div>
 
+    <!-- FAR-860: choice options — rendered when the gate has a response_contract
+         with kind: 'choice'. The reviewer MUST select an option before approve. -->
+    <div
+      v-if="isChoiceGate && status === 'claimed' && claimToken"
+      ref="optionsGroupRef"
+      data-testid="hitl-gate-choice-options"
+      class="space-y-2"
+      role="radiogroup"
+      :aria-label="$t('hitl.gate.choice_options_label')"
+    >
+      <template v-if="choiceOptions.length">
+        <p class="text-xs font-semibold text-muted-foreground">{{ $t('hitl.gate.select_an_option') }}</p>
+        <!-- eslint-disable-next-line vuejs-accessibility/interactive-supports-focus -- roving tabindex is dynamic (the checked option is the tab stop); the rule only understands literal tabindex values -->
+        <div
+          v-for="(opt, index) in choiceOptions"
+          :key="opt.id"
+          class="flex items-start gap-2 rounded-lg border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          :class="selectedOption === opt.id
+            ? 'border-primary bg-primary/5'
+            : 'border-input hover:border-primary/50'"
+          role="radio"
+          :aria-checked="selectedOption === opt.id ? 'true' : 'false'"
+          :data-testid="`hitl-gate-option-${opt.id}`"
+          :tabindex="selectedOption === opt.id || (!selectedOption && index === 0) ? 0 : -1"
+          @click="selectOption(opt.id)"
+          @keydown="onOptionKeydown($event, index)"
+        >
+          <span
+            class="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border"
+            :class="selectedOption === opt.id ? 'border-primary' : 'border-muted-foreground'"
+          >
+            <span
+              v-if="selectedOption === opt.id"
+              class="h-2 w-2 rounded-full bg-primary"
+            />
+          </span>
+          <div class="min-w-0 flex-1">
+            <span class="font-medium text-foreground">{{ opt.label }}</span>
+            <p v-if="opt.description" class="mt-0.5 text-xs text-muted-foreground">{{ opt.description }}</p>
+          </div>
+        </div>
+      </template>
+      <!-- A choice gate with an empty/missing options list can never be
+           answered: render an explicit fallback rather than an empty
+           radiogroup beside a permanently-disabled Approve button. -->
+      <p
+        v-else
+        data-testid="hitl-gate-choice-fallback"
+        role="status"
+        class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+      >
+        {{ $t('hitl.gate.choice_no_options') }}
+      </p>
+    </div>
+
     <!-- Actions -->
     <div
       v-if="status === 'pending'"
@@ -151,7 +206,7 @@
       <div class="flex gap-2">
         <button
           type="button"
-          :disabled="Boolean(actioning)"
+          :disabled="Boolean(actioning) || (isChoiceGate && !selectedOption)"
           data-testid="hitl-gate-approve"
           class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
           @click="approveGate"
@@ -286,6 +341,7 @@ const claimToken = gateState.claimToken
 const notes = gateState.notes
 const editingSubject = gateState.editingSubject
 const modifiedSubject = gateState.modifiedSubject
+const selectedOption = gateState.selectedOption
 const claimedByYou = ref(false)
 const claiming = ref(false)
 const actioning = ref<'approve' | 'reject' | 'modify-approve' | null>(null)
@@ -329,6 +385,97 @@ const claimedByDisplay = computed(() => {
 })
 
 const pipelineName = computed(() => props.gate.pipeline_name || '')
+
+/**
+ * FAR-860: the gate's response contract from the fire-time briefing.
+ * Shape: { kind: "approval" | "choice", options?: [{ id, label, description? }] }
+ */
+interface ResponseOption {
+  id: string
+  label: string
+  description?: string | null
+}
+
+interface ResponseContract {
+  kind: 'approval' | 'choice'
+  options?: ResponseOption[] | null
+}
+
+const responseContract = computed<ResponseContract | null>(() => {
+  const ctx = props.gate.context
+  if (!ctx || typeof ctx !== 'object' || Array.isArray(ctx)) return null
+  const rc = (ctx as Record<string, unknown>).response_contract
+  if (!rc || typeof rc !== 'object' || Array.isArray(rc)) return null
+  const obj = rc as Record<string, unknown>
+  const kind = obj.kind
+  if (kind !== 'approval' && kind !== 'choice') return null
+  const options = Array.isArray(obj.options)
+    ? obj.options
+        .filter((o): o is Record<string, unknown> => o !== null && typeof o === 'object')
+        .map((o) => ({
+          id: String(o.id ?? ''),
+          label: String(o.label ?? ''),
+          description: typeof o.description === 'string' ? o.description : null,
+        }))
+        .filter((o) => o.id !== '' && o.label !== '')
+    : null
+  return { kind, options }
+})
+
+const isChoiceGate = computed(() => responseContract.value?.kind === 'choice')
+const choiceOptions = computed(() => responseContract.value?.options ?? [])
+
+// FAR-860: radiogroup keyboard interaction — roving tabindex (only the checked
+// option, or the first when nothing is checked, is tabbable) with arrow-key
+// selection-follows-focus, plus Home/End. Without this the items are reachable
+// by Tab but not navigable by the expected arrow keys.
+const optionsGroupRef = ref<HTMLElement | null>(null)
+
+function selectOption(id: string | undefined) {
+  if (id) selectedOption.value = id
+}
+
+function focusAndSelect(index: number) {
+  const count = choiceOptions.value.length
+  if (count === 0) return
+  const next = ((index % count) + count) % count
+  const opt = choiceOptions.value[next]
+  if (!opt) return
+  selectedOption.value = opt.id
+  const nodes = optionsGroupRef.value?.querySelectorAll<HTMLElement>('[role="radio"]')
+  nodes?.[next]?.focus()
+}
+
+function onOptionKeydown(event: KeyboardEvent, index: number) {
+  const count = choiceOptions.value.length
+  if (count === 0) return
+  switch (event.key) {
+    case 'Enter':
+    case ' ':
+    case 'Spacebar':
+      event.preventDefault()
+      selectOption(choiceOptions.value[index]?.id)
+      break
+    case 'ArrowDown':
+    case 'ArrowRight':
+      event.preventDefault()
+      focusAndSelect(index + 1)
+      break
+    case 'ArrowUp':
+    case 'ArrowLeft':
+      event.preventDefault()
+      focusAndSelect(index - 1)
+      break
+    case 'Home':
+      event.preventDefault()
+      focusAndSelect(0)
+      break
+    case 'End':
+      event.preventDefault()
+      focusAndSelect(count - 1)
+      break
+  }
+}
 
 /**
  * FAR-859: the resolved subject under review — extracted from the gate's
@@ -487,7 +634,13 @@ async function decideGate(decision: 'approve' | 'reject') {
         params: { path: { run_id: props.gate.run_id, gate_id: props.gate.gate_id } },
         body:
           decision === 'approve'
-            ? { claim_token: token, notes: notes.value || null }
+            ? {
+                claim_token: token,
+                notes: notes.value || null,
+                ...(isChoiceGate.value && selectedOption.value
+                  ? { answer: { kind: 'choice', option_id: selectedOption.value } }
+                  : {}),
+              }
             : { claim_token: token, reason },
       },
     )
