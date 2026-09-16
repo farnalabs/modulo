@@ -964,6 +964,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/sso/presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Presets Endpoint
+         * @description Return available SSO provider presets.
+         */
+        get: operations["list_presets_endpoint_api_v1_admin_sso_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/sso/providers/{provider_id}": {
         parameters: {
             query?: never;
@@ -14124,6 +14144,16 @@ export interface components {
         OidcProviderInfo: {
             /** Provider Id */
             provider_id: string;
+            /**
+             * Display Name
+             * @default
+             */
+            display_name: string;
+            /**
+             * Preset
+             * @default custom
+             */
+            preset: string;
         };
         /** OkrProgressResponse */
         OkrProgressResponse: {
@@ -15136,6 +15166,17 @@ export interface components {
             poll_query: string;
             /** Condition Expression */
             condition_expression?: string | null;
+        };
+        /** PresetInfo */
+        PresetInfo: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Requires Tenant */
+            requires_tenant: boolean;
+            /** Tenant Label */
+            tenant_label: string;
         };
         /** ProfileCreate */
         ProfileCreate: {
@@ -17312,6 +17353,13 @@ export interface components {
             default_role: string;
             /** Allowed Domains */
             allowed_domains?: string[];
+            /**
+             * Preset
+             * @default custom
+             */
+            preset: string;
+            /** Tenant Domain */
+            tenant_domain?: string | null;
         };
         /** SsoProviderResponse */
         SsoProviderResponse: {
@@ -17353,6 +17401,15 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Preset
+             * @default custom
+             */
+            preset: string;
+            /** Tenant Domain */
+            tenant_domain?: string | null;
+            /** Callback Url */
+            callback_url?: string | null;
             /**
              * Updated At
              * Format: date-time
@@ -17396,6 +17453,10 @@ export interface components {
             default_role?: string | null;
             /** Allowed Domains */
             allowed_domains?: string[] | null;
+            /** Preset */
+            preset?: string | null;
+            /** Tenant Domain */
+            tenant_domain?: string | null;
         };
         /** SsoProvidersResponse */
         SsoProvidersResponse: {
@@ -21023,6 +21084,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SsoProviderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_presets_endpoint_api_v1_admin_sso_presets_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresetInfo"][];
                 };
             };
             /** @description Validation Error */

@@ -33,3 +33,5 @@ class SsoProvider(OrgScoped):
     allowed_domains: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     default_role: Mapped[str] = mapped_column(String(32), default="runner", server_default="runner")
     group_mappings: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, server_default="[]")
+    preset: Mapped[str] = mapped_column(String(32), nullable=False, server_default="custom")
+    tenant_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)

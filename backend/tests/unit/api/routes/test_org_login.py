@@ -91,6 +91,7 @@ def _make_provider(
     provider_type: str = "oidc",
     enabled: bool = True,
     organisation_id: uuid.UUID | None = None,
+    preset: str = "custom",
 ) -> MagicMock:
     p = MagicMock()
     p.id = id or uuid.uuid4()
@@ -102,9 +103,7 @@ def _make_provider(
     # Ensure no secret fields leak via attribute access.
     p.client_secret = None
     p.client_id = None
-    # preset may not exist on the model (FAR-853) — set to None explicitly
-    # so getattr() returns None, not a MagicMock.
-    p.preset = None
+    p.preset = preset
     return p
 
 
@@ -381,6 +380,33 @@ class TestOrgLogin:
         body = resp.text
         assert "client_secret" not in body.lower()
         assert "client_id" not in body.lower()
+
+    def test_provider_includes_preset_field(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """Org-login providers include the preset field (FAR-853)."""
+        http, session = client
+        org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme Corp")
+        provider = _make_provider(provider_id="google", name="Google", organisation_id=org.id, preset="google")
+
+        call_count = 0
+
+        async def mock_execute(stmt: object, *args: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalars.return_value.first.return_value = org
+            else:
+                result.scalars.return_value.all.return_value = [provider]
+            return result
+
+        session.execute = mock_execute
+
+        resp = http.get("/api/v1/auth/org-login/acme")
+        assert resp.status_code == 200
+        data = resp.json()
+        p = data["providers"][0]
+        assert p["preset"] == "google"
+        assert p["display_name"] == "Google"
 
 
 # ---------------------------------------------------------------------------
