@@ -51,19 +51,6 @@ vi.mock('../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
-vi.mock('../lib/api/runs', () => ({
-  requestRunCancellation: vi.fn().mockImplementation(async (_runId: string, _msg: string) => {
-    const postResult = postMock.mock.results[postMock.mock.calls.length - 1]
-    if (postResult?.value?.error) return { error: postResult.value.error.detail }
-    return { error: null }
-  }),
-  requestRunRerun: vi.fn().mockImplementation(async (_runId: string, _msg: string) => {
-    const postResult = postMock.mock.results[postMock.mock.calls.length - 1]
-    if (postResult?.value?.error) return { error: postResult.value.error.detail }
-    return { runId: postResult?.value?.data?.run_id, error: null }
-  }),
-}))
-
 // Deterministic operator session so `isOrgOperator` is true and the guardrail
 // override button always renders — this lets the override tests assert one
 // branch unconditionally instead of falling through a runtime `if (btn.exists())`.
