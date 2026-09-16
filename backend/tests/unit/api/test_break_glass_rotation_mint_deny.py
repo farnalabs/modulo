@@ -239,6 +239,7 @@ async def test_run_rotation_background_uses_system_factory() -> None:
             old_key="",
             org_id=_ORG_ID,
             actor_user_id=_USER_ID,
+            lock_owner="test-owner-token",
         )
 
     assert factory_calls, "rotation did not open a session via _make_system_session_factory"

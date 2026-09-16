@@ -153,7 +153,11 @@ class TestRotationGuardRedisLock:
         self,
         mock_redis_cls: MagicMock,
     ) -> None:
-        """SET NX succeeds when the lock key does not exist."""
+        """SET NX succeeds when the lock key does not exist.
+
+        The acquire returns a unique owner token (not a bare sentinel) so
+        release can discriminate owners.
+        """
         from modulo.api.routes.admin_rotation import _acquire_rotation_lock
 
         mock_r = AsyncMock()
@@ -163,7 +167,13 @@ class TestRotationGuardRedisLock:
 
         settings = _make_settings()
         result = await _acquire_rotation_lock(settings)
-        assert result is True
+        assert isinstance(result, str) and result
+
+        # The stored value must be the returned owner token, with NX + TTL.
+        stored_value = mock_r.set.call_args[0][1]
+        assert stored_value == result
+        assert mock_r.set.call_args[1]["nx"] is True
+        assert mock_r.set.call_args[1]["ex"] == 1800
 
     @pytest.mark.asyncio
     @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
@@ -171,7 +181,7 @@ class TestRotationGuardRedisLock:
         self,
         mock_redis_cls: MagicMock,
     ) -> None:
-        """SET NX returns False when the lock key already exists."""
+        """SET NX returns None when the lock key already exists."""
         from modulo.api.routes.admin_rotation import _acquire_rotation_lock
 
         mock_r = AsyncMock()
@@ -181,7 +191,28 @@ class TestRotationGuardRedisLock:
 
         settings = _make_settings()
         result = await _acquire_rotation_lock(settings)
-        assert result is False
+        assert result is None
+
+    @pytest.mark.asyncio
+    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    async def test_acquire_lock_redis_error_returns_503(
+        self,
+        mock_redis_cls: MagicMock,
+    ) -> None:
+        """A Redis blip during acquire must surface as 503, not an unhandled 500."""
+        from fastapi import HTTPException
+
+        from modulo.api.routes.admin_rotation import _acquire_rotation_lock
+
+        mock_r = AsyncMock()
+        mock_r.set = AsyncMock(side_effect=ConnectionError("redis down"))
+        mock_r.aclose = AsyncMock()
+        mock_redis_cls.from_url.return_value = mock_r
+
+        settings = _make_settings()
+        with pytest.raises(HTTPException) as exc_info:
+            await _acquire_rotation_lock(settings)
+        assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
     @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
@@ -198,11 +229,13 @@ class TestRotationGuardRedisLock:
         mock_redis_cls.from_url.return_value = mock_r
 
         settings = _make_settings()
-        await _release_rotation_lock(settings)
+        await _release_rotation_lock(settings, "owner-token-abc")
 
         mock_r.eval.assert_called_once()
         call_args = mock_r.eval.call_args
         assert call_args[0][1] == 1  # 1 key argument
+        # The owner token (not a shared sentinel) is passed as ARGV[1].
+        assert call_args[0][3] == "owner-token-abc"
 
     @pytest.mark.asyncio
     @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
@@ -214,7 +247,7 @@ class TestRotationGuardRedisLock:
         from modulo.api.routes.admin_rotation import _release_rotation_lock
 
         settings = _make_settings(redis_url="")
-        await _release_rotation_lock(settings)
+        await _release_rotation_lock(settings, "owner-token-abc")
         mock_redis_cls.from_url.assert_not_called()
 
     @pytest.mark.asyncio

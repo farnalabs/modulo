@@ -141,8 +141,11 @@ async def rotate_key(
             },
         )
 
-        # Acquire the distributed lock (atomic SET NX + TTL)
-        if not await _acquire_rotation_lock(settings):
+        # Acquire the distributed lock (atomic SET NX + TTL).  The returned
+        # owner token is threaded into the background task so its release only
+        # deletes the lock if THIS rotation still owns it.
+        lock_owner = await _acquire_rotation_lock(settings)
+        if lock_owner is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A key rotation is already in progress",
@@ -156,6 +159,7 @@ async def rotate_key(
             old_key=old_key,
             org_id=current_user.organisation_id,
             actor_user_id=current_user.account_id,
+            lock_owner=lock_owner,
         )
     )
     task_id = str(id(task))
@@ -215,44 +219,60 @@ async def _is_rotation_active(settings: Settings) -> bool:
         return False
 
 
-async def _acquire_rotation_lock(settings: Settings) -> bool:
+async def _acquire_rotation_lock(settings: Settings) -> str | None:
     """Atomically acquire the rotation lock via Redis SET NX + TTL.
 
-    Returns True if the lock was acquired, False if already held.
+    Returns a unique owner token on success (pass it to
+    :func:`_release_rotation_lock`), or ``None`` if the lock is already held.
+    The owner token makes release discriminate owners: a rotation that
+    outlives the TTL must not delete a successor's lock.
+
+    Fails CLOSED if Redis is configured but unreachable (503): reporting a
+    transient Redis blip as "already in progress" would be misleading, and
+    proceeding without the lock would allow two concurrent rotations.
     """
     if not settings.redis_url:
-        # No Redis — fall back to in-memory asyncio.Lock (single-process)
-        return True
+        # No Redis — fall back to in-memory asyncio.Lock (single-process).
+        # Return a token so the caller's success check is uniform.
+        return uuid.uuid4().hex
+    owner = uuid.uuid4().hex
     r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
     try:
         acquired = await r.set(
             _ROTATION_LOCK_KEY,
-            "1",
+            owner,
             nx=True,
             ex=_ROTATION_LOCK_TTL_SECONDS,
         )
-        return bool(acquired)
+        return owner if acquired else None
+    except Exception as exc:
+        _log.exception("rotation.lock_acquire_failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Fernet key rotation is temporarily unavailable (lock store unreachable).",
+        ) from exc
     finally:
         with contextlib.suppress(Exception):
             await r.aclose()
 
 
-async def _release_rotation_lock(settings: Settings) -> None:
+async def _release_rotation_lock(settings: Settings, owner: str) -> None:
     """Release the rotation lock key (best-effort, never raises).
 
-    Only deletes if the value is still "1" (not stale from a different
-    owner).  Uses a Lua script for atomicity.
+    Only deletes the key if it still holds *owner* (our unique token), so a
+    stale rotation cannot delete a successor's lock.  Uses a Lua script for
+    atomicity.
     """
     if not settings.redis_url:
         return
     r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
     try:
-        # Atomic: delete only if the key still holds our sentinel value.
+        # Atomic: delete only if the key still holds OUR owner token.
         await r.eval(
             "if redis.call('get', KEYS[1]) == ARGV[1] then   return redis.call('del', KEYS[1]) else   return 0 end",
             1,  # number of keys
             _ROTATION_LOCK_KEY,
-            "1",  # sentinel value
+            owner,  # owner token
         )
     except Exception:
         _log.exception("rotation.lock_release_failed")
@@ -269,6 +289,7 @@ async def _run_rotation_background(
     old_key: str,
     org_id: uuid.UUID,
     actor_user_id: uuid.UUID,
+    lock_owner: str,
 ) -> None:
     """Run the full rotation in the background and store the result.
 
@@ -351,5 +372,7 @@ async def _run_rotation_background(
     finally:
         # Always release the Redis lock — covers success, failure, and crash
         # recovery.  The TTL already provides self-healing, but releasing
-        # eagerly avoids leaving a stale lock for the full TTL window.
-        await _release_rotation_lock(settings)
+        # eagerly avoids leaving a stale lock for the full TTL window.  The
+        # owner token guards against deleting a successor's lock if this
+        # rotation outlived the TTL.
+        await _release_rotation_lock(settings, lock_owner)
