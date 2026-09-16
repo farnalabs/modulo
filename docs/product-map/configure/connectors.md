@@ -35,6 +35,10 @@ bdd:
   - backend/tests/bdd/steps/test_teamcity_connector.py
   - backend/tests/bdd/features/connectors/opsgenie_connector.feature
   - backend/tests/bdd/steps/test_opsgenie_connector.py
+  - backend/tests/bdd/features/connectors/azure_key_vault.feature
+  - backend/tests/bdd/steps/test_azure_key_vault_connector.py
+  - backend/tests/bdd/features/connectors/azure_pipelines.feature
+  - backend/tests/bdd/steps/test_azure_pipelines_connector.py
 depends-on:
   - feat-model-backends
 status: covered
@@ -114,6 +118,19 @@ and per-destination rate limiting.
       on-call lookups, the alert write family (create / acknowledge / close /
       note / snooze), and API-key validation via `GET /alerts?limit=1`
       (`opsgenie_connector.feature`, `steps/test_opsgenie_connector.py`)
+- [x] The Azure Key Vault connector is BDD-exercised against the real
+      `AzureKeyVaultConnector` (respx-mocked Azure Key Vault REST API 7.4):
+      token validation via `GET /secrets?maxresults=1` (200 => healthy, 401 =>
+      unhealthy), listing secrets / keys / certificates, single-secret / key /
+      certificate lookups, and the secret write family (create via PUT +
+      soft-delete via DELETE) (`azure_key_vault.feature`,
+      `steps/test_azure_key_vault_connector.py`)
+- [x] The Azure Pipelines connector is BDD-exercised against the real
+      `AzurePipelinesConnector` (respx-mocked Azure DevOps REST API 7.0):
+      listing projects / pipelines / runs / releases, triggering a pipeline
+      run (pipeline_id + branch) and a release (definition_id), and failing
+      closed on an unsupported query resource
+      (`azure_pipelines.feature`, `steps/test_azure_pipelines_connector.py`)
 
 ## Known Gaps
 
@@ -123,6 +140,21 @@ and per-destination rate limiting.
   coverage is via unit tests.
 
 ## QA History
+- 2026-09-16: **improve-architecture (product-map walk)** — closed the
+  `azure_key_vault.feature` and `azure_pipelines.feature` orphan gaps: both
+  features shipped under `tests/bdd/features/connectors/` but no step module
+  registered them via `scenarios(...)`, so they never executed. Each is now
+  wired from its own step module that drives the REAL connector against a
+  respx-mocked API (mirroring the unit suites):
+  `steps/test_azure_key_vault_connector.py` (10 scenarios — `/secrets` health
+  200/401, list secrets/keys/certificates, get secret/key/certificate, create a
+  secret, soft-delete a secret) and `steps/test_azure_pipelines_connector.py`
+  (7 scenarios — query projects/pipelines/runs/releases, trigger a pipeline run
+  and a release, fail closed on an unsupported resource).
+  `_ORPHANED_BDD_FEATURES` shrinks by two; the remaining connector orphans
+  (`azure_repos`, `discord`, `dropbox_paper`, `microsoft_teams`, `sharepoint`,
+  `swappable_binding`) and the two pipeline-validation orphans still await step
+  modules.
 - 2026-09-15: **improve-architecture (product-map walk)** — closed the
   `circleci.feature`, `jenkins.feature`, `teamcity_connector.feature` and
   `opsgenie_connector.feature` orphan gaps: the features shipped under
