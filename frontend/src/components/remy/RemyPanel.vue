@@ -554,11 +554,15 @@ watch(() => store.requestRename, () => {
 onMounted(async () => {
   window.addEventListener("resize", onWindowResize)
   // Clamp any stale persisted position/size from a previous viewport so the
-  // panel cannot render off-screen or cover the full viewport on mount.
-  if (store.panelState === 'floating') {
-    store.reclampPosition()
+  // panel cannot render off-screen or cover the full viewport on mount. Skip
+  // entirely when closed: there is nothing to render, so writing back the
+  // (unchanged) size would be a redundant storage write on every mount.
+  if (store.panelState !== 'closed') {
+    if (store.panelState === 'floating') {
+      store.reclampPosition()
+    }
+    store.updateSize(store.panelSize)
   }
-  store.updateSize(store.panelSize)
   await store.fetchSessions();
   const savedId = store.activeSessionId
   if (savedId && store.sessions.some(s => s.id === savedId)) {
