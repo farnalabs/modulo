@@ -7,7 +7,12 @@ from langchain_openai import ChatOpenAI
 from openai import APIConnectionError, APIStatusError
 
 from modulo.core.ssrf import pinned_async_client_sync
-from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
+from modulo.model_backends.base import (
+    HealthResult,
+    ModelBackendBase,
+    openai_compatible_health_check,
+    serialize_structured_output,
+)
 
 
 class ProviderUnavailableError(RuntimeError):
@@ -122,8 +127,17 @@ class OpenAICompatibleBackend(ModelBackendBase):
     ) -> BaseMessage:
         try:
             if output_schema is not None:
-                bound = self._model.bind(response_format={"type": "json_schema", "json_schema": output_schema})
-                return await bound.ainvoke(messages, **kwargs)
+                # FIX 1 (FAR-898): use LangChain's with_structured_output to get the
+                # correct response_format wrapping — OpenAI requires the schema
+                # nested inside {"name": ..., "schema": ...}, which the raw
+                # bind(response_format={"type": "json_schema", "json_schema": ...})
+                # does not provide and 400s on.
+                structured = self._model.with_structured_output(
+                    schema=output_schema,
+                    method="json_schema",
+                )
+                result = await structured.ainvoke(messages, **kwargs)
+                return serialize_structured_output(result)
             return await self._model.ainvoke(messages, **kwargs)
         except (APIStatusError, APIConnectionError) as exc:
             classified = self._classify_gateway_error(exc)
@@ -138,12 +152,13 @@ class OpenAICompatibleBackend(ModelBackendBase):
         output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
+        # FIX 4 (FAR-898): streaming structured output is not yet supported —
+        # with_structured_output in stream mode yields non-BaseMessage chunks
+        # and conflicts with tool-calling.  output_schema is intentionally
+        # ignored here; the non-streaming invoke() path handles structured output.
         async def _iter() -> AsyncIterator[BaseMessage]:
             try:
-                target: Any = self._model
-                if output_schema is not None:
-                    target = self._model.bind(response_format={"type": "json_schema", "json_schema": output_schema})
-                async for chunk in target.astream(messages, tools=tools, **kwargs):
+                async for chunk in self._model.astream(messages, tools=tools, **kwargs):
                     yield chunk
             except (APIStatusError, APIConnectionError) as exc:
                 classified = self._classify_gateway_error(exc)

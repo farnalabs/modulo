@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -6,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from modulo.core.ssrf import pinned_async_client_sync
 
@@ -14,6 +15,29 @@ logger = logging.getLogger(__name__)
 
 HEALTH_CHECK_TIMEOUT = 10.0
 HEALTH_DETAIL_MAX_LENGTH = 500
+
+
+# ---------------------------------------------------------------------------
+# FIX 7 (FAR-898): shared serialisation for structured-output paths
+# ---------------------------------------------------------------------------
+
+
+def serialize_structured_output(result: Any) -> AIMessage:
+    """Serialise a ``with_structured_output()`` result into an ``AIMessage``.
+
+    Both the OpenAI-compatible and Anthropic structured-output paths produce
+    a dict or Pydantic BaseModel; callers (``_invoke_node_model``) always
+    ``json.loads(response.content)`` to recover the data.  This helper
+    guarantees that round-trip by JSON-encoding the result into the
+    ``AIMessage.content`` field — a single contract both backends share.
+    """
+    if hasattr(result, "model_dump"):
+        content = json.dumps(result.model_dump())
+    elif isinstance(result, dict):
+        content = json.dumps(result)
+    else:
+        content = json.dumps(str(result))
+    return AIMessage(content=content)
 
 
 @dataclass(frozen=True)

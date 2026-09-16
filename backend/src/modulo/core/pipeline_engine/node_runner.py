@@ -3170,6 +3170,61 @@ def _render_agent_prompt(
     return rendered_prompt, routing_mode
 
 
+# ---------------------------------------------------------------------------
+# FIX 6 (FAR-898): defensive schema bounds — reject schemas that are
+# likely to 400 or hang the provider before they reach the model.
+# ---------------------------------------------------------------------------
+
+_MAX_SCHEMA_BYTES = 100_000  # 100 KB — prevents oversized payloads
+_MAX_SCHEMA_DEPTH = 10  # prevents pathological nesting
+
+
+def _is_safe_schema(schema: dict[str, Any]) -> tuple[bool, str]:
+    """Return ``(True, "")`` when *schema* is within provider-safe bounds.
+
+    Rejects schemas that are not a dict, exceed a max serialised size,
+    exceed a max nesting depth, or contain an external ``$ref`` (a ``$ref``
+    whose value is not a local ``#...`` pointer).  On rejection the caller
+    falls back to no native structured output — the schema is NOT sent to
+    the provider.
+    """
+    if not isinstance(schema, dict):
+        return False, "schema is not a dict"
+
+    serialised = json.dumps(schema)
+    if len(serialised) > _MAX_SCHEMA_BYTES:
+        return False, f"schema serialises to {len(serialised)} bytes (max {_MAX_SCHEMA_BYTES})"
+
+    def _depth(obj: Any, current: int = 0) -> int:
+        if current > _MAX_SCHEMA_DEPTH:
+            return current
+        if isinstance(obj, dict):
+            return max((_depth(v, current + 1) for v in obj.values()), default=current)
+        if isinstance(obj, list):
+            return max((_depth(v, current + 1) for v in obj), default=current)
+        return current
+
+    depth = _depth(schema)
+    if depth > _MAX_SCHEMA_DEPTH:
+        return False, f"schema nesting depth {depth} exceeds max {_MAX_SCHEMA_DEPTH}"
+
+    def _has_external_ref(obj: Any) -> bool:
+        if isinstance(obj, dict):
+            if "$ref" in obj:
+                ref = obj["$ref"]
+                if isinstance(ref, str) and not ref.startswith("#"):
+                    return True
+            return any(_has_external_ref(v) for v in obj.values())
+        if isinstance(obj, list):
+            return any(_has_external_ref(v) for v in obj)
+        return False
+
+    if _has_external_ref(schema):
+        return False, "schema contains external $ref (not a local # pointer)"
+
+    return True, ""
+
+
 async def _invoke_node_model(
     rendered_prompt: str,
     model_backend_id_str: str,
@@ -3182,10 +3237,12 @@ async def _invoke_node_model(
     rendered prompt, invokes the backend, and best-effort JSON-parses a
     string response. Raises when the hub is unavailable.
 
-    When *output_schema_json* is supplied and the backend declares
+    When *output_schema_json* is truthy and the backend declares
     ``supports_native_structured_output``, the schema is forwarded to the
-    provider's native structured-output decoding path.  Otherwise the kwarg
-    is never sent.
+    provider's native structured-output decoding path.  An empty dict
+    ``{}`` is treated as "no schema" (truthiness guard).  Before dispatch,
+    FIX 6 bounds-checks the schema (size, depth, external ``$ref``) and
+    falls back to no native structured output when the check fails.
     """
     from modulo.core.pipeline_engine.decorator import get_model_backend_hub
 
@@ -3198,8 +3255,19 @@ async def _invoke_node_model(
 
     messages = [HumanMessage(content=rendered_prompt)]
     invoke_kwargs: dict[str, Any] = {}
-    if output_schema_json is not None and backend.supports_native_structured_output:
-        invoke_kwargs["output_schema"] = output_schema_json
+    # FIX 2 (FAR-898): truthiness guard — an empty dict {} is treated as "no
+    # schema", matching the prior None guard behaviour while also catching
+    # the degenerate empty-schema case.
+    # FIX 6 (FAR-898): bounds-check the schema before dispatching.
+    if output_schema_json and backend.supports_native_structured_output:
+        ok, reason = _is_safe_schema(output_schema_json)
+        if ok:
+            invoke_kwargs["output_schema"] = output_schema_json
+        else:
+            _log.warning(
+                "node_model.schema_bounds_rejected",
+                extra={"node_id": node_id, "reason": reason},
+            )
     response = await backend.invoke(messages, **invoke_kwargs)
 
     content = response.content if hasattr(response, "content") else str(response)

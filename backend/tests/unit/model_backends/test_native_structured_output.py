@@ -253,3 +253,257 @@ class TestKwargForwarding:
         r2 = await backend.invoke([BaseMessage(content="b", type="human")])
         assert r1.content == '{"attempt": 1}'
         assert r2.content == '{"attempt": 2}'
+
+
+# ---------------------------------------------------------------------------
+# FIX 1: OpenAI structured output uses with_structured_output (not raw bind)
+# ---------------------------------------------------------------------------
+
+
+class TestOpenAIStructuredOutputMechanism:
+    """FIX 1 (CRITICAL): the OpenAI path must use with_structured_output,
+    not a raw bind(response_format=...), which 400s on the wrong schema shape."""
+
+    async def test_invoke_uses_with_structured_output(self) -> None:
+        """OpenAICompatibleBackend.invoke() calls with_structured_output(method='json_schema')."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import HumanMessage
+
+        from modulo.model_backends.module import OpenAICompatibleBackend
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_structured = AsyncMock()
+            mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice"})
+            mock_chat.with_structured_output = MagicMock(return_value=mock_structured)
+            mock_chat_cls.return_value = mock_chat
+
+            backend = OpenAICompatibleBackend(api_key="sk-test", model_id="gpt-4o")
+            result = await backend.invoke(
+                [HumanMessage(content="hi")],
+                output_schema=schema,
+            )
+
+        # Assert with_structured_output was called with correct parameters
+        mock_chat.with_structured_output.assert_called_once_with(
+            schema=schema,
+            method="json_schema",
+        )
+        # Assert result is an AIMessage with JSON content
+        assert hasattr(result, "content")
+        import json
+
+        parsed = json.loads(result.content)
+        assert parsed == {"name": "Alice"}
+
+    async def test_invoke_without_schema_does_not_call_with_structured_output(self) -> None:
+        """When output_schema is None, with_structured_output must not be called."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import HumanMessage
+
+        from modulo.model_backends.module import OpenAICompatibleBackend
+
+        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_chat.ainvoke = AsyncMock(return_value=AIMessage(content="{}"))
+            mock_chat_cls.return_value = mock_chat
+
+            backend = OpenAICompatibleBackend(api_key="sk-test", model_id="gpt-4o")
+            await backend.invoke([HumanMessage(content="hi")])
+
+        mock_chat.with_structured_output.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# FIX 2: empty-dict schema → no kwarg
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyDictSchemaGuard:
+    """FIX 2 (MAJOR): output_schema_json={} must not be forwarded."""
+
+    async def test_empty_dict_schema_not_forwarded(self) -> None:
+        """An empty dict {} is treated as 'no schema' — no kwarg forwarded."""
+        from unittest.mock import patch
+
+        from modulo.core.pipeline_engine import node_runner as nr
+
+        backend = FakeStructuredOutputBackend()
+        backend.supports_native_structured_output = True
+
+        class _FakeHub:
+            async def get(self, _id: Any) -> Any:
+                return backend
+
+        with patch(
+            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            return_value=_FakeHub(),
+        ):
+            await nr._invoke_node_model(
+                "prompt",
+                "11111111-2222-3333-4444-555555555555",
+                "n1",
+                output_schema_json={},
+            )
+        assert len(backend.invoke_kwargs_received) == 1
+        assert "output_schema" not in backend.invoke_kwargs_received[0]
+
+
+# ---------------------------------------------------------------------------
+# FIX 3: hub sets flag False for unsupported providers
+# ---------------------------------------------------------------------------
+
+
+class TestHubCapabilityOverride:
+    """FIX 3 (MAJOR): _build_backend must disable native structured output
+    for providers that cannot deliver it."""
+
+    def test_ollama_backend_has_flag_false(self) -> None:
+        """An ollama provider's backend must have flag=False after _build_backend."""
+        from unittest.mock import MagicMock, patch
+
+        from modulo.core.model_backend_hub import _build_backend
+
+        mock_creds = {"api_key": "unused"}
+
+        with patch("modulo.model_backends.module.OpenAICompatibleBackend") as mock_backend:
+            instance = MagicMock()
+            instance.supports_native_structured_output = True
+            mock_backend.return_value = instance
+
+            _build_backend("ollama", "llama3", mock_creds, {})
+
+            assert instance.supports_native_structured_output is False
+
+    def test_openai_backend_keeps_flag_true(self) -> None:
+        """An openai provider's backend keeps flag=True after _build_backend."""
+        from unittest.mock import MagicMock, patch
+
+        from modulo.core.model_backend_hub import _build_backend
+
+        mock_creds = {"api_key": "sk-test"}
+
+        with patch("modulo.model_backends.module.OpenAICompatibleBackend") as mock_backend:
+            instance = MagicMock()
+            instance.supports_native_structured_output = True
+            mock_backend.return_value = instance
+
+            _build_backend("openai", "gpt-4o", mock_creds, {})
+
+            assert instance.supports_native_structured_output is True
+
+    @pytest.mark.parametrize(
+        "provider",
+        ["ollama", "llamacpp", "localai", "tgi", "vllm"],
+    )
+    def test_denied_provider_flag_set_false(self, provider: str) -> None:
+        """Every provider in _NO_NATIVE_STRUCTURED_OUTPUT_PROVIDERS gets flag=False."""
+        from unittest.mock import MagicMock, patch
+
+        from modulo.core.model_backend_hub import _build_backend
+
+        mock_creds = {"api_key": "unused"}
+
+        with patch("modulo.model_backends.module.OpenAICompatibleBackend") as mock_backend:
+            instance = MagicMock()
+            instance.supports_native_structured_output = True
+            mock_backend.return_value = instance
+
+            _build_backend(provider, "model", mock_creds, {})
+
+            assert instance.supports_native_structured_output is False, f"Provider {provider!r} should have flag=False"
+
+
+# ---------------------------------------------------------------------------
+# FIX 6: schema bounds validation
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaBounds:
+    """FIX 6 (MAJOR): _is_safe_schema rejects invalid schemas before dispatch."""
+
+    def test_valid_schema_passes(self) -> None:
+        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        ok, reason = _is_safe_schema(schema)
+        assert ok is True
+        assert reason == ""
+
+    def test_non_dict_rejected(self) -> None:
+        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+
+        ok, reason = _is_safe_schema("not a dict")  # type: ignore[arg-type]
+        assert ok is False
+        assert "not a dict" in reason
+
+    def test_oversized_schema_rejected(self) -> None:
+        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+
+        # Build a schema that serialises to > 100 KB
+        big_value = "x" * 200_000
+        schema: dict[str, Any] = {"type": "object", "data": big_value}
+        ok, reason = _is_safe_schema(schema)
+        assert ok is False
+        assert "bytes" in reason
+
+    def test_too_deep_schema_rejected(self) -> None:
+        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+
+        # Build a schema with nesting depth > 10
+        schema: dict[str, Any] = {}
+        current = schema
+        for _ in range(15):
+            current["nested"] = {}
+            current = current["nested"]
+        ok, reason = _is_safe_schema(schema)
+        assert ok is False
+        assert "depth" in reason
+
+    def test_external_ref_rejected(self) -> None:
+        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+
+        schema = {"type": "object", "definitions": {"Foo": {"$ref": "https://example.com/schema.json#/Foo"}}}
+        ok, reason = _is_safe_schema(schema)
+        assert ok is False
+        assert "external $ref" in reason
+
+    def test_local_ref_allowed(self) -> None:
+        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+
+        schema = {"type": "object", "definitions": {"Foo": {"$ref": "#/definitions/Foo"}}}
+        ok, _reason = _is_safe_schema(schema)
+        assert ok is True
+
+    async def test_oversized_schema_not_forwarded(self) -> None:
+        """An oversized schema is caught by bounds check and not sent to provider."""
+        from unittest.mock import patch
+
+        from modulo.core.pipeline_engine import node_runner as nr
+
+        backend = FakeStructuredOutputBackend()
+        backend.supports_native_structured_output = True
+
+        class _FakeHub:
+            async def get(self, _id: Any) -> Any:
+                return backend
+
+        big_value = "x" * 200_000
+        schema: dict[str, Any] = {"type": "object", "data": big_value}
+        with patch(
+            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            return_value=_FakeHub(),
+        ):
+            await nr._invoke_node_model(
+                "prompt",
+                "11111111-2222-3333-4444-555555555555",
+                "n1",
+                output_schema_json=schema,
+            )
+        # Backend was called but output_schema was NOT forwarded
+        assert len(backend.invoke_kwargs_received) == 1
+        assert "output_schema" not in backend.invoke_kwargs_received[0]
