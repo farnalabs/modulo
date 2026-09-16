@@ -49,6 +49,8 @@ bdd:
   - backend/tests/bdd/steps/test_microsoft_teams_connector.py
   - backend/tests/bdd/features/connectors/sharepoint.feature
   - backend/tests/bdd/steps/test_sharepoint_connector.py
+  - backend/tests/bdd/features/connectors/swappable_binding.feature
+  - backend/tests/bdd/steps/test_pipeline_connector_binding.py
 depends-on:
   - feat-model-backends
 status: covered
@@ -173,6 +175,16 @@ and per-destination rate limiting.
       name, 401 => unhealthy), listing sites / list items, reading a file, and
       creating a list item (`sharepoint.feature`,
       `steps/test_sharepoint_connector.py`)
+- [x] Connector bindings on pipeline nodes are swappable and validated at graph
+      save time: swapping a node's binding swaps the extracted snapshot binding
+      without touching the topology, an unbound node extracts no binding, a
+      binding to a missing instance is rejected (`CONNECTOR_NOT_FOUND`), a
+      binding whose instance lacks a required operation is rejected
+      (`CONNECTOR_MISSING_OPERATIONS`), and an active instance covering the
+      required operations passes — BDD-exercised against the real
+      `extract_connector_bindings` + `GraphValidator.validate_definition`
+      surfaces (`swappable_binding.feature`,
+      `steps/test_pipeline_connector_binding.py`)
 
 ## Known Gaps
 
@@ -182,6 +194,19 @@ and per-destination rate limiting.
   coverage is via unit tests.
 
 ## QA History
+- 2026-09-16: **improve-architecture (product-map walk)** — closed the last
+  connector BDD orphan, `connectors/swappable_binding.feature` (a stale
+  placeholder draft whose steps did not exist). It was rewritten into an
+  accurate connector-binding spec and wired into the executing suite from the
+  new `steps/test_pipeline_connector_binding.py`, which drives the REAL
+  binding surfaces the pipeline save path uses: `extract_connector_bindings`
+  (pure swap/extraction semantics) and
+  `GraphValidator.validate_definition` → `_check_connector_bindings` with a
+  mocked session (the DB-free pattern of `tests/unit/graph_validator`): 5
+  scenarios — swap binding (exactly one binding, old one gone), unbound node
+  extracts nothing, missing instance → `CONNECTOR_NOT_FOUND`, missing required
+  operation → `CONNECTOR_MISSING_OPERATIONS`, valid active binding → pass —
+  all collect and pass. `_ORPHANED_BDD_FEATURES` shrinks to zero.
 - 2026-09-16: **improve-architecture (product-map walk)** — closed the
   `azure_repos.feature`, `discord.feature`, `microsoft_teams.feature` and
   `sharepoint.feature` orphan gaps: all four features shipped under
