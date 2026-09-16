@@ -1985,7 +1985,7 @@ async def stale_run_recovery_sweep(
         }
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
         _log.exception("Stale run recovery sweep failed")
         return {
             "never_dispatched_swept": 0,
@@ -1993,7 +1993,7 @@ async def stale_run_recovery_sweep(
             "capacity_timeout_swept": 0,
             "stranded_capacity_redispatched": 0,
             "redispatch_outcomes": {},
-            "error": "sweep_failed",
+            "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
         }
 
 

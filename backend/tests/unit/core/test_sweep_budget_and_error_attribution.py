@@ -409,3 +409,212 @@ class TestHealthCheckSurfacesEnrichedError:
         assert result.status == "degraded"
         assert result.detail is not None
         assert "sweep_failed" in result.detail
+
+
+# ---------------------------------------------------------------------------
+# FAR-909: runner_health_probe error attribution
+# ---------------------------------------------------------------------------
+
+
+class TestRunnerHealthProbeErrorAttribution:
+    """runner_health_probe persists actual exception details in the error string."""
+
+    @pytest.mark.asyncio
+    async def test_probe_error_includes_exception(self) -> None:
+        """runner_health_probe persists exception type + message in the error."""
+        with (
+            patch("modulo.core.saq_worker._cleanup_session_factory", return_value=MagicMock()),
+            patch(
+                "modulo.core.bundled_runner.health_probe.run_runner_health_probe",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("Docker socket unreachable"),
+            ),
+            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+        ):
+            from modulo.core.saq_worker import runner_health_probe
+
+            with pytest.raises(RuntimeError):
+                await runner_health_probe({})
+
+        mock_persist.assert_called_once()
+        call_args = mock_persist.call_args
+        stats_blob = call_args[0][1]
+        error_str = stats_blob["error"]
+        assert "probe_failed" in error_str
+        assert "RuntimeError" in error_str
+        assert "Docker socket unreachable" in error_str
+
+
+# ---------------------------------------------------------------------------
+# FAR-909: stale_run_recovery_sweep error attribution
+# ---------------------------------------------------------------------------
+
+
+class TestStaleRunRecoverySweepErrorAttribution:
+    """stale_run_recovery_sweep returns enriched error details on failure."""
+
+    @pytest.mark.asyncio
+    async def test_sweep_error_includes_exception(self) -> None:
+        """stale_run_recovery_sweep returns error with exception type + message."""
+        with patch(
+            "modulo.core.pipeline_execution.get_settings",
+            return_value=MagicMock(
+                saq_never_dispatched_window=300,
+                saq_worker_lost_window=600,
+                saq_capacity_timeout_ttl_minutes=30,
+                saq_redis_pool_size=5,
+                redis_url="redis://localhost",
+            ),
+        ):
+            from modulo.core.pipeline_execution import stale_run_recovery_sweep
+
+            # Build a proper async context manager that raises on __aenter__
+            class _FailingConnector:
+                async def __aenter__(self):
+                    raise RuntimeError("DB connection lost")
+
+                async def __aexit__(self, *args):
+                    return False
+
+            mock_engine = MagicMock()
+            mock_engine.connect = MagicMock(return_value=_FailingConnector())
+
+            result = await stale_run_recovery_sweep(mock_engine)
+
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "sweep_failed" in result["error"]
+        assert "RuntimeError" in result["error"]
+        assert "DB connection lost" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_sweep_success_no_error_key(self) -> None:
+        """stale_run_recovery_sweep returns counts without error on success."""
+        mock_conn = MagicMock()
+        mock_result = MagicMock()
+        mock_result.all.return_value = []
+        mock_conn.execute = AsyncMock(return_value=mock_result)
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=False)
+        mock_begin = MagicMock()
+        mock_begin.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_begin.__aexit__ = AsyncMock(return_value=False)
+        mock_conn.begin = MagicMock(return_value=mock_begin)
+
+        fake_engine = MagicMock()
+        fake_engine.connect = MagicMock(return_value=mock_conn)
+
+        with patch(
+            "modulo.core.pipeline_execution.get_settings",
+            return_value=MagicMock(
+                saq_never_dispatched_window=300,
+                saq_worker_lost_window=600,
+                saq_capacity_timeout_ttl_minutes=30,
+            ),
+        ):
+            from modulo.core.pipeline_execution import stale_run_recovery_sweep
+
+            result = await stale_run_recovery_sweep(fake_engine)
+
+        assert isinstance(result, dict)
+        assert "error" not in result
+
+
+# ---------------------------------------------------------------------------
+# FAR-909: stale_run_recovery wrapper surfaces error at top level
+# ---------------------------------------------------------------------------
+
+
+class TestStaleRunRecoveryWrapperErrorSurfacing:
+    """The stale_run_recovery wrapper surfaces the sweep's error at the top
+    level of the stats dict so the health check can read it."""
+
+    @pytest.mark.asyncio
+    async def test_wrapper_surfaces_error_at_top_level(self) -> None:
+        """When the sweep returns an error dict, the wrapper persists the error
+        at the top level (not nested inside 'recovered')."""
+        sweep_result = {
+            "never_dispatched_swept": 0,
+            "worker_lost_swept": 0,
+            "capacity_timeout_swept": 0,
+            "stranded_capacity_redispatched": 0,
+            "redispatch_outcomes": {},
+            "error": "sweep_failed (RuntimeError: DB down)",
+        }
+
+        with (
+            patch("modulo.core.saq_worker._get_async_engine", return_value=MagicMock()),
+            patch(
+                "modulo.core.pipeline_execution.stale_run_recovery_sweep",
+                new_callable=AsyncMock,
+                return_value=sweep_result,
+            ),
+            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+        ):
+            from modulo.core.saq_worker import stale_run_recovery
+
+            await stale_run_recovery({})
+
+        mock_persist.assert_called_once()
+        call_args = mock_persist.call_args
+        stats_blob = call_args[0][1]
+        # Error must be at top level, not nested inside 'recovered'
+        assert "error" in stats_blob
+        assert "sweep_failed" in stats_blob["error"]
+        assert "RuntimeError" in stats_blob["error"]
+        assert stats_blob["recovered"] == 0
+
+    @pytest.mark.asyncio
+    async def test_wrapper_success_has_no_error(self) -> None:
+        """On success the wrapper persists recovered count without error."""
+        with (
+            patch("modulo.core.saq_worker._get_async_engine", return_value=MagicMock()),
+            patch(
+                "modulo.core.pipeline_execution.stale_run_recovery_sweep",
+                new_callable=AsyncMock,
+                return_value=5,
+            ),
+            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+        ):
+            from modulo.core.saq_worker import stale_run_recovery
+
+            await stale_run_recovery({})
+
+        mock_persist.assert_called_once()
+        call_args = mock_persist.call_args
+        stats_blob = call_args[0][1]
+        assert "error" not in stats_blob
+        assert stats_blob["recovered"] == 5
+
+
+# ---------------------------------------------------------------------------
+# FAR-909: library_sync error attribution
+# ---------------------------------------------------------------------------
+
+
+class TestLibrarySyncErrorAttribution:
+    """library_sync persists actual exception details in the error string."""
+
+    @pytest.mark.asyncio
+    async def test_library_sync_error_includes_exception(self) -> None:
+        """library_sync returns error with exception type + message when
+        sync_library raises (not returns a failure SyncResult)."""
+        from modulo.core.saq_worker import library_sync
+
+        mock_settings = MagicMock()
+        mock_settings.modulo_library_endpoint = "https://library.example.com"
+        with (
+            patch("modulo.core.saq_worker.get_settings", return_value=mock_settings),
+            patch("modulo.core.saq_worker._make_session_factory", return_value=MagicMock()),
+            patch(
+                "modulo.core.library_sync.sync_library",
+                new_callable=AsyncMock,
+                side_effect=ConnectionError("Network unreachable"),
+            ),
+        ):
+            result = await library_sync({})
+
+        assert result["status"] == "failed"
+        assert "unexpected cron failure" in result["error"]
+        assert "ConnectionError" in result["error"]
+        assert "Network unreachable" in result["error"]

@@ -1246,13 +1246,17 @@ async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
     """
     from modulo.core.pipeline_execution import stale_run_recovery_sweep
 
-    recovered = await stale_run_recovery_sweep(_get_async_engine())
+    result = await stale_run_recovery_sweep(_get_async_engine())
     stats: dict[str, Any] = {
         "last_run_at": datetime.now(UTC).isoformat(),
-        "recovered": recovered,
     }
+    if isinstance(result, dict) and "error" in result:
+        stats["error"] = result["error"]
+        stats["recovered"] = 0
+    else:
+        stats["recovered"] = result
     await _persist_sweep_stats(STALE_RUN_RECOVERY_STATS_KEY, stats, STALE_RUN_RECOVERY_STATS_TTL_SECONDS)
-    return recovered
+    return result
 
 
 async def slot_reconciliation(_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -1472,7 +1476,7 @@ async def runner_health_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
 
     try:
         result = await run_runner_health_probe(_cleanup_session_factory())
-    except Exception:
+    except Exception as exc:
         await _persist_sweep_stats(
             RUNNER_HEALTH_PROBE_STATS_KEY,
             {
@@ -1480,7 +1484,7 @@ async def runner_health_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
                 "orgs_probed": 0,
                 "orgs_failed": 0,
                 "transitions": 0,
-                "error": "probe_failed",
+                "error": f"probe_failed ({type(exc).__name__}: {exc})"[:200],
             },
             RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS,
         )
@@ -1613,9 +1617,9 @@ async def library_sync(_ctx: dict[str, Any]) -> dict[str, Any]:
         }
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
         _log.exception("saq.library_sync.failed")
-        return {"status": "failed", "error": "unexpected cron failure"}
+        return {"status": "failed", "error": f"unexpected cron failure ({type(exc).__name__}: {exc})"[:200]}
 
 
 async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
