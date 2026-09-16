@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from typing import Annotated, Any
 
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +27,12 @@ from modulo.settings import Settings, get_settings
 
 _MIN_KEY_LEN = 32
 
+# Redis key for the distributed rotation lock.  SET NX + TTL provides a
+# cross-process atomic guard with self-healing on crash (the key expires
+# automatically).  An in-process asyncio.Lock serialises concurrent callers
+# within the same worker so two coroutines don't race on the Redis roundtrip.
+_ROTATION_LOCK_KEY = "modulo:fernet_rotation:lock"
+_ROTATION_LOCK_TTL_SECONDS = 1800  # 30 minutes — generous for large orgs
 
 _log = logging.getLogger(__name__)
 
@@ -32,8 +40,8 @@ router = APIRouter(prefix="/api/v1/admin/rotation", tags=["admin-rotation"])
 
 # ── In-memory rotation state ──────────────────────────────────────────────
 
-_rotation_in_progress: bool = False
 _last_rotation_result: dict[str, Any] | None = None
+_rotation_lock = asyncio.Lock()
 
 
 class RotateKeyRequest(BaseModel):
@@ -106,30 +114,42 @@ async def rotate_key(
             ),
         )
 
-    global _rotation_in_progress
-    if _rotation_in_progress:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A key rotation is already in progress",
+    # Cross-process atomic guard: Redis SET NX + TTL.  The asyncio.Lock
+    # serialises concurrent callers within one process so two coroutines
+    # don't race the Redis roundtrip, and the Redis key provides the
+    # cross-process invariant.  The TTL self-heals if a crash prevents
+    # release.
+    async with _rotation_lock:
+        # Fast in-memory check (avoids Redis roundtrip in the common case)
+        if await _is_rotation_active(settings):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A key rotation is already in progress",
+            )
+
+        # Log the rotation start to audit log FIRST
+        await append_audit_event(
+            session,
+            org_id=current_user.organisation_id,
+            event_type="fernet_key_rotation_started",
+            actor_user_id=current_user.account_id,
+            resource_type="encryption",
+            resource_id=current_user.organisation_id,
+            payload_json={
+                "initiated_by": str(current_user.account_id),
+                "old_key_provided": bool(req.old_fernet_key),
+            },
         )
 
-    # Log the rotation start to audit log FIRST
-    await append_audit_event(
-        session,
-        org_id=current_user.organisation_id,
-        event_type="fernet_key_rotation_started",
-        actor_user_id=current_user.account_id,
-        resource_type="encryption",
-        resource_id=current_user.organisation_id,
-        payload_json={
-            "initiated_by": str(current_user.account_id),
-            "old_key_provided": bool(req.old_fernet_key),
-        },
-    )
+        # Acquire the distributed lock (atomic SET NX + TTL)
+        if not await _acquire_rotation_lock(settings):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A key rotation is already in progress",
+            )
 
-    _rotation_in_progress = True
-
-    # Launch background rotation task.
+    # Launch background rotation task (lock is held by the Redis key, not
+    # the asyncio.Lock — the asyncio.Lock scope has ended).
     task = asyncio.create_task(
         _run_rotation_background(
             new_key=req.new_fernet_key,
@@ -159,11 +179,86 @@ async def rotate_key(
 async def rotation_status(
     _current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> RotationStatusResponse:
-    """Return the current rotation state."""
+    """Return the current rotation state.
+
+    Checks both the Redis distributed lock (cross-process) and the
+    in-memory flag (fast path for same-process).
+    """
+    settings = get_settings()
+    is_active = await _is_rotation_active(settings)
     return RotationStatusResponse(
-        rotation_in_progress=_rotation_in_progress,
+        rotation_in_progress=is_active,
         last_rotation_result=_last_rotation_result,
     )
+
+
+# ── Redis lock helpers ────────────────────────────────────────────────────
+
+
+async def _is_rotation_active(settings: Settings) -> bool:
+    """Check if rotation is in progress via Redis (cross-process safe).
+
+    Falls back to False if Redis is unavailable (fail-open — a Redis blip
+    should not wedge the status endpoint).
+    """
+    if not settings.redis_url:
+        return False
+    try:
+        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
+        try:
+            exists = await r.exists(_ROTATION_LOCK_KEY)
+            return bool(exists)
+        finally:
+            with contextlib.suppress(Exception):
+                await r.aclose()
+    except Exception:
+        return False
+
+
+async def _acquire_rotation_lock(settings: Settings) -> bool:
+    """Atomically acquire the rotation lock via Redis SET NX + TTL.
+
+    Returns True if the lock was acquired, False if already held.
+    """
+    if not settings.redis_url:
+        # No Redis — fall back to in-memory asyncio.Lock (single-process)
+        return True
+    r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
+    try:
+        acquired = await r.set(
+            _ROTATION_LOCK_KEY,
+            "1",
+            nx=True,
+            ex=_ROTATION_LOCK_TTL_SECONDS,
+        )
+        return bool(acquired)
+    finally:
+        with contextlib.suppress(Exception):
+            await r.aclose()
+
+
+async def _release_rotation_lock(settings: Settings) -> None:
+    """Release the rotation lock key (best-effort, never raises).
+
+    Only deletes if the value is still "1" (not stale from a different
+    owner).  Uses a Lua script for atomicity.
+    """
+    if not settings.redis_url:
+        return
+    r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
+    try:
+        # Atomic: delete only if the key still holds our sentinel value.
+        await r.eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then   return redis.call('del', KEYS[1]) else   return 0 end",
+            1,  # number of keys
+            _ROTATION_LOCK_KEY,
+            "1",  # sentinel value
+        )
+    except Exception:
+        _log.exception("rotation.lock_release_failed")
+    finally:
+        with contextlib.suppress(Exception):
+            await r.aclose()
 
 
 # ── Background task ────────────────────────────────────────────────────────
@@ -186,34 +281,34 @@ async def _run_rotation_background(
     ZERO rows and the rotation would silently no-op. The system factory bypasses
     RLS and is the same cross-org mechanism used by the retention/system crons.
     """
-    global _rotation_in_progress, _last_rotation_result
+    global _last_rotation_result
 
-    # Defensive guard: if the modulo_system role is unprovisioned, the system
-    # factory silently falls back to the NOBYPASSRLS app role and the rotation
-    # becomes a zero-row no-op (the exact bug this fix prevents). Refuse loudly
-    # instead of reporting a hollow "completed" with 0 rows.
     settings = get_settings()
-    if not settings.modulo_system_database_url:
-        _log.error(
-            "rotation.system_role_unprovisioned",
-            extra={
-                "reason": (
-                    "MODULO_SYSTEM_DATABASE_URL unset — refusing to rotate on the "
-                    "NOBYPASSRLS app role (would silently no-op on RLS-scoped tables)"
-                )
-            },
-        )
-        _last_rotation_result = {
-            "status": "failed",
-            "error": (
-                "modulo_system role unprovisioned (MODULO_SYSTEM_DATABASE_URL unset); "
-                "rotation refused to avoid a silent no-op."
-            ),
-        }
-        _rotation_in_progress = False
-        return
 
     try:
+        # Defensive guard: if the modulo_system role is unprovisioned, the system
+        # factory silently falls back to the NOBYPASSRLS app role and the rotation
+        # becomes a zero-row no-op (the exact bug this fix prevents). Refuse loudly
+        # instead of reporting a hollow "completed" with 0 rows.
+        if not settings.modulo_system_database_url:
+            _log.error(
+                "rotation.system_role_unprovisioned",
+                extra={
+                    "reason": (
+                        "MODULO_SYSTEM_DATABASE_URL unset — refusing to rotate on the "
+                        "NOBYPASSRLS app role (would silently no-op on RLS-scoped tables)"
+                    )
+                },
+            )
+            _last_rotation_result = {
+                "status": "failed",
+                "error": (
+                    "modulo_system role unprovisioned (MODULO_SYSTEM_DATABASE_URL unset); "
+                    "rotation refused to avoid a silent no-op."
+                ),
+            }
+            return
+
         async with _make_system_session_factory()() as session, session.begin():
             result = await rotate_all_encrypted_data(session, new_key, old_key)
 
@@ -254,4 +349,7 @@ async def _run_rotation_background(
             "error": str(exc),
         }
     finally:
-        _rotation_in_progress = False
+        # Always release the Redis lock — covers success, failure, and crash
+        # recovery.  The TTL already provides self-healing, but releasing
+        # eagerly avoids leaving a stale lock for the full TTL window.
+        await _release_rotation_lock(settings)
