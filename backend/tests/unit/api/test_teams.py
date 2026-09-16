@@ -154,6 +154,27 @@ def operator_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_plan_context] = lambda: _TeamPlan()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 class TestListTeams:
     def test_returns_200(self, client: TestClient) -> None:
         page_result = MagicMock(items=[_make_team()], total=1, page=1, page_size=20)
@@ -369,12 +390,52 @@ class TestAddMember:
             )
         assert resp.status_code == 201
 
-    def test_operator_returns_403(self, operator_client: TestClient) -> None:
+    def test_operator_of_other_team_returns_403(self, operator_client: TestClient) -> None:
+        """An org operator who is NOT an operator of this team is denied by the handler."""
         resp = operator_client.post(
             f"/api/v1/teams/{_TEAM_ID}/members",
             json={"user_id": str(_USER_ID), "role": "viewer"},
         )
         assert resp.status_code == 403
+
+    def test_team_operator_can_add_own_team_member(self, operator_client: TestClient) -> None:
+        caller = _make_membership(role="operator", account_id=_USER_ID)
+        target_account = MagicMock()
+        target_account.id = _USER_ID
+        target_membership = MagicMock()
+        target_membership.role = "viewer"
+        with (
+            patch(
+                "modulo.api.routes.teams.get_membership_by_team_and_account",
+                new=AsyncMock(return_value=caller),
+            ),
+            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=target_account)),
+            patch(
+                "modulo.api.routes.teams.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=target_membership),
+            ),
+            patch(
+                "modulo.api.routes.teams.add_team_member",
+                return_value=_make_membership(role="viewer"),
+            ),
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+        ):
+            resp = operator_client.post(
+                f"/api/v1/teams/{_TEAM_ID}/members",
+                json={"user_id": str(_USER_ID), "role": "viewer"},
+            )
+        assert resp.status_code == 201
+
+    def test_viewer_route_denied_by_permission_gate(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.post(
+            f"/api/v1/teams/{_TEAM_ID}/members",
+            json={"user_id": str(_USER_ID), "role": "viewer"},
+        )
+        assert resp.status_code == 403
+        assert "Permission 'team.members.manage'" in resp.json()["detail"]
 
     def test_invalid_user_id_returns_422(self, client: TestClient) -> None:
         resp = client.post(
@@ -658,14 +719,32 @@ class TestRemoveMember:
 class TestRemoveMemberPrivilegeGuard:
     """SECURITY #1194 — operator cannot remove a member with equal/higher team role.
 
-    The route-level ``team.members.manage`` permission gate denies non-admin
-    principals before the handler runs (FAR-880); the handler-level guard is
-    exercised directly via ``_remove_member_checked`` so the defence-in-depth
-    layer keeps coverage.
+    The route-level ``team.members.manage`` permission gate (FAR-880) is the
+    org-role floor: operator+ pass the gate, viewers/runners are denied
+    before the handler runs. The handler-level "admin OR operator-of-this-
+    team" check (via ``_require_team_operator_caller``) then enforces the
+    team-specific scoping, including the equal/higher-role guard.
     """
 
-    def test_operator_route_denied_by_permission_gate(self, operator_client: TestClient) -> None:
-        resp = operator_client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
+    def test_operator_can_remove_own_team_member(self, operator_client: TestClient) -> None:
+        caller = _make_membership(role="operator", account_id=_USER_ID)
+        target = _make_membership(account_id=uuid.uuid4(), role="viewer")
+        with (
+            patch(
+                "modulo.api.routes.teams.get_membership_by_team_and_account",
+                new=AsyncMock(return_value=caller),
+            ),
+            patch("modulo.api.routes.teams.get_membership", return_value=target),
+            patch("modulo.api.routes.teams.remove_team_member", return_value=True),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+        ):
+            resp = operator_client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
+        assert resp.status_code == 204
+
+    def test_viewer_route_denied_by_permission_gate(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
         assert resp.status_code == 403
         assert "Permission 'team.members.manage'" in resp.json()["detail"]
 
@@ -800,12 +879,35 @@ class TestChangeMemberRole:
 class TestChangeMemberRolePrivilegeGuard:
     """SECURITY #1194 — operator cannot demote a member with equal/higher team role.
 
-    Route-level ``team.members.manage`` gate (FAR-880) denies non-admin
-    principals first; handler-level guard covered via ``_change_member_role_checked``.
+    Route-level ``team.members.manage`` gate (FAR-880) is the org-role floor:
+    operator+ pass, viewers/runners are denied first; the handler-level guard
+    is covered via ``_change_member_role_checked``.
     """
 
-    def test_operator_route_denied_by_permission_gate(self, operator_client: TestClient) -> None:
-        resp = operator_client.patch(
+    def test_operator_can_change_lower_member_role(self, operator_client: TestClient) -> None:
+        caller = _make_membership(role="operator", account_id=_USER_ID)
+        target = _make_membership(account_id=uuid.uuid4(), role="viewer")
+        updated = _make_membership(role="runner")
+        with (
+            patch(
+                "modulo.api.routes.teams.get_membership_by_team_and_account",
+                new=AsyncMock(return_value=caller),
+            ),
+            patch("modulo.api.routes.teams.get_membership", return_value=target),
+            patch("modulo.api.routes.teams.update_member_role", return_value=updated),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+        ):
+            resp = operator_client.patch(
+                f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}",
+                json={"role": "runner"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "runner"
+
+    def test_viewer_route_denied_by_permission_gate(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.patch(
             f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}",
             json={"role": "viewer"},
         )

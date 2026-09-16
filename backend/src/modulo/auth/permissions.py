@@ -200,7 +200,13 @@ PERMISSIONS: dict[str, str] = {
     "admin.sensitive.manage": "admin",
     "errors.resolve": "viewer",
     "library.manage": "operator",
-    "team.members.manage": "admin",
+    # Member management is admin-only in most registries, but a TEAM operator
+    # may manage their own team's members (the handler enforces that with the
+    # admin-OR-team-operator check, SECURITY #1194). The route-level gate is
+    # the org-role floor: operator+, so org viewers/runners never reach the
+    # handlers; the team-scope check inside the handler is the load-bearing,
+    # team-specific control on top.
+    "team.members.manage": "operator",
     "admin.rate_limit.manage": "admin",
     "view.manage": "operator",
     "view.list": "viewer",

@@ -7,21 +7,6 @@ scenarios("../features/deployment/metadata.feature")
 
 @when("I GET /api/v1/deployment")
 def get_deployment_info(client, request):
-    # The deployment metadata endpoint is gated with ``system.config.manage``
-    # (FAR-880 RBAC sweep), which authenticates the principal (not just the org
-    # role). The shared BDD ``client`` fixture provides an org admin without the
-    # system-admin claim, so override ``get_current_user`` here — mirroring the
-    # pattern in tests/bdd/steps/test_monitor_config.py.
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
-
-    client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="sysadmin@test",
-        organisation_id=None,
-        account_id=None,
-        org_role=None,
-        is_system_admin=True,
-    )
     resp = client.get("/api/v1/deployment")
     request.node._resp = resp
     request.node._body = resp.json()
@@ -34,14 +19,15 @@ def check_required_fields(request):
     assert "uptime_seconds" in body
     assert "started_at" in body
     assert "python_version" in body
-    assert "hostname" in body
     assert "environment" in body
     assert "git_sha" in body
     assert "git_branch" in body
     assert "git_commit_timestamp" in body
     assert "git_commit_message" in body
     assert "build_timestamp" in body
-    assert "ci_job_url" in body
+    # hostname / ci_job_url are deliberately absent (FAR-880).
+    assert "hostname" not in body
+    assert "ci_job_url" not in body
 
 
 @then(parsers.parse('the "{field}" field is a non-empty string'))
@@ -73,7 +59,6 @@ def check_build_metadata_types(request):
         "git_commit_timestamp",
         "git_commit_message",
         "build_timestamp",
-        "ci_job_url",
     ):
         assert isinstance(body[field], str), f"{field} should be a string"
 
@@ -82,4 +67,3 @@ def check_build_metadata_types(request):
 def check_fallback_empty(request):
     body = request.node._body
     assert not body["git_sha"]
-    assert not body["ci_job_url"]

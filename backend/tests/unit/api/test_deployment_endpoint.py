@@ -1,22 +1,21 @@
 """Unit tests for the deployment info endpoint.
 
-FAR-880: the endpoint now requires a system admin principal
-(``require_system_permission("system.config.manage")``).
+FAR-880 follow-up: the endpoint stays UNAUTHENTICATED — the CI/CD deploy
+pipelines (deploy.yml, rc-validate.yml, deploy-watchdog.yml,
+deploy-staleness-check.yml) call it without a principal to verify which build
+is live. Sensitive local fields (hostname, ci_job_url) are removed from the
+response instead; the git metadata is already world-readable because the repo
+is public.
 """
 
 from collections.abc import Generator
-from typing import Any
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
-
-_ORG_ID = "00000000-0000-0000-0000-000000000001"
-_USER_ID = "00000000-0000-0000-0000-000000000002"
 
 
 def _make_settings() -> Settings:
@@ -29,49 +28,17 @@ def _make_settings() -> Settings:
     )
 
 
-def _system_admin_principal() -> dict[str, Any]:
-    return {
-        "username": "sysadmin",
-        "organisation_id": _ORG_ID,
-        "account_id": _USER_ID,
-        "org_role": "admin",
-        "is_system_admin": True,
-    }
-
-
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
+    # Deliberately NO auth principal override: the endpoint is public.
     app.dependency_overrides[get_settings] = _make_settings
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**_system_admin_principal())
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
 class TestDeploymentInfo:
-    def test_unauthenticated_returns_4xx(self, client: TestClient) -> None:
-        app.dependency_overrides.pop(get_current_user, None)
-        try:
-            resp = client.get("/api/v1/deployment")
-        finally:
-            app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**_system_admin_principal())
-        assert resp.status_code in (401, 403)
-
-    def test_non_system_admin_returns_403(self, client: TestClient) -> None:
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="orgadmin",
-            organisation_id=_ORG_ID,
-            account_id=_USER_ID,
-            org_role="admin",
-            is_system_admin=False,
-        )
-        try:
-            resp = client.get("/api/v1/deployment")
-        finally:
-            app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**_system_admin_principal())
-        assert resp.status_code == 403
-        assert "system admin" in resp.json()["detail"]
-
-    def test_get_returns_200(self, client: TestClient) -> None:
+    def test_unauthenticated_reachable_returns_200(self, client: TestClient) -> None:
+        """No Authorization header — an unauthenticated caller still gets 200."""
         resp = client.get("/api/v1/deployment")
         assert resp.status_code == 200
 
@@ -82,14 +49,18 @@ class TestDeploymentInfo:
         assert "uptime_seconds" in body
         assert "started_at" in body
         assert "python_version" in body
-        assert "hostname" in body
         assert "environment" in body
         assert "git_sha" in body
         assert "git_branch" in body
         assert "git_commit_timestamp" in body
         assert "git_commit_message" in body
         assert "build_timestamp" in body
-        assert "ci_job_url" in body
+
+    def test_sensitive_fields_absent(self, client: TestClient) -> None:
+        resp = client.get("/api/v1/deployment")
+        body = resp.json()
+        assert "hostname" not in body
+        assert "ci_job_url" not in body
 
     def test_version_is_non_empty_string(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")
@@ -106,8 +77,6 @@ class TestDeploymentInfo:
     def test_started_at_is_valid_iso_datetime(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")
         body = resp.json()
-        from datetime import datetime
-
         parsed = datetime.fromisoformat(body["started_at"])
         # started_at is UTC and tz-aware — it must round-trip to the same instant
         assert parsed.tzinfo is not None
@@ -127,7 +96,6 @@ class TestDeploymentInfo:
             "git_commit_timestamp",
             "git_commit_message",
             "build_timestamp",
-            "ci_job_url",
         ):
             assert isinstance(body[field], str), f"{field} should be a string"
 
@@ -135,4 +103,3 @@ class TestDeploymentInfo:
         resp = client.get("/api/v1/deployment")
         body = resp.json()
         assert not body["git_sha"]
-        assert not body["ci_job_url"]
