@@ -6730,11 +6730,7 @@ def _any_all_literal_container_violations(tree: ast.AST) -> list[tuple[int, str]
 
         if not elements:
             fixed = "False" if fn == "any" else "True"
-            why = (
-                "there is nothing to match; the call is ALWAYS False"
-                if fn == "any"
-                else "the call is vacuously True"
-            )
+            why = "there is nothing to match; the call is ALWAYS False" if fn == "any" else "the call is vacuously True"
             found.append(
                 (
                     node.lineno,
