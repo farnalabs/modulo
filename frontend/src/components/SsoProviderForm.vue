@@ -261,7 +261,7 @@
         <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
         </svg>
-        {{ copyLabel }}
+        {{ copySuccess ? $t('components.SsoProviderForm.copied') : $t('components.SsoProviderForm.copy_callback_url') }}
       </button>
       <span v-if="copySuccess" class="ml-2 text-xs text-primary" role="status" aria-live="polite" data-testid="sso-callback-url-copied">
         {{ $t('components.SsoProviderForm.copied') }}
@@ -416,17 +416,14 @@ const derivedScopes = computed(() => {
 
 // Copy to clipboard
 const copySuccess = ref(false)
-const copyLabel = ref('Copy')
 
 async function copyCallbackUrl() {
   if (!props.callbackUrl) return
   try {
     await navigator.clipboard.writeText(props.callbackUrl)
     copySuccess.value = true
-    copyLabel.value = 'Copied!'
     setTimeout(() => {
       copySuccess.value = false
-      copyLabel.value = 'Copy'
     }, 2000)
   } catch {
     // Fallback for non-secure contexts
@@ -437,10 +434,8 @@ async function copyCallbackUrl() {
     document.execCommand('copy')
     document.body.removeChild(textarea)
     copySuccess.value = true
-    copyLabel.value = 'Copied!'
     setTimeout(() => {
       copySuccess.value = false
-      copyLabel.value = 'Copy'
     }, 2000)
   }
 }
