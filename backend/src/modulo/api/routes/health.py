@@ -47,6 +47,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
+from modulo.db.migration_guard import check_migration_divergence
 from modulo.settings import Settings, break_glass_boot_findings, get_settings
 from modulo.version import get_version
 
@@ -343,8 +344,6 @@ async def _check_migrations() -> CheckResult:
         # revisions the repo does not ship).  Logged at ERROR in
         # migration_guard; surfaced here so it is visible without grepping logs.
         try:
-            from modulo.db.migration_guard import check_migration_divergence
-
             divergence = check_migration_divergence(applied)
         except Exception:
             divergence = None
