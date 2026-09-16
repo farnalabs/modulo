@@ -441,13 +441,19 @@ def _build_custom_stub_backend(fixture_map: dict[str, str]) -> ModelBackendBase:
             del kwargs
             self._stub = StubModelBackend(fixture_map)
 
-        async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+        async def invoke(
+            self,
+            messages: list[BaseMessage],
+            output_schema: dict[str, Any] | None = None,
+            **kwargs: Any,
+        ) -> BaseMessage:
             return await self._stub.ainvoke(messages, **kwargs)
 
         def stream(
             self,
             messages: list[BaseMessage],
             tools: list[dict[str, Any]] | None = None,
+            output_schema: dict[str, Any] | None = None,
             **kwargs: Any,
         ) -> Any:
             return self._stub.astream(messages, tools=tools, **kwargs)
