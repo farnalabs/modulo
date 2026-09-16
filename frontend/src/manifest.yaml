@@ -3318,6 +3318,12 @@ elements:
       - testid: hitl-gate-reclaim
         type: button
         dynamic_testid: false
+      - testid: hitl-gate-choice-options
+        type: element
+        dynamic_testid: false
+      - testid: hitl-gate-option
+        type: button
+        dynamic_testid: false
       - testid: hitl-gate-notes
         type: textarea
         dynamic_testid: false
@@ -3937,6 +3943,12 @@ elements:
         type: button
         dynamic_testid: false
       - testid: hitl-gate-reclaim
+        type: button
+        dynamic_testid: false
+      - testid: hitl-gate-choice-options
+        type: element
+        dynamic_testid: false
+      - testid: hitl-gate-option
         type: button
         dynamic_testid: false
       - testid: hitl-gate-notes
