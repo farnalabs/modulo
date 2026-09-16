@@ -16,11 +16,18 @@ Feature: Onboarding action checklist
     And the response reports the "login" action as completed
 
   Scenario: Auto-completion reflects real organisation state
-    Given the org state auto-completes every onboarding action
+    Given the stored organisation already has every onboarding primitive
     When I GET the onboarding status
     Then the response status is 200
     And the response reports all 6 onboarding actions as completed
     And the response reports 100% progress
+
+  Scenario: Auto-completion detects a bare organisation from real state
+    Given the stored organisation has no onboarding primitives
+    When I GET the onboarding status
+    Then the response status is 200
+    And the response reports the "login" action as completed
+    And the response reports 1 onboarding action as completed
 
   Scenario: Completing an action updates the persisted progress
     Given the org state auto-completes only the "login" action

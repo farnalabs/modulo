@@ -67,12 +67,18 @@ def _progress_patch(request) -> patch:
 
 
 def _status_patches(request):
-    """Patches the status read: shared progress row + controllable auto-completion."""
+    """Patches the status read: shared progress row + controllable auto-completion.
+
+    By default ``_check_auto_completion`` is patched to return the scenario's
+    ``_onboarding_auto`` set. When a scenario opts into real detection (via the
+    "stored organisation" givens) the patch is omitted, so the six ``select``
+    probes in the shipped function run against the scenario's ``mock_session``.
+    """
     auto = request.node._onboarding_auto
-    return (
-        _progress_patch(request),
-        patch("modulo.api.routes.onboarding._check_auto_completion", new=AsyncMock(return_value=auto)),
-    )
+    patches = [_progress_patch(request)]
+    if not getattr(request.node, "_onboarding_real_detection", False):
+        patches.append(patch("modulo.api.routes.onboarding._check_auto_completion", new=AsyncMock(return_value=auto)))
+    return tuple(patches)
 
 
 def _read_status(request) -> None:
@@ -103,6 +109,22 @@ def auto_completes_single(action: str, request) -> None:
 def auto_completes_all(request) -> None:
     _reset_progress(request)
     request.node._onboarding_auto = set(_ACTION_IDS)
+
+
+@given("the stored organisation already has every onboarding primitive")
+def stored_org_has_every_primitive(mock_session, request) -> None:
+    """Drive the real ``_check_auto_completion`` probes to report a populated org."""
+    _reset_progress(request)
+    request.node._onboarding_real_detection = True
+    mock_session.execute.return_value.scalar_one_or_none.return_value = MagicMock()
+
+
+@given("the stored organisation has no onboarding primitives")
+def stored_org_has_no_primitives(mock_session, request) -> None:
+    """Drive the real probes to report a bare org (only ``login`` auto-completes)."""
+    _reset_progress(request)
+    request.node._onboarding_real_detection = True
+    mock_session.execute.return_value.scalar_one_or_none.return_value = None
 
 
 @given(parsers.parse('the onboarding progress has the "{action}" action completed'))
@@ -246,6 +268,12 @@ def response_reports_action_completed(action: str, request) -> None:
 
 @then(parsers.parse("the response reports all {n:d} onboarding actions as completed"))
 def response_reports_all_completed(n: int, request) -> None:
+    body = request.node._resp.json()
+    assert len(body["completed_actions"]) == n, f"Expected {n} completed actions, got {body}"
+
+
+@then(parsers.parse("the response reports {n:d} onboarding action as completed"))
+def response_reports_n_actions_completed(n: int, request) -> None:
     body = request.node._resp.json()
     assert len(body["completed_actions"]) == n, f"Expected {n} completed actions, got {body}"
 
