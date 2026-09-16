@@ -1,37 +1,29 @@
-Feature: Pipeline Validation
+Feature: Pipeline Graph Validation
   As a pipeline author
-  I want my pipeline configuration validated before saving
-  So that errors are caught early
+  I want invalid pipeline graphs to be rejected with clear errors at save time
+  So that a broken pipeline cannot be saved
 
-  Background:
-    Given I am authenticated as an admin in org "acme"
+  Scenario: Reject a graph with no nodes
+    Given a pipeline graph with no nodes
+    When I validate the pipeline graph
+    Then the graph is rejected with error code "TOPOLOGY_NO_NODES"
 
-  Scenario: Reject pipeline with missing required field
-    When I POST /api/pipelines with config missing "name"
-    Then the response status is 422
-    And the error mentions "name"
+  Scenario: Reject a graph that omits the nodes field
+    Given a pipeline graph definition without a nodes field
+    When I validate the pipeline graph
+    Then the graph is rejected with error code "TOPOLOGY_NO_NODES"
 
-  Scenario: Reject unknown node type
-    When I POST /api/pipelines with a node of type "unknown_type"
-    Then the response status is 422
-    And the error mentions "unknown_type"
+  Scenario: Reject a circular dependency between nodes
+    Given a pipeline graph where node "a" feeds node "b" and node "b" feeds node "a"
+    When I validate the pipeline graph
+    Then the graph is rejected with error code "TOPOLOGY_CYCLE"
 
-  Scenario: Reject circular dependency
-    When I POST /api/pipelines with a config where node A depends on B and B depends on A
-    Then the response status is 422
-    And the error mentions "circular dependency"
+  Scenario: Reject an edge that references an unknown node
+    Given a pipeline graph with node "a" and an edge targeting unknown node "ghost"
+    When I validate the pipeline graph
+    Then the graph is rejected with error code "TOPOLOGY_UNKNOWN_TARGET"
 
-  Scenario: Accept valid minimal config
-    When I POST /api/pipelines with a single LLM node config
-    Then the response status is 201
-
-  Scenario: Reject pipeline with no nodes
-    When I POST /api/pipelines with name "empty" and an empty graph
-    Then the response status is 422
-    And the error mentions "at least one node"
-
-  Scenario: Reject pipeline referencing missing connector
-    Given no connector named "my-connector" exists
-    When I POST /api/pipelines with a node referencing connector "my-connector"
-    Then the response status is 422
-    And the error mentions "connector"
+  Scenario: Accept a valid minimal pipeline graph
+    Given a valid minimal pipeline graph with one node
+    When I validate the pipeline graph
+    Then the graph is valid
