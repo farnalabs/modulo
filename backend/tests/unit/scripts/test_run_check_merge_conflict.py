@@ -29,27 +29,16 @@ def _make_fake_git(fakes: dict[tuple[str, ...], tuple[int, str, str]]):
     """Return a callable that behaves like ``_run_git`` but returns canned
     responses keyed on the argument tuple.
 
-    If a call is not in *fakes*, it falls through to ``subprocess.run`` so
-    the test does not break on an unexpected invocation.
+    If a call is not in *fakes*, raises ``AssertionError`` so missing fakes
+    are never silently swallowed.
     """
-    import subprocess as _sp
-
     calls: list[tuple[str, ...]] = []
 
     def _fake(*args: str) -> tuple[int, str, str]:
         calls.append(args)
         if args in fakes:
             return fakes[args]
-        # Fallback: run real git (should rarely happen in unit tests).
-        proc = _sp.run(  # noqa: S603
-            ["git", *args],  # noqa: S607
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        return proc.returncode, proc.stdout or "", proc.stderr or ""
+        raise AssertionError(f"unexpected git call: {args}")
 
     return _fake, calls
 
@@ -83,7 +72,7 @@ _MERGE_TREE = (
 class TestCleanMerge:
     """merge-tree rc=0 -> pass."""
 
-    def test_returns_zero(self, capsys: pytest.CaptureFixture[str]):
+    def test_returns_zero(self):
         fake, calls = _make_fake_git(
             {
                 _REMOTE: (0, "origin\n", ""),
@@ -161,7 +150,7 @@ class TestConflictNoPathsParsed:
 class TestUnexpectedMergeTreeExit:
     """merge-tree rc != 0 and rc != 1 -> fail-open."""
 
-    def test_returns_zero_on_rc_128(self, capsys: pytest.CaptureFixture[str]):
+    def test_returns_zero_on_rc_128(self):
         fake, _ = _make_fake_git(
             {
                 _REMOTE: (0, "origin\n", ""),
@@ -184,7 +173,7 @@ class TestUnexpectedMergeTreeExit:
 class TestOriginMainAlreadyAncestor:
     """origin/main is ancestor of HEAD -> pass, merge-tree never called."""
 
-    def test_returns_zero_and_skips_merge_tree(self, capsys: pytest.CaptureFixture[str]):
+    def test_returns_zero_and_skips_merge_tree(self):
         fake, calls = _make_fake_git(
             {
                 _REMOTE: (0, "origin\n", ""),
@@ -207,7 +196,7 @@ class TestOriginMainAlreadyAncestor:
 class TestAlreadyPushed:
     """Branch already has an upstream -> pass without fetching."""
 
-    def test_returns_zero(self, capsys: pytest.CaptureFixture[str]):
+    def test_returns_zero(self):
         fake, calls = _make_fake_git(
             {
                 _REMOTE: (0, "origin\n", ""),
@@ -227,7 +216,7 @@ class TestAlreadyPushed:
 class TestFetchFails:
     """git fetch origin fails -> fail-open."""
 
-    def test_returns_zero(self, capsys: pytest.CaptureFixture[str]):
+    def test_returns_zero(self):
         fake, _ = _make_fake_git(
             {
                 _REMOTE: (0, "origin\n", ""),
@@ -247,7 +236,7 @@ class TestFetchFails:
 class TestDetachedHead:
     """Detached HEAD -> pass."""
 
-    def test_returns_zero(self, capsys: pytest.CaptureFixture[str]):
+    def test_returns_zero(self):
         fake, _ = _make_fake_git(
             {
                 _REMOTE: (0, "origin\n", ""),
@@ -265,7 +254,7 @@ class TestDetachedHead:
 class TestNoOriginRemote:
     """No 'origin' remote -> pass."""
 
-    def test_returns_zero(self, capsys: pytest.CaptureFixture[str]):
+    def test_returns_zero(self):
         fake, _ = _make_fake_git(
             {
                 _REMOTE: (0, "upstream\n", ""),
@@ -284,7 +273,7 @@ class TestNoOriginRemote:
 class TestUpstreamIsOriginMain:
     """Upstream == origin/main is treated as first push."""
 
-    def test_continues_to_fetch(self, capsys: pytest.CaptureFixture[str]):
+    def test_continues_to_fetch(self):
         fake, calls = _make_fake_git(
             {
                 _REMOTE: (0, "origin\n", ""),
@@ -318,10 +307,10 @@ class TestParseConflictedPaths:
         assert mod._parse_conflicted_paths("deadbeef\nonly.py\n") == ["only.py"]
 
     def test_no_paths(self):
-        assert mod._parse_conflicted_paths("deadbeef\n") == []
+        assert not mod._parse_conflicted_paths("deadbeef\n")
 
     def test_empty(self):
-        assert mod._parse_conflicted_paths("") == []
+        assert not mod._parse_conflicted_paths("")
 
     def test_trailing_newlines(self):
         assert mod._parse_conflicted_paths("deadbeef\na.py\nb.py\n\n\n") == [
@@ -333,7 +322,7 @@ class TestParseConflictedPaths:
 class TestOriginMainDoesNotResolve:
     """origin/main rev-parse fails -> fail-open."""
 
-    def test_returns_zero(self, capsys: pytest.CaptureFixture[str]):
+    def test_returns_zero(self):
         fake, _ = _make_fake_git(
             {
                 _REMOTE: (0, "origin\n", ""),
