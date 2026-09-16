@@ -1356,7 +1356,8 @@ async def runner_marker_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
     Liveness contract (qa F5, mirrors the ``runner_workspace_reconcile``
     sibling): the outcome is persisted to the shared Redis key every tick. A
     FAILED sweep (org-index or any org pass) persists the PARTIAL counts with
-    ``"error": "sweep_failed"`` and then RE-RAISES so SAQ's ``retries=2``
+    an enriched ``"error": "sweep_failed (<ExceptionType>: <message>)"`` and
+    then RE-RAISES so SAQ's ``retries=2``
     engages — a swallowed sweep failure is a silently dead safety net (stale
     markers accumulate as phantom capacity and the rollback signal goes dark).
 
