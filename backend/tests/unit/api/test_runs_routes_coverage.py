@@ -440,7 +440,10 @@ def test_workspace_events_returns_timeline(client: tuple[TestClient, AsyncMock])
     http, session = client
     _queue_execute(session, [_result(rows=[_event_row()])])
 
-    resp = http.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
+    # FAR-897: the endpoint loads the run through the org-scoped CRUD helper
+    # first; patch it so the queued execute results serve the audit query.
+    with patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=MagicMock()):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -454,7 +457,8 @@ def test_workspace_events_empty_returns_empty_list(client: tuple[TestClient, Asy
     http, session = client
     _queue_execute(session, [_result(rows=[])])
 
-    resp = http.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
+    with patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=MagicMock()):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
 
     assert resp.status_code == 200
     assert not resp.json()
