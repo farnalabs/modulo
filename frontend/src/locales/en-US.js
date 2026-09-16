@@ -544,7 +544,8 @@ export default {
       "login_failed": "Login failed:",
       "enter_your_password": "Enter your password",
       "modulo": "Modulo",
-      "or_continue_with": "or continue with"
+      "or_continue_with": "or continue with",
+      "sign_in_to_org": "Sign in to {orgName}"
     },
     "OrgLoginView": {
       "sign_in_to_your_organisation": "Sign in to your organisation",

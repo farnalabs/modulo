@@ -53,10 +53,36 @@ describe('LoginView - login-context integration', () => {
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
     })
-    // Org name should be shown
+    // Org name should be shown as subordinate element
     expect(wrapper.text()).toContain('Acme Corp')
     // No org entry step
     expect(wrapper.find('[data-testid="login-org-slug"]').exists()).toBe(false)
+  })
+
+  it('h1 always shows product brand even when org name is present (FAR-866 regression)', async () => {
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          multi_org: false,
+          org: { slug: 'acme', name: 'Acme Corp' },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ oidc: [], saml: false }),
+      } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+    })
+    // h1 must always contain the product brand — never the org name
+    const h1 = wrapper.find('h1')
+    expect(h1.exists()).toBe(true)
+    expect(h1.text()).toBe('Modulo')
+    // Org name appears as a subordinate line, not in h1
+    expect(wrapper.text()).toContain('Sign in to Acme Corp')
   })
 
   it('shows org entry step when login-context returns multi_org=true', async () => {
