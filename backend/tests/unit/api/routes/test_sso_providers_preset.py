@@ -149,7 +149,7 @@ class TestSsoProvidersDiscovery:
         assert resp.status_code == 200
         assert resp.status_code != 401
         data = resp.json()
-        assert data["oidc"] == []
+        assert not data["oidc"]
         assert data["saml"] is False
 
     def test_preset_field_set(self, client: tuple[TestClient, AsyncMock]) -> None:

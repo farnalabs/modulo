@@ -17,7 +17,7 @@ class TestGetPreset:
         assert p.id == "custom"
         assert p.requires_tenant is False
         assert p.discovery_url_template is None
-        assert p.scopes == []
+        assert not p.scopes
 
     def test_google_preset(self) -> None:
         p = get_preset("google")
