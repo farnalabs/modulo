@@ -14253,7 +14253,6 @@ export interface components {
             password_enabled: boolean;
             /**
              * Saml
-             * Instance-wide SAML availability (not per-org — SAML is single-IdP-per-instance).
              * @default false
              */
             saml: boolean;
