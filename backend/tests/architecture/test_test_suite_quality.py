@@ -328,6 +328,26 @@ regression that silently weakens the suite:
   literal-constant lens), and a constant in the *wrong* position (falsy under
   ``or``, truthy under ``and``) does not pin the outcome and is left alone —
   that is the legitimate default/refinement idiom
+- an ``assert`` whose test calls the builtin ``any()``/``all()`` over a
+  *literal* container — ``assert any([])``, ``assert all([x])``,
+  ``assert any([x, True])``, ``assert all([flag, 0])``. ``any``/``all`` exist
+  to scan a *dynamic* iterable; over a literal container the verdict is
+  decided at source time. An empty container is fixed: ``all`` is vacuously
+  True (the assertion ALWAYS PASSES, a silent false-green) and ``any`` has
+  nothing to match (ALWAYS FAILS). A single-element container
+  (``any([x])``/``all((x,))``) is a redundant ``bool(x)`` wrapper that adds
+  no verdict the bare truthiness assert would not — and when the author
+  meant to *scan* ``x``, wrapping it in a one-element list flips the check to
+  emptyness, a real spelling bug. A truthy constant element under ``any`` or
+  a falsy constant element under ``all`` (``any([x, True])``,
+  ``all([flag, 0])``) absorbs the whole check exactly the way the
+  constant-absorbed ``or``/``and`` BoolOp lens describes — which cannot see
+  this shape because the absorbent hides inside a container literal rather
+  than as a ``BoolOp`` operand. Generator/comprehension arguments
+  (``any(x for x in y)`` — the blessed scanning form), dynamic arguments
+  (``any(items)``, ``any(build())``), non-empty dict literals (key-iteration
+  semantics that re-read each literal key), and multi-element containers
+  whose elements leave the verdict open are deliberately left alone
 - wall-clock sleeps with a *computed* duration — ``time.sleep(<name>)`` /
   ``asyncio.sleep(<name>)`` where the argument is a bare name rather than a
   literal constant. A duration computed from other values (a refill rate, a
@@ -6632,6 +6652,214 @@ def test_constant_absorbed_boolean_lens_flags_fixed_outcomes():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _constant_boolean_absorbent_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _any_all_literal_container_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test calls
+    the builtin ``any()``/``all()`` over a *literal* container.
+
+    ``any``/``all`` exist to scan a dynamic iterable; handed a literal
+    container the verdict is decided at source time:
+
+    - an *empty* container fixes the outcome — ``all([])`` is vacuously
+      True (``assert all([])`` ALWAYS PASSES, a silent false-green) and
+      ``any([])`` has nothing to match (ALWAYS FAILS), with the ``not``-
+      wrapped mirrors inverted;
+    - a *single-element* container (``any([x])``/``all((x,))``) is just
+      ``bool(x)`` — the wrapper never changes the verdict, and it sits one
+      typo from the ``any(items)``/``all(items)`` scanning form the author
+      may have meant, so it is flagged as a redundant/possibly-mis-read
+      spelling;
+    - a *multi-element* literal containing an absorbent constant — a truthy
+      constant under ``any`` (``any([x, True])``) forces the call ALWAYS
+      True, a falsy constant under ``all`` (``all([flag, 0])``) forces it
+      ALWAYS False — the call-wrapper twin of the constant-absorbed
+      ``or``/``and`` BoolOp lens, which cannot reach it because the absorbent
+      hides as an element of a container literal rather than as a ``BoolOp``
+      operand (the direct ``assert [x, True]`` container truthiness is owned
+      by the container-literal lens, but the ``any()``/``all()`` call around
+      it is a different AST shape that lens provably misses).
+
+    Generator/comprehension arguments (``any(x for x in y)``), dynamic
+    arguments (``any(items)``, ``any(build())``), non-empty dict literals
+    (key-iteration semantics), and literal containers whose elements leave
+    the verdict open are left alone.
+    """
+    found: list[tuple[int, str]] = []
+
+    def _literal_container(node: ast.AST) -> tuple[str, list[ast.AST]] | None:
+        """Return ``(kind, elements)`` for a list/tuple/set literal, the empty
+        dict literal, or ``None`` for anything else (dynamic arg, ``*``-starred
+        list, generator/comprehension, non-empty dict)."""
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return type(node).__name__.lower(), list(node.elts)
+        if isinstance(node, ast.Dict):
+            if not node.keys:
+                return "dict", []
+            return None
+        return None
+
+    def _constant_truthiness(node: ast.AST) -> bool | None:
+        """Return the truthiness of a literal constant, or ``None`` when the
+        node is not a constant (complex values excluded, mirroring the
+        constant-absorbed lens)."""
+        if not isinstance(node, ast.Constant):
+            return None
+        value = node.value
+        if isinstance(value, complex):
+            return None
+        return bool(value)
+
+    for node in _all_nodes(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        negated = isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
+        expr = test.operand if negated else test
+        if not isinstance(expr, ast.Call):
+            continue
+        if not isinstance(expr.func, ast.Name) or expr.func.id not in ("any", "all"):
+            continue
+        if len(expr.args) != 1 or expr.keywords:
+            continue
+        fn = expr.func.id
+        container = _literal_container(expr.args[0])
+        if container is None:
+            continue
+        kind, elements = container
+
+        if not elements:
+            fixed = "False" if fn == "any" else "True"
+            why = "there is nothing to match; the call is ALWAYS False" if fn == "any" else "the call is vacuously True"
+            found.append(
+                (
+                    node.lineno,
+                    (
+                        f"assert {ast.unparse(test)} — {fn}({kind} literal with no elements) has {why} "
+                        f"(the {fn} of an empty container is fixed at {fixed}), so the assertion's outcome "
+                        "never depends on the code under test; the negated form is the mirror. Drop the "
+                        "check or feed any()/all() the real iterable"
+                    ),
+                )
+            )
+            continue
+
+        if len(elements) == 1:
+            el = ast.unparse(elements[0])
+            found.append(
+                (
+                    node.lineno,
+                    (
+                        f"assert {ast.unparse(test)} — {fn}({kind} literal holding one element) is just "
+                        f"bool({el}): wrapping a single value adds no verdict, and if iterating {el} was "
+                        f"intended the one-element wrapper silently flips the check to emptiness. Assert "
+                        f"{el} directly, or pass the iterable to {fn}() without the wrapper"
+                    ),
+                )
+            )
+            continue
+
+        if fn == "any":
+            absorb = next((e for e in elements if _constant_truthiness(e) is True), None)
+            if absorb is not None:
+                found.append(
+                    (
+                        node.lineno,
+                        (
+                            f"assert {ast.unparse(test)} — any({kind} literal) contains truthy constant "
+                            f"{ast.unparse(absorb)}, which absorbs the call: any() is ALWAYS True, so the "
+                            "assertion ALWAYS PASSES (or, negated, ALWAYS FAILS) no matter what the code "
+                            "under test does. Drop the constant element or assert the real condition"
+                        ),
+                    )
+                )
+        else:
+            absorb = next((e for e in elements if _constant_truthiness(e) is False), None)
+            if absorb is not None:
+                found.append(
+                    (
+                        node.lineno,
+                        (
+                            f"assert {ast.unparse(test)} — all({kind} literal) contains falsy constant "
+                            f"{ast.unparse(absorb)}, which absorbs the call: all() is ALWAYS False, so the "
+                            "assertion ALWAYS FAILS (or, negated, ALWAYS PASSES) no matter what the code "
+                            "under test does. Drop the constant element or assert the real condition"
+                        ),
+                    )
+                )
+    return found
+
+
+def test_no_any_all_literal_container_asserts():
+    """An ``assert`` that feeds the ``any()``/``all()`` builtins a *literal*
+    container — ``assert any([])``, ``assert all([x])``, ``assert any([x, True])``,
+    ``assert all([flag, 0])`` — asserts a verdict that is decided at source time
+    (or is a redundant ``bool()`` wrapper around the element). ``any``/``all``
+    exist to scan a dynamic iterable; over a literal container every verdict is
+    either pinned (``any`` with a truthy-constant element ALWAYS PASSES, ``all``
+    with a falsy-constant element ALWAYS FAILS, both empty forms vacuous-constant)
+    or a ``bool`` wrapper (single element) that adds nothing. These are the
+    call-wrapper twin of the constant-absorbed ``or``/``and`` lens, invisible to
+    every sibling because the absorbent or the wrapper sits inside a container
+    literal argument rather than in a ``BoolOp``."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _any_all_literal_container_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} any()/all() assertion(s) over a literal container.\n"
+        "any()/all() exist to scan a dynamic iterable; over a literal container the verdict is fixed\n"
+        "at source time (an empty container is vacuous-constant, a truthy/falsy constant element\n"
+        "absorbs the whole call) or the wrapper is a redundant bool() of a single element. Pass the\n"
+        "real iterable, assert the element directly, or drop the constant element.\n" + "\n".join(violations)
+    )
+
+
+def test_any_all_literal_container_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the any/all-literal-container
+    lens: it must flag empty, single-element, and absorbent-constant literal
+    containers (list/tuple/set/empty-dict, direct and ``not``-negated), and
+    ignore the blessed generator/comprehension scanning form, dynamic
+    (name/call/attribute) arguments, non-empty dict literals, and literal
+    containers whose elements leave the verdict open."""
+    positive_sources = [
+        "def test_foo():\n    assert any([])\n",
+        "def test_foo():\n    assert not any(())\n",
+        "def test_foo():\n    assert all({})\n",
+        "def test_foo():\n    assert not all([])\n",
+        "def test_foo():\n    assert any([1, x])\n",
+        "def test_foo():\n    assert all([flag, 0])\n",
+        "def test_foo():\n    assert not all([x, None])\n",
+        "def test_foo():\n    assert not any({x, '', 1})\n",
+        "def test_foo():\n    assert any((ready,))\n",
+        "def test_foo():\n    assert all([result])\n",
+        "def test_foo():\n    assert any({x})\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _any_all_literal_container_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert any(x for x in items)\n",
+        "def test_foo():\n    assert all(r['status'] == 'ok' for r in results)\n",
+        "def test_foo():\n    assert any(items)\n",
+        "def test_foo():\n    assert all(status_flags)\n",
+        "def test_foo():\n    assert any(build())\n",
+        "def test_foo():\n    assert all(config.get('flags'))\n",
+        "def test_foo():\n    assert any({'k': v})\n",
+        "def test_foo():\n    assert all([x, True])\n",
+        "def test_foo():\n    assert any([x, False])\n",
+        "def test_foo():\n    assert all([x, y])\n",
+        "def test_foo():\n    assert any([x, y])\n",
+        "def test_foo():\n    assert any(*[x])\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _any_all_literal_container_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def _computed_wall_clock_sleep_violations(tree: ast.AST) -> list[tuple[int, str]]:
