@@ -3339,6 +3339,21 @@ elements:
       - testid: hitl-gate-foreign-claim
         type: element
         dynamic_testid: false
+      - testid: hitl-gate-subject-editor
+        type: element
+        dynamic_testid: false
+      - testid: hitl-gate-edit-subject
+        type: button
+        dynamic_testid: false
+      - testid: hitl-gate-subject-textarea
+        type: textarea
+        dynamic_testid: false
+      - testid: hitl-gate-save-approve
+        type: button
+        dynamic_testid: false
+      - testid: hitl-gate-cancel-edit
+        type: button
+        dynamic_testid: false
       - testid: hitl-briefing
         type: element
         dynamic_testid: false
@@ -3941,6 +3956,21 @@ elements:
         dynamic_testid: false
       - testid: hitl-gate-foreign-claim
         type: element
+        dynamic_testid: false
+      - testid: hitl-gate-subject-editor
+        type: element
+        dynamic_testid: false
+      - testid: hitl-gate-edit-subject
+        type: button
+        dynamic_testid: false
+      - testid: hitl-gate-subject-textarea
+        type: textarea
+        dynamic_testid: false
+      - testid: hitl-gate-save-approve
+        type: button
+        dynamic_testid: false
+      - testid: hitl-gate-cancel-edit
+        type: button
         dynamic_testid: false
       - testid: hitl-briefing
         type: element

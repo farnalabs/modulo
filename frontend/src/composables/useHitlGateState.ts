@@ -3,6 +3,8 @@ import { computed, reactive } from 'vue'
 export interface HitlGateSessionState {
   claimToken: string | null
   notes: string
+  editingSubject: boolean
+  modifiedSubject: string
 }
 
 // Module-scoped on purpose (FAR-686): the HITL review page's 30s auto-refresh
@@ -15,7 +17,7 @@ const gateStates = reactive(new Map<string, HitlGateSessionState>())
 function ensureEntry(key: string): HitlGateSessionState {
   const existing = gateStates.get(key)
   if (existing) return existing
-  gateStates.set(key, reactive<HitlGateSessionState>({ claimToken: null, notes: '' }))
+  gateStates.set(key, reactive<HitlGateSessionState>({ claimToken: null, notes: '', editingSubject: false, modifiedSubject: '' }))
   return gateStates.get(key) as HitlGateSessionState
 }
 
@@ -39,7 +41,29 @@ export function useHitlGateState(runId: string, gateId: string) {
     gateStates.delete(key)
   }
 
-  return { claimToken, notes, setClaimToken, clear }
+  const editingSubject = computed<boolean>({
+    get: () => gateStates.get(key)?.editingSubject ?? false,
+    set: (value: boolean) => {
+      ensureEntry(key).editingSubject = value
+    },
+  })
+
+  const modifiedSubject = computed<string>({
+    get: () => gateStates.get(key)?.modifiedSubject ?? '',
+    set: (value: string) => {
+      ensureEntry(key).modifiedSubject = value
+    },
+  })
+
+  function setEditingSubject(value: boolean): void {
+    ensureEntry(key).editingSubject = value
+  }
+
+  function setModifiedSubject(value: string): void {
+    ensureEntry(key).modifiedSubject = value
+  }
+
+  return { claimToken, notes, setClaimToken, editingSubject, modifiedSubject, setEditingSubject, setModifiedSubject, clear }
 }
 
 /** Drop every persisted gate session — simulates a fresh browser session. */
