@@ -30,6 +30,15 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 
 
+def _patch_pinned(**kwargs: object) -> object:
+    """Patch the dispatcher's pinned-client SSRF seam with an async mock."""
+    return patch(
+        "modulo.core.error_tracking.alert_dispatcher.pinned_async_client",
+        new_callable=AsyncMock,
+        **kwargs,
+    )
+
+
 class _FakeResponse:
     is_success = True
 
@@ -375,7 +384,7 @@ class TestDispatchWebhook:
             run_group_id=run_group_id,
         )
         client = _FakeClient()
-        with patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", return_value=client):
+        with _patch_pinned(return_value=client):
             await _dispatch_webhook(alert, "Agent failed", "/admin/errors/x")
 
         import json
@@ -394,7 +403,7 @@ class TestDispatchWebhook:
     async def test_webhook_slack_url_formats_payload(self) -> None:
         alert = _alert(webhook_url="https://hooks.slack.com/services/T00/B00/xxx", level="critical")
         client = _FakeClient()
-        with patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", return_value=client):
+        with _patch_pinned(return_value=client):
             await _dispatch_webhook(alert, "DB down", "/admin/errors/x")
 
         import json
@@ -408,7 +417,7 @@ class TestDispatchWebhook:
         client = _FakeClient()
         client.responses = [_FakeResponseFail()]
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", return_value=client),
+            _patch_pinned(return_value=client),
             patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
@@ -419,7 +428,7 @@ class TestDispatchWebhook:
 
     async def test_webhook_request_error_records_failure(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", return_value=_FakeClientError()),
+            _patch_pinned(return_value=_FakeClientError()),
             patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
@@ -427,6 +436,22 @@ class TestDispatchWebhook:
 
         failed.assert_called_once()
         assert any("alert.webhook_request_failed" in rec.message for rec in caplog.records)
+
+    async def test_webhook_url_rejected_fails_closed(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A private/metadata webhook URL must never open a raw client fallback."""
+        with (
+            _patch_pinned(
+                side_effect=ValueError("outbound URL blocked: private/metadata address"),
+            ),
+            patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
+            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await _dispatch_webhook(
+                _alert(webhook_url="http://169.254.169.254/latest/meta-data"), "", "/admin/errors/x"
+            )
+
+        failed.assert_called_once()
+        assert any("alert.webhook_url_rejected" in rec.message for rec in caplog.records)
 
 
 class TestDispatchAlertResolved:
@@ -449,7 +474,7 @@ class TestDispatchAlertResolved:
     async def test_resolved_with_webhook_posts_payload(self) -> None:
         session = _session()
         client = _FakeClient()
-        with patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", return_value=client):
+        with _patch_pinned(return_value=client):
             await dispatch_alert_resolved(
                 _ORG_ID,
                 group_id=_GROUP_ID,
@@ -474,7 +499,7 @@ class TestDispatchAlertResolved:
         client = _FakeClient()
         client.responses = [_FakeResponseFail()]
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", return_value=client),
+            _patch_pinned(return_value=client),
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert_resolved(
@@ -488,10 +513,28 @@ class TestDispatchAlertResolved:
 
         assert any("alert.resolved_webhook_http_error" in rec.message for rec in caplog.records)
 
+    async def test_resolved_webhook_url_rejected_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            _patch_pinned(
+                side_effect=ValueError("outbound URL blocked: private/metadata address"),
+            ),
+            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await dispatch_alert_resolved(
+                _ORG_ID,
+                group_id=_GROUP_ID,
+                signal="agent.failed",
+                reason="recovered",
+                session=_session(),
+                webhook_url="http://127.0.0.1:8080/hook",
+            )
+
+        assert any("alert.resolved_webhook_url_rejected" in rec.message for rec in caplog.records)
+
     async def test_resolved_webhook_request_error_logs(self, caplog: pytest.LogCaptureFixture) -> None:
         session = _session()
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", return_value=_FakeClientError()),
+            _patch_pinned(return_value=_FakeClientError()),
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert_resolved(

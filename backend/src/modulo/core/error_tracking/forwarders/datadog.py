@@ -6,11 +6,12 @@ import asyncio
 import logging
 from typing import Any
 
-import httpx
-
 from modulo.core.error_tracking.forwarders.base import BaseForwarder
+from modulo.core.ssrf import pinned_async_client
 
 _log = logging.getLogger(__name__)
+
+_CONNECTOR_TYPE = "error_forwarder"
 
 
 class DatadogErrorForwarder(BaseForwarder):
@@ -50,7 +51,11 @@ class DatadogErrorForwarder(BaseForwarder):
                 "priority": "normal",
             }
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            # SSRF-fail-closed: pinned_async_client validates the URL (DNS-resolved,
+            # blocked on private/metadata/loopback) and pins the connection to the
+            # validated address, closing the DNS-rebinding window. Validation
+            # failure raises ValueError, which the except below returns as False.
+            async with await pinned_async_client(url, timeout=15.0, connector_type=_CONNECTOR_TYPE) as client:
                 resp = await client.post(
                     url,
                     json=body,

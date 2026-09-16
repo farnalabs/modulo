@@ -20,6 +20,15 @@ from modulo.core.error_tracking.forwarders import (
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
+def _patch_pinned(module: str, **kwargs: object) -> object:
+    """Patch a forwarder module's pinned-client SSRF seam with an async mock."""
+    return patch(
+        f"modulo.core.error_tracking.forwarders.{module}.pinned_async_client",
+        new_callable=AsyncMock,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
 def _make_error_group(**overrides):
     group = MagicMock()
     group.id = uuid.uuid4()
@@ -76,7 +85,7 @@ class TestSentryErrorForwarder:
         fwd = SentryErrorForwarder()
 
         with (
-            patch("modulo.core.error_tracking.forwarders.sentry.httpx.AsyncClient") as mock_client,
+            _patch_pinned("sentry") as mock_client,
         ):
             instance = AsyncMock()
             instance.post = AsyncMock()
@@ -97,7 +106,7 @@ class TestSentryErrorForwarder:
         fwd = SentryErrorForwarder()
 
         with (
-            patch("modulo.core.error_tracking.forwarders.sentry.httpx.AsyncClient") as mock_client,
+            _patch_pinned("sentry") as mock_client,
         ):
             instance = AsyncMock()
             instance.post = AsyncMock()
@@ -152,7 +161,7 @@ class TestDatadogErrorForwarder:
     async def test_posts_to_datadog_api(self) -> None:
         fwd = DatadogErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.datadog.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("datadog") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock()
             resp = AsyncMock()
@@ -170,11 +179,13 @@ class TestDatadogErrorForwarder:
         call_args = instance.post.call_args
         assert "datadoghq.eu" in call_args[0][0]
         assert "dd-api-key-abc" in call_args[1]["headers"]["DD-API-KEY"]
+        # The pinned SSRF seam is used (validate + pin), not a raw httpx client.
+        assert mock_client.call_args.kwargs["connector_type"] == "error_forwarder"
 
     async def test_failure_returns_false(self) -> None:
         fwd = DatadogErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.datadog.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("datadog") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock()
             resp = AsyncMock()
@@ -194,7 +205,7 @@ class TestDatadogErrorForwarder:
     async def test_request_error_does_not_crash(self) -> None:
         fwd = DatadogErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.datadog.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("datadog") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock(side_effect=Exception("timeout"))
             mock_client.return_value.__aenter__.return_value = instance
@@ -226,7 +237,7 @@ class TestPagerDutyErrorForwarder:
     async def test_forwards_critical(self) -> None:
         fwd = PagerDutyErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.pagerduty.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("pagerduty") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock()
             resp = AsyncMock()
@@ -249,7 +260,7 @@ class TestPagerDutyErrorForwarder:
     async def test_configurable_severity_and_levels(self) -> None:
         fwd = PagerDutyErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.pagerduty.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("pagerduty") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock()
             resp = AsyncMock()
@@ -273,7 +284,7 @@ class TestPagerDutyErrorForwarder:
     async def test_request_error_does_not_crash(self) -> None:
         fwd = PagerDutyErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.pagerduty.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("pagerduty") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock(side_effect=Exception("timeout"))
             mock_client.return_value.__aenter__.return_value = instance
@@ -300,7 +311,7 @@ class TestRollbarErrorForwarder:
     async def test_posts_to_rollbar_api(self) -> None:
         fwd = RollbarErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.rollbar.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("rollbar") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock()
             resp = AsyncMock()
@@ -322,7 +333,7 @@ class TestRollbarErrorForwarder:
     async def test_failure_returns_false(self) -> None:
         fwd = RollbarErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.rollbar.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("rollbar") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock()
             resp = AsyncMock()
@@ -354,7 +365,7 @@ class TestOpsGenieErrorForwarder:
     async def test_posts_to_opsgenie_api(self) -> None:
         fwd = OpsGenieErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.opsgenie.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("opsgenie") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock()
             resp = AsyncMock()
@@ -377,7 +388,7 @@ class TestOpsGenieErrorForwarder:
         fwd = OpsGenieErrorForwarder()
 
         for level, expected_priority in [("critical", "P1"), ("error", "P2"), ("warning", "P3")]:
-            with patch("modulo.core.error_tracking.forwarders.opsgenie.httpx.AsyncClient") as mock_client:
+            with _patch_pinned("opsgenie") as mock_client:
                 instance = AsyncMock()
                 instance.post = AsyncMock()
                 resp = AsyncMock()
@@ -408,7 +419,7 @@ class TestLokiErrorForwarder:
     async def test_posts_to_loki_push_api(self) -> None:
         fwd = LokiErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.loki.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("loki") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock()
             resp = AsyncMock()
@@ -431,7 +442,7 @@ class TestLokiErrorForwarder:
     async def test_custom_labels(self) -> None:
         fwd = LokiErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.loki.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("loki") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock()
             resp = AsyncMock()
@@ -451,6 +462,69 @@ class TestLokiErrorForwarder:
             stream = instance.post.call_args[1]["json"]["streams"][0]["stream"]
             assert stream["app"] == "modulo"
             assert stream["env"] == "prod"
+
+
+# =========================================================================
+# ForwarderRegistry
+# =========================================================================
+
+
+# =========================================================================
+# SSRF fail-closed: pinned client refuses to construct -> forward returns False
+# =========================================================================
+
+
+class TestForwarderSsrfFailClosed:
+    """Every forwarder must fail closed when the pinned-client seam refuses its URL."""
+
+    _BLOCKED = ValueError("outbound URL blocked: private/metadata address")
+
+    async def test_sentry_api_fallback_refuses_blocked_url(self) -> None:
+        fwd = SentryErrorForwarder()
+        with _patch_pinned("sentry", side_effect=self._BLOCKED):
+            result = await fwd.forward(
+                _ORG_ID,
+                _make_error_group(),
+                _make_error_event(),
+                {"dsn": "https://key@169.254.169.254/123", "org_slug": "o", "project_slug": "p"},
+            )
+        assert result is False
+
+    async def test_datadog_refuses_blocked_url(self) -> None:
+        fwd = DatadogErrorForwarder()
+        with _patch_pinned("datadog", side_effect=self._BLOCKED):
+            result = await fwd.forward(
+                _ORG_ID, _make_error_group(), _make_error_event(), {"api_key": "k", "site": "localhost"}
+            )
+        assert result is False
+
+    async def test_pagerduty_refuses_blocked_url(self) -> None:
+        fwd = PagerDutyErrorForwarder()
+        with _patch_pinned("pagerduty", side_effect=self._BLOCKED):
+            result = await fwd.forward(
+                _ORG_ID, _make_error_group(), _make_error_event(level="critical"), {"routing_key": "k"}
+            )
+        assert result is False
+
+    async def test_rollbar_refuses_blocked_url(self) -> None:
+        fwd = RollbarErrorForwarder()
+        with _patch_pinned("rollbar", side_effect=self._BLOCKED):
+            result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {"access_token": "k"})
+        assert result is False
+
+    async def test_opsgenie_refuses_blocked_url(self) -> None:
+        fwd = OpsGenieErrorForwarder()
+        with _patch_pinned("opsgenie", side_effect=self._BLOCKED):
+            result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {"api_key": "k"})
+        assert result is False
+
+    async def test_loki_refuses_blocked_url(self) -> None:
+        fwd = LokiErrorForwarder()
+        with _patch_pinned("loki", side_effect=self._BLOCKED):
+            result = await fwd.forward(
+                _ORG_ID, _make_error_group(), _make_error_event(), {"push_url": "http://127.0.0.1:9090/push"}
+            )
+        assert result is False
 
 
 # =========================================================================
@@ -496,7 +570,7 @@ class TestForwarderFailureIsolation:
     async def test_forwarder_raises_does_not_crash_registry(self) -> None:
         sentry = SentryErrorForwarder()
 
-        with patch("modulo.core.error_tracking.forwarders.sentry.httpx.AsyncClient") as mock_client:
+        with _patch_pinned("sentry") as mock_client:
             instance = AsyncMock()
             instance.post = AsyncMock(side_effect=Exception())
             mock_client.return_value.__aenter__.return_value = instance
@@ -520,7 +594,7 @@ class TestForwarderFailureIsolation:
                 }
             )
 
-            with patch("modulo.core.error_tracking.forwarders.sentry.httpx.AsyncClient") as mock_client:
+            with _patch_pinned("sentry") as mock_client:
                 instance = AsyncMock()
                 instance.post = AsyncMock(side_effect=Exception("network down"))
                 mock_client.return_value.__aenter__.return_value = instance

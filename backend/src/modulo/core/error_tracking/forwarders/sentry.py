@@ -7,11 +7,12 @@ import logging
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx
-
 from modulo.core.error_tracking.forwarders.base import BaseForwarder
+from modulo.core.ssrf import pinned_async_client
 
 _log = logging.getLogger(__name__)
+
+_CONNECTOR_TYPE = "error_forwarder"
 
 _LEVEL_MAP: dict[str, str] = {
     "critical": "fatal",
@@ -158,7 +159,10 @@ class SentryErrorForwarder(BaseForwarder):
             if auth_token:
                 headers["Authorization"] = f"Bearer {auth_token}"
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            # SSRF-fail-closed: the API fallback derives its API base from the
+            # tenant-supplied DSN hostname, so the pinned client both validates
+            # it and pins the connection to the validated address.
+            async with await pinned_async_client(url, timeout=15.0, connector_type=_CONNECTOR_TYPE) as client:
                 resp = await client.post(url, json=body, headers=headers)
                 if resp.is_success:
                     return True

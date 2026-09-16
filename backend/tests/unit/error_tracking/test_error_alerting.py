@@ -26,6 +26,15 @@ _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 _RULE_ID = uuid.UUID("00000000-0000-0000-0000-000000000011")
 
 
+def _as_pinned(client_cls: type) -> object:
+    """Wrap a client class into an async pinned_async_client stand-in."""
+
+    async def _pinned(*args: object, **kwargs: object) -> object:
+        return client_cls()
+
+    return _pinned
+
+
 def _make_session() -> AsyncMock:
     return AsyncMock(spec=AsyncSession)
 
@@ -518,7 +527,7 @@ class TestDispatchWebhook:
                 captured["body"] = json.loads(kwargs["content"].decode())
                 return _FakeResponse()
 
-        with patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient):
+        with patch("modulo.core.error_tracking.alert_dispatcher.pinned_async_client", _as_pinned(_FakeClient)):
             await _dispatch_webhook(alert, "Agent failed on retry", "/admin/errors/x")
 
         body = captured["body"]
@@ -605,7 +614,7 @@ class TestDispatchWebhookNoUrl:
                 captured["body"] = json.loads(kwargs["content"].decode())
                 return _FakeResponse()
 
-        with patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient):
+        with patch("modulo.core.error_tracking.alert_dispatcher.pinned_async_client", _as_pinned(_FakeClient)):
             await _dispatch_webhook(alert, "Service down", "/admin/errors/x")
 
         body = captured["body"]
@@ -645,7 +654,7 @@ class TestDispatchWebhookNoUrl:
                 return _FakeResponse()
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient),
+            patch("modulo.core.error_tracking.alert_dispatcher.pinned_async_client", _as_pinned(_FakeClient)),
             patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as record_failed,
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
@@ -1043,7 +1052,7 @@ class TestDispatchResolved:
                 captured["body"] = json.loads(kwargs["content"].decode())
                 return _FakeResponse()
 
-        with patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient):
+        with patch("modulo.core.error_tracking.alert_dispatcher.pinned_async_client", _as_pinned(_FakeClient)):
             await dispatch_alert_resolved(
                 _ORG_ID,
                 group_id=_GROUP_ID,
@@ -1081,7 +1090,7 @@ class TestDispatchResolved:
                 return _FakeResponse()
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient),
+            patch("modulo.core.error_tracking.alert_dispatcher.pinned_async_client", _as_pinned(_FakeClient)),
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert_resolved(
@@ -1114,7 +1123,7 @@ class TestDispatchResolved:
                 raise httpx.RequestError("connection refused")
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient),
+            patch("modulo.core.error_tracking.alert_dispatcher.pinned_async_client", _as_pinned(_FakeClient)),
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert_resolved(

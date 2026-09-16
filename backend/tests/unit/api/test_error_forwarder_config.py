@@ -372,6 +372,10 @@ class TestConfigureForwarder:
 
         with (
             patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
+            patch(
+                "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
+                new_callable=AsyncMock,
+            ),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.put(
@@ -504,7 +508,13 @@ class TestConfigureForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with (
+            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
+            patch(
+                "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
+                new_callable=AsyncMock,
+            ),
+        ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.put(
                 "/api/v1/errors/forwarders/sentry",
@@ -521,7 +531,13 @@ class TestConfigureForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with (
+            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
+            patch(
+                "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
+                new_callable=AsyncMock,
+            ),
+        ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.put(
                 "/api/v1/errors/forwarders/sentry",
@@ -544,6 +560,64 @@ class TestConfigureForwarder:
             json={"config_json": {"dsn": "https://key@sentry.io/1"}},
         )
         assert resp.status_code == 402
+
+    def test_configure_loki_push_url_metadata_ip_rejected(self, client: TestClient) -> None:
+        """SSRF-fail-closed: push_url pointing at the cloud metadata endpoint is 422."""
+        mock_session = _make_mock_session()
+        mock_session.execute = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.put(
+                "/api/v1/errors/forwarders/loki",
+                json={"config_json": {"push_url": "http://169.254.169.254/loki/api/v1/push"}},
+            )
+
+        assert resp.status_code == 422
+        assert "SSRF check failed for push_url" in resp.json()["detail"]
+        mock_session.add.assert_not_called()
+
+    def test_configure_sentry_dsn_loopback_rejected(self, client: TestClient) -> None:
+        """The DSN hostname becomes the API base, so a loopback DSN is 422."""
+        mock_session = _make_mock_session()
+        mock_session.execute = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.put(
+                "/api/v1/errors/forwarders/sentry",
+                json={"config_json": {"dsn": "http://127.0.0.1:8080/1"}},
+            )
+
+        assert resp.status_code == 422
+        assert "SSRF check failed for dsn" in resp.json()["detail"]
+
+    def test_configure_enable_only_toggle_does_not_revalidate_urls(self, client: TestClient) -> None:
+        """A pure enabled toggle sends no config, so no URL validation runs."""
+        mock_session = _make_mock_session()
+        existing = _make_mock_config("loki", enabled=False, config_json={"push_url": "https://loki.example.com"})
+        scalar_mock = MagicMock()
+        scalar_mock.scalar_one_or_none = MagicMock(return_value=existing)
+        mock_session.execute = AsyncMock(return_value=scalar_mock)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.put(
+                "/api/v1/errors/forwarders/loki",
+                json={"enabled": True},
+            )
+
+        assert resp.status_code == 200
+        assert existing.enabled is True
 
 
 # ── POST /api/v1/errors/forwarders/{forwarder_type}/test ───────────────────

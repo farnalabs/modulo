@@ -6,11 +6,12 @@ import asyncio
 import logging
 from typing import Any
 
-import httpx
-
 from modulo.core.error_tracking.forwarders.base import BaseForwarder
+from modulo.core.ssrf import pinned_async_client
 
 _log = logging.getLogger(__name__)
+
+_CONNECTOR_TYPE = "error_forwarder"
 
 _DEFAULT_SEVERITY_MAP: dict[str, str] = {
     "critical": "critical",
@@ -78,7 +79,8 @@ class PagerDutyErrorForwarder(BaseForwarder):
                 "dedup_key": f"modulo:{org_id}:{error_group.fingerprint}" if error_group else f"modulo:{org_id}",
             }
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            # SSRF-fail-closed: the validate+pin happens inside pinned_async_client.
+            async with await pinned_async_client(url, timeout=15.0, connector_type=_CONNECTOR_TYPE) as client:
                 resp = await client.post(
                     url,
                     json=body,
