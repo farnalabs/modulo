@@ -99,6 +99,28 @@ describe('OrgLoginView', () => {
     expect(wrapper.find('[data-testid="org-login-submit"]').exists()).toBe(true)
   })
 
+  it('h1 always shows product brand even when org name is present (FAR-866 regression)', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        org: { slug: 'test-org', name: 'Test Org' },
+        providers: [],
+        password_enabled: true,
+      }),
+    } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-email"]').exists()).toBe(true)
+    })
+    // h1 must always contain the product brand — never the org name
+    const h1 = wrapper.find('h1')
+    expect(h1.exists()).toBe(true)
+    expect(h1.text()).toBe('Modulo')
+    // Org name appears as a subordinate line, not in h1
+    expect(wrapper.text()).toContain('Sign in to Test Org')
+  })
+
   it('hides password form when password is disabled', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,

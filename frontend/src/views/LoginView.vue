@@ -20,7 +20,8 @@
             </svg>
           </div>
         </div>
-        <h1 class="text-3xl font-bold tracking-tight">{{ displayOrgName || $t('views.LoginView.modulo') }}</h1>
+        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.LoginView.modulo') }}</h1>
+        <p v-if="displayOrgName" class="mt-1 text-sm text-muted-foreground">{{ $t('views.LoginView.sign_in_to_org', { orgName: displayOrgName }) }}</p>
         <p class="mt-1 text-muted-foreground">{{ $t('views.LoginView.agent_governance_for_your_agentic_sdlc') }}</p>
       </div>
 
