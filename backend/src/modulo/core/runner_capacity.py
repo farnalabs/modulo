@@ -863,6 +863,12 @@ class RunnerMarkerSweepError(RuntimeError):
     transitioned: int
     org_failures: int
 
+    def __post_init__(self) -> None:
+        super().__init__(
+            f"scanned={self.scanned}, cleared={self.cleared}, "
+            f"transitioned={self.transitioned}, org_failures={self.org_failures}"
+        )
+
 
 # Bounded polling for the SESSION-scoped sweep dedup advisory lock. Mirrors
 # ``api.main._migration_advisory_lock`` / ``db.migrations.env._migration_advisory_lock``:

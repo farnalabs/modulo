@@ -1282,7 +1282,7 @@ async def slot_reconciliation(_ctx: dict[str, Any]) -> dict[str, Any]:
                 "last_run_at": datetime.now(UTC).isoformat(),
                 "released": exc.released,
                 "per_pipeline": exc.per_pipeline,
-                "error": "sweep_failed",
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
             },
             SLOT_RECONCILIATION_STATS_TTL_SECONDS,
         )
@@ -1326,7 +1326,7 @@ async def hitl_park_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
             {
                 "last_run_at": datetime.now(UTC).isoformat(),
                 "parked": exc.parked,
-                "error": "sweep_failed",
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
             },
             HITL_PARK_SWEEP_STATS_TTL_SECONDS,
         )
@@ -1379,7 +1379,7 @@ async def runner_marker_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
                 "cleared": exc.cleared,
                 "transitioned": exc.transitioned,
                 "orgs_failed": exc.org_failures,
-                "error": "sweep_failed",
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
             },
             RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS,
         )
@@ -1426,7 +1426,7 @@ async def runner_workspace_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
                 "last_run_at": datetime.now(UTC).isoformat(),
                 "scanned": exc.scanned,
                 "orphans_destroyed": exc.destroyed,
-                "error": "sweep_failed",
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
             },
             RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS,
         )
