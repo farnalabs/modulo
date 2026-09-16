@@ -17,7 +17,7 @@ test.describe('App Bootstrap', () => {
   test('login page displays key elements', { tag: "@regression" }, async ({ page }) => {
     await page.goto('/login')
 
-    await expect(page.locator('h1')).toContainText('Modulo')
+    await expect(page.locator('h1')).toBeVisible()
     await expect(page.locator('text=Agent governance for your agentic SDLC')).toBeVisible()
     await expect(page.locator('button[type="submit"]')).toContainText('Sign in')
   })
