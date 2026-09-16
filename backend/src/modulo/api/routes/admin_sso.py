@@ -28,6 +28,7 @@ from modulo.api.dependencies import (
 from modulo.api.middleware.sensitive_mask import SensitiveValue
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+from modulo.core.sso_presets import list_presets, resolve_preset
 from modulo.core.ssrf import pinned_async_client, validate_outbound_url_async
 from modulo.db.crud.sso_provider import (
     create_provider,
@@ -66,6 +67,8 @@ class SsoProviderCreate(BaseModel):
     auto_provision: bool = True
     default_role: str = Field(default="runner", pattern=r"^(operator|runner)$")
     allowed_domains: list[str] = Field(default_factory=list, max_length=50)
+    preset: str = Field(default="custom", max_length=32)
+    tenant_domain: str | None = Field(default=None, max_length=255)
 
 
 class SsoProviderUpdate(BaseModel):
@@ -81,6 +84,8 @@ class SsoProviderUpdate(BaseModel):
     auto_provision: bool | None = None
     default_role: str | None = Field(default=None, pattern=r"^(operator|runner)$")
     allowed_domains: list[str] | None = Field(default=None, max_length=50)
+    preset: str | None = Field(default=None, max_length=32)
+    tenant_domain: str | None = Field(default=None, max_length=255)
 
 
 class SsoProviderResponse(BaseModel):
@@ -100,6 +105,9 @@ class SsoProviderResponse(BaseModel):
     default_role: str
     allowed_domains: list[str] = Field(default_factory=list)
     created_at: datetime
+    preset: str = "custom"
+    tenant_domain: str | None = None
+    callback_url: str | None = None
 
     model_config = {"from_attributes": True}
     updated_at: datetime
@@ -146,6 +154,27 @@ class SsoProviderResponse(BaseModel):
             return "configured" if value else ""
         raise ValueError("client_secret has an unsupported storage type")
 
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _coerce_preset(cls, value: object) -> str:
+        if isinstance(value, str):
+            return value
+        return "custom"
+
+    @field_validator("tenant_domain", mode="before")
+    @classmethod
+    def _coerce_tenant_domain(cls, value: object) -> str | None:
+        if value is None or isinstance(value, str):
+            return value
+        return None
+
+    @field_validator("callback_url", mode="before")
+    @classmethod
+    def _coerce_callback_url(cls, value: object) -> str | None:
+        if value is None or isinstance(value, str):
+            return value
+        return None
+
 
 class SsoProviderTestResult(BaseModel):
     success: bool
@@ -159,6 +188,17 @@ _MSG_UNRESTRICTED_SSO_DISABLED = (
     "enable that operator-level flag — it is dangerous: every IdP account could join this "
     "organisation. Existing members and invited users are not affected."
 )
+
+
+def _provider_response(provider: Any, settings: Settings | None = None) -> SsoProviderResponse:
+    """Build an SsoProviderResponse with a computed callback_url."""
+    resp = SsoProviderResponse.model_validate(provider)
+    if provider.provider_type == "oidc" and provider.provider_id:
+        if settings is None:
+            settings = get_settings()
+        public_url = settings.modulo_public_url.rstrip("/")
+        resp.callback_url = f"{public_url}/api/v1/auth/oidc/{provider.provider_id}/callback"
+    return resp
 
 
 def _sso_provider_is_unrestricted(provider: Any) -> bool:
@@ -194,7 +234,7 @@ async def get_providers(
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             providers = await list_providers(session, org_id=current_user.organisation_id)
-        return [SsoProviderResponse.model_validate(p) for p in providers]
+        return [_provider_response(p) for p in providers]
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available: %s", exc, exc_info=True)
         raise HTTPException(
@@ -217,6 +257,23 @@ async def get_providers(
         ) from None
 
 
+class PresetInfo(BaseModel):
+    id: str
+    label: str
+    requires_tenant: bool
+    tenant_label: str
+
+
+@router.get("/presets")
+@handle_db_errors("admin.sso.list_presets")
+async def list_presets_endpoint(
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = require_permission(_CODE_SSO_MANAGE),
+) -> list[PresetInfo]:
+    """Return available SSO provider presets."""
+    return [PresetInfo(**p) for p in list_presets()]
+
+
 @router.post(
     "/providers",
     status_code=status.HTTP_201_CREATED,
@@ -235,6 +292,13 @@ async def create_provider_endpoint(
         normalized_allowed_domains = validate_allowed_domains(req.allowed_domains)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    # Preset derivation: non-custom presets override discovery_url and scopes.
+    try:
+        derived_url, derived_scopes = resolve_preset(req.preset, req.tenant_domain)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    effective_discovery_url = derived_url if derived_url is not None else req.discovery_url
+    effective_scopes = derived_scopes if derived_scopes is not None else req.scopes
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
@@ -245,15 +309,17 @@ async def create_provider_endpoint(
                 provider_id=req.provider_id,
                 client_id=req.client_id,
                 client_secret=req.client_secret,
-                discovery_url=req.discovery_url,
+                discovery_url=effective_discovery_url,
                 metadata_url=req.metadata_url,
                 metadata_xml=req.metadata_xml,
                 entity_id=req.entity_id,
-                scopes=req.scopes,
+                scopes=effective_scopes,
                 allowed_domains=normalized_allowed_domains,
                 enabled=req.enabled,
                 auto_provision=req.auto_provision,
                 default_role=req.default_role,
+                preset=req.preset,
+                tenant_domain=req.tenant_domain,
                 fernet_key=settings.fernet_key,
                 org_id=current_user.organisation_id,
                 actor_user_id=current_user.account_id,
@@ -295,7 +361,7 @@ async def create_provider_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
-    return SsoProviderResponse.model_validate(provider)
+    return _provider_response(provider, settings)
 
 
 @router.put(
@@ -319,6 +385,20 @@ async def update_provider_endpoint(
             updates["allowed_domains"] = validate_allowed_domains(updates["allowed_domains"])
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    # Preset derivation on update: when preset or tenant_domain changes,
+    # re-derive discovery_url and scopes for non-custom presets.
+    effective_preset = updates.get("preset")
+    effective_tenant = updates.get("tenant_domain")
+    if effective_preset is not None and effective_preset != "custom":
+        try:
+            derived_url, derived_scopes = resolve_preset(str(effective_preset), effective_tenant)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        if derived_url is not None:
+            updates["discovery_url"] = derived_url
+        if derived_scopes is not None:
+            updates["scopes"] = derived_scopes
 
     try:
         async with session.begin():
@@ -368,7 +448,7 @@ async def update_provider_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=_MSG_SSO_PROVIDER_NOT_FOUND,
         )
-    return SsoProviderResponse.model_validate(provider)
+    return _provider_response(provider, settings)
 
 
 @router.delete(
@@ -709,7 +789,7 @@ async def toggle_provider_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=_MSG_SSO_PROVIDER_NOT_FOUND,
         )
-    return SsoProviderResponse.model_validate(provider)
+    return _provider_response(provider)
 
 
 class GroupMappingItem(BaseModel):

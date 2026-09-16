@@ -41,6 +41,14 @@ bdd:
   - backend/tests/bdd/steps/test_azure_pipelines_connector.py
   - backend/tests/bdd/features/connectors/dropbox_paper.feature
   - backend/tests/bdd/steps/test_dropbox_paper_connector.py
+  - backend/tests/bdd/features/connectors/azure_repos.feature
+  - backend/tests/bdd/steps/test_azure_repos_connector.py
+  - backend/tests/bdd/features/connectors/discord.feature
+  - backend/tests/bdd/steps/test_discord_connector.py
+  - backend/tests/bdd/features/connectors/microsoft_teams.feature
+  - backend/tests/bdd/steps/test_microsoft_teams_connector.py
+  - backend/tests/bdd/features/connectors/sharepoint.feature
+  - backend/tests/bdd/steps/test_sharepoint_connector.py
 depends-on:
   - feat-model-backends
 status: covered
@@ -141,6 +149,30 @@ and per-destination rate limiting.
       listing folders (``folders`` resource), creating a Paper doc via markdown
       import (``doc`` write resource), and failing closed on unsupported query/write
       resources (`dropbox_paper.feature`, `steps/test_dropbox_paper_connector.py`)
+- [x] The Azure Repos connector is BDD-exercised against the real
+      `AzureReposConnector` (respx-mocked Azure DevOps REST API v7.0): PAT
+      validation via the profile endpoint (401 => unhealthy), listing
+      repositories / pull requests / commits, reading a file from a branch,
+      writing a file via a push, and creating a pull request
+      (`azure_repos.feature`, `steps/test_azure_repos_connector.py`)
+- [x] The Discord connector is BDD-exercised against the real
+      `DiscordConnector` (respx-mocked Discord REST API v10): bot-token
+      validation via `/users/@me` (200 => healthy, 401 => unhealthy), listing
+      guilds / channels / messages / guild members / roles, getting a guild by
+      id, and the message / reaction / channel write family
+      (`discord.feature`, `steps/test_discord_connector.py`)
+- [x] The Microsoft Teams connector is BDD-exercised against the real
+      `MicrosoftTeamsConnector` (respx-mocked Microsoft Graph API v1.0): token
+      validation via `/users` (200 => healthy, 401 => unhealthy), listing
+      teams / channels / messages / members / users / groups, getting a team and
+      a channel by id, and the message / channel write family
+      (`microsoft_teams.feature`, `steps/test_microsoft_teams_connector.py`)
+- [x] The SharePoint connector is BDD-exercised against the real
+      `SharePointConnector` (respx-mocked Microsoft Graph API v1.0): token
+      validation via `/sites/root` (200 => healthy reporting the site root
+      name, 401 => unhealthy), listing sites / list items, reading a file, and
+      creating a list item (`sharepoint.feature`,
+      `steps/test_sharepoint_connector.py`)
 
 ## Known Gaps
 
@@ -150,6 +182,25 @@ and per-destination rate limiting.
   coverage is via unit tests.
 
 ## QA History
+- 2026-09-16: **improve-architecture (product-map walk)** — closed the
+  `azure_repos.feature`, `discord.feature`, `microsoft_teams.feature` and
+  `sharepoint.feature` orphan gaps: all four features shipped under
+  `tests/bdd/features/connectors/` but no step module registered them via
+  `scenarios(...)`, so they never executed. Each is now wired from its own step
+  module that drives the REAL connector against a respx-mocked API (mirroring
+  the unit suites): `steps/test_azure_repos_connector.py` (7 scenarios — 401
+  profile health, list repos / file / pull requests / commits, write a file via
+  a push, create a pull request), `steps/test_discord_connector.py` (11
+  scenarios — `/users/@me` health 200/401, list guilds / channels / messages /
+  members / roles, get guild, send message, add reaction, create channel),
+  `steps/test_microsoft_teams_connector.py` (12 scenarios — `/users` health
+  200/401, list teams / channels / messages / members / users / groups, get
+  team / channel, send message, create channel) and
+  `steps/test_sharepoint_connector.py` (6 scenarios — `/sites/root` health
+  200/401, list sites / list items, create list item, read file).
+  36 scenarios now collect and execute. `_ORPHANED_BDD_FEATURES` shrinks by
+  four; the remaining orphans (`swappable_binding`, `pipeline_config_validation`,
+  `validation`) still await step modules.
 - 2026-09-16: **improve-architecture (product-map walk)** — closed the
   `azure_key_vault.feature` and `azure_pipelines.feature` orphan gaps: both
   features shipped under `tests/bdd/features/connectors/` but no step module

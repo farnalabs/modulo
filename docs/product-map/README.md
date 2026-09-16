@@ -201,6 +201,17 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > into the executing BDD suite (`steps/test_dropbox_paper_connector.py`),
 > shrunk `_ORPHANED_BDD_FEATURES` by one more, and closed `feat-connectors`'s
 > Dropbox Paper per-connector BDD gap (`configure/connectors.md`).
+>
+> **Closed this walk (2026-09-16):** wired the four remaining connector orphans
+> `connectors/azure_repos.feature`, `connectors/discord.feature`,
+> `connectors/microsoft_teams.feature` and `connectors/sharepoint.feature`
+> into the executing BDD suite (`steps/test_azure_repos_connector.py`,
+> `steps/test_discord_connector.py`, `steps/test_microsoft_teams_connector.py`,
+> `steps/test_sharepoint_connector.py`), shrunk `_ORPHANED_BDD_FEATURES` by
+> four, and closed `feat-connectors`'s Azure Repos / Discord / Microsoft Teams /
+> SharePoint per-connector BDD gaps (`configure/connectors.md`). The only
+> remaining orphans are `connectors/swappable_binding.feature` and the two
+> pipeline-validation features.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

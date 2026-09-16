@@ -446,6 +446,182 @@ jobs:
             exit 1
           fi
 
+  notify-staging-e2e-failure:
+    name: Trigger Branch Fixer on staging E2E failure
+    needs: [staging-e2e, deploy-staging]
+    # FAR-906: fires when the staging E2E job fails — the post-deploy
+    # Playwright @regression gate. Without this job, a Staging E2E failure
+    # produced ZERO fix attempts across 13 consecutive runs over ~11 hours
+    # because no notification reached the Branch Fixer. The earlier
+    # notify-deploy-failure job only covers pre-deploy gate failures; this
+    # closes the gap for the post-deploy E2E stage.
+    #
+    # branchName: main, prNumber: 0 signals "create a fix branch from main,
+    # diagnose, and raise a PR" — the same contract as notify-deploy-failure.
+    if: always() && needs.staging-e2e.result == 'failure'
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Dispatch Branch Fixer webhook
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          BRANCH: main
+          PR_NUMBER: "0"
+          FEEDBACK: "Staging E2E tests failed after deploy to staging. The Branch Fixer should create a fix branch from main, diagnose the Playwright @regression failure, fix it, and raise a PR."
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg branchName "${BRANCH}" \
+            --argjson prNumber ${PR_NUMBER} \
+            --arg failureDescription "${FEEDBACK}" \
+            --arg repo "${{ github.repository }}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+
+          DISPATCHED="false"
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) - retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
+              break
+            fi
+          done
+          if [ "$DISPATCHED" != "true" ]; then
+            echo "::error::Branch Fixer webhook dispatch failed - staging E2E failure was not handed to the autonomous fix loop."
+            exit 1
+          fi
+
+  notify-prod-smoke-failure:
+    name: Trigger Branch Fixer on prod smoke failure
+    needs: [prod-smoke, deploy-production]
+    # FAR-906 follow-up: same gap exists for prod smoke test failures. A
+    # production deploy that passes staging E2E but fails @smoke tests would
+    # also have no autonomous fix attempt.
+    if: always() && needs.prod-smoke.result == 'failure'
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Dispatch Branch Fixer webhook
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          BRANCH: main
+          PR_NUMBER: "0"
+          FEEDBACK: "Production smoke tests failed after deploy to app.modulo.run. The Branch Fixer should create a fix branch from main, diagnose the Playwright @smoke failure, fix it, and raise a PR."
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg branchName "${BRANCH}" \
+            --argjson prNumber ${PR_NUMBER} \
+            --arg failureDescription "${FEEDBACK}" \
+            --arg repo "${{ github.repository }}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+
+          DISPATCHED="false"
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) - retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
+              break
+            fi
+          done
+          if [ "$DISPATCHED" != "true" ]; then
+            echo "::error::Branch Fixer webhook dispatch failed - prod smoke failure was not handed to the autonomous fix loop."
+            exit 1
+          fi
+
+  notify-deploy-staging-failure:
+    name: Signal infra failure on staging deploy
+    needs: [deploy-staging]
+    # FAR-908: deploy-staging infrastructure failures (Fly API errors, image
+    # build failures, migration failures) previously had NO notification.
+    # The deploy watchdog re-dispatches, but after 3 consecutive failures it
+    # only logs ::error:: in the Actions tab — invisible unless someone
+    # checks. This job dispatches the Branch Fixer as a TRIAGE step: it may
+    # conclude the failure is not fixable in code, but the webhook creates a
+    # visible Modulo pipeline run that surfaces the failure in the app UI.
+    #
+    # Distinguishable from code-failure notifications: the FEEDBACK text
+    # begins with "INFRASTRUCTURE FAILURE" so a human reading it knows this
+    # is not a code regression.
+    if: always() && needs.deploy-staging.result == 'failure'
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Dispatch Branch Fixer webhook (triage)
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          BRANCH: main
+          PR_NUMBER: "0"
+          FEEDBACK: "INFRASTRUCTURE FAILURE: Deploy to staging failed (Fly API, image build, or migration). The Branch Fixer should triage this — it may not be fixable in code, but the run creates visibility. Check deploy-staleness-check and deploy-watchdog for re-dispatch."
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg branchName "${BRANCH}" \
+            --argjson prNumber ${PR_NUMBER} \
+            --arg failureDescription "${FEEDBACK}" \
+            --arg repo "${{ github.repository }}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+
+          DISPATCHED="false"
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) - retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
+              break
+            fi
+          done
+          if [ "$DISPATCHED" != "true" ]; then
+            echo "::error::Branch Fixer webhook dispatch failed - staging infra failure was not signalled."
+            exit 1
+          fi
+
   deploy-staging:
     name: Deploy to staging
     needs: [pre-deploy-gate]
@@ -2568,6 +2744,65 @@ jobs:
               print(f"stray machines destroyed: {removed}")
           PYEOF
 
+  notify-deploy-production-failure:
+    name: Signal infra failure on production deploy
+    needs: [deploy-production]
+    # FAR-908: deploy-production infrastructure failures (Fly API errors,
+    # image build failures, migration failures) previously had NO
+    # notification. Same rationale as notify-deploy-staging-failure: the
+    # Branch Fixer webhook creates a visible Modulo pipeline run for triage,
+    # and the staleness-check/watchdog handle re-dispatch independently.
+    #
+    # The FEEDBACK text begins with "INFRASTRUCTURE FAILURE" to distinguish
+    # from code-failure notifications (notify-deploy-failure, etc.).
+    if: always() && needs.deploy-production.result == 'failure'
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Dispatch Branch Fixer webhook (triage)
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          BRANCH: main
+          PR_NUMBER: "0"
+          FEEDBACK: "INFRASTRUCTURE FAILURE: Deploy to production failed (Fly API, image build, or migration). The Branch Fixer should triage this — it may not be fixable in code, but the run creates visibility. Check deploy-staleness-check and deploy-watchdog for re-dispatch."
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg branchName "${BRANCH}" \
+            --argjson prNumber ${PR_NUMBER} \
+            --arg failureDescription "${FEEDBACK}" \
+            --arg repo "${{ github.repository }}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+
+          DISPATCHED="false"
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) - retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
+              break
+            fi
+          done
+          if [ "$DISPATCHED" != "true" ]; then
+            echo "::error::Branch Fixer webhook dispatch failed - production infra failure was not signalled."
+            exit 1
+          fi
+
   prod-smoke:
     name: Prod smoke tests
     needs: [deploy-production]
@@ -2606,3 +2841,60 @@ jobs:
           E2E_ADMIN_PASSWORD: ${{ secrets.E2E_PROD_ADMIN_PASSWORD }}
         # No failure masking: a broken deploy must not ship green, so smoke
         # failures hard-fail the run.
+
+  deploy-audit:
+    name: Deploy job notification audit
+    # FAR-908: this job runs on EVERY deploy workflow completion (success or
+    # failure) and prints a coverage table to the step summary. Any job added
+    # to deploy.yml without a corresponding failure signal will show as
+    # UNCOVERED in this table — making gaps visible in the Actions UI rather
+    # than discoverable only during an outage.
+    #
+    # This is a DOCUMENTATION/ASSERTION job, not a gate. It always succeeds
+    # so it never blocks deploys. The value is in the step summary output
+    # that humans and agents read after a failure.
+    if: always()
+    needs: [deploy-throttle, pre-deploy-gate, notify-deploy-failure, deploy-staging, notify-deploy-staging-failure, staging-e2e, notify-staging-e2e-failure, deploy-production, notify-deploy-production-failure, prod-smoke, notify-prod-smoke-failure]
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Audit notification coverage
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'AUDIT'
+          ## Deploy Workflow — Job Notification Audit (FAR-908)
+
+          Every job that can fail and block a deploy MUST have a failure signal.
+          This table is the source of truth. Update it when adding jobs.
+
+          | Job | Can fail? | Blocks deploy? | Failure signal | Notified to |
+          |---|---|---|---|---|
+          | `deploy-throttle` | Yes | Yes (skips deploy) | Fails loud (::error::) | Actions tab |
+          | `backend-lint` | Yes | Yes (via gate) | Branch Fixer webhook | Modulo pipeline |
+          | `backend-unit` | Yes | Yes (via gate) | Branch Fixer webhook | Modulo pipeline |
+          | `frontend-checks` | Yes | Yes (via gate) | Branch Fixer webhook | Modulo pipeline |
+          | `integration-tests` | Yes | Yes (via gate) | Branch Fixer webhook | Modulo pipeline |
+          | `security-audit` | Yes | Yes (via gate) | Branch Fixer webhook | Modulo pipeline |
+          | `pre-deploy-gate` | Yes | Yes (aggregates above) | Branch Fixer webhook | Modulo pipeline |
+          | `notify-deploy-failure` | Yes | No (notification only) | N/A — IS the signal | — |
+          | `deploy-staging` | Yes | Yes | Branch Fixer webhook (triage) + watchdog re-dispatch | Modulo pipeline + Actions |
+          | `notify-deploy-staging-failure` | Yes | No (notification only) | N/A — IS the signal | — |
+          | `staging-e2e` | Yes | Yes | Branch Fixer webhook | Modulo pipeline |
+          | `notify-staging-e2e-failure` | Yes | No (notification only) | N/A — IS the signal | — |
+          | `deploy-production` | Yes | Yes | Branch Fixer webhook (triage) + staleness-check escalation | Modulo pipeline + Actions |
+          | `notify-deploy-production-failure` | Yes | No (notification only) | N/A — IS the signal | — |
+          | `prod-smoke` | Yes | Yes | Branch Fixer webhook | Modulo pipeline |
+          | `notify-prod-smoke-failure` | Yes | No (notification only) | N/A — IS the signal | — |
+
+          ### Coverage rules
+          - **Code failures** (tests, lint): routed to Branch Fixer via webhook → Modulo pipeline run
+          - **Infrastructure failures** (deploy-staging, deploy-production): routed to Branch Fixer as triage + deploy-watchdog re-dispatches + deploy-staleness-check escalates
+          - **Notification-only jobs** (notify-*): always succeed; their purpose IS the signal
+
+          ### Adding a new job?
+          1. If it can fail and block a deploy, add a `notify-<job>-failure` job
+          2. Use the same Branch Fixer webhook pattern as existing notify-* jobs
+          3. Prefix INFRASTRUCTURE failures with "INFRASTRUCTURE FAILURE:" in FEEDBACK
+          4. Add the new job and its notify job to this table
+          5. Add both to this job's `needs:` list so gaps appear in the summary
+          AUDIT
+          echo "Audit table written to step summary."

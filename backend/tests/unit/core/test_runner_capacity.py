@@ -1638,7 +1638,8 @@ async def test_sweep_failed_org_pass_emits_no_marker_cleared_events(
 
 async def test_saq_cron_persists_partial_counts_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
     """F5 liveness contract: the SAQ cron wrapper persists the PARTIAL counts
-    with ``error: sweep_failed`` BEFORE re-raising (SAQ retries engage)."""
+    with an enriched ``error`` (``sweep_failed (<ExceptionType>: <message>)``)
+    BEFORE re-raising (SAQ retries engage)."""
     from modulo.core import saq_worker
 
     persisted: list[tuple[str, dict[str, Any]]] = []
@@ -1664,7 +1665,9 @@ async def test_saq_cron_persists_partial_counts_and_reraises(monkeypatch: pytest
     assert payload["scanned"] == 3
     assert payload["cleared"] == 1
     assert payload["orgs_failed"] == 1
-    assert payload["error"] == "sweep_failed"
+    assert payload["error"] == (
+        "sweep_failed (RunnerMarkerSweepError: scanned=3, cleared=1, transitioned=0, org_failures=1)"
+    )
 
 
 # ---------------------------------------------------------------------------

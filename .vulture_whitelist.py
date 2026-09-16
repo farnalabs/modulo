@@ -394,4 +394,7 @@ __all__ = [
     # --- FAR-856 login-active predicate (ORM-level safety net, tested
     #     independently; SQL-level helpers embed the same predicate) ---
     "is_login_active_org",
+    # --- FAR-853 SSO presets (Pydantic response attribute set in _provider_response;
+    #     vulture cannot see it consumed by model_dump/serialization) ---
+    "callback_url",
 ]

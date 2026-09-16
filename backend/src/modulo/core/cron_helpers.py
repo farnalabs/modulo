@@ -4823,6 +4823,7 @@ def _terminalize_max_rows(max_rows: int | None) -> int:
 _RECONCILE_BUDGET_DEFAULT_SECONDS = 95
 _RECONCILE_TERMINALIZE_DEFAULT_MAX = 25
 _RECONCILE_FACTS_DEFAULT_MAX = 25
+_RECONCILE_MAX_ROWS_DEFAULT = 500
 
 
 def _int_setting(value: Any, default: int) -> int:
@@ -5290,6 +5291,9 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     facts_max = _int_setting(
         getattr(settings, "dispatcher_reconcile_facts_max_per_tick", None), _RECONCILE_FACTS_DEFAULT_MAX
     )
+    max_rows = _int_setting(
+        getattr(settings, "dispatcher_reconcile_max_rows_per_tick", None), _RECONCILE_MAX_ROWS_DEFAULT
+    )
     factory = _open_system_factory()
     summary = _dispatcher_summary()
     # Runs terminalised by this tick's terminalizers — (run_id, org_id) — whose
@@ -5336,6 +5340,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     hitl_gate_cancel_grace=hitl_gate_cancel_grace,
                     terminalize_max=terminalize_max,
                     facts_max=facts_max,
+                    max_rows=max_rows,
                     redis_client=redis_client,
                     summary=summary,
                     terminalized_run_ids=terminalized_run_ids,
@@ -5353,7 +5358,8 @@ async def dispatcher_reconcile() -> dict[str, Any]:
             # FAR-904: name WHERE the tick was when the deadline fired — a
             # bare TimeoutError (its str() is empty) reported nothing.
             summary["last_error"] = (
-                f"inner deadline after {tick_elapsed:.1f}s (budget={budget_seconds}s) "
+                f"inner deadline after {tick_elapsed:.1f}s "
+                f"(budget={budget_seconds}s, max_rows={max_rows}) "
                 f"during stage={stage.get('op', 'unknown')}: {_summarize_reconcile_error(exc)}"
             )[:200]
             _log.warning(
@@ -5392,6 +5398,7 @@ async def _dispatcher_reconcile_body(
     hitl_gate_cancel_grace: int,
     terminalize_max: int,
     facts_max: int,
+    max_rows: int,
     redis_client: AsyncRedis,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
@@ -5418,6 +5425,11 @@ async def _dispatcher_reconcile_body(
     q = RedisQueue(redis_client, name=queue_name)
     # Per-tick re-dispatch cap counter for the B3 enqueue-failed branch.
     enqueue_failed_redispatched = 0
+    # FAR-904: cumulative row budget across all orgs.  Tracks terminalizer
+    # rows + reconcile-scan rows so the sweep always completes within the
+    # inner deadline instead of timing out mid-org.  Overflow drains on
+    # subsequent ticks.
+    rows_processed = 0
     # qa F3: the composed recovery predicate is the SINGLE composition
     # (re_dispatch OR nodeless zombie) — shared verbatim with the D8
     # marker sweep's recoverability check.
@@ -5432,6 +5444,16 @@ async def _dispatcher_reconcile_body(
     for org_id in org_ids:
         if stage is not None:
             stage["op"] = f"reconcile_org:{org_id}"
+        # FAR-904: bound cumulative rows processed across all orgs so the
+        # sweep always completes within the inner deadline.  The per-org
+        # reconcile loop processes terminalizers + a row scan + per-row
+        # operations; without a cross-org cap the tick can grow unbounded
+        # (many orgs * many rows each) and hit the timeout.  Overflow drains
+        # on subsequent 60s ticks.
+        if rows_processed >= max_rows:
+            summary["rows_deferred"] = summary.get("rows_deferred", 0) + len(org_ids) - org_ids.index(org_id)
+            break
+        rows_before = summary["scanned"]
         enqueue_failed_redispatched = await _reconcile_org(
             factory,
             q,
@@ -5450,6 +5472,7 @@ async def _dispatcher_reconcile_body(
             terminalize_max=terminalize_max,
             early_detect_minutes=early_detect_minutes,
         )
+        rows_processed += summary["scanned"] - rows_before
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_superseded / claim_cap_exhausted / dispatch_failed /
     # hitl_gate_expired): the terminalizers write raw UPDATEs and never

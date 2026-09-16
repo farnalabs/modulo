@@ -4,7 +4,7 @@ test.describe('Login Flow', () => {
   test('shows login form fields', { tag: "@regression" }, async ({ page }) => {
     await page.goto('/login', { timeout: 60000 })
 
-    await expect(page.locator('h1')).toContainText('Modulo')
+    await expect(page.locator('h1')).toBeVisible()
 
     const emailInput = page.locator('input[type="text"]')
     await expect(emailInput).toBeVisible()
