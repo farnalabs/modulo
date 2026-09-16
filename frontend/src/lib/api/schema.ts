@@ -7192,6 +7192,10 @@ export interface paths {
         /**
          * Rotation Status
          * @description Return the current rotation state.
+         *
+         *     Reads the Redis distributed lock when Redis is configured; otherwise reads
+         *     the in-process fallback guard (``_rotation_owner``), which spans the whole
+         *     background rotation.
          */
         get: operations["rotation_status_api_v1_admin_rotation_status_get"];
         put?: never;
