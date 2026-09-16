@@ -110,7 +110,7 @@
         <div class="flex gap-2">
           <button
             type="button"
-            :disabled="Boolean(actioning)"
+            :disabled="Boolean(actioning) || (isChoiceGate && !selectedOptionId)"
             data-testid="hitl-gate-save-approve"
             class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
             @click="modifyAndApprove"
@@ -140,6 +140,26 @@
       </Button>
     </div>
     <div v-else-if="status === 'claimed' && claimToken" class="space-y-2 pt-2">
+      <!-- FAR-907: choice gates must be answered before any approval path. -->
+      <div v-if="isChoiceGate" class="space-y-1" data-testid="hitl-gate-choice-options">
+        <p class="text-xs font-semibold text-muted-foreground">{{ $t('hitl.gate.choice_options_label') }}</p>
+        <div class="flex flex-wrap gap-2">
+          <button
+            v-for="opt in choiceOptions"
+            :key="opt.id"
+            type="button"
+            :data-option-id="opt.id"
+            data-testid="hitl-gate-option"
+            class="rounded-md border px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted"
+            :class="selectedOptionId === opt.id ? 'border-primary bg-primary/10 text-primary' : 'border-input text-muted-foreground'"
+            :aria-pressed="selectedOptionId === opt.id"
+            @click="selectedOptionId = opt.id"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+        <p v-if="!selectedOptionId" class="text-xs text-muted-foreground">{{ $t('hitl.gate.choice_required_to_approve') }}</p>
+      </div>
       <textarea
         v-model="notes"
         rows="2"
@@ -151,7 +171,7 @@
       <div class="flex gap-2">
         <button
           type="button"
-          :disabled="Boolean(actioning)"
+          :disabled="Boolean(actioning) || (isChoiceGate && !selectedOptionId)"
           data-testid="hitl-gate-approve"
           class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
           @click="approveGate"
@@ -286,6 +306,9 @@ const claimToken = gateState.claimToken
 const notes = gateState.notes
 const editingSubject = gateState.editingSubject
 const modifiedSubject = gateState.modifiedSubject
+/** FAR-907: the selected choice-gate option, batched in gate state so the
+ * 30s auto-refresh doesn't drop the selection. */
+const selectedOptionId = gateState.selectedOptionId
 const claimedByYou = ref(false)
 const claiming = ref(false)
 const actioning = ref<'approve' | 'reject' | 'modify-approve' | null>(null)
@@ -361,6 +384,43 @@ const subjectLeafKey = computed(() => {
   if (!ctx || typeof ctx !== 'object' || Array.isArray(ctx)) return null
   const value = (ctx as Record<string, unknown>).subject_leaf_key
   return typeof value === 'string' && value.trim() ? value : null
+})
+
+/** FAR-860/907: a single selectable option of a `kind: choice` gate. */
+interface ChoiceOption {
+  id: string
+  label: string
+}
+
+/**
+ * FAR-907: the declared choice options surfaced from the gate's fire-time
+ * briefing context (`context.response_contract`, captured by the backend at
+ * gate-fire time). Empty when the gate is not a choice gate or the bundle
+ * predates FAR-860 — the picker only renders for declared choice gates.
+ */
+const choiceOptions = computed<ChoiceOption[]>(() => {
+  const ctx = props.gate.context
+  if (!ctx || typeof ctx !== 'object' || Array.isArray(ctx)) return []
+  const rc = (ctx as Record<string, unknown>).response_contract
+  if (!rc || typeof rc !== 'object') return []
+  if ((rc as Record<string, unknown>).kind !== 'choice') return []
+  const options = (rc as Record<string, unknown>).options
+  if (!Array.isArray(options)) return []
+  return options.filter(
+    (o): o is ChoiceOption =>
+      !!o && typeof o === 'object' && typeof (o as Record<string, unknown>).id === 'string' && typeof (o as Record<string, unknown>).label === 'string',
+  )
+})
+
+const isChoiceGate = computed(() => choiceOptions.value.length > 0)
+
+/**
+ * FAR-907: the choice answer carried on the approve / approve-with-modification
+ * payloads — only for declared choice gates with a selected option.
+ */
+const choiceAnswer = computed<Record<string, string> | undefined>(() => {
+  if (!isChoiceGate.value || !selectedOptionId.value) return undefined
+  return { kind: 'choice', option_id: selectedOptionId.value }
 })
 
 function statusBadgeClass(state: string): string {
@@ -487,7 +547,7 @@ async function decideGate(decision: 'approve' | 'reject') {
         params: { path: { run_id: props.gate.run_id, gate_id: props.gate.gate_id } },
         body:
           decision === 'approve'
-            ? { claim_token: token, notes: notes.value || null }
+            ? { claim_token: token, notes: notes.value || null, answer: choiceAnswer.value }
             : { claim_token: token, reason },
       },
     )
@@ -582,6 +642,9 @@ async function modifyAndApprove() {
           claim_token: token,
           modified_output: reconstructedOutput,
           notes: notes.value || null,
+          // FAR-907: the choice rides with the modification — a choice gate
+          // cannot be modify-approved without a selected option.
+          answer: choiceAnswer.value,
         },
       },
     )

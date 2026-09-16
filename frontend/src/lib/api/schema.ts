@@ -9780,6 +9780,10 @@ export interface components {
             };
             /** Notes */
             notes?: string | null;
+            /** Answer */
+            answer?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * ArtifactListResponse

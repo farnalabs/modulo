@@ -196,6 +196,12 @@ class ApproveWithModificationRequest(BaseModel):
     claim_token: str
     modified_output: dict[str, Any]
     notes: str | None = None
+    #: FAR-907: optional answer for ``kind: choice`` gates, mirroring
+    #: ``ApproveRequest.answer``. A choice gate REQUIRES a valid ``option_id``
+    #: on this path too — without it a reviewer could approve-with-modification
+    #: while skipping the declared choice (the answer becomes
+    #: ``hitl_answer_{gate_id}`` in run state for downstream conditional edges).
+    answer: dict[str, Any] | None = None
 
 
 class RejectRequest(BaseModel):
@@ -506,6 +512,7 @@ async def _validate_choice_answer(
     gate_id: str,
     org_id: uuid.UUID,
     answer: dict[str, Any] | None,
+    require_answer: bool = False,
 ) -> dict[str, Any] | None:
     """Validate a HITL answer against the gate's response_contract.
 
@@ -517,6 +524,10 @@ async def _validate_choice_answer(
     Raises ``AnswerValidationErrorHTTP`` (422) when the answer is present but
     invalid: missing ``kind``/``option_id``, unknown kind, or unknown
     option_id.
+
+    ``require_answer`` (FAR-907) additionally rejects a missing answer on a
+    ``kind: choice`` gate — used by the approve-with-modification path where
+    the reviewer must not bypass the declared choice.
     """
     try:
         return await validate_hitl_answer(
@@ -525,6 +536,7 @@ async def _validate_choice_answer(
             gate_id=gate_id,
             org_id=org_id,
             answer=answer,
+            require_answer=require_answer,
         )
     except SharedValidationError as exc:
         raise AnswerValidationErrorHTTP(str(exc)) from exc
@@ -840,6 +852,14 @@ async def approve_gate_with_modification(
     for downstream nodes.  A ``hitl.output_modified`` audit event is logged
     documenting the change.
     """
+    # FAR-907: validate the choice answer against the gate's response_contract
+    # BEFORE the manager call (fail-fast, no side effects). A choice gate
+    # REQUIRES a valid answer on this path — without it a reviewer could
+    # modify-approve while skipping the declared choice (previously nothing
+    # validated, so the requirement was silently skipped).
+    validated_answer = await _validate_choice_answer(
+        session, run_id, gate_id, principal.organisation_id, req.answer, require_answer=True
+    )
     # FAR-541: the payload is stamped with the gate it resolves (see approve_gate).
     # The real writer contract: action "approved" + "modified_output" (there is
     # no "approved_with_modification" action). _decide would stamp the persisted
@@ -852,6 +872,11 @@ async def approve_gate_with_modification(
     }
     if req.notes:
         resume_data["notes"] = req.notes
+    if validated_answer is not None:
+        # FAR-907: the answer rides in the persisted decision so
+        # ``_inject_answer_state`` places ``hitl_answer_<gate_id>`` in run
+        # state exactly as on the plain approve path.
+        resume_data["answer"] = validated_answer
     await _run_hitl_manager(
         session,
         principal,
@@ -864,6 +889,7 @@ async def approve_gate_with_modification(
         modified_output=req.modified_output,
         decision_payload=resume_data,
         client_type=_client_type(principal),
+        answer=validated_answer,
     )
 
     try:

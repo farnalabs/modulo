@@ -27,7 +27,9 @@ _GATE_ID = "hitl_gate_src_tgt"
 _SESSION = AsyncMock()
 
 
-async def _validate(answer: dict[str, Any] | None, config: dict[str, Any] | None) -> dict[str, Any] | None:
+async def _validate(
+    answer: dict[str, Any] | None, config: dict[str, Any] | None, *, require_answer: bool = False
+) -> dict[str, Any] | None:
     """Run ``validate_hitl_answer`` with ``resolve_hitl_gate_config`` stubbed."""
     with patch(
         "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
@@ -39,6 +41,7 @@ async def _validate(answer: dict[str, Any] | None, config: dict[str, Any] | None
             gate_id=_GATE_ID,
             org_id=_ORG_ID,
             answer=answer,
+            require_answer=require_answer,
         )
 
 
@@ -155,3 +158,29 @@ async def test_mcp_adapter_returns_error_tuple_on_invalid_answer():
     assert error is not None
     assert error["error"] == "invalid_answer"
     assert validated is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-907: require_answer — the modify-approve path must not skip a choice
+# ---------------------------------------------------------------------------
+
+
+async def test_require_answer_rejects_missing_answer_on_choice_gate():
+    config = {"response_contract": {"kind": "choice", "options": [{"id": "a", "label": "A"}]}}
+    with pytest.raises(AnswerValidationError, match="choice gate requires an answer"):
+        await _validate(None, config, require_answer=True)
+
+
+async def test_require_answer_accepts_valid_choice_answer():
+    config = {"response_contract": {"kind": "choice", "options": [{"id": "a", "label": "A"}]}}
+    answer = {"kind": "choice", "option_id": "a"}
+    assert await _validate(answer, config, require_answer=True) == answer
+
+
+async def test_require_answer_passes_missing_on_non_choice_gate():
+    config = {"response_contract": {"kind": "approval"}}
+    assert await _validate(None, config, require_answer=True) is None
+
+
+async def test_require_answer_passes_missing_on_no_contract_gate():
+    assert await _validate(None, None, require_answer=True) is None

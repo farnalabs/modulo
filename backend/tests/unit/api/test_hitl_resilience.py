@@ -281,6 +281,9 @@ class TestResumeSandboxCapacityExceeded:
         executor = self._executor_raising()
         with (
             patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
+            # FAR-907: the modify-approve path now validates the answer contract,
+            # which resolves the gate config through the shared validator module.
+            patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch(
                 f"modulo.api.routes.hitl.HITLManager.{hitl_method}",
@@ -329,6 +332,7 @@ class TestResumeDataGateStamp:
         executor.resume = AsyncMock()
         with (
             patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
+            patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager", return_value=manager),
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
@@ -351,10 +355,11 @@ class TestApproveWithModificationSQLAlchemyError:
         new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")),
     )
     def test_approve_with_modification_returns_503(self, client: TestClient) -> None:
-        resp = client.post(
-            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve-with-modification",
-            json={"claim_token": "test-token", "modified_output": {"key": "value"}, "notes": "modified"},
-        )
+        with patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None)):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve-with-modification",
+                json={"claim_token": "test-token", "modified_output": {"key": "value"}, "notes": "modified"},
+            )
         assert resp.status_code == 503
 
 
