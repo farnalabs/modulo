@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock
 from modulo.db.crud.invitations import (
     consume_invitation,
     create_invitation,
-    get_live_for_email,
     get_valid_by_token_hash,
     has_live_for_email,
     hash_invitation_token,
@@ -96,6 +95,32 @@ class TestHasLiveForEmail:
         assert await has_live_for_email(session, org_id=uuid.uuid4(), email="a@b.com") is False
 
 
+class TestGetLiveForEmail:
+    """FAR-855: the SSO join-gate lookup (row-locked, live-only)."""
+
+    async def test_returns_locked_live_invitation(self) -> None:
+        from modulo.db.crud.invitations import get_live_for_email
+
+        session = _mock_session()
+        invitation = _invitation()
+        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=invitation)))
+        org_id = uuid.uuid4()
+
+        result = await get_live_for_email(session, org_id=org_id, email="invited@example.com")
+
+        assert result is invitation
+        stmt = session.execute.call_args.args[0]
+        assert "FOR UPDATE" in str(stmt.compile()).upper()
+
+    async def test_returns_none_when_no_match(self) -> None:
+        from modulo.db.crud.invitations import get_live_for_email
+
+        session = _mock_session()
+        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+
+        assert await get_live_for_email(session, org_id=uuid.uuid4(), email="nobody@example.com") is None
+
+
 class TestGetValidByTokenHash:
     async def test_returns_invitation_when_live(self) -> None:
         session = _mock_session()
@@ -109,23 +134,6 @@ class TestGetValidByTokenHash:
         session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         assert await get_valid_by_token_hash(session, "hash") is None
-
-
-class TestGetLiveForEmail:
-    """FAR-855: the (org, email) live lookup the SSO join gate bridges into."""
-
-    async def test_returns_live_invitation(self) -> None:
-        session = _mock_session()
-        invitation = _invitation()
-        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=invitation)))
-
-        assert await get_live_for_email(session, org_id=uuid.uuid4(), email="invited@example.com") is invitation
-
-    async def test_returns_none_when_no_live_match(self) -> None:
-        session = _mock_session()
-        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-
-        assert await get_live_for_email(session, org_id=uuid.uuid4(), email="missing@example.com") is None
 
 
 class TestConsumeInvitation:

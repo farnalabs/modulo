@@ -2217,3 +2217,10 @@ class TestSsoJoinGate:
         with stack, pytest.raises(SsoProvisioningDeniedError):
             await self._join(_override(), _mock_session(), provider, "not-an-email")
         mocks.create.assert_not_awaited()
+
+    def test_sso_verified_domain_rejects_non_email(self) -> None:
+        from modulo.auth.sso import _sso_verified_domain
+
+        assert _sso_verified_domain("plainname") is None
+        assert _sso_verified_domain("a@b") == "b"
+        assert _sso_verified_domain("a@b@BAD.com") == "bad.com"
