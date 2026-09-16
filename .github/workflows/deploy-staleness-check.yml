@@ -11,6 +11,13 @@ name: "Deploy staleness check (prod vs main)"
 # it compares the fly image tag vs main HEAD and re-dispatches deploy.yml to
 # heal WITHIN this check's 6h grace window. If this check's ::error:: fires,
 # the watchdog failed to heal - investigate the watchdog, not this check.
+#
+# FAR-910: escalation path -- on failure, a Linear ticket is auto-created with
+# the staleness detail (prod SHA, main HEAD, hours stale) so the signal
+# reaches the ready queue, not just the Actions tab. The warning branches
+# (unreachable endpoint, missing SHA) remain warn-only for transient failures;
+# persistent blindness is covered by the uptime-monitor (FAR-400) and the
+# deploy-watchdog's own escalation (3 consecutive failures).
 
 on:
   schedule:
@@ -19,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   check-prod-staleness:
@@ -26,17 +34,10 @@ jobs:
     runs-on: ubicloud-standard-2
     steps:
       - name: Compare prod build SHA against origin/main HEAD
+        id: staleness
         shell: bash
         env:
-          # github.token: same-repo API reads must use the workflow runtime
-          # token — a scoped PAT yields 404, which looks exactly like an empty
-          # result (FAR-528 lesson).
           GH_TOKEN: ${{ github.token }}
-          # Grace window before divergence is treated as starvation: the deploy
-          # throttle itself batches up to DEPLOY_INTERVAL_HOURS (default 3h) and
-          # the pre-deploy CI + staging E2E pipeline runs ~2h, so main being
-          # ahead of prod for a few hours is NORMAL. Default 6h; overridable via
-          # the STALENESS_GRACE_HOURS repo variable.
           GRACE_HOURS: ${{ vars.STALENESS_GRACE_HOURS || 6 }}
         run: |
           MAIN_JSON="$(gh api "repos/${{ github.repository }}/commits/${{ github.ref_name }}" --jq '{sha: .sha, date: .commit.committer.date}' 2>/dev/null || true)"
@@ -66,12 +67,58 @@ jobs:
           MAIN_TS=$(date -u -d "$MAIN_DATE" +%s)
           NOW_TS=$(date -u +%s)
           AGE_H=$(( (NOW_TS - MAIN_TS) / 3600 ))
-          echo "head_age_hours=${AGE_H}"
+
+          echo "head_age_hours=${AGE_H}" >> "$GITHUB_OUTPUT"
+          echo "main_sha=${MAIN_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "prod_sha=${PROD_SHORT}" >> "$GITHUB_OUTPUT"
           echo "grace_hours=${GRACE_HOURS}"
 
           if [ "$AGE_H" -ge "$GRACE_HOURS" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
             echo "::error::PRODUCTION DEPLOY STARVATION: app.modulo.run is running $PROD_SHORT but origin/${{ github.ref_name }} HEAD is $MAIN_SHORT, committed ${AGE_H}h ago (>= ${GRACE_HOURS}h grace). The deploy pipeline has not released main's HEAD - check the 'Deploy: Staging + Prod' workflow runs and the throttle step. If no deploy is in flight, use workflow_dispatch with force_deploy=true."
             exit 1
           fi
 
           echo "::notice::Production ($PROD_SHORT) is behind origin/${{ github.ref_name }} HEAD ($MAIN_SHORT, ${AGE_H}h old) but within the ${GRACE_HOURS}h grace window - the deploy pipeline may still be in flight (throttle batches up to DEPLOY_INTERVAL_HOURS)."
+
+      - name: Create Linear ticket on starvation
+        if: failure()
+        shell: bash
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "LINEAR_API_KEY not set - skipping ticket (workflow failure still alerts via GitHub)."
+            exit 0
+          fi
+          HEAD_AGE="${{ steps.staleness.outputs.head_age_hours }}"
+          MAIN_SHA="${{ steps.staleness.outputs.main_sha }}"
+          PROD_SHA="${{ steps.staleness.outputs.prod_sha }}"
+          GRACE="${{ steps.staleness.outputs.grace_hours }}"
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          TITLE="DEPLOY STARVATION: prod stale ${HEAD_AGE}h (FAR-910)"
+          DESC="Production deploy starvation detected at ${TS}.\nProd SHA: ${PROD_SHA:-unknown}\nMain HEAD: ${MAIN_SHA:-unknown}\nHours stale: ${HEAD_AGE:-unknown}h\nGrace window: ${GRACE:-6}h\nThe deploy pipeline has not released main's HEAD within the grace window.\nIf no deploy is in flight, force one: gh workflow run 'Deploy: Staging + Prod' --ref main -f force_deploy=true\nThis is FAR-910 -- deploy staleness + watchdog checks must escalate, not annotate green runs."
+
+          BODY=$(jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$(echo -e "$DESC")" \
+            '{
+              query: "mutation($i: IssueCreateInput!){ issueCreate(input:$i){ success issue { identifier url } } }",
+              variables: { i: {
+                teamId: "ae855baf-6439-4980-97fb-38da80129485",
+                title: $title,
+                description: $desc,
+                priority: 1
+              } }
+            }')
+          RESULT=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$BODY" 2>&1) || true
+          if echo "$RESULT" | grep -q '"success":true'; then
+            TICKET_ID=$(echo "$RESULT" | jq -r '.data.issueCreate.issue.identifier // "unknown"')
+            echo "Created Linear ticket: $TICKET_ID"
+          else
+            echo "::warning::Failed to create Linear ticket: $RESULT"
+          fi
