@@ -400,6 +400,42 @@ describe('HitlGateCard', () => {
     expect(wrapper.find('[data-testid="hitl-gate-edit-subject"]').exists()).toBe(false)
   })
 
+  it('prefills the textarea from the raw subject leaf, not the quoted serialized subject', async () => {
+    // The backend produces `subject` via serialize_value() (json.dumps), so a
+    // STRING leaf arrives quoted ('"Review this comment."'). The editor must
+    // prefill from subject_parent[subject_leaf_key] (the raw, unquoted value)
+    // so Save & approve does not persist literal quotes into modified_output.
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockResolvedValue({
+      data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
+      error: undefined,
+    })
+    wrapper = mount(HitlGateCard, {
+      props: {
+        gate: gate({
+          context: {
+            subject: '"Review this comment."',
+            subject_parent: { body: 'Review this comment.' },
+            subject_leaf_key: 'body',
+          },
+        }),
+      },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="hitl-gate-edit-subject"]').trigger('click')
+    await flushPromises()
+
+    const textarea = wrapper.find('[data-testid="hitl-gate-subject-textarea"]')
+    expect(textarea.exists()).toBe(true)
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('Review this comment.')
+    expect(wrapper.find('[data-testid="hitl-gate-save-approve"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-cancel-edit"]').exists()).toBe(true)
+  })
+
   it('opens the subject textarea when edit button is clicked', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.POST as any).mockResolvedValue({

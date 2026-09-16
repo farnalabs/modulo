@@ -481,7 +481,7 @@ async def _build_context_inner(
     bounded_subject_leaf_key: str | None = None
     if isinstance(subject_parent, dict) and subject_leaf_key is not None:
         try:
-            raw_parent = json.dumps(subject_parent, sort_keys=True, default=str, ensure_ascii=False)
+            raw_parent = serialize_value(subject_parent)
             redacted_parent = sanitize_error_text(raw_parent)
             bounded_parent_str = slice_with_marker(redacted_parent, ARTIFACTS_BUDGET_CHARS)
             bounded_subject_parent = json.loads(bounded_parent_str) if bounded_parent_str else None

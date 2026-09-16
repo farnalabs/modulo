@@ -42,7 +42,6 @@ export default {
       "save_and_approve": "Save & approve",
       "save_and_approving": "Saving & approving...",
       "modified_subject_label": "Modified subject (downstream nodes receive this)",
-      "subject_modified_indicator": "Modified",
       "cancel_edit": "Cancel"
     }
   },
@@ -3334,7 +3333,6 @@ export default {
       "show_details": "Show details",
       "hide_details": "Hide details",
       "subject": "What you are deciding",
-      "subject_modified": "What you are deciding (modified)",
       "consequence_approve": "Approve → continues to {target}",
       "consequence_reject": "Reject → routes to {target}"
     },

@@ -519,7 +519,19 @@ async function rejectGate() {
 
 // FAR-862: subject editing — "I am about to post this PR comment as you"
 function startEditSubject() {
-  modifiedSubject.value = subject.value ?? ''
+  // Prefill from the RAW subject leaf, not the serialized `subject` string:
+  // the backend derives `subject` via serialize_value() (json.dumps), so a
+  // string leaf arrives as '"Review this comment."' — literal quotes around
+  // the real value. Prefilling from that would seed the editor with the
+  // quoted JSON repr, which Save & approve would persist into
+  // modified_output as real data. The raw value lives in
+  // subject_parent[subject_leaf_key]; fall back to `subject` only when the
+  // leaf is not a plain string (complex subject), where the serialized form
+  // is the value the reviewer edits.
+  const parent = subjectParent.value
+  const leafKey = subjectLeafKey.value
+  const rawLeaf = parent && leafKey ? parent[leafKey] : undefined
+  modifiedSubject.value = typeof rawLeaf === 'string' ? rawLeaf : (subject.value ?? '')
   editingSubject.value = true
 }
 
