@@ -97,6 +97,33 @@ async function mountPanel(): Promise<ReturnType<typeof mount>> {
   return wrapper
 }
 
+/** Mount the panel in an open state with a session pre-seeded.
+ *  Tests that need to interact with panel internals (titlebar, tabs, etc.)
+ *  must use this helper — the default panelState is 'closed', so the panel
+ *  does not render without explicit setup. */
+async function mountPanelOpen(
+  state: 'floating' | 'docked' = 'floating',
+  sessionOverrides: Partial<ChatSession> = {},
+): Promise<ReturnType<typeof mount>> {
+  const store = useRemyStore()
+  store.panelState = state
+  store.activeSessionId = 'sess-1'
+  const session = makeSession(sessionOverrides)
+  // Override API mock so fetchSessions returns our session
+  apiGet.mockImplementation((path: string) => {
+    if (path === '/api/v1/remy/sessions') {
+      return Promise.resolve({ data: { items: [session] }, error: undefined })
+    }
+    if (path === '/api/v1/remy/sessions/{session_id}/messages') {
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    }
+    return Promise.resolve({ data: { items: [] }, error: undefined })
+  })
+  const wrapper = mount(RemyPanel)
+  await flushPromises()
+  return wrapper
+}
+
 describe('RemyPanel', () => {
   let createObjectURLSpy: ReturnType<typeof vi.fn>
   let revokeObjectURLSpy: ReturnType<typeof vi.fn>
@@ -132,7 +159,18 @@ describe('RemyPanel', () => {
     expect(wrapper.find('.remy-panel').exists()).toBe(true)
   })
 
-  it('renders the docked panel with chat tab active by default', async () => {
+  it('defaults to closed state — only the launcher button renders, not the panel overlay', async () => {
+    const store = useRemyStore()
+    // Fresh localStorage means the default kicks in (should be 'closed')
+    expect(store.panelState).toBe('closed')
+    const wrapper = await mountPanel()
+    expect(wrapper.find('.remy-panel').exists()).toBe(false)
+    expect(wrapper.find('.remy-floating-btn').exists()).toBe(true)
+  })
+
+  it('renders the docked panel when explicitly set to docked', async () => {
+    const store = useRemyStore()
+    store.panelState = 'docked'
     const wrapper = await mountPanel()
     expect(wrapper.find('.remy-panel').exists()).toBe(true)
     expect(wrapper.find('[data-testid="remy-chat-stub"]').isVisible()).toBe(true)
@@ -140,7 +178,7 @@ describe('RemyPanel', () => {
   })
 
   it('switches tabs between chat, skills, sessions and sources', async () => {
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen()
     const tabs = wrapper.findAll('.remy-tab')
     await tabs[1].trigger('click')
     expect(wrapper.find('[data-testid="remy-skill-manager-stub"]').exists()).toBe(true)
@@ -152,8 +190,8 @@ describe('RemyPanel', () => {
     expect(wrapper.find('[data-testid="remy-chat-stub"]').isVisible()).toBe(true)
   })
 
-  it('docks a floating panel and undocks a docked panel (auto-created sessions start floating)', async () => {
-    const wrapper = await mountPanel()
+  it('docks a floating panel and undocks a docked panel', async () => {
+    const wrapper = await mountPanelOpen('floating')
     const store = useRemyStore()
     expect(store.panelState).toBe('floating')
     const dockBtn = wrapper.find('button[title="Dock"]')
@@ -168,6 +206,7 @@ describe('RemyPanel', () => {
 
   it('maximises and minimises the panel', async () => {
     const store = useRemyStore()
+    store.panelState = 'docked'
     const wrapper = await mountPanel()
     await wrapper.find('button[title="Maximise"]').trigger('click')
     expect(store.panelState).toBe('maximised')
@@ -178,7 +217,7 @@ describe('RemyPanel', () => {
 
   it('closes the panel from the titlebar close button', async () => {
     const store = useRemyStore()
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen('floating')
     await wrapper.find('button[title="Close"]').trigger('click')
     expect(store.panelState).toBe('closed')
     expect(wrapper.find('.remy-floating-btn').exists()).toBe(true)
@@ -186,8 +225,7 @@ describe('RemyPanel', () => {
 
   it('resets session permissions when the shield button is clicked', async () => {
     const store = useRemyStore()
-    store.activeSessionId = 'sess-1'
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen()
     await wrapper.find('button[title="Reset Permissions"]').trigger('click')
     await flushPromises()
     expect(apiPost).toHaveBeenCalledWith('/api/v1/remy/sessions/{session_id}/reset-permissions', {
@@ -197,11 +235,10 @@ describe('RemyPanel', () => {
   })
 
   it('exports the transcript as a markdown blob', async () => {
+    const wrapper = await mountPanelOpen()
     const store = useRemyStore()
-    store.activeSessionId = 'sess-1'
-    store.sessions = [makeSession()]
     store.messages = [makeMessage()]
-    const wrapper = await mountPanel()
+    await nextTick()
     const exportBtn = wrapper.find('button[title="Export Transcript"]')
     expect(exportBtn.exists()).toBe(true)
     await exportBtn.trigger('click')
@@ -217,7 +254,7 @@ describe('RemyPanel', () => {
 
   it('shows an error banner and dismisses it', async () => {
     const store = useRemyStore()
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen()
     store.error = 'Something broke'
     await nextTick()
     const banner = wrapper.find('.remy-panel .text-destructive')
@@ -231,7 +268,7 @@ describe('RemyPanel', () => {
 
   it('styles rate-limit errors with the warning palette', async () => {
     const store = useRemyStore()
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen()
     store.error = 'Rate limit exceeded, slow down'
     await nextTick()
     const banner = wrapper.find('.text-orange-600')
@@ -240,7 +277,7 @@ describe('RemyPanel', () => {
   })
 
   it('starts renaming from the titlebar and saves via Enter', async () => {
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen()
     const store = useRemyStore()
     expect(store.activeSession).not.toBeNull()
     await wrapper.find('.remy-titlebar button.text-sm').trigger('click')
@@ -257,7 +294,7 @@ describe('RemyPanel', () => {
   })
 
   it('does not rename when the edited name is blank', async () => {
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen()
     await wrapper.find('.remy-titlebar button.text-sm').trigger('click')
     const input = wrapper.find('#remypanel-name-input')
     expect(input.exists()).toBe(true)
@@ -268,7 +305,7 @@ describe('RemyPanel', () => {
   })
 
   it('opens the rename input when the store requests a rename', async () => {
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen()
     const store = useRemyStore()
     expect(wrapper.find('#remypanel-name-input').exists()).toBe(false)
     store.triggerRename()
@@ -277,8 +314,7 @@ describe('RemyPanel', () => {
   })
 
   it('falls back to the session number in the titlebar label', async () => {
-    apiPost.mockResolvedValue({ data: makeSession({ name: null, session_number: 7 }), error: undefined })
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen('floating', { name: null, session_number: 7 })
     expect(wrapper.find('.remy-titlebar button.text-sm').text()).toContain('#7')
   })
 
@@ -320,7 +356,7 @@ describe('RemyPanel', () => {
 
   it('cycles the UI navigation speed when the feature is enabled', async () => {
     featureEnabledMock.mockReturnValue(true)
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen()
     const speedBtn = wrapper.find('.remy-titlebar button[aria-label^="Speed:"]')
     expect(speedBtn.exists()).toBe(true)
     expect(speedBtn.text()).toContain('normal')
@@ -339,7 +375,7 @@ describe('RemyPanel', () => {
   it('shows the review-mode bar with a resume control when speed is review', async () => {
     featureEnabledMock.mockReturnValue(true)
     localStorage.setItem('remy-action-speed', 'review')
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen()
     const store = useRemyStore()
     expect(store.activeSession).not.toBeNull()
     expect(wrapper.text()).toContain('Stops after each navigation')
@@ -352,7 +388,7 @@ describe('RemyPanel', () => {
 
   it('hides the speed button when the UI-driving feature is disabled', async () => {
     featureEnabledMock.mockReturnValue(false)
-    const wrapper = await mountPanel()
+    const wrapper = await mountPanelOpen()
     expect(wrapper.find('.remy-titlebar button[aria-label^="Speed:"]').exists()).toBe(false)
   })
 
@@ -377,7 +413,8 @@ describe('RemyPanel', () => {
     await mountPanel()
     expect(apiPost).toHaveBeenCalledWith('/api/v1/remy/sessions', expect.objectContaining({ body: expect.anything() }))
     expect(store.activeSessionId).toBe('sess-1')
-    expect(store.panelState).toBe('floating')
+    // Panel stays closed by default — user must explicitly open it
+    expect(store.panelState).toBe('closed')
   })
 
   it('does not replace a saved session id that no longer exists on the server', async () => {
@@ -386,5 +423,32 @@ describe('RemyPanel', () => {
     await mountPanel()
     expect(apiPost).not.toHaveBeenCalledWith('/api/v1/remy/sessions', expect.anything())
     expect(store.activeSessionId).toBe('sess-gone')
+  })
+
+  it('clamps stale persisted position into the viewport on mount when floating', async () => {
+    const store = useRemyStore()
+    // Simulate a persisted position from a wider viewport (off-screen right)
+    store.panelState = 'floating'
+    store.panelPosition = { x: 9999, y: 80 }
+    store.panelSize = { width: 440, height: 600 }
+    await mountPanel()
+    // After mount, position must be clamped inside the viewport
+    expect(store.panelPosition.x).toBeLessThanOrEqual(window.innerWidth - 340)
+    expect(store.panelPosition.y).toBeLessThanOrEqual(window.innerHeight - 100)
+    expect(store.panelPosition.x).toBeGreaterThanOrEqual(8)
+    expect(store.panelPosition.y).toBeGreaterThanOrEqual(8)
+  })
+
+  it('clamps stale persisted size into the viewport on mount', async () => {
+    const store = useRemyStore()
+    store.panelState = 'docked'
+    // Simulate a persisted size from a larger viewport
+    store.panelSize = { width: 9999, height: 9999 }
+    await mountPanel()
+    // updateSize clamps width to window.innerWidth - 16 and height to window.innerHeight - 40
+    expect(store.panelSize.width).toBeLessThanOrEqual(window.innerWidth - 16)
+    expect(store.panelSize.height).toBeLessThanOrEqual(window.innerHeight - 40)
+    expect(store.panelSize.width).toBeGreaterThanOrEqual(100)
+    expect(store.panelSize.height).toBeGreaterThanOrEqual(100)
   })
 })

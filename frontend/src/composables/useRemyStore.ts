@@ -39,7 +39,7 @@ export const useRemyStore = defineStore('remy', () => {
   const sessions = ref<ChatSession[]>([])
   const activeSessionId = useStorage<string | null>('remy-active-session', null)
   const messages = ref<ChatMessage[]>([])
-  const panelState = useStorage<'closed' | 'floating' | 'docked' | 'maximised'>('remy-panel-state', 'docked')
+  const panelState = useStorage<'closed' | 'floating' | 'docked' | 'maximised'>('remy-panel-state', 'closed')
   const panelPosition = useStorage('remy-panel-position', { x: Math.max(8, window.innerWidth - 460), y: 80 })
   const panelSize = useStorage('remy-panel-size', { width: Math.min(440, window.innerWidth - 16), height: Math.min(600, window.innerHeight - 120) })
   const isStreaming = ref(false)
