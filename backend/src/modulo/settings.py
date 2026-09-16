@@ -548,6 +548,16 @@ class Settings(BaseSettings):
     dispatcher_reconcile_facts_max_per_tick: int = Field(
         default=25, alias="DISPATCHER_RECONCILE_FACTS_MAX_PER_TICK", ge=1, le=1000
     )
+    # FAR-904: cumulative row budget across all orgs per tick. The per-org
+    # reconcile loop processes terminalizers + a row scan + per-row
+    # operations.  Without a cross-org cap the tick can grow unbounded
+    # (many orgs * many rows each) and hit the inner deadline before
+    # completing — a timeout with no recovery.  This cap bounds the total
+    # rows processed (terminalizers + reconcile scan) so the sweep always
+    # completes within budget; overflow drains on subsequent ticks.
+    dispatcher_reconcile_max_rows_per_tick: int = Field(
+        default=500, alias="DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK", ge=50, le=10000
+    )
     # FAR-705: per-run capacity-retry budget for the stale-run sweep's
     # capacity_timeout TTL terminalisation. capacity.* is a RETRYABLE registry
     # class (all four capacity codes carry retryable=True), so a capacity-

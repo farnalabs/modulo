@@ -851,7 +851,8 @@ class RunnerMarkerSweepError(RuntimeError):
 
     Carries the PARTIAL counts the tick achieved (orgs after the failure were
     still swept in the same tick) so the SAQ cron wrapper can persist them
-    with ``"error": "sweep_failed"`` before re-raising (SAQ ``retries=2``
+    with an enriched ``"error": "sweep_failed (<ExceptionType>: <message>)"``
+    before re-raising (SAQ ``retries=2``
     engages — mirroring the ``runner_workspace_reconcile`` sibling contract).
     A swallowed sweep failure is a silently dead safety net: stale markers
     would accumulate as phantom capacity and the D8 rollback signal would go
@@ -862,6 +863,12 @@ class RunnerMarkerSweepError(RuntimeError):
     cleared: int
     transitioned: int
     org_failures: int
+
+    def __post_init__(self) -> None:
+        super().__init__(
+            f"scanned={self.scanned}, cleared={self.cleared}, "
+            f"transitioned={self.transitioned}, org_failures={self.org_failures}"
+        )
 
 
 # Bounded polling for the SESSION-scoped sweep dedup advisory lock. Mirrors
