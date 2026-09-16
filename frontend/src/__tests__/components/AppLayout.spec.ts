@@ -297,8 +297,9 @@ describe('AppLayout', () => {
       // The premise: the panel is docked. The old layout
       // bound `paddingRight: panelSize.width`px onto <main> in this state,
       // reserving 440px on every page.
-      useRemyStore().panelState = 'docked'
-      expect(useRemyStore().panelState).toBe('docked')
+      const remyStore = useRemyStore()
+      remyStore.setPanelState('docked')
+      expect(remyStore.panelState).toBe('docked')
       const main = wrapper.find('main')
       expect(main.attributes('style')).toBeUndefined()
       expect(main.element.style.paddingRight).toBe('')
