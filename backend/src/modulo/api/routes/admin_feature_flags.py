@@ -330,7 +330,7 @@ async def get_feature_flag(
             content={
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": f"Failed to get feature flag: {flag_name}",
+                    "message": "Failed to get feature flag.",
                 }
             },
         )
@@ -411,7 +411,7 @@ async def toggle_feature_flag(
             content={
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": f"Failed to toggle feature flag: {flag_name}",
+                    "message": "Failed to toggle feature flag.",
                 }
             },
         )

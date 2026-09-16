@@ -6713,9 +6713,9 @@ async def create_agent(
     except ProgrammingError:
         _log.exception("create_agent failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception as e:
+    except Exception:
         _log.exception("create_agent failed")
-        return {"error": "internal_error", "detail": f"Failed to create agent: {e}"}
+        return _tool_error("Failed to create agent")
 
 
 def _agent_item(a: Any) -> dict[str, Any]:
@@ -6864,7 +6864,17 @@ SENSITIVE_CONFIG_KEYS: set[str] = {
 
 def _is_sensitive_key(key: str) -> bool:
     lower = key.lower()
-    return any(lower.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS)
+    if any(lower.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS):
+        return True
+    # Also match colon-separated segments (e.g. "remy_config:{org}:api_key")
+    return any(any(segment.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS) for segment in lower.split(":"))
+
+
+def _value_looks_sensitive(val: str) -> bool:
+    """True when *val* matches a known secret-format pattern (API key, PAT, etc.)."""
+    from modulo.core.secret_patterns import SECRET_VALUE_PATTERNS
+
+    return any(pattern.search(val) for pattern, _replacement in SECRET_VALUE_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -7013,7 +7023,9 @@ def _config_table(filtered: list[Any]) -> str:
     for cfg in filtered:
         val = cfg.value
         val_str = json.dumps(val, default=str) if isinstance(val, dict) else str(val)
-        if len(val_str) > 200:
+        if _value_looks_sensitive(val_str):
+            val_str = "\u2022\u2022\u2022\u2022\u2022\u2022"
+        elif len(val_str) > 200:
             val_str = val_str[:200] + "..."
         lines.append(f"| {cfg.key} | {val_str} |")
     return "\n".join(lines)
