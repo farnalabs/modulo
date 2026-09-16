@@ -1,22 +1,22 @@
 """VertexAIBackend — wraps ChatVertexAI for Google Vertex AI models."""
 
-from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import BaseMessage
 from langchain_google_vertexai import ChatVertexAI
 
 from modulo.model_backends.base import (
+    LangChainChatForwardingMixin,
     ModelBackendBase,
 )
 
 VERTEXAI_DEFAULT_LOCATION = "us-central1"
 
 
-class VertexAIBackend(ModelBackendBase):
+class VertexAIBackend(LangChainChatForwardingMixin, ModelBackendBase):
     """Thin adapter over ChatVertexAI for Google Vertex AI (Gemini, Claude, Llama)."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(
         self,
@@ -39,14 +39,3 @@ class VertexAIBackend(ModelBackendBase):
 
     def __repr__(self) -> str:
         return f"VertexAIBackend(model_id={self._backend_id!r})"
-
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
-        return await self._model.ainvoke(messages, **kwargs)
-
-    def stream(
-        self,
-        messages: list[BaseMessage],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, tools=tools, **kwargs)

@@ -1,20 +1,20 @@
 """BedrockBackend — wraps ChatBedrock as a Modulo ModelBackendBase."""
 
-from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_aws import ChatBedrock
-from langchain_core.messages import BaseMessage
 
 from modulo.model_backends.base import (
+    LangChainChatForwardingMixin,
     ModelBackendBase,
 )
 
 
-class BedrockBackend(ModelBackendBase):
+class BedrockBackend(LangChainChatForwardingMixin, ModelBackendBase):
     """Thin adapter over ChatBedrock."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(
         self,
@@ -39,14 +39,3 @@ class BedrockBackend(ModelBackendBase):
 
     def __repr__(self) -> str:
         return f"BedrockBackend(model_id={self._backend_id!r})"
-
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
-        return await self._model.ainvoke(messages, **kwargs)
-
-    def stream(
-        self,
-        messages: list[BaseMessage],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, tools=tools, **kwargs)

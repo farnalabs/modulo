@@ -1,20 +1,24 @@
 """CohereBackend — wraps ChatCohere as a Modulo ModelBackendBase."""
 
-from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_cohere import ChatCohere
-from langchain_core.messages import BaseMessage
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
+from modulo.model_backends.base import (
+    HealthResult,
+    LangChainChatForwardingMixin,
+    ModelBackendBase,
+    openai_compatible_health_check,
+)
 
 COHERE_BASE_URL = "https://api.cohere.ai/v1"
 
 
-class CohereBackend(ModelBackendBase):
+class CohereBackend(LangChainChatForwardingMixin, ModelBackendBase):
     """Thin adapter over ChatCohere."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
         self._model = ChatCohere(
@@ -38,14 +42,3 @@ class CohereBackend(ModelBackendBase):
             base_url=COHERE_BASE_URL,
             api_key=self._api_key,
         )
-
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
-        return await self._model.ainvoke(messages, **kwargs)
-
-    def stream(
-        self,
-        messages: list[BaseMessage],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, tools=tools, **kwargs)

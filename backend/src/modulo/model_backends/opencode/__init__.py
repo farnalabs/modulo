@@ -13,7 +13,8 @@ provider — see the repo-root AGENTS.md Lessons Learned.
 
 from typing import Any
 
-from modulo.model_backends.module import OpenAICompatibleBackend, ProviderUnavailableError
+from modulo.model_backends.base import ProviderUnavailableError
+from modulo.model_backends.module import OpenAICompatibleBackend
 
 __all__ = ["OpenCodeBackend", "ProviderUnavailableError"]
 
