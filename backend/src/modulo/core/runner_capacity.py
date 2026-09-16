@@ -856,12 +856,20 @@ class RunnerMarkerSweepError(RuntimeError):
     A swallowed sweep failure is a silently dead safety net: stale markers
     would accumulate as phantom capacity and the D8 rollback signal would go
     dark without anyone noticing.
+
+    ``detail`` carries the underlying failure (exception type + message,
+    possibly several org failures joined) so the persisted
+    ``"error": "sweep_failed"`` payload is diagnosable from the
+    /healthz/ready readout alone — a bare ``sweep_failed`` with zero counts
+    is unactionable (FAR-905 regression: two sweeps degraded for hours while
+    the token named neither the exception nor the resource).
     """
 
     scanned: int
     cleared: int
     transitioned: int
     org_failures: int
+    detail: str = ""
 
 
 # Bounded polling for the SESSION-scoped sweep dedup advisory lock. Mirrors
@@ -1172,6 +1180,7 @@ async def reconcile_runner_dispatch_markers(
     transitioned = 0
     violations = 0
     orgs_failed = 0
+    org_failure_details: list[str] = []
 
     k1, k2 = runner_marker_sweep_lock_keys()
     # Hold the SESSION-scoped dedup lock on a DEDICATED engine connection for the
@@ -1198,11 +1207,15 @@ async def reconcile_runner_dispatch_markers(
                 org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as org_index_exc:
             _log.exception("runner.capacity.marker_sweep_org_index_failed")
             raise RunnerMarkerSweepError(
-                scanned=scanned, cleared=cleared, transitioned=transitioned, org_failures=orgs_failed
-            ) from None
+                scanned=scanned,
+                cleared=cleared,
+                transitioned=transitioned,
+                org_failures=orgs_failed,
+                detail=f"org index query failed: {org_index_exc!r}",
+            ) from org_index_exc
 
         for org_id in org_ids:
             org_scanned_slot: list[int] = [0]
@@ -1233,6 +1246,7 @@ async def reconcile_runner_dispatch_markers(
                 # logs without the noisy traceback of a genuine org failure; the
                 # 60s cadence retries the org next tick (fail-open, self-healing).
                 sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+                org_failure_details.append(f"org={org_id}: {type(exc).__name__}: {exc}"[:200])
                 if sqlstate == "55P03":
                     _log.warning(
                         "runner.capacity.marker_sweep_org_lock_timeout org=%s",
@@ -1256,7 +1270,11 @@ async def reconcile_runner_dispatch_markers(
         )
         if orgs_failed:
             raise RunnerMarkerSweepError(
-                scanned=scanned, cleared=cleared, transitioned=transitioned, org_failures=orgs_failed
+                scanned=scanned,
+                cleared=cleared,
+                transitioned=transitioned,
+                org_failures=orgs_failed,
+                detail="; ".join(org_failure_details)[:400],
             )
         return {
             "scanned": scanned,
