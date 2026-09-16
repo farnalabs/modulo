@@ -33,7 +33,7 @@ class TestListCommunityExceptionNarrowing:
         principal.organisation_id = "00000000-0000-0000-0000-000000000001"
 
         result = await list_community(session, principal)
-        assert result["items"] == []
+        assert not result["items"]
         assert result["total"] == 0
         # Suppress unused variable warnings — these are injected by @patch
         assert mock_entries is not None
