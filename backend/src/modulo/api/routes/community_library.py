@@ -65,7 +65,15 @@ async def list_community(
 
 
 async def _fetch_entry_content(content_sha256: str) -> Any:
-    """Fetch and parse an entry blob, failing open to ``None`` on any error."""
+    """Fetch and parse an entry blob, degrading ``content`` to ``None`` when the
+    blob cannot be retrieved or parsed.
+
+    ``LibraryClient`` is itself fail-open (it returns ``None`` on network, HTTP,
+    SSRF, signature, and hash-mismatch failures rather than raising), so a
+    library outage already degrades ``content`` to ``None`` here. Only a
+    ``ValueError`` from decoding/parsing the fetched bytes is caught; any other
+    exception is a programming error and propagates (fail-closed).
+    """
     settings = get_settings()
     client = LibraryClient(
         endpoint=settings.modulo_library_endpoint,
