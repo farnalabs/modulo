@@ -722,4 +722,51 @@ describe('HitlGateCard', () => {
     expect(wrapper.find('[data-testid="hitl-gate-choice-options"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
   })
+
+  // FAR-907: the choice rides with the modification too — a choice gate cannot
+  // be modify-approved without a selected option, so Save & approve is locked
+  // until one is picked and the answer is included in the wire body.
+  it('requires a selection before Save & approve and sends the answer with the modification (FAR-907)', async () => {
+    await mockClaimThenDecide()
+    wrapper = mount(HitlGateCard, {
+      props: {
+        gate: choiceGate({
+          subject: '{"body":"Review this comment."}',
+          subject_parent: { body: 'Review this comment.', priority: 'high' },
+          subject_leaf_key: 'body',
+        }),
+      },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-edit-subject"]').trigger('click')
+    await flushPromises()
+
+    const save = wrapper.find('[data-testid="hitl-gate-save-approve"]')
+    expect((save.element as HTMLButtonElement).disabled).toBe(true)
+
+    await wrapper.find('[data-testid="hitl-gate-option-hold"]').trigger('click')
+    expect((save.element as HTMLButtonElement).disabled).toBe(false)
+
+    await wrapper.find('[data-testid="hitl-gate-subject-textarea"]').setValue('Updated comment.')
+    await save.trigger('click')
+    await flushPromises()
+
+    const { api } = await import('../lib/api/client')
+    const post = (api.POST as any).mock.calls.find(
+      (c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification',
+    )
+    expect(post).toBeTruthy()
+    expect((post as unknown[])[1]).toEqual({
+      params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
+      body: {
+        claim_token: 'tok-1',
+        modified_output: { body: 'Updated comment.', priority: 'high' },
+        notes: null,
+        answer: { kind: 'choice', option_id: 'hold' },
+      },
+    })
+  })
 })

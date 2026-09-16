@@ -110,7 +110,7 @@
         <div class="flex gap-2">
           <button
             type="button"
-            :disabled="Boolean(actioning)"
+            :disabled="Boolean(actioning) || (isChoiceGate && !selectedOption)"
             data-testid="hitl-gate-save-approve"
             class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
             @click="modifyAndApprove"
@@ -735,6 +735,12 @@ async function modifyAndApprove() {
           claim_token: token,
           modified_output: reconstructedOutput,
           notes: notes.value || null,
+          // FAR-907: a choice gate cannot be modify-approved without answering,
+          // so the selection rides with the modification just as it does with
+          // a plain approve.
+          ...(isChoiceGate.value && selectedOption.value
+            ? { answer: { kind: 'choice', option_id: selectedOption.value } }
+            : {}),
         },
       },
     )

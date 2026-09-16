@@ -1216,3 +1216,260 @@ def test_list_org_gates_error_mapping(client: tuple[TestClient, AsyncMock], exc:
     resp = http.get("/api/v1/hitl/gates")
 
     assert resp.status_code == expected, resp.text
+
+
+# ---------------------------------------------------------------------------
+# FAR-907: approve-with-modification carries the answer contract
+# ---------------------------------------------------------------------------
+
+
+_CHOICE_CONFIG = {
+    "response_contract": {"kind": "choice", "options": [{"id": "ship", "label": "Ship"}, {"id": "fix", "label": "Fix"}]}
+}
+
+
+def _modify_patches(side_effect: object) -> list:
+    return [
+        *_decision_patches("approve_with_modification", side_effect),
+        patch(
+            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            new=AsyncMock(return_value=_CHOICE_CONFIG),
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected", "fragment"),
+    [
+        (None, 422, "choice gate requires an answer"),
+        ({"kind": "choice", "option_id": "nonsense"}, 422, "not a valid option"),
+        ({"kind": "approval"}, 422, "does not match gate response_contract kind"),
+    ],
+    ids=["missing-answer", "unknown-option", "wrong-kind"],
+)
+def test_modify_approve_choice_gate_requires_valid_answer(
+    client: tuple[TestClient, AsyncMock], answer: dict | None, expected: int, fragment: str
+) -> None:
+    """A choice gate cannot be approve-with-modification'd without a valid
+    option selection (FAR-907) — missing/unknown/mismatched all 422."""
+    http, _session = client
+    patches = _modify_patches(RuntimeError("must not reach the manager"))
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve-with-modification",
+            json={"claim_token": "tok", "modified_output": {"k": "v"}, **({"answer": answer} if answer else {})},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == expected, resp.text
+    if expected == 422:
+        assert fragment in resp.json()["detail"]
+
+
+def test_modify_approve_choice_gate_valid_answer_reaches_manager_and_resume(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """A valid choice answer is validated, forwarded to the manager and riding
+    in the resume decision payload (so ``hitl_answer_<gate_id>`` lands in
+    state exactly as on the plain approve path)."""
+    http, _session = client
+    mgr_call = AsyncMock(_gate_mock)
+    resume = AsyncMock()
+    executor = MagicMock()
+    executor.resume = resume
+    patches = [
+        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
+        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch(
+            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            new=AsyncMock(return_value=_CHOICE_CONFIG),
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve-with-modification",
+            json={
+                "claim_token": "tok",
+                "modified_output": {"k": "v"},
+                "answer": {"kind": "choice", "option_id": "ship"},
+            },
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 200, resp.text
+    assert mgr_call.await_args.kwargs["answer"] == {"kind": "choice", "option_id": "ship"}
+    assert mgr_call.await_args.kwargs["decision_payload"]["answer"] == {"kind": "choice", "option_id": "ship"}
+    resume.assert_awaited_once()
+
+
+def test_modify_approve_non_choice_gate_without_answer_unchanged(client: tuple[TestClient, AsyncMock]) -> None:
+    """Non-choice gates keep the old contract: no answer is fine and nothing
+    rejects the request."""
+    http, _session = client
+    mgr_call = AsyncMock(_gate_mock)
+    resume = AsyncMock()
+    executor = MagicMock()
+    executor.resume = resume
+    patches = [
+        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
+        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch(
+            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            new=AsyncMock(return_value={"response_contract": {"kind": "approval"}}),
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve-with-modification",
+            json={"claim_token": "tok", "modified_output": {"k": "v"}},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 200, resp.text
+    assert mgr_call.await_args.kwargs.get("answer") is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-907: the plain approve path enforces the choice contract too
+# ---------------------------------------------------------------------------
+
+
+def _approve_choice_patches(side_effect: object) -> list:
+    return [
+        *_decision_patches("approve", side_effect),
+        patch(
+            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            new=AsyncMock(return_value=_CHOICE_CONFIG),
+        ),
+    ]
+
+
+def test_approve_choice_gate_requires_valid_answer(client: tuple[TestClient, AsyncMock]) -> None:
+    """A choice gate cannot be plain-approved without a valid option selection
+    (FAR-907) — the /approve path enforces the same contract as
+    approve-with-modification, so a direct API caller cannot skip the choice."""
+    http, _session = client
+    patches = _approve_choice_patches(RuntimeError("must not reach the manager"))
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+            json={"claim_token": "tok"},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 422, resp.text
+    assert "choice gate requires an answer" in resp.json()["detail"]
+
+
+def test_approve_choice_gate_valid_answer_reaches_manager_and_resume(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """A valid choice answer on /approve is validated and rides in the resume
+    decision payload, exactly as on the modify path."""
+    http, _session = client
+    mgr_call = AsyncMock(_gate_mock)
+    resume = AsyncMock()
+    executor = MagicMock()
+    executor.resume = resume
+    patches = [
+        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
+        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch(
+            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            new=AsyncMock(return_value=_CHOICE_CONFIG),
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+            json={"claim_token": "tok", "answer": {"kind": "choice", "option_id": "ship"}},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 200, resp.text
+    assert mgr_call.await_args.kwargs["answer"] == {"kind": "choice", "option_id": "ship"}
+    assert mgr_call.await_args.kwargs["decision_payload"]["answer"] == {"kind": "choice", "option_id": "ship"}
+    resume.assert_awaited_once()
+
+
+def test_approve_non_choice_gate_without_answer_unchanged(client: tuple[TestClient, AsyncMock]) -> None:
+    """Non-choice gates keep the old contract on /approve: no answer is fine."""
+    http, _session = client
+    mgr_call = AsyncMock(_gate_mock)
+    resume = AsyncMock()
+    executor = MagicMock()
+    executor.resume = resume
+    patches = [
+        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
+        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch(
+            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            new=AsyncMock(return_value={"response_contract": {"kind": "approval"}}),
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+            json={"claim_token": "tok"},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 200, resp.text
+    assert mgr_call.await_args.kwargs.get("answer") is None
+
+
+def test_modify_approve_unresolvable_config_fails_open_without_answer(client: tuple[TestClient, AsyncMock]) -> None:
+    """Legacy snapshots with an unresolvable config keep the fail-open
+    None-answer behaviour (FAR-907 must not strand legacy gates)."""
+    http, _session = client
+    mgr_call = AsyncMock(_gate_mock)
+    resume = AsyncMock()
+    executor = MagicMock()
+    executor.resume = resume
+    patches = [
+        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
+        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve-with-modification",
+            json={"claim_token": "tok", "modified_output": {"k": "v"}},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 200, resp.text
+    assert mgr_call.await_args.kwargs.get("answer") is None

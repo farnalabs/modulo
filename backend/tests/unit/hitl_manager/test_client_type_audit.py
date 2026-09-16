@@ -120,6 +120,53 @@ class TestApproveWithModificationClientType:
         for call in mock_audit.await_args_list:
             assert call.kwargs["payload_json"]["client_type"] == "api_key"
 
+    async def test_answer_recorded_on_output_modified_event(self):
+        """FAR-907: a choice answer on the modify-approve path lands on the
+        ``hitl.output_modified`` audit event (the chosen option is queryable
+        alongside the modification)."""
+        session, _gate_decided = _decided("approved")
+        with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+            mgr = HITLManager()
+            await mgr.approve_with_modification(
+                session,
+                run_id=_RUN,
+                gate_id=_GATE,
+                org_id=_ORG,
+                claim_token="tok",
+                modified_output={"value": 42},
+                actor_id=_USER,
+                client_type=_BROWSER,
+                answer={"kind": "choice", "option_id": "ship-it"},
+            )
+        modified_event = next(
+            c.kwargs["payload_json"]
+            for c in mock_audit.await_args_list
+            if c.kwargs["event_type"] == "hitl.output_modified"
+        )
+        assert modified_event["answer_kind"] == "choice"
+        assert modified_event["answer_option_id"] == "ship-it"
+
+    async def test_no_answer_omits_answer_fields(self):
+        session, _gate_decided = _decided("approved")
+        with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+            mgr = HITLManager()
+            await mgr.approve_with_modification(
+                session,
+                run_id=_RUN,
+                gate_id=_GATE,
+                org_id=_ORG,
+                claim_token="tok",
+                modified_output={"value": 42},
+                actor_id=_USER,
+            )
+        modified_event = next(
+            c.kwargs["payload_json"]
+            for c in mock_audit.await_args_list
+            if c.kwargs["event_type"] == "hitl.output_modified"
+        )
+        assert "answer_kind" not in modified_event
+        assert "answer_option_id" not in modified_event
+
 
 class TestClaimClientType:
     async def test_claim_records_client_type(self):

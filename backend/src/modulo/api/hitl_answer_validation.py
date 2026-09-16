@@ -42,13 +42,29 @@ async def validate_hitl_answer(
     gate_id: str,
     org_id: uuid.UUID,
     answer: dict[str, Any] | None,
+    require_answer: bool = False,
 ) -> dict[str, Any] | None:
     """Validate *answer* against the gate's ``response_contract``.
 
     Returns the validated answer dict, or ``None`` when no answer is provided.
     Raises ``AnswerValidationError`` when validation fails.
+
+    ``require_answer`` (FAR-907): a path that must never skip a declared
+    choice (the approve-with-modification flow) withholds the None short-
+    circuit — when no answer is supplied, the gate config is resolved and a
+    ``kind: choice`` gate raises. Non-choice gates stay answer-optional.
     """
     if answer is None:
+        if require_answer:
+            config = await resolve_hitl_gate_config(
+                session,
+                run_id=run_id,
+                gate_id=gate_id,
+                org_id=org_id,
+            )
+            rc = config.get("response_contract") if isinstance(config, dict) else None
+            if isinstance(rc, dict) and rc.get("kind") == "choice":
+                raise AnswerValidationError("choice gate requires an answer with a non-empty 'option_id'")
         return None
 
     kind = answer.get("kind")

@@ -558,11 +558,17 @@ class HITLManager:
         actor_id: uuid.UUID | None = None,
         decision_payload: dict[str, Any] | None = None,
         client_type: str | None = None,
+        answer: dict[str, Any] | None = None,
     ) -> HitlClaim:
         """Record approval with a modified output payload.
 
         Logs a ``hitl.output_modified`` audit event documenting the change,
         then logs the standard ``hitl.output_delivered`` event.
+
+        ``answer`` (FAR-907): optional choice answer dict
+        (``{"kind": "choice", "option_id": "<id>"}``) recorded on the
+        ``hitl.output_modified`` audit event so the selected option is
+        queryable alongside the modification.
 
         ``client_type`` (FAR-611): the caller's credential kind recorded on
         both audit events when known (``"browser"`` / ``"api_key"`` /
@@ -587,6 +593,10 @@ class HITLManager:
             decided_by=actor_id,
         )
 
+        audit_kwargs: dict[str, Any] = {}
+        if answer is not None:
+            # FAR-907: record the chosen option on the modification audit event.
+            audit_kwargs["answer"] = answer
         await self._log_audit_and_deliver(
             session,
             gate,
@@ -595,7 +605,9 @@ class HITLManager:
             events=[
                 (
                     "hitl.output_modified",
-                    self._base_audit_payload(gate, client_type=client_type, modified_output=modified_output),
+                    self._base_audit_payload(
+                        gate, client_type=client_type, modified_output=modified_output, **audit_kwargs
+                    ),
                 ),
                 ("hitl.output_delivered", self._base_audit_payload(gate, client_type=client_type, modified=True)),
             ],
