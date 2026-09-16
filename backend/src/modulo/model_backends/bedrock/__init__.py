@@ -15,6 +15,7 @@ class BedrockBackend(ModelBackendBase):
     """Thin adapter over ChatBedrock."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(
         self,

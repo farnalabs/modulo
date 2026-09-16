@@ -15,6 +15,7 @@ class MistralBackend(ModelBackendBase):
     """Thin adapter over ChatMistralAI for Mistral's API."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
         self._model = ChatMistralAI(

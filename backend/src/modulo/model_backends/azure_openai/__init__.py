@@ -11,6 +11,7 @@ class AzureOpenAIBackend(ModelBackendBase):
     """Thin adapter over ChatOpenAI configured for Azure OpenAI."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(
         self,

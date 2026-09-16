@@ -17,6 +17,7 @@ class VertexAIBackend(ModelBackendBase):
     """Thin adapter over ChatVertexAI for Google Vertex AI (Gemini, Claude, Llama)."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(
         self,

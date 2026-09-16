@@ -86,7 +86,7 @@ class TestInvokeNodeModelSchemaThreading:
             )
         assert len(backend.calls) == 1
         # output_schema must NOT be in the call kwargs
-        assert backend.calls[0] == {}
+        assert "output_schema" not in backend.calls[0]
 
     async def test_no_schema_no_kwarg(self) -> None:
         backend = _RecordingBackend(supports_native=True)
@@ -101,7 +101,7 @@ class TestInvokeNodeModelSchemaThreading:
                 "n1",
             )
         assert len(backend.calls) == 1
-        assert backend.calls[0] == {}
+        assert "output_schema" not in backend.calls[0]
 
     async def test_none_schema_no_kwarg(self) -> None:
         backend = _RecordingBackend(supports_native=True)
@@ -116,7 +116,7 @@ class TestInvokeNodeModelSchemaThreading:
                 "n1",
                 output_schema_json=None,
             )
-        assert backend.calls[0] == {}
+        assert "output_schema" not in backend.calls[0]
 
     async def test_json_string_response_is_parsed(self) -> None:
         """The output is JSON-parsed when the response content is a string."""

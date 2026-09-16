@@ -17,6 +17,7 @@ class WatsonXBackend(ModelBackendBase):
     """Thin adapter over ChatWatsonx for IBM watsonx.ai models."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(
         self,

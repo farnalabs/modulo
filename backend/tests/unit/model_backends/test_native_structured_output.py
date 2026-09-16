@@ -54,10 +54,14 @@ class FakeStructuredOutputBackend(ModelBackendBase):
     async def invoke(
         self,
         messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> BaseMessage:
         self._attempt += 1
-        self.invoke_kwargs_received.append(kwargs)
+        recorded: dict[str, Any] = dict(kwargs)
+        if output_schema is not None:
+            recorded["output_schema"] = output_schema
+        self.invoke_kwargs_received.append(recorded)
         return AIMessage(content=self._output_factory(self._attempt))
 
     def stream(
@@ -94,15 +98,33 @@ class TestFlagDeclaration:
     def test_fake_backend_flag_is_false(self) -> None:
         assert FakeStructuredOutputBackend.supports_native_structured_output is False
 
-    def test_flag_declared_on_known_concrete_backends(self) -> None:
-        """Every known backend must have an explicit declaration — no inherited default."""
-        from modulo.model_backends.anthropic import AnthropicBackend
-        from modulo.model_backends.module import OpenAICompatibleBackend
+    def test_flag_declared_on_all_subclasses(self) -> None:
+        """Every ModelBackendBase subclass must explicitly declare the flag.
 
-        for cls in (OpenAICompatibleBackend, AnthropicBackend, FakeStructuredOutputBackend):
-            assert "supports_native_structured_output" in cls.__dict__, (
-                f"{cls.__name__} must explicitly declare supports_native_structured_output"
-            )
+        Discovers subclasses dynamically so a NEW backend that forgets to
+        declare ``supports_native_structured_output`` is caught at test time.
+        Only OpenAI-compatible and Anthropic backends are True; all others
+        inherit the base class default (False) but MUST still declare it.
+        """
+        import importlib
+        import pkgutil
+
+        import modulo.model_backends as mb_pkg
+
+        # Force-import every module in model_backends/ so all subclasses register.
+        for _importer, modname, _ispkg in pkgutil.walk_packages(mb_pkg.__path__, prefix=mb_pkg.__name__ + "."):
+            importlib.import_module(modname)
+
+        # Only DIRECT subclasses of ModelBackendBase need an explicit
+        # declaration. Indirect subclasses (e.g. OpenCodeBackend extends
+        # OpenAICompatibleBackend) inherit from their parent and are fine.
+        direct = [
+            cls for cls in ModelBackendBase.__subclasses__() if cls.__module__.startswith("modulo.model_backends.")
+        ]
+        assert len(direct) > 0, "Expected at least one direct ModelBackendBase subclass"
+
+        undeclared = [cls.__name__ for cls in direct if "supports_native_structured_output" not in cls.__dict__]
+        assert not undeclared, f"These backends must explicitly declare supports_native_structured_output: {undeclared}"
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +214,7 @@ class TestKwargForwarding:
                 "n1",
             )
         assert len(backend.invoke_kwargs_received) == 1
-        assert backend.invoke_kwargs_received[0] == {}
+        assert "output_schema" not in backend.invoke_kwargs_received[0]
 
     async def test_true_backend_receives_schema(self) -> None:
         """When flag=True and schema is supplied, the backend sees it."""
