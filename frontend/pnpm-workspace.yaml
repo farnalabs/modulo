@@ -104,3 +104,4 @@ minimumReleaseAgeExclude:
   - '@datadog/browser-rum@7.13.0'
   - '@datadog/js-core@0.0.14'
   - '@lucide/vue@1.46.0'
+  - '@types/node@26.6.1'
