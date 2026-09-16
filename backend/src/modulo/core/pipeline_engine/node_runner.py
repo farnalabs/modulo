@@ -3170,12 +3170,22 @@ def _render_agent_prompt(
     return rendered_prompt, routing_mode
 
 
-async def _invoke_node_model(rendered_prompt: str, model_backend_id_str: str, node_id: str) -> Any:
+async def _invoke_node_model(
+    rendered_prompt: str,
+    model_backend_id_str: str,
+    node_id: str,
+    output_schema_json: dict[str, Any] | None = None,
+) -> Any:
     """Invoke the configured model backend and return its parsed output.
 
     Resolves the ModelBackendHub (ContextVar), builds a HumanMessage from the
     rendered prompt, invokes the backend, and best-effort JSON-parses a
     string response. Raises when the hub is unavailable.
+
+    When *output_schema_json* is supplied and the backend declares
+    ``supports_native_structured_output``, the schema is forwarded to the
+    provider's native structured-output decoding path.  Otherwise the kwarg
+    is never sent.
     """
     from modulo.core.pipeline_engine.decorator import get_model_backend_hub
 
@@ -3187,7 +3197,10 @@ async def _invoke_node_model(rendered_prompt: str, model_backend_id_str: str, no
     backend = await hub.get(backend_id)
 
     messages = [HumanMessage(content=rendered_prompt)]
-    response = await backend.invoke(messages)
+    invoke_kwargs: dict[str, Any] = {}
+    if output_schema_json is not None and backend.supports_native_structured_output:
+        invoke_kwargs["output_schema"] = output_schema_json
+    response = await backend.invoke(messages, **invoke_kwargs)
 
     content = response.content if hasattr(response, "content") else str(response)
     output_data: Any = content
@@ -3361,7 +3374,12 @@ def make_node_fn(
             work_item_refs=node_work_item_refs,
         )
 
-        output_data = await _invoke_node_model(rendered_prompt, model_backend_id_str, node_id)
+        output_data = await _invoke_node_model(
+            rendered_prompt,
+            model_backend_id_str,
+            node_id,
+            output_schema_json=output_schema_json,
+        )
 
         return _finalize_node_result(node_id, output_data, output_schema_json, routing_mode)
 

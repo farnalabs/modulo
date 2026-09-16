@@ -28,6 +28,7 @@ class OpenAICompatibleBackend(ModelBackendBase):
     """
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = True
 
     def __init__(
         self,
@@ -113,8 +114,16 @@ class OpenAICompatibleBackend(ModelBackendBase):
             f"on the model endpoint — upstream outage, not an auth failure. Detail: {detail}"
         )
 
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
         try:
+            if output_schema is not None:
+                bound = self._model.bind(response_format={"type": "json_schema", "json_schema": output_schema})
+                return await bound.ainvoke(messages, **kwargs)
             return await self._model.ainvoke(messages, **kwargs)
         except (APIStatusError, APIConnectionError) as exc:
             classified = self._classify_gateway_error(exc)
@@ -126,11 +135,15 @@ class OpenAICompatibleBackend(ModelBackendBase):
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         async def _iter() -> AsyncIterator[BaseMessage]:
             try:
-                async for chunk in self._model.astream(messages, tools=tools, **kwargs):
+                target = self._model
+                if output_schema is not None:
+                    target = self._model.bind(response_format={"type": "json_schema", "json_schema": output_schema})
+                async for chunk in target.astream(messages, tools=tools, **kwargs):
                     yield chunk
             except (APIStatusError, APIConnectionError) as exc:
                 classified = self._classify_gateway_error(exc)

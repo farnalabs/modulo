@@ -13,6 +13,7 @@ class AnthropicBackend(ModelBackendBase):
     """Thin adapter over ChatAnthropic."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = True
 
     def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
         self._model = ChatAnthropic(model=model_id, api_key=api_key, **default_params)
@@ -33,13 +34,25 @@ class AnthropicBackend(ModelBackendBase):
             extra_headers={"x-api-key": self._api_key, "anthropic-version": "2023-06-01"},
         )
 
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
+        if output_schema is not None:
+            structured = self._model.with_structured_output()
+            return await structured.ainvoke(messages, **kwargs)
         return await self._model.ainvoke(messages, **kwargs)
 
     def stream(
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
+        if output_schema is not None:
+            structured = self._model.with_structured_output()
+            return structured.astream(messages, tools=tools, **kwargs)
         return self._model.astream(messages, tools=tools, **kwargs)

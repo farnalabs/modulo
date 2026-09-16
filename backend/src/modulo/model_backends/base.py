@@ -64,20 +64,30 @@ class ModelBackendBase(ABC):
     """Abstract base for all model backends (real + stub)."""
 
     supports_tools: bool = False
+    supports_native_structured_output: bool = False
 
     @abstractmethod
     async def invoke(
         self,
         messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> BaseMessage:
-        """Send messages and return the assistant reply."""
+        """Send messages and return the assistant reply.
+
+        When *output_schema* is supplied and the backend's
+        ``supports_native_structured_output`` flag is True, the backend
+        invokes the provider's native structured-output decoding (e.g.
+        OpenAI ``response_format`` or Anthropic tool-use). When absent or
+        None, behaviour is byte-identical to today.
+        """
 
     @abstractmethod
     def stream(
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         """Return an async iterator that yields token chunks."""
