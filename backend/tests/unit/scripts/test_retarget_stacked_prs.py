@@ -109,7 +109,7 @@ def test_retarget_success_protects_nothing(tmp_path):
     assert rc == 0
     outputs = _read_outputs(out)
     assert outputs["retargeted_prs"] == "602"
-    assert outputs["protected_branches"] == ""
+    assert not outputs["protected_branches"]
     assert any(c[:2] == ("pr", "comment") and c[2] == "602" for c in fake.calls)
 
 
@@ -122,7 +122,7 @@ def test_retarget_failure_protects_base_branch(tmp_path):
     assert rc == 0
     outputs = _read_outputs(out)
     assert outputs["protected_branches"] == "feat/base"
-    assert outputs["retargeted_prs"] == ""
+    assert not outputs["retargeted_prs"]
 
 
 def test_failed_open_pr_query_protects_every_branch_and_deletes_nothing(tmp_path):
@@ -137,9 +137,9 @@ def test_failed_open_pr_query_protects_every_branch_and_deletes_nothing(tmp_path
     assert rc == 0  # fail SAFE, not failed: post-merge CI/deploy dispatch must run
     outputs = _read_outputs(out)
     assert set(outputs["protected_branches"].split()) == {"feat/a", "feat/b"}
-    assert outputs["retargeted_prs"] == ""
+    assert not outputs["retargeted_prs"]
     # No branch was retargeted/deleted on an unverifiable query.
-    assert fake.edits() == []
+    assert not fake.edits()
 
 
 def test_blank_open_pr_query_output_protects_every_branch(tmp_path):
@@ -160,8 +160,8 @@ def test_genuine_empty_response_permits_deletion(tmp_path):
 
     assert rc == 0
     outputs = _read_outputs(out)
-    assert outputs["protected_branches"] == ""
-    assert outputs["retargeted_prs"] == ""
+    assert not outputs["protected_branches"]
+    assert not outputs["retargeted_prs"]
 
 
 def test_unrelated_base_is_ignored(tmp_path):
@@ -171,8 +171,8 @@ def test_unrelated_base_is_ignored(tmp_path):
     rc = mod.run(["prog", "feat/base", "main"], run_gh=fake, github_output=str(out))
 
     assert rc == 0
-    assert _read_outputs(out)["retargeted_prs"] == ""
-    assert fake.edits() == []
+    assert not _read_outputs(out)["retargeted_prs"]
+    assert not fake.edits()
 
 
 def test_multi_page_paginated_response_is_fully_seen(tmp_path):
@@ -213,7 +213,7 @@ def test_no_branches_still_writes_outputs(tmp_path):
     assert rc == 0
     outputs = _read_outputs(out)
     assert outputs == {"protected_branches": "", "retargeted_prs": ""}
-    assert fake.calls == []  # no query for an empty branch list
+    assert not fake.calls  # no query for an empty branch list
 
 
 def test_gh_checked_propagates_returncode():
