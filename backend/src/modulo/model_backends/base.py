@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import httpx
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from modulo.core.ssrf import pinned_async_client_sync
@@ -199,3 +200,40 @@ class ModelBackendBase(ABC):
         except Exception as exc:
             logger.warning("Health check failed for %s: %s", type(self).__name__, exc)
             return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
+
+
+class LangChainChatForwardingMixin:
+    """Forward ``invoke``/``stream`` straight to ``self._model``.
+
+    Mixin for the thin provider adapters whose ``invoke`` and ``stream`` do
+    nothing but delegate to a LangChain chat model held on ``self._model``.
+    They neither implement native structured output nor classify gateway
+    errors, so the delegation is identical for every provider — declaring it
+    in each adapter duplicated the same block across all of them.
+
+    Concrete subclasses still derive from ``ModelBackendBase`` (which declares
+    the ``invoke``/``stream`` contract) and must set ``self._model`` in their
+    ``__init__``.
+    """
+
+    _model: BaseChatModel
+
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
+        # output_schema is accepted for contract compliance only: these
+        # adapters declare supports_native_structured_output = False, so the
+        # caller never forwards a schema here.
+        return await self._model.ainvoke(messages, **kwargs)
+
+    def stream(
+        self,
+        messages: list[BaseMessage],
+        tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[BaseMessage]:
+        return self._model.astream(messages, tools=tools, **kwargs)

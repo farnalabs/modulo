@@ -1,13 +1,16 @@
-from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
+from modulo.model_backends.base import (
+    HealthResult,
+    LangChainChatForwardingMixin,
+    ModelBackendBase,
+    openai_compatible_health_check,
+)
 
 
-class AzureOpenAIBackend(ModelBackendBase):
+class AzureOpenAIBackend(LangChainChatForwardingMixin, ModelBackendBase):
     """Thin adapter over ChatOpenAI configured for Azure OpenAI."""
 
     supports_tools: bool = True
@@ -62,20 +65,3 @@ class AzureOpenAIBackend(ModelBackendBase):
             api_key=None,
             extra_headers={"api-key": self._api_key},
         )
-
-    async def invoke(
-        self,
-        messages: list[BaseMessage],
-        output_schema: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> BaseMessage:
-        return await self._model.ainvoke(messages, **kwargs)
-
-    def stream(
-        self,
-        messages: list[BaseMessage],
-        tools: list[dict[str, Any]] | None = None,
-        output_schema: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, tools=tools, **kwargs)
