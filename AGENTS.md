@@ -84,3 +84,14 @@ Rules:
 1. Every bot-driven PR closure must post a closure comment stating the reason. The `closed` event has no reason field, so the comment IS the audit trail: post the reason with `gh pr comment` before closing (or pass `--comment` on the close), never a bare close.
 2. Comment-posting failures must never be silenced - `2>/dev/null || true` on a close+comment command hides exactly the failure that makes closures un-auditable. Post the comment separately from the close: if `gh pr comment` fails, still proceed with the close but emit a visible `::warning::closure comment failed for PR $NUM - audit trail missing` annotation (reference pattern: the "Close duplicate PRs" and post-merge close steps in `.github/workflows/merge-queue.yml`).
 3. When auditing "who closed this PR", read the issue-timeline `commented` events immediately BEFORE the `closed` event: `gh pr close --comment` posts the comment ~1 second before the close event, and `gh pr view --json` / the bare `closed` event alone make the closure look reason-less even when the comment posted (this exact false lead cost the #2092 investigation).
+
+### Pre-auth routes need an explicit unauthenticated test (2026-09-16)
+
+Every SSO pre-auth route (`/api/v1/auth/oidc/{provider}/login`, `/api/v1/auth/oidc/{provider}/callback`, `/api/v1/auth/saml/login`, `/api/v1/auth/saml/acs`, `/api/v1/auth/saml/metadata`) was guarded with `require_feature("sso")`. `require_feature` resolves the plan via `get_plan_context`, which depends on `get_current_user`, which depends on `HTTPBearer(auto_error=True)`. A request with no `Authorization` header — exactly what a browser sends when navigating from the logged-out login page — raised `401 "Not authenticated"` before the route handler ran. The feature was marked covered in the product map and had passing unit and BDD tests, because every test called those routes with an authenticated client. The real flow (an unauthenticated user clicking the sign-in button) was never exercised, so the feature was unreachable end-to-end while CI stayed green.
+
+Rules:
+
+1. Any route reachable before authentication needs at least one test that calls it with NO credentials and asserts the intended pre-auth behaviour (200/302/400/402 as applicable), and explicitly asserts it is NOT a 401.
+2. A dependency that composes an authenticated dependency (`require_feature`, `get_plan_context`, `get_current_user`) must never guard a pre-auth route; use an anonymous resolver instead.
+3. "Covered" is a claim about user-reachable behaviour, not about the existence of tests. A feature whose primary entry point is unreachable is not covered.
+4. A mocked or authenticated test client does not exercise the unauthenticated path — add the unauthenticated case explicitly.
