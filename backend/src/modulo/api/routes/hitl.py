@@ -780,9 +780,14 @@ async def approve_gate(
     principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
-    # FAR-860: validate choice answer against the gate's response_contract
-    # BEFORE the manager call (fail-fast, no side effects).
-    validated_answer = await _validate_choice_answer(session, run_id, gate_id, principal.organisation_id, req.answer)
+    # FAR-860/FAR-907: validate choice answer against the gate's response_contract
+    # BEFORE the manager call (fail-fast, no side effects). A choice gate
+    # REQUIRES a valid answer on this path too — without it a direct API caller
+    # could approve while skipping the declared choice (mirrors
+    # approve-with-modification).
+    validated_answer = await _validate_choice_answer(
+        session, run_id, gate_id, principal.organisation_id, req.answer, require_answer=True
+    )
     # FAR-541: every resume decision is STAMPED with the gate it resolves so a
     # per-gate consumer (``_hitl_gate_resume_result``) can reject a foreign
     # decision left in state by an earlier gate (decisions are per-RUN but

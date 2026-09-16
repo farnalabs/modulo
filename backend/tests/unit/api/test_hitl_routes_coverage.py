@@ -1226,7 +1226,6 @@ def test_list_org_gates_error_mapping(client: tuple[TestClient, AsyncMock], exc:
 _CHOICE_CONFIG = {
     "response_contract": {"kind": "choice", "options": [{"id": "ship", "label": "Ship"}, {"id": "fix", "label": "Fix"}]}
 }
-_APPLICATION = patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
 
 
 def _modify_patches(side_effect: object) -> list:
@@ -1335,6 +1334,109 @@ def test_modify_approve_non_choice_gate_without_answer_unchanged(client: tuple[T
         resp = http.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve-with-modification",
             json={"claim_token": "tok", "modified_output": {"k": "v"}},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 200, resp.text
+    assert mgr_call.await_args.kwargs.get("answer") is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-907: the plain approve path enforces the choice contract too
+# ---------------------------------------------------------------------------
+
+
+def _approve_choice_patches(side_effect: object) -> list:
+    return [
+        *_decision_patches("approve", side_effect),
+        patch(
+            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            new=AsyncMock(return_value=_CHOICE_CONFIG),
+        ),
+    ]
+
+
+def test_approve_choice_gate_requires_valid_answer(client: tuple[TestClient, AsyncMock]) -> None:
+    """A choice gate cannot be plain-approved without a valid option selection
+    (FAR-907) — the /approve path enforces the same contract as
+    approve-with-modification, so a direct API caller cannot skip the choice."""
+    http, _session = client
+    patches = _approve_choice_patches(RuntimeError("must not reach the manager"))
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+            json={"claim_token": "tok"},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 422, resp.text
+    assert "choice gate requires an answer" in resp.json()["detail"]
+
+
+def test_approve_choice_gate_valid_answer_reaches_manager_and_resume(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """A valid choice answer on /approve is validated and rides in the resume
+    decision payload, exactly as on the modify path."""
+    http, _session = client
+    mgr_call = AsyncMock(_gate_mock)
+    resume = AsyncMock()
+    executor = MagicMock()
+    executor.resume = resume
+    patches = [
+        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
+        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch(
+            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            new=AsyncMock(return_value=_CHOICE_CONFIG),
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+            json={"claim_token": "tok", "answer": {"kind": "choice", "option_id": "ship"}},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 200, resp.text
+    assert mgr_call.await_args.kwargs["answer"] == {"kind": "choice", "option_id": "ship"}
+    assert mgr_call.await_args.kwargs["decision_payload"]["answer"] == {"kind": "choice", "option_id": "ship"}
+    resume.assert_awaited_once()
+
+
+def test_approve_non_choice_gate_without_answer_unchanged(client: tuple[TestClient, AsyncMock]) -> None:
+    """Non-choice gates keep the old contract on /approve: no answer is fine."""
+    http, _session = client
+    mgr_call = AsyncMock(_gate_mock)
+    resume = AsyncMock()
+    executor = MagicMock()
+    executor.resume = resume
+    patches = [
+        patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
+        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch(
+            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            new=AsyncMock(return_value={"response_contract": {"kind": "approval"}}),
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+            json={"claim_token": "tok"},
         )
     finally:
         for p in patches:

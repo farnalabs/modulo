@@ -208,6 +208,7 @@ class TestClaimGateRunStatusFence:
 
 
 class TestApproveGateSQLAlchemyError:
+    @patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
     @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
     @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_approve_gate_returns_503(self, client: TestClient) -> None:
@@ -219,6 +220,7 @@ class TestApproveGateSQLAlchemyError:
 
 
 class TestApproveGateAtSandboxCapacity:
+    @patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
     @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
     @patch(
         "modulo.api.routes.hitl.org_sandbox_capacity_free",

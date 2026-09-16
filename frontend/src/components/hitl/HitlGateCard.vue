@@ -735,6 +735,9 @@ async function modifyAndApprove() {
           claim_token: token,
           modified_output: reconstructedOutput,
           notes: notes.value || null,
+          // FAR-907: a choice gate cannot be modify-approved without answering,
+          // so the selection rides with the modification just as it does with
+          // a plain approve.
           ...(isChoiceGate.value && selectedOption.value
             ? { answer: { kind: 'choice', option_id: selectedOption.value } }
             : {}),
