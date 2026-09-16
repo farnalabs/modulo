@@ -792,3 +792,70 @@ class TestCheckSystemCronsProcessGroup:
             result = await _check_system_crons()
         assert result.status == "unavailable"
         assert "machine-a" in result.detail
+
+
+def _fake_migrations_engine(applied: list[str]) -> AsyncMock:
+    """Fake engine whose ``connect()`` yields rows for the alembic_version query."""
+    engine = AsyncMock()
+    conn = AsyncMock()
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    rows = MagicMock()
+    rows.fetchall.return_value = [(rev,) for rev in applied]
+    conn.execute = AsyncMock(return_value=rows)
+    engine.connect = lambda: conn
+    return engine
+
+
+class TestMigrationsDivergence:
+    """FAR-872: the /healthz/ready migration check surfaces repo-vs-DB divergence.
+
+    The health.py integration is the path that loses status and becomes
+    ``degraded``; these tests fail without the health.py change.
+    """
+
+    async def test_divergence_surfaces_degraded_detail(self) -> None:
+        from modulo.db.migration_guard import DivergenceCheckResult
+
+        settings = _make_settings()
+        divergent = DivergenceCheckResult(
+            diverged=True,
+            db_revisions={"0001", "0099"},
+            repo_revisions={"0001"},
+            orphaned_revisions={"0099"},
+            detail="Migration divergence detected: 0099",
+        )
+        script = MagicMock()
+        script.get_heads.return_value = ["0001"]
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch(
+                "modulo.api.routes.health.get_or_create_engine",
+                return_value=_fake_migrations_engine(["0001", "0099"]),
+            ),
+            patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script),
+            patch("modulo.api.routes.health.check_migration_divergence", return_value=divergent),
+        ):
+            result = await _check_migrations()
+        assert result.status == "degraded"
+        assert "DIVERGENCE" in result.detail
+        assert "0099" in result.detail
+
+    async def test_divergence_check_failure_is_logged_and_fail_open(self) -> None:
+        settings = _make_settings()
+        script = MagicMock()
+        script.get_heads.return_value = ["0001"]
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch(
+                "modulo.api.routes.health.get_or_create_engine",
+                return_value=_fake_migrations_engine(["0001"]),
+            ),
+            patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script),
+            patch("modulo.api.routes.health.check_migration_divergence", side_effect=RuntimeError("boom")),
+            patch("modulo.api.routes.health._log") as log,
+        ):
+            result = await _check_migrations()
+        assert result.status == "ok"
+        assert result.detail == "migrations up to date"
+        log.exception.assert_called_once()

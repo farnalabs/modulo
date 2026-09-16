@@ -54,22 +54,24 @@ class TestGetBuildSha:
         original = modulo.__build_tag__
         try:
             modulo.__build_tag__ = "build-deadbe"
-            result = _get_build_tag_wrapper()
+            result = _get_build_sha()
         finally:
             modulo.__build_tag__ = original
         assert result == "build-deadbe"
 
+    def test_env_only_build_tag_used_when_module_cache_is_local_dev(self) -> None:
+        """When ``__build_tag__`` is the local-dev sentinel but GIT_SHA is set,
+        the shared ``modulo.get_build_tag()`` helper derives it from the env."""
+        import modulo
 
-def _get_build_tag_wrapper() -> str:
-    """Wrapper to test the __build_tag__ path."""
-    try:
-        from modulo import __build_tag__
-
-        if __build_tag__ and __build_tag__ != "build-local-dev":
-            return __build_tag__
-    except Exception:  # noqa: S110 — intentional fail-open
-        pass
-    return _get_build_sha()
+        original = modulo.__build_tag__
+        try:
+            modulo.__build_tag__ = "build-local-dev"
+            with patch.dict(os.environ, {"GIT_SHA": "deadbeefcafe"}):
+                result = _get_build_sha()
+        finally:
+            modulo.__build_tag__ = original
+        assert result == "build-deadbee"
 
 
 class TestExtractColumnInfo:
@@ -90,6 +92,18 @@ class TestExtractColumnInfo:
         table, column = _extract_column_info(exc)
         assert table == "pipeline_runs"
         assert column == "status"
+
+    def test_dotted_token_without_column_keyword_returns_none(self) -> None:
+        """A bare ``<word>.<word>`` token must NOT be attributed as a column.
+
+        Regression guard: the broader ProgrammingError pattern used to accept
+        an unanchored ``word.word`` alternative, so an error like
+        ``"no module named a.b"`` produced a false attribution.
+        """
+        exc = _make_db_error("ImportError: no module named modulo.db")
+        table, column = _extract_column_info(exc)
+        assert table is None
+        assert column is None
 
     def test_malformed_message_returns_none(self) -> None:
         exc = _make_db_error("some unrelated error message")

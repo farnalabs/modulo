@@ -18,9 +18,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
+
+from modulo.db.health_checks import resolve_alembic_ini
 
 _log = logging.getLogger(__name__)
+
+# Process-wide cache of the repo revision set.  The migration tree is fixed
+# for the lifetime of a process, so re-parsing it on every /healthz/ready
+# probe is pure overhead.  Only successful (non-empty) loads are cached so a
+# transient parse failure is retried on the next probe.
+_REPO_REVISIONS: set[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -34,32 +41,24 @@ class DivergenceCheckResult:
     detail: str
 
 
-def _resolve_alembic_ini() -> Path:
-    """Locate ``backend/alembic.ini`` robustly regardless of process cwd.
-
-    Mirrors ``modulo.api.routes.health._resolve_alembic_ini``.
-    """
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "alembic.ini"
-        if candidate.exists():
-            return candidate
-    return Path("alembic.ini")
-
-
 def _load_repo_revisions() -> set[str]:
     """Load all revision IDs from the repo's migration tree.
 
     Uses Alembic's ``ScriptDirectory`` to parse each migration file's
     ``revision`` and ``down_revision`` attributes — more robust than
-    regex-based text scanning.
+    regex-based text scanning.  The result is memoized process-wide.
 
     Returns an EMPTY set when the tree cannot be loaded (fail-open).
     """
+    global _REPO_REVISIONS
+    if _REPO_REVISIONS is not None:
+        return set(_REPO_REVISIONS)
+
     try:
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
-        alembic_ini = _resolve_alembic_ini()
+        alembic_ini = resolve_alembic_ini()
         alembic_cfg = Config(str(alembic_ini))
         alembic_cfg.set_main_option(
             "script_location",
@@ -77,7 +76,9 @@ def _load_repo_revisions() -> set[str]:
                             all_revisions.add(dr)
                 else:
                     all_revisions.add(walk.down_revision)
-        return all_revisions
+        if all_revisions:
+            _REPO_REVISIONS = all_revisions
+        return set(all_revisions)
     except Exception:
         _log.exception("migration_guard._load_repo_revisions failed")
         return set()

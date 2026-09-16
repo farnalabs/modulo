@@ -278,19 +278,21 @@ def _traceback_detail(exc: BaseException, limit: int = 2000) -> str:
 # ---------------------------------------------------------------------------
 # FAR-872: failure-context attribution helpers (log-line extras)
 # ---------------------------------------------------------------------------
-# Lazy-import gate so the failure_context module is only imported when the
-# attribution code path is actually exercised (never during normal flow).
+# Single import gate: every helper below delegates to the (itself fail-open)
+# failure_context module.  A single module-level guard is the only layer
+# needed — the per-call re-imports previously duplicated this guard.
 _ATTRIBUTION_AVAILABLE = True
 try:
     from modulo.core.pipeline_engine.failure_context import (
         _extract_column_info,
         _get_build_sha,
+        enrich_error_detail,
     )
-except Exception:
+except Exception:  # pragma: no cover — import failure is the degraded path
     _ATTRIBUTION_AVAILABLE = False
 
 
-def _failure_build_sha(exc: BaseException) -> str:
+def _failure_build_sha() -> str:
     """Best-effort build SHA for log-line extra (never raises)."""
     if not _ATTRIBUTION_AVAILABLE:
         return "unknown"
@@ -309,6 +311,20 @@ def _failure_column(exc: BaseException) -> str | None:
         return column
     except Exception:
         return None
+
+
+def _enrich_failure_detail(raw_detail: str, exc: BaseException) -> str:
+    """Append FAR-872 attribution to a failure detail.
+
+    Thin executor-side boundary around ``failure_context.enrich_error_detail``
+    so both executor failure paths share one call site and a test can prove
+    the enrichment is wired.  The flag guard is the only executor-side layer:
+    ``enrich_error_detail`` is itself fail-open by construction, so returns
+    ``raw_detail`` unchanged when the module is unavailable.
+    """
+    if not _ATTRIBUTION_AVAILABLE:
+        return raw_detail
+    return enrich_error_detail(raw_detail, exc)
 
 
 def _retry_backoff_seconds(
@@ -3307,22 +3323,14 @@ class PipelineExecutor:
             _raw_tb = _traceback_detail(exc, limit=2000)
             # FAR-872: enrich the error detail with attribution (build SHA,
             # failing column, table set) so executor failures are self-identifying.
-            # FAIL-OPEN: enrich_error_detail never raises.
-            try:
-                from modulo.core.pipeline_engine.failure_context import (
-                    enrich_error_detail,
-                )
-
-                error_detail = enrich_error_detail(_raw_tb, exc)
-            except Exception:
-                error_detail = _raw_tb
+            error_detail = _enrich_failure_detail(_raw_tb, exc)
             _log.exception(
                 "pipeline.resume_error",
                 extra={
                     "run_id": str(run_id),
                     **(
                         {
-                            "failure_build_sha": _failure_build_sha(exc),
+                            "failure_build_sha": _failure_build_sha(),
                             "failing_column": _failure_column(exc),
                         }
                         if _ATTRIBUTION_AVAILABLE
@@ -3920,22 +3928,14 @@ class PipelineExecutor:
             _tb = _traceback_detail(exc, limit=2000)
             # FAR-872: enrich the error detail with attribution (build SHA,
             # failing column, table set) so executor failures are self-identifying.
-            # FAIL-OPEN: enrich_error_detail never raises.
-            try:
-                from modulo.core.pipeline_engine.failure_context import (
-                    enrich_error_detail,
-                )
-
-                error_detail = enrich_error_detail(_tb, exc)
-            except Exception:
-                error_detail = _tb
+            error_detail = _enrich_failure_detail(_tb, exc)
             _log.exception(
                 "pipeline.execution_error",
                 extra={
                     "run_id": str(run_id),
                     **(
                         {
-                            "failure_build_sha": _failure_build_sha(exc),
+                            "failure_build_sha": _failure_build_sha(),
                             "failing_column": _failure_column(exc),
                         }
                         if _ATTRIBUTION_AVAILABLE

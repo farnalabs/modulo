@@ -346,6 +346,9 @@ async def _check_migrations() -> CheckResult:
         try:
             divergence = check_migration_divergence(applied)
         except Exception:
+            # Contractually fail-open, but never silent: a failure here would
+            # otherwise hide a real bug behind the "migrations up to date" path.
+            _log.exception("health._check_migrations divergence check failed")
             divergence = None
 
         pending = heads - applied

@@ -23,28 +23,23 @@ _log = logging.getLogger(__name__)
 
 
 def _get_build_sha() -> str:
-    """Return the first 7 chars of the GIT_SHA env var, or ``"unknown"``.
+    """Return the deployed build identifier, or ``"unknown"``.
 
-    Uses ``modulo.__build_tag__`` when available (already wired through
-    the deploy pipeline's build args).  Falls back to reading the env var
-    directly if the module has not been imported yet (edge case during
-    early boot).
+    Reuses the single build-tag source in ``modulo`` (``__build_tag__`` is
+    wired through the deploy pipeline's build args; ``get_build_tag()``
+    re-derives it from ``GIT_SHA`` when the cached value is still
+    ``"build-local-dev"``, e.g. when the env var was set after ``modulo``
+    was imported).  No env-parsing logic is duplicated here.
     """
     try:
-        from modulo import __build_tag__
+        from modulo import __build_tag__, get_build_tag
 
         # __build_tag__ is ``"build-<7chars>"`` or ``"build-local-dev"``.
         if __build_tag__ and __build_tag__ != "build-local-dev":
             return __build_tag__
-    except Exception:  # noqa: S110 — intentional fail-open
-        pass
-
-    try:
-        import os
-
-        sha = os.environ.get("GIT_SHA", "")
-        if sha and len(sha) >= 7:
-            return f"build-{sha[:7]}"
+        tag = get_build_tag()
+        if tag and tag != "build-local-dev":
+            return tag
     except Exception:  # noqa: S110 — intentional fail-open
         pass
 
@@ -57,17 +52,19 @@ def _get_build_sha() -> str:
 
 # Pattern for asyncpg's UndefinedColumnError message:
 #   "column <table>.<column> does not exist"
-_UNDDEFINED_COLUMN_RE = re.compile(
+_UNDEFINED_COLUMN_RE = re.compile(
     r"column\s+(?P<table>\w+)\.(?P<column>\w+)\s+does\s+not\s+exist",
     re.IGNORECASE,
 )
 
-# Pattern for a broader set of ProgrammingError messages that reference
-# a column name:
-#   "column \"<table>.<column>\" does not exist"
+# Broader ProgrammingError pattern.  Both alternatives MUST stay anchored
+# to the ``column`` keyword: an unanchored ``<word>.<word>`` alternative
+# would match any dotted token in an error string and emit a false
+# attribution (e.g. ``"no module named a.b"``).  Supported shapes:
+#   'column "<table>.<column>" does not exist'
 #   "column <table>.<column> does not exist"
 _PROGRAMMING_COLUMN_RE = re.compile(
-    r"column\s+(?:(?:\"(?P<table_q>\w+)\.(?P<column_q>\w+)\"))|(?:(?P<table>\w+)\.(?P<column>\w+))",
+    r"column\s+(?:(?:\"(?P<table_q>\w+)\.(?P<column_q>\w+)\")|(?:(?P<table>\w+)\.(?P<column>\w+)))",
     re.IGNORECASE,
 )
 
@@ -81,7 +78,7 @@ def _extract_column_info(exc: BaseException) -> tuple[str | None, str | None]:
     try:
         text = str(exc) or ""
         # Try the specific UndefinedColumnError pattern first (most precise).
-        m = _UNDDEFINED_COLUMN_RE.search(text)
+        m = _UNDEFINED_COLUMN_RE.search(text)
         if m:
             return m.group("table"), m.group("column")
         # Broader ProgrammingError column pattern.
