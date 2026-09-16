@@ -42,7 +42,9 @@ export default {
       "save_and_approve": "Save & approve",
       "save_and_approving": "Saving & approving...",
       "modified_subject_label": "Modified subject (downstream nodes receive this)",
-      "cancel_edit": "Cancel"
+      "cancel_edit": "Cancel",
+      "choice_options_label": "Select an option",
+      "select_an_option": "Select an option to continue:"
     }
   },
   "views": {

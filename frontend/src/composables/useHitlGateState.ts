@@ -5,6 +5,8 @@ export interface HitlGateSessionState {
   notes: string
   editingSubject: boolean
   modifiedSubject: string
+  /** FAR-860: the option_id selected by the reviewer for kind:choice gates. */
+  selectedOption: string | null
 }
 
 // Module-scoped on purpose (FAR-686): the HITL review page's 30s auto-refresh
@@ -17,7 +19,7 @@ const gateStates = reactive(new Map<string, HitlGateSessionState>())
 function ensureEntry(key: string): HitlGateSessionState {
   const existing = gateStates.get(key)
   if (existing) return existing
-  gateStates.set(key, reactive<HitlGateSessionState>({ claimToken: null, notes: '', editingSubject: false, modifiedSubject: '' }))
+  gateStates.set(key, reactive<HitlGateSessionState>({ claimToken: null, notes: '', editingSubject: false, modifiedSubject: '', selectedOption: null }))
   return gateStates.get(key) as HitlGateSessionState
 }
 
@@ -63,7 +65,14 @@ export function useHitlGateState(runId: string, gateId: string) {
     ensureEntry(key).modifiedSubject = value
   }
 
-  return { claimToken, notes, setClaimToken, editingSubject, modifiedSubject, setEditingSubject, setModifiedSubject, clear }
+  const selectedOption = computed<string | null>({
+    get: () => gateStates.get(key)?.selectedOption ?? null,
+    set: (value: string | null) => {
+      ensureEntry(key).selectedOption = value
+    },
+  })
+
+  return { claimToken, notes, setClaimToken, editingSubject, modifiedSubject, setEditingSubject, setModifiedSubject, selectedOption, clear }
 }
 
 /** Drop every persisted gate session — simulates a fresh browser session. */
