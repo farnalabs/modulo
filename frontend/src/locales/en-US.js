@@ -42,7 +42,8 @@ export default {
       "save_and_approve": "Save & approve",
       "save_and_approving": "Saving & approving...",
       "modified_subject_label": "Modified subject (downstream nodes receive this)",
-      "subject_modified_indicator": "Modified"
+      "subject_modified_indicator": "Modified",
+      "cancel_edit": "Cancel"
     }
   },
   "views": {

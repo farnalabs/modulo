@@ -1632,6 +1632,28 @@ def _interrupt_subject(gate_payload: dict[str, Any]) -> str | None:
     return result if isinstance(result, str) else None
 
 
+def _interrupt_subject_parent(gate_payload: dict[str, Any]) -> dict[str, Any] | None:
+    """The interrupt payload's ``subject_parent`` member (FAR-862), or None.
+
+    The gate node resolves the JMESPath prefix of ``subject_path`` to find
+    the container dict holding the subject value; the briefing capture
+    stores it so the frontend can reconstruct a shape-preserving
+    ``modified_output``. None for gates without a ``subject_path`` or when
+    the parent cannot be resolved.
+    """
+    result = gate_payload.get("subject_parent")
+    return result if isinstance(result, dict) else None
+
+
+def _interrupt_subject_leaf_key(gate_payload: dict[str, Any]) -> str | None:
+    """The interrupt payload's ``subject_leaf_key`` member (FAR-862), or None.
+
+    The leaf key within ``subject_parent`` whose value is the subject.
+    """
+    result = gate_payload.get("subject_leaf_key")
+    return result if isinstance(result, str) else None
+
+
 class PipelineExecutor:
     """Execute a single pipeline run (HITL-aware, supports parallel fan-out).
 
@@ -5294,6 +5316,8 @@ class PipelineExecutor:
         completed_node_outputs: dict[str, Any] | None = None,
         condition_result: dict[str, Any] | None = None,
         subject: str | None = None,
+        subject_parent: dict[str, Any] | None = None,
+        subject_leaf_key: str | None = None,
     ) -> tuple[str | None, bool]:
         """Create the HITL gate row (or reuse a coalescing open gate).
 
@@ -5373,6 +5397,8 @@ class PipelineExecutor:
                             completed_node_outputs=completed_node_outputs,
                             condition_result=condition_result,
                             subject=subject,
+                            subject_parent=subject_parent,
+                            subject_leaf_key=subject_leaf_key,
                         )
                 except asyncio.CancelledError:
                     raise
@@ -5442,6 +5468,8 @@ class PipelineExecutor:
         required_team_id = _interrupt_required_team_id(gate_payload)
         condition_result = _interrupt_condition_result(gate_payload)
         subject = _interrupt_subject(gate_payload)
+        subject_parent = _interrupt_subject_parent(gate_payload)
+        subject_leaf_key = _interrupt_subject_leaf_key(gate_payload)
         node_token_usage = state.node_token_usage
         broker = ctx.broker
         run_id = ctx.run_id
@@ -5477,6 +5505,8 @@ class PipelineExecutor:
                 completed_node_outputs=ctx.completed_node_outputs,
                 condition_result=condition_result,
                 subject=subject,
+                subject_parent=subject_parent,
+                subject_leaf_key=subject_leaf_key,
             )
             if coalesce_reused:
                 detail = (

@@ -342,7 +342,7 @@ describe('HitlGateCard', () => {
   })
 
   // FAR-862: subject editing tests
-  it('shows the edit subject button when gate has a subject and is claimed by the current user', async () => {
+  it('shows the edit subject button when gate has a subject, subject_parent, and is claimed', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.POST as any).mockResolvedValue({
       data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
@@ -350,12 +350,17 @@ describe('HitlGateCard', () => {
     })
     wrapper = mount(HitlGateCard, {
       props: {
-        gate: gate({ context: { subject: '{"body":"Review this comment."}' } }),
+        gate: gate({
+          context: {
+            subject: '{"body":"Review this comment."}',
+            subject_parent: { body: 'Review this comment.' },
+            subject_leaf_key: 'body',
+          },
+        }),
       },
       global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
 
-    // Claim the gate to get a token
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
 
@@ -403,7 +408,13 @@ describe('HitlGateCard', () => {
     })
     wrapper = mount(HitlGateCard, {
       props: {
-        gate: gate({ context: { subject: '{"body":"Review this comment."}' } }),
+        gate: gate({
+          context: {
+            subject: 'Review this comment.',
+            subject_parent: { body: 'Review this comment.' },
+            subject_leaf_key: 'body',
+          },
+        }),
       },
       global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
@@ -416,7 +427,7 @@ describe('HitlGateCard', () => {
 
     const textarea = wrapper.find('[data-testid="hitl-gate-subject-textarea"]')
     expect(textarea.exists()).toBe(true)
-    expect((textarea.element as HTMLTextAreaElement).value).toBe('{"body":"Review this comment."}')
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('Review this comment.')
     expect(wrapper.find('[data-testid="hitl-gate-save-approve"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="hitl-gate-cancel-edit"]').exists()).toBe(true)
   })
@@ -431,7 +442,13 @@ describe('HitlGateCard', () => {
     })
     wrapper = mount(HitlGateCard, {
       props: {
-        gate: gate({ context: { subject: '{"body":"Review this comment."}' } }),
+        gate: gate({
+          context: {
+            subject: '{"body":"Review this comment."}',
+            subject_parent: { body: 'Review this comment.', priority: 'high' },
+            subject_leaf_key: 'body',
+          },
+        }),
       },
       global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
@@ -442,7 +459,7 @@ describe('HitlGateCard', () => {
     await wrapper.find('[data-testid="hitl-gate-edit-subject"]').trigger('click')
     await flushPromises()
 
-    await wrapper.find('[data-testid="hitl-gate-subject-textarea"]').setValue('{"body":"Updated comment."}')
+    await wrapper.find('[data-testid="hitl-gate-subject-textarea"]').setValue('Updated comment.')
     await wrapper.find('[data-testid="hitl-gate-save-approve"]').trigger('click')
     await flushPromises()
 
@@ -454,7 +471,7 @@ describe('HitlGateCard', () => {
       params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
       body: {
         claim_token: 'tok-1',
-        modified_output: { subject: '{"body":"Updated comment."}' },
+        modified_output: { body: 'Updated comment.', priority: 'high' },
         notes: null,
       },
     })
@@ -472,7 +489,13 @@ describe('HitlGateCard', () => {
     })
     wrapper = mount(HitlGateCard, {
       props: {
-        gate: gate({ context: { subject: '{"body":"Review this comment."}' } }),
+        gate: gate({
+          context: {
+            subject: 'Review this comment.',
+            subject_parent: { body: 'Review this comment.' },
+            subject_leaf_key: 'body',
+          },
+        }),
       },
       global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
@@ -488,5 +511,27 @@ describe('HitlGateCard', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="hitl-gate-subject-textarea"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hitl-gate-edit-subject"]').exists()).toBe(true)
+  })
+
+  it('hides the editor when subject_parent is absent (fail-safe, no lossy partial dict)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockResolvedValue({
+      data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
+      error: undefined,
+    })
+    wrapper = mount(HitlGateCard, {
+      props: {
+        gate: gate({ context: { subject: 'Review this comment.' } }),
+      },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+
+    // Editor affordance must NOT appear — subject_parent is absent, so
+    // the frontend cannot reconstruct a shape-preserving modified_output.
+    expect(wrapper.find('[data-testid="hitl-gate-edit-subject"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="hitl-gate-subject-editor"]').exists()).toBe(false)
   })
 })

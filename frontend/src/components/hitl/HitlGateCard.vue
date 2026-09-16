@@ -78,7 +78,7 @@
     <!-- FAR-862: inline subject editor — only when the gate has a subject,
          is claimed by the current user, and is not yet decided. -->
     <div
-      v-if="subject && status === 'claimed' && claimToken"
+      v-if="subject && subjectParent && subjectLeafKey && status === 'claimed' && claimToken"
       class="space-y-2"
       data-testid="hitl-gate-subject-editor"
     >
@@ -124,7 +124,7 @@
             class="rounded-lg border border-input px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted"
             @click="cancelEditSubject"
           >
-            {{ $t('components.HitlBriefing.hide_details') }}
+            {{ $t('hitl.gate.cancel_edit') }}
           </button>
         </div>
       </div>
@@ -343,6 +343,26 @@ const subject = computed(() => {
   return typeof value === 'string' && value.trim() ? value : null
 })
 
+/**
+ * FAR-862: the container holding the subject and the leaf key within it,
+ * captured at gate-fire time so the frontend can reconstruct a
+ * shape-preserving modified_output (replacing only the subject, never
+ * dropping sibling keys).
+ */
+const subjectParent = computed(() => {
+  const ctx = props.gate.context
+  if (!ctx || typeof ctx !== 'object' || Array.isArray(ctx)) return null
+  const value = (ctx as Record<string, unknown>).subject_parent
+  return value != null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+})
+
+const subjectLeafKey = computed(() => {
+  const ctx = props.gate.context
+  if (!ctx || typeof ctx !== 'object' || Array.isArray(ctx)) return null
+  const value = (ctx as Record<string, unknown>).subject_leaf_key
+  return typeof value === 'string' && value.trim() ? value : null
+})
+
 function statusBadgeClass(state: string): string {
   const classMap: Record<string, string> = {
     pending: 'badge badge-status-pending',
@@ -510,12 +530,14 @@ function cancelEditSubject() {
 
 /**
  * FAR-862: approve-with-modification — the edited subject replaces the
- * gate node's output. The v1 contract sends `{ "subject": editedSubject }`
- * as `modified_output`, which downstream nodes receive as `state["output"]`.
+ * gate node's output. The reconstruction is shape-preserving: the parent
+ * container (captured at gate-fire time) is cloned with ONLY the subject
+ * leaf key replaced by the edited text. This preserves every sibling key
+ * that downstream nodes may depend on.
  *
- * Limitation: the full output dict is not reconstructed. If downstream nodes
- * depend on output keys beyond `subject`, the pipeline designer must use
- * a broader `subject_path` or handle the reconstruction in the pipeline graph.
+ * Fail-safe: if the parent container is unavailable (legacy gate, capture
+ * failed, or subject is not a plain string leaf), the editor is hidden
+ * entirely — we never send a lossy partial dict.
  */
 async function modifyAndApprove() {
   const token = claimToken.value
@@ -527,8 +549,18 @@ async function modifyAndApprove() {
     showMessage({ type: 'error', text: t('hitl.gate.modified_subject_label') }, false)
     return
   }
+  const parent = subjectParent.value
+  const leafKey = subjectLeafKey.value
+  if (!parent || !leafKey) {
+    showMessage({ type: 'error', text: t('hitl.gate.modified_subject_label') }, false)
+    return
+  }
   actioning.value = 'modify-approve'
   message.value = null
+  // Shape-preserving reconstruction: clone the parent, replace only the
+  // subject leaf.  JSON round-trip gives a deep plain-object copy — safe
+  // because the backend already serialised the parent to JSON at capture time.
+  const reconstructedOutput = { ...JSON.parse(JSON.stringify(parent)), [leafKey]: modifiedSubject.value }
   try {
     const { error: err } = await api.POST(
       '/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification',
@@ -536,7 +568,7 @@ async function modifyAndApprove() {
         params: { path: { run_id: props.gate.run_id, gate_id: props.gate.gate_id } },
         body: {
           claim_token: token,
-          modified_output: { subject: modifiedSubject.value },
+          modified_output: reconstructedOutput,
           notes: notes.value || null,
         },
       },

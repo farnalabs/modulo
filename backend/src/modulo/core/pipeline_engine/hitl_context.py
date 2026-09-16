@@ -141,6 +141,14 @@ class HitlGateContext(TypedDict, total=False):
     reason: str | None
     pipeline_name: str | None
     subject: str | None
+    #: FAR-862: the container that holds the subject value in state, so the
+    #: frontend can reconstruct a shape-preserving modified_output (replacing
+    #: only the subject leaf). ``None`` when the parent cannot be resolved
+    #: (complex JMESPath, non-dict parent, capture failure) — the frontend
+    #: hides the editor in that case (fail-safe: no lossy partial dict).
+    subject_parent: dict[str, Any] | None
+    #: FAR-862: the key in ``subject_parent`` whose value is the subject.
+    subject_leaf_key: str | None
     consequences: dict[str, Any] | None
     #: FAR-860: the gate's response contract (agent-defined options).
     #: Threaded from the gate config at fire time so the UI can render
@@ -311,6 +319,8 @@ async def build_hitl_gate_context(
     completed_node_outputs: dict[str, Any] | None,
     condition_result: dict[str, Any] | None = None,
     subject: str | None = None,
+    subject_parent: dict[str, Any] | None = None,
+    subject_leaf_key: str | None = None,
 ) -> HitlGateContext | None:
     """Build the fire-time briefing bundle for a HITL gate, or ``None``.
 
@@ -323,9 +333,11 @@ async def build_hitl_gate_context(
     bundle's PRIMARY evidence. ``subject`` (FAR-859) is the pre-resolved
     value at the gate's ``subject_path`` — the caller resolves it against the
     run state (the same root the condition evaluates against) so the builder
-    does not need the state dict. Any error logs and returns ``None``: a
-    briefing defect must never block the interrupt (failure-isolation
-    contract).
+    does not need the state dict. ``subject_parent`` / ``subject_leaf_key``
+    (FAR-862) are the container holding the subject and the key within it, so
+    the frontend can reconstruct a shape-preserving ``modified_output``. Any
+    error logs and returns ``None``: a briefing defect must never block the
+    interrupt (failure-isolation contract).
     """
     try:
         return await _build_context_inner(
@@ -337,6 +349,8 @@ async def build_hitl_gate_context(
             completed_node_outputs=completed_node_outputs,
             condition_result=condition_result,
             subject=subject,
+            subject_parent=subject_parent,
+            subject_leaf_key=subject_leaf_key,
         )
     except asyncio.CancelledError:
         raise
@@ -359,6 +373,8 @@ async def _build_context_inner(
     completed_node_outputs: dict[str, Any] | None,
     condition_result: dict[str, Any] | None,
     subject: str | None,
+    subject_parent: dict[str, Any] | None,
+    subject_leaf_key: str | None,
 ) -> HitlGateContext | None:
     run = await get_run(session, run_id, organisation_id=org_id)
     if run is None:
@@ -457,6 +473,23 @@ async def _build_context_inner(
     if subject is not None:
         bounded_subject = _bound_text(sanitize_error_text(subject))
 
+    # FAR-862: capture the parent container holding the subject so the frontend
+    # can reconstruct a shape-preserving modified_output. Bounded and redacted
+    # identically to artifacts — the parent is node output content. Only
+    # JSON-serialisable dicts are captured; capture failure yields None (fail-safe).
+    bounded_subject_parent: dict[str, Any] | None = None
+    bounded_subject_leaf_key: str | None = None
+    if isinstance(subject_parent, dict) and subject_leaf_key is not None:
+        try:
+            raw_parent = json.dumps(subject_parent, sort_keys=True, default=str, ensure_ascii=False)
+            redacted_parent = sanitize_error_text(raw_parent)
+            bounded_parent_str = slice_with_marker(redacted_parent, ARTIFACTS_BUDGET_CHARS)
+            bounded_subject_parent = json.loads(bounded_parent_str) if bounded_parent_str else None
+            bounded_subject_leaf_key = subject_leaf_key[:_NAME_FIELD_MAX_CHARS]
+        except (TypeError, ValueError, KeyError):
+            bounded_subject_parent = None
+            bounded_subject_leaf_key = None
+
     # FAR-859: resolve consequences — approve/reject routing from the
     # snapshot graph.  Approve continues to the gate edge's target node;
     # reject routes to reject_target (when set).
@@ -489,6 +522,8 @@ async def _build_context_inner(
         "reason": reason,
         "pipeline_name": pipeline_name[:_NAME_FIELD_MAX_CHARS] if pipeline_name else None,
         "subject": bounded_subject,
+        "subject_parent": bounded_subject_parent,
+        "subject_leaf_key": bounded_subject_leaf_key,
         "consequences": consequences,
         "response_contract": response_contract,
     }
