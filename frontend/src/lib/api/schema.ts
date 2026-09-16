@@ -14251,6 +14251,11 @@ export interface components {
              * @default true
              */
             password_enabled: boolean;
+            /**
+             * Saml
+             * @default false
+             */
+            saml: boolean;
         };
         /** OrgProfileResponse */
         OrgProfileResponse: {

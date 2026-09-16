@@ -552,7 +552,8 @@ export default {
       "organisation_slug_label": "Organisation name or slug",
       "organisation_slug_placeholder": "e.g. acme-corp",
       "organisation_slug_hint": "Enter your organisation's name or URL slug to continue.",
-      "continue": "Continue"
+      "continue": "Continue",
+      "saml_button": "SAML"
     },
     "NotificationsPage": {
       "title": "Notifications",

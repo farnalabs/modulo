@@ -65,7 +65,7 @@
           </Button>
         </form>
 
-        <div v-if="providers.length > 0" class="space-y-3" data-testid="org-login-sso-section">
+        <div v-if="providers.length > 0 || samlEnabled" class="space-y-3" data-testid="org-login-sso-section">
           <div class="flex items-center gap-3 text-xs text-muted-foreground">
             <span class="h-px flex-1 bg-border" />
             <span>{{ $t('views.LoginView.or_continue_with') }}</span>
@@ -80,6 +80,14 @@
               :data-testid="`org-login-sso-${provider.provider_id}`"
             >
               {{ provider.display_name }}
+            </a>
+            <a
+              v-if="samlEnabled"
+              href="/api/v1/auth/saml/login"
+              class="flex w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+              data-testid="org-login-sso-saml"
+            >
+              {{ $t('views.OrgLoginView.saml_button') }}
             </a>
           </div>
         </div>
@@ -106,6 +114,7 @@ const slug = route.params.slug as string
 const orgName = ref('')
 const providers = ref<OrgLoginProviderInfo[]>([])
 const passwordEnabled = ref(true)
+const samlEnabled = ref(false)
 const loading = ref(true)
 const notFound = ref(false)
 
@@ -124,6 +133,7 @@ async function fetchOrgLogin() {
     orgName.value = data.org?.name || slug
     providers.value = data.providers ?? []
     passwordEnabled.value = data.password_enabled !== false
+    samlEnabled.value = Boolean(data.saml)
     loading.value = false
   } catch {
     notFound.value = true

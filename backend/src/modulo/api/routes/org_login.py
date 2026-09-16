@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
+from modulo.api.routes.sso import is_saml_available
 from modulo.db.crud.organisation import (
     get_login_active_org_by_slug,
     list_login_active_orgs,
@@ -77,6 +78,8 @@ class OrgLoginResponse(BaseModel):
     org: OrgInfo
     providers: list[OrgLoginProviderInfo]
     password_enabled: bool = True
+    # Instance-wide SAML availability (not per-org — SAML is single-IdP-per-instance).
+    saml: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +181,9 @@ async def org_login(
             # system session (BYPASSRLS), we must filter manually.  We always
             # filter by organisation_id defensively.
             scoped_providers = [p for p in oidc_providers if p.organisation_id == org.id]
+
+            # SAML is instance-wide (single-IdP-per-instance), not per-org.
+            saml_enabled = await is_saml_available(settings, None, session)
     except HTTPException:
         raise
     except Exception:
@@ -199,4 +205,5 @@ async def org_login(
             if p.provider_id  # skip providers with no slug
         ],
         password_enabled=True,
+        saml=saml_enabled,
     )
