@@ -60,7 +60,7 @@ async function runAutoLogin(navigateHome = false): Promise<boolean> {
     const res = await fetch('/api/v1/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: autoLogin.username, password: autoLogin.password }),
+      body: JSON.stringify({ email: autoLogin.username, password: autoLogin.password, org_slug: autoLogin.org_slug }),
     })
     if (!res.ok) return false
     const data = await res.json()

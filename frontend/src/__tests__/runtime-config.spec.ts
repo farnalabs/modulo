@@ -12,12 +12,20 @@ describe('getAutoLoginConfig', () => {
     expect(getAutoLoginConfig()).toBeUndefined()
   })
 
-  it('returns explicitly configured demo credentials', () => {
+  it('returns explicitly configured demo credentials with default org slug', () => {
     window.__MODULO_CONFIG__ = {
       autoLogin: { username: 'demo', password: 'demo' },
     }
 
-    expect(getAutoLoginConfig()).toEqual({ username: 'demo', password: 'demo' })
+    expect(getAutoLoginConfig()).toEqual({ username: 'demo', password: 'demo', org_slug: 'demo' })
+  })
+
+  it('returns a custom org slug when provided', () => {
+    window.__MODULO_CONFIG__ = {
+      autoLogin: { username: 'demo', password: 'demo', orgSlug: 'custom-org' },
+    }
+
+    expect(getAutoLoginConfig()).toEqual({ username: 'demo', password: 'demo', org_slug: 'custom-org' })
   })
 
   it('rejects incomplete or non-string credentials', () => {

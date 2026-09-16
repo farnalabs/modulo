@@ -1,7 +1,12 @@
 export interface AutoLoginConfig {
   username: string
   password: string
+  /** Org slug for the login request — binds the session to that org. */
+  org_slug: string
 }
+
+/** Default demo org slug — single source of truth on the frontend side. */
+const DEFAULT_DEMO_ORG_SLUG = 'demo'
 
 export function getAutoLoginConfig(): AutoLoginConfig | undefined {
   const config = window.__MODULO_CONFIG__?.autoLogin
@@ -14,5 +19,8 @@ export function getAutoLoginConfig(): AutoLoginConfig | undefined {
   ) {
     return undefined
   }
-  return { username: config.username, password: config.password }
+  const orgSlug = typeof config.orgSlug === 'string' && config.orgSlug
+    ? config.orgSlug
+    : DEFAULT_DEMO_ORG_SLUG
+  return { username: config.username, password: config.password, org_slug: orgSlug }
 }
