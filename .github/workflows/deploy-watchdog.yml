@@ -60,6 +60,7 @@ concurrency:
 permissions:
   contents: read
   actions: write
+  issues: write
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -86,6 +87,7 @@ jobs:
       # never needs bypassing, and bypassing it on a red main would only
       # re-fire the Branch Fixer webhook on every tick.
       - name: Check prod staleness and re-dispatch deploy if needed
+        id: watchdog
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -128,6 +130,7 @@ jobs:
             exit 0
           fi
           MAIN_SHORT="${MAIN_SHA:0:12}"
+          echo "main_sha=${MAIN_SHORT}" >> "$GITHUB_OUTPUT"
 
           # ---- 3. Prod SHA: fly image tag -> complete release -> deployment endpoint ----
           if ! bash .github/scripts/install-flyctl.sh; then
@@ -331,12 +334,69 @@ jobs:
           ')" || RECENT="ok"
           if [ "$RECENT" != "ok" ]; then
             echo "::error::deploy-watchdog: 3 consecutive failed deploys; not re-dispatching - investigate deploy.yml failures; deploy-staleness-check.yml escalates staleness independently"
-            exit 0
+            echo "consecutive_failures=true" >> "$GITHUB_OUTPUT"
+            echo "prod_sha=${PROD_SHA}" >> "$GITHUB_OUTPUT"
+            echo "main_sha=${MAIN_SHORT}" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
 
           echo "Prod is stale (prod=$PROD_SHA main=$MAIN_SHORT, prod sha source: $SHA_SOURCE) - re-dispatching deploy.yml (plain dispatch; the deploy throttle is authoritative)."
+          echo "prod_sha=${PROD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "sha_source=${SHA_SOURCE}" >> "$GITHUB_OUTPUT"
           if ! gh workflow run "$DEPLOY_WORKFLOW" --repo "$REPO" --ref main; then
             echo "::error::Deploy-staleness watchdog: prod is STALE (prod=$PROD_SHA main=$MAIN_SHORT) and the plain re-dispatch of deploy.yml FAILED. Next tick retries; if it persists, dispatch manually: gh workflow run \"Deploy: Staging + Prod\" --ref main"
+            echo "dispatch_failed=true" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           echo "Watchdog re-dispatched deploy.yml (prod=$PROD_SHA main=$MAIN_SHORT)."
+
+      - name: Create Linear ticket on watchdog escalation
+        if: failure()
+        shell: bash
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "LINEAR_API_KEY not set - skipping ticket (workflow failure still alerts via GitHub)."
+            exit 0
+          fi
+          PROD_SHA="${{ steps.watchdog.outputs.prod_sha }}"
+          MAIN_SHA="${{ steps.watchdog.outputs.main_sha }}"
+          CONSECUTIVE="${{ steps.watchdog.outputs.consecutive_failures }}"
+          DISPATCH_FAILED="${{ steps.watchdog.outputs.dispatch_failed }}"
+          SHA_SOURCE="${{ steps.watchdog.outputs.sha_source }}"
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          if [ "$CONSECUTIVE" = "true" ]; then
+            TITLE="DEPLOY WATCHDOG GAVE UP: 3 consecutive failures (FAR-910)"
+            DESC="The deploy watchdog detected 3 consecutive failed deploys and stopped re-dispatching at ${TS}. Prod SHA: ${PROD_SHA:-unknown} Main HEAD: ${MAIN_SHA:-unknown} SHA source: ${SHA_SOURCE:-unknown}. deploy.yml itself is broken -- investigate the deploy workflow failures. The deploy-staleness-check.yml escalates staleness independently. This is FAR-910 -- deploy watchdog terminal case must escalate, not annotate."
+          elif [ "$DISPATCH_FAILED" = "true" ]; then
+            TITLE="DEPLOY WATCHDOG DISPATCH FAILED (FAR-910)"
+            DESC="The deploy watchdog could not re-dispatch deploy.yml at ${TS}. Prod SHA: ${PROD_SHA:-unknown} Main HEAD: ${MAIN_SHA:-unknown}. The prod is stale and the watchdog dispatch mechanism failed. Check the GitHub Actions token scope and workflow_dispatch permissions. This is FAR-910."
+          else
+            TITLE="DEPLOY WATCHDOG FAILED (FAR-910)"
+            DESC="The deploy watchdog workflow failed at ${TS}. Check the GitHub Actions run for details. This is FAR-910."
+          fi
+
+          BODY=$(jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$DESC" \
+            '{
+              query: "mutation($i: IssueCreateInput!){ issueCreate(input:$i){ success issue { identifier url } } }",
+              variables: { i: {
+                teamId: "ae855baf-6439-4980-97fb-38da80129485",
+                title: $title,
+                description: $desc,
+                priority: 1
+              } }
+            }')
+          RESULT=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$BODY" 2>&1) || true
+          if echo "$RESULT" | grep -q '"success":true'; then
+            TICKET_ID=$(echo "$RESULT" | jq -r '.data.issueCreate.issue.identifier // "unknown"')
+            echo "Created Linear ticket: $TICKET_ID"
+          else
+            echo "::warning::Failed to create Linear ticket: $RESULT"
+          fi
