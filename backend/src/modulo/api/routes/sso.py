@@ -50,6 +50,8 @@ def _redirect_to_frontend(tokens: dict[str, str], settings: Settings) -> Redirec
 
 class OidcProviderInfo(BaseModel):
     provider_id: str
+    display_name: str = ""
+    preset: str = "custom"
 
 
 class SsoProvidersResponse(BaseModel):
@@ -161,12 +163,26 @@ async def sso_providers(
         async with session.begin():
             oidc_providers = await _list_enabled_oidc_global(system_session, session)
             db_ids = {p.provider_id for p in oidc_providers}
-            oidc_list = [{"provider_id": p.provider_id} for p in oidc_providers if p.provider_id]
+            oidc_list: list[dict[str, str]] = [
+                {
+                    "provider_id": p.provider_id,
+                    "display_name": p.name or getattr(p, "preset", "custom"),
+                    "preset": getattr(p, "preset", "custom"),
+                }
+                for p in oidc_providers
+                if p.provider_id
+            ]
 
             for env_provider in parse_oidc_providers(settings):
                 env_id = env_provider["provider_id"]
                 if env_id not in db_ids:
-                    oidc_list.append({"provider_id": env_id})
+                    oidc_list.append(
+                        {
+                            "provider_id": env_id,
+                            "display_name": env_id,
+                            "preset": "custom",
+                        }
+                    )
 
             saml_enabled = await is_saml_available(settings, system_session, session)
             return SsoProvidersResponse(

@@ -173,6 +173,7 @@ describe('SettingsSsoView — create provider', () => {
       client_secret: null,
       discovery_url: 'https://idp.new/.well-known',
       scopes: ['openid', 'email'],
+      preset: 'custom',
     })
     // The form closes and the list refetches (FAR-608): the created provider
     // appears once the GET mock reflects the server state after the POST.

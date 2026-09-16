@@ -1353,7 +1353,7 @@ class TestOidcProcessCallbackDb:
 class TestSsoProvidersEndpointDb:
     def test_returns_db_configured_provider(self, client: TestClient) -> None:
 
-        db_provider = SimpleNamespace(provider_id="auth0")
+        db_provider = SimpleNamespace(provider_id="auth0", name="Auth0 SSO", preset="auth0")
         with (
             patch(
                 "modulo.core.license.get_license",
