@@ -311,8 +311,9 @@ def test_record_retry_redispatch_with_meter():
 
 def test_record_retry_redispatch_no_meter():
     """When no meter is available, it returns without error."""
-    with patch("modulo.core.pipeline_engine.executor._get_otel_meter", return_value=None):
+    with patch("modulo.core.pipeline_engine.executor._get_otel_meter", return_value=None) as mock_meter:
         _record_retry_redispatch(reason="failed", schedule_state="absent", delay_seconds=0.5)
+    assert mock_meter.call_count == 1
 
 
 def test_record_retry_redispatch_exception_is_swallowed():
@@ -321,6 +322,7 @@ def test_record_retry_redispatch_exception_is_swallowed():
     mock_meter.create_counter.side_effect = RuntimeError("metrics down")
     with patch("modulo.core.pipeline_engine.executor._get_otel_meter", return_value=mock_meter):
         _record_retry_redispatch(reason="failed", schedule_state="valid", delay_seconds=1.0)
+    assert mock_meter.create_counter.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -410,12 +412,12 @@ def test_map_lg_event_unknown_kind():
 
 def test_streamed_interrupts_no_stream_event():
     """Non-stream events yield empty tuple."""
-    assert _streamed_interrupts({"event": "on_chain_start"}) == ()
+    assert not _streamed_interrupts({"event": "on_chain_start"})
 
 
 def test_streamed_interrupts_no_interrupt():
     """Stream events without __interrupt__ yield empty tuple."""
-    assert _streamed_interrupts({"event": "on_chain_stream", "data": {"chunk": {}}}) == ()
+    assert not _streamed_interrupts({"event": "on_chain_stream", "data": {"chunk": {}}})
 
 
 def test_streamed_interrupts_list_of_interrupts():
@@ -434,17 +436,17 @@ def test_streamed_interrupts_single_interrupt():
 
 def test_streamed_interrupts_non_dict_chunk():
     """Non-dict chunk yields empty tuple."""
-    assert _streamed_interrupts({"event": "on_chain_stream", "data": {"chunk": "str"}}) == ()
+    assert not _streamed_interrupts({"event": "on_chain_stream", "data": {"chunk": "str"}})
 
 
 def test_streamed_interrupts_non_dict_data():
     """Non-dict data yields empty tuple."""
-    assert _streamed_interrupts({"event": "on_chain_stream", "data": "str"}) == ()
+    assert not _streamed_interrupts({"event": "on_chain_stream", "data": "str"})
 
 
 def test_streamed_interrupts_none_data():
     """None data yields empty tuple."""
-    assert _streamed_interrupts({"event": "on_chain_stream", "data": None}) == ()
+    assert not _streamed_interrupts({"event": "on_chain_stream", "data": None})
 
 
 def test_streamed_interrupts_tuple_of_interrupts():
@@ -1180,7 +1182,7 @@ def test_extract_chat_model_usage_from_dict_legacy():
 
 def test_extract_chat_model_usage_non_dict():
     result = _extract_chat_model_token_usage("str")
-    assert result == {}
+    assert not result
 
 
 def test_extract_chat_model_usage_no_usage_metadata():
@@ -1204,17 +1206,17 @@ def test_extract_llm_usage_from_dict():
 
 def test_extract_llm_usage_non_dict():
     result = _extract_llm_token_usage("str")
-    assert result == {}
+    assert not result
 
 
 def test_extract_llm_usage_no_llm_output():
     result = _extract_llm_token_usage({})
-    assert result == {}
+    assert not result
 
 
 def test_extract_llm_usage_non_dict_llm_output():
     result = _extract_llm_token_usage({"llm_output": "str"})
-    assert result == {}
+    assert not result
 
 
 # ---------------------------------------------------------------------------
@@ -1243,7 +1245,7 @@ def test_accumulate_node_token_usage_with_guard():
     usage = {"total_tokens": 100}
     node_usage: dict[str, dict[str, int]] = {}
     _accumulate_node_token_usage("n1", usage, node_usage, guard, None)
-    guard.record_tokens.assert_called_once_with(100)
+    assert guard.record_tokens.call_count == 1
 
 
 def test_accumulate_node_token_usage_budget_exceeded():
@@ -1252,6 +1254,8 @@ def test_accumulate_node_token_usage_budget_exceeded():
     budgets = {"n1": 150}
     with pytest.raises(RunawayRunError):
         _accumulate_node_token_usage("n1", usage, node_usage, None, budgets)
+    # Total was updated to 300 (100+200) before the budget check raised
+    assert node_usage["n1"]["total_tokens"] == 300
 
 
 def test_accumulate_node_token_usage_none_values_treated_as_zero():
@@ -1288,7 +1292,8 @@ def test_accumulate_chat_model_tokens_non_dict_data():
     lg_event = {"metadata": {"langgraph_node": "n1"}, "data": "str"}
     node_usage: dict[str, dict[str, int]] = {}
     _accumulate_chat_model_tokens(lg_event, node_usage, None, None)
-    # Falls through to non-dict data path
+    # Non-dict data falls through; output defaults to {}, so 0 tokens accumulated
+    assert node_usage["n1"]["total_tokens"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1345,17 +1350,17 @@ def test_connector_scope_agent_ids_valid():
 
 def test_connector_scope_agent_ids_skips_non_dict():
     graph = {"nodes": ["not-a-dict"]}
-    assert _connector_scope_agent_ids(graph) == []
+    assert not _connector_scope_agent_ids(graph)
 
 
 def test_connector_scope_agent_ids_skips_invalid_uuid():
     graph = {"nodes": [{"agent_id": "not-a-uuid"}]}
-    assert _connector_scope_agent_ids(graph) == []
+    assert not _connector_scope_agent_ids(graph)
 
 
 def test_connector_scope_agent_ids_skips_none_agent_id():
     graph = {"nodes": [{"agent_id": None}]}
-    assert _connector_scope_agent_ids(graph) == []
+    assert not _connector_scope_agent_ids(graph)
 
 
 # ---------------------------------------------------------------------------
@@ -1364,7 +1369,7 @@ def test_connector_scope_agent_ids_skips_none_agent_id():
 
 
 def test_interrupt_gate_payload_empty_interrupts():
-    assert _interrupt_gate_payload([]) == {}
+    assert not _interrupt_gate_payload([])
 
 
 def test_interrupt_gate_payload_with_value_dict():
@@ -1376,7 +1381,7 @@ def test_interrupt_gate_payload_with_value_dict():
 def test_interrupt_gate_payload_non_dict_value():
     i = Interrupt(value="str")
     result = _interrupt_gate_payload([i])
-    assert result == {}
+    assert not result
 
 
 def test_interrupt_gate_payload_none_value():
@@ -1384,7 +1389,7 @@ def test_interrupt_gate_payload_none_value():
     i = MagicMock(spec=[])
     # No 'value' attr → getattr returns None
     result = _interrupt_gate_payload([i])
-    assert result == {}
+    assert not result
 
 
 def test_interrupt_required_team_id_present():
@@ -1532,22 +1537,22 @@ def test_log_accumulation_state_zero_segments():
     """Zero segments → info log."""
     with patch("modulo.core.pipeline_engine.executor._log") as mock_log:
         PipelineExecutor._log_accumulation_state(uuid.uuid4(), 0, None)
-        mock_log.info.assert_called_once()
+        assert mock_log.info.call_count == 1
 
 
 def test_log_accumulation_state_segments_with_empty_usage():
     """Segments > 0 but empty usage → warning (broken accumulation)."""
     with patch("modulo.core.pipeline_engine.executor._log") as mock_log:
         PipelineExecutor._log_accumulation_state(uuid.uuid4(), 1, {})
-        mock_log.warning.assert_called_once()
+        assert mock_log.warning.call_count == 1
 
 
 def test_log_accumulation_state_segments_with_usage():
     """Segments > 0 with non-empty usage → no log."""
     with patch("modulo.core.pipeline_engine.executor._log") as mock_log:
         PipelineExecutor._log_accumulation_state(uuid.uuid4(), 1, {"n1": {"total_tokens": 10}})
-        mock_log.info.assert_not_called()
-        mock_log.warning.assert_not_called()
+        assert mock_log.info.call_count == 0
+        assert mock_log.warning.call_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1722,14 +1727,14 @@ def test_record_node_markers_clean_output():
 async def test_apply_work_intact_without_claim_token():
     session = AsyncMock()
     await _apply_work_intact(session, uuid.uuid4(), True, claim_token=None)
-    session.execute.assert_called_once()
+    assert session.execute.call_count == 1
 
 
 @pytest.mark.asyncio
 async def test_apply_work_intact_with_claim_token():
     session = AsyncMock()
     await _apply_work_intact(session, uuid.uuid4(), False, claim_token="tok-1")
-    session.execute.assert_called_once()
+    assert session.execute.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -1745,6 +1750,7 @@ async def test_reclassify_after_work_intact_best_effort():
     ):
         # Must not raise
         await _reclassify_after_work_intact(session, uuid.uuid4())
+    assert session.get.call_count == 1  # Function executed through the error path
 
 
 @pytest.mark.asyncio
@@ -1753,6 +1759,7 @@ async def test_reclassify_after_work_intact_run_not_found():
     session = AsyncMock()
     session.get.return_value = None
     await _reclassify_after_work_intact(session, uuid.uuid4())
+    assert session.get.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1897,6 +1904,7 @@ async def test_stream_graph_node_cancelled_reraises():
 
     with pytest.raises(NodeCancelledError):
         await executor._stream_graph(compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4())
+    assert broker.is_closed is False  # Broker was not closed when exception propagated
 
 
 async def test_stream_graph_run_cancelled_terminalizes():
