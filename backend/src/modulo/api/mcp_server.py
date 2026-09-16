@@ -57,6 +57,9 @@ from modulo.api.hitl_answer_validation import (
     validate_hitl_answer,
 )
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
+from modulo.api.middleware.sensitive_mask import (
+    is_sensitive_key as _shared_is_sensitive_key,
+)
 from modulo.api.middleware.sensitive_mask import mask_config_json, merge_masked_config
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.triggers import _streak_status_for
@@ -6713,9 +6716,9 @@ async def create_agent(
     except ProgrammingError:
         _log.exception("create_agent failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception as e:
+    except Exception:
         _log.exception("create_agent failed")
-        return {"error": "internal_error", "detail": f"Failed to create agent: {e}"}
+        return _tool_error("Failed to create agent")
 
 
 def _agent_item(a: Any) -> dict[str, Any]:
@@ -6863,8 +6866,30 @@ SENSITIVE_CONFIG_KEYS: set[str] = {
 
 
 def _is_sensitive_key(key: str) -> bool:
+    # Primary net: the shared substring matcher used by the HTTP masking
+    # surface (_SENSITIVE_KEY_PATTERNS covers secret/password/token/key/
+    # credential/api_key/...), so key names like
+    # "product_analytics_instance_secret", "smtp_password" or "api_token"
+    # are excluded from get_org_config even without a known prefix match.
+    # Over-masking is safe: the only consumer is row exclusion from the
+    if _shared_is_sensitive_key(key):
+        return True
     lower = key.lower()
-    return any(lower.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS)
+    if any(lower.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS):
+        return True
+    # Also match colon-separated segments (e.g. "remy_config:{org}:api_key")
+    return any(any(segment.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS) for segment in lower.split(":"))
+
+
+def _value_looks_sensitive(val: str) -> bool:
+    """True when *val* matches a known secret-format pattern (API key, PAT, etc.)."""
+    from modulo.core.secret_patterns import SECRET_VALUE_PATTERNS, SECRET_VALUE_REDACT_CHAR_CAP
+
+    # Bound the pattern scan: never run SECRET_VALUE_PATTERNS over an
+    # unbounded string; the module caps redaction input at
+    # SECRET_VALUE_REDACT_CHAR_CAP chars for exactly this ReDoS/cost reason.
+    bounded = val[:SECRET_VALUE_REDACT_CHAR_CAP]
+    return any(pattern.search(bounded) for pattern, _replacement in SECRET_VALUE_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -7013,7 +7038,9 @@ def _config_table(filtered: list[Any]) -> str:
     for cfg in filtered:
         val = cfg.value
         val_str = json.dumps(val, default=str) if isinstance(val, dict) else str(val)
-        if len(val_str) > 200:
+        if _value_looks_sensitive(val_str):
+            val_str = "\u2022\u2022\u2022\u2022\u2022\u2022"
+        elif len(val_str) > 200:
             val_str = val_str[:200] + "..."
         lines.append(f"| {cfg.key} | {val_str} |")
     return "\n".join(lines)
