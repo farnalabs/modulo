@@ -107,9 +107,7 @@ def azrepos_query_pulls(ctx: dict) -> None:
             params={"searchCriteria.status": "active", "api-version": "7.0"},
         ).mock(return_value=httpx.Response(200, json={"value": prs, "count": 1}))
         ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(
-                ConnectorQuery(resource="pulls", filters={"project": _PROJECT, "repo": _REPO})
-            )
+            ctx["connector"].query(ConnectorQuery(resource="pulls", filters={"project": _PROJECT, "repo": _REPO}))
         )
 
 
@@ -162,11 +160,7 @@ def azrepos_write_file(path: str, content: str, ctx: dict) -> None:
         )
 
 
-@when(
-    parsers.parse(
-        'the connector creates a pull request from "{source}" to "{target}" with title "{title}"'
-    )
-)
+@when(parsers.parse('the connector creates a pull request from "{source}" to "{target}" with title "{title}"'))
 def azrepos_write_pull(source: str, target: str, title: str, ctx: dict) -> None:
     from modulo.connectors.base import ConnectorPayload
 

@@ -84,9 +84,7 @@ def sharepoint_query_list_items(list_id: str, site_id: str, ctx: dict) -> None:
         ]
     }
     with respx.mock:
-        respx.get(f"{_BASE}/sites/{site_id}/lists/{list_id}/items").mock(
-            return_value=httpx.Response(200, json=items)
-        )
+        respx.get(f"{_BASE}/sites/{site_id}/lists/{list_id}/items").mock(return_value=httpx.Response(200, json=items))
         ctx["query_result"] = asyncio.run(
             ctx["connector"].query(
                 ConnectorQuery(resource="list_items", filters={"site_id": site_id, "list_id": list_id})

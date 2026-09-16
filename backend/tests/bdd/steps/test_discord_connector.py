@@ -185,9 +185,7 @@ def discord_write_channel(name: str, guild_id: str, ctx: dict) -> None:
             return_value=httpx.Response(201, json={"id": "ch-new", "name": name, "type": 0, "guild_id": guild_id})
         )
         ctx["write_result"] = asyncio.run(
-            ctx["connector"].write(
-                ConnectorPayload(resource="channel", data={"guild_id": guild_id, "name": name})
-            )
+            ctx["connector"].write(ConnectorPayload(resource="channel", data={"guild_id": guild_id, "name": name}))
         )
 
 

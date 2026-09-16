@@ -104,9 +104,7 @@ def teams_query_channel(team_id: str, channel_id: str, ctx: dict) -> None:
 
     channel = {"id": channel_id, "displayName": "General", "description": "General discussions"}
     with respx.mock:
-        respx.get(f"{_BASE}/teams/{team_id}/channels/{channel_id}").mock(
-            return_value=httpx.Response(200, json=channel)
-        )
+        respx.get(f"{_BASE}/teams/{team_id}/channels/{channel_id}").mock(return_value=httpx.Response(200, json=channel))
         ctx["query_result"] = asyncio.run(
             ctx["connector"].query(
                 ConnectorQuery(resource="channel", filters={"team_id": team_id, "channel_id": channel_id})
@@ -174,11 +172,7 @@ def teams_query_groups(ctx: dict) -> None:
         ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="groups")))
 
 
-@when(
-    parsers.parse(
-        'the connector sends a message "{content}" to team "{team_id}" and channel "{channel_id}"'
-    )
-)
+@when(parsers.parse('the connector sends a message "{content}" to team "{team_id}" and channel "{channel_id}"'))
 def teams_write_message(content: str, team_id: str, channel_id: str, ctx: dict) -> None:
     from modulo.connectors.base import ConnectorPayload
 
