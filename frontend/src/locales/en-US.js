@@ -44,7 +44,8 @@ export default {
       "modified_subject_label": "Modified subject (downstream nodes receive this)",
       "cancel_edit": "Cancel",
       "choice_options_label": "Select an option",
-      "select_an_option": "Select an option to continue:"
+      "select_an_option": "Select an option to continue:",
+      "choice_no_options": "No options are available for this gate. Contact the pipeline owner to fix its response contract."
     }
   },
   "views": {
