@@ -191,6 +191,11 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > shrunk `_ORPHANED_BDD_FEATURES` by four, and closed `feat-connectors`'s
 > CircleCI / Jenkins / TeamCity / Opsgenie per-connector BDD gaps
 > (`configure/connectors.md`).
+>
+> **Closed this walk (2026-09-16):** wired `connectors/dropbox_paper.feature`
+> into the executing BDD suite (`steps/test_dropbox_paper_connector.py`),
+> shrunk `_ORPHANED_BDD_FEATURES` by one more, and closed `feat-connectors`'s
+> Dropbox Paper per-connector BDD gap (`configure/connectors.md`).
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
