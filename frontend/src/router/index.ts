@@ -6,6 +6,7 @@ import { getAccessToken } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import manifest from '@/manifest.yaml'
 import LoginView from '../views/LoginView.vue'
+import OrgLoginView from '../views/OrgLoginView.vue'
 import AuthCallbackView from '../views/AuthCallbackView.vue'
 import { resolveDemoEntry } from '../lib/api/demo'
 
@@ -131,6 +132,16 @@ const router = createRouter({
       path: '/login',
       name: 'login',
       component: LoginView,
+    },
+    {
+      // Per-org login (FAR-863): bookmarkable, deep-linkable, refresh-safe.
+      // The view resolves the org on mount via GET /api/v1/auth/org-login/{slug}.
+      // A not-found response shows a generic error — never reveals whether the
+      // slug exists (tenancy boundary).
+      path: '/login/:slug',
+      name: 'org-login',
+      component: OrgLoginView,
+      props: true,
     },
     {
       // SSO (OIDC/SAML) success handoff: the backend redirects the browser to
@@ -760,8 +771,8 @@ router.beforeEach(async (to) => {
 
     const token = getAccessToken()
     if (to.meta?.public) return true
-    if (to.name === 'login' && token) return { name: 'dashboard' }
-    if (to.name === 'login') return true // login page without token — allowed
+    if ((to.name === 'login' || to.name === 'org-login') && token) return { name: 'dashboard' }
+    if (to.name === 'login' || to.name === 'org-login') return true // login page without token — allowed
     if (!token) return { name: 'login' }
 
     // Role / tier / visibility enforcement
