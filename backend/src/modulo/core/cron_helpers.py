@@ -5320,6 +5320,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         # (the ``async with session.begin()`` context managers roll back
         # + close), persists a FAILURE HEARTBEAT, and returns gracefully.
         tick_started = time.monotonic()
+        # FAR-904: the body mutates this "current stage" hint as it progresses
+        # (org ids / per-org scan / facts write / compensating sweeps) so an
+        # inner-deadline TimeoutError names WHERE the tick was instead of a
+        # bare, message-less ``TimeoutError`` that explains nothing.
+        stage: dict[str, str] = {}
         try:
             async with asyncio.timeout(budget_seconds):
                 return await _dispatcher_reconcile_body(
@@ -5340,17 +5345,22 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     summary=summary,
                     terminalized_run_ids=terminalized_run_ids,
                     early_detect_minutes=early_detect_minutes,
+                    stage=stage,
                 )
-        except TimeoutError:
+        except TimeoutError as exc:
             # Inner deadline fired — the current per-org transaction
             # rolled back + closed (session context managers), and no
             # new per-org work was started.  Persist a failure heartbeat
             # so /healthz/ready sees a FRESH last_run_at + status='timeout'
             # (degraded, non-gating) instead of ageing into 'unavailable'.
             summary["status"] = "timeout"
+            tick_elapsed = time.monotonic() - tick_started
+            # FAR-904: name WHERE the tick was when the deadline fired — a
+            # bare TimeoutError (its str() is empty) reported nothing.
             summary["last_error"] = (
-                f"TimeoutError: inner deadline fired after {time.monotonic() - tick_started:.1f}s "
-                f"(budget={budget_seconds}s, max_rows={max_rows})"
+                f"inner deadline after {tick_elapsed:.1f}s "
+                f"(budget={budget_seconds}s, max_rows={max_rows}) "
+                f"during stage={stage.get('op', 'unknown')}: {_summarize_reconcile_error(exc)}"
             )[:200]
             _log.warning(
                 "dispatcher_reconcile: inner deadline fired after %.1fs (budget=%ds); stats persisted as timeout",
@@ -5393,13 +5403,18 @@ async def _dispatcher_reconcile_body(
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     early_detect_minutes: int | None = None,
+    stage: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Inner body of dispatcher_reconcile — runs under the inner deadline.
 
     Extracted so the outer function can wrap it in ``asyncio.timeout`` and
     catch TimeoutError at a safe boundary without touching the session
-    lifecycle.
+    lifecycle. ``stage`` is the outer handler's mutable current-operation
+    hint (FAR-904): the body names each stage before starting it so a
+    deadline expiry can be attributed.
     """
+    if stage is not None:
+        stage["op"] = "collect_org_ids"
     org_ids = await _collect_org_ids(factory)
     if not org_ids:
         # Still record the run so /healthz/ready sees a fresh last_run_at
@@ -5427,6 +5442,8 @@ async def _dispatcher_reconcile_body(
         early_detect_minutes=early_detect_minutes,
     )
     for org_id in org_ids:
+        if stage is not None:
+            stage["op"] = f"reconcile_org:{org_id}"
         # FAR-904: bound cumulative rows processed across all orgs so the
         # sweep always completes within the inner deadline.  The per-org
         # reconcile loop processes terminalizers + a row scan + per-row
@@ -5468,6 +5485,8 @@ async def _dispatcher_reconcile_body(
     # DB latency).  Overflow is counted (facts_deferred) and drained on
     # subsequent ticks.
     facts_written = 0
+    if stage is not None:
+        stage["op"] = "record_facts"
     for facts_written, (run_id, run_org_id) in enumerate(terminalized_run_ids):
         if facts_written >= facts_max:
             summary["facts_deferred"] += len(terminalized_run_ids) - facts_written
@@ -5483,6 +5502,8 @@ async def _dispatcher_reconcile_body(
             summary["claimed_but_never_dispatched"],
             nodeless_window,
         )
+    if stage is not None:
+        stage["op"] = "compensating_sweeps"
     await _run_reconcile_sweeps(redis_client, summary)
     # Record the outcome for /healthz/ready BEFORE the client is closed:
     # the shared Redis key is what the WEB process reads (the in-process

@@ -1385,6 +1385,7 @@ async def runner_marker_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
                 "transitioned": exc.transitioned,
                 "orgs_failed": exc.org_failures,
                 "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+                "error_detail": exc.detail or repr(exc),
             },
             RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS,
         )
@@ -1432,6 +1433,7 @@ async def runner_workspace_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
                 "scanned": exc.scanned,
                 "orphans_destroyed": exc.destroyed,
                 "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+                "error_detail": str(exc),
             },
             RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS,
         )

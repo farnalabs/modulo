@@ -711,10 +711,13 @@ async def _check_sweep_stats_advisory(key: str, stale_seconds: int, count_key: s
     except (ValueError, TypeError):
         return CheckResult(status="degraded", detail="sweep stats unparsable")
     if error := data.get("error"):
-        return CheckResult(
-            status="degraded",
-            detail=f"sweep reported error: {error}, last {count_key}={count}",
-        )
+        # FAR-905: surface the underlying exception detail when the sweep
+        # persisted one — a bare error token is unactionable in a readout.
+        error_detail = data.get("error_detail")
+        msg = f"sweep reported error: {error}"
+        if error_detail:
+            msg += f" ({error_detail})"
+        return CheckResult(status="degraded", detail=f"{msg}, last {count_key}={count}")
     if not last_run_at:
         return CheckResult(status="degraded", detail="sweep last_run_at missing")
     try:
