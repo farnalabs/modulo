@@ -73,8 +73,12 @@ def _status_patches(request):
     ``_onboarding_auto`` set. When a scenario opts into real detection (via the
     "stored organisation" givens) the patch is omitted, so the six ``select``
     probes in the shipped function run against the scenario's ``mock_session``.
+
+    The default is resolved with ``getattr`` so a status read never depends on a
+    scenario having run a given that seeds ``_onboarding_auto``; it falls back to
+    the real default of only ``login`` auto-completing.
     """
-    auto = request.node._onboarding_auto
+    auto = getattr(request.node, "_onboarding_auto", {"login"})
     patches = [_progress_patch(request)]
     if not getattr(request.node, "_onboarding_real_detection", False):
         patches.append(patch("modulo.api.routes.onboarding._check_auto_completion", new=AsyncMock(return_value=auto)))
@@ -113,7 +117,14 @@ def auto_completes_all(request) -> None:
 
 @given("the stored organisation already has every onboarding primitive")
 def stored_org_has_every_primitive(mock_session, request) -> None:
-    """Drive the real ``_check_auto_completion`` probes to report a populated org."""
+    """Drive the real ``_check_auto_completion`` probes to report a populated org.
+
+    The shipped probes call ``mock_session.execute(<select>)`` once per
+    primitive and read ``.scalar_one_or_none()`` off each result, so setting
+    that return value is what makes "real detection" report state. A truthy row
+    means the primitive exists; ``None`` means it is absent (see the bare-org
+    given below).
+    """
     _reset_progress(request)
     request.node._onboarding_real_detection = True
     mock_session.execute.return_value.scalar_one_or_none.return_value = MagicMock()
@@ -266,16 +277,11 @@ def response_reports_action_completed(action: str, request) -> None:
     assert entry["completed"] is True, f"Action {action} not marked completed: {entry}"
 
 
-@then(parsers.parse("the response reports all {n:d} onboarding actions as completed"))
-def response_reports_all_completed(n: int, request) -> None:
+@then(parsers.re(r"the response reports (?:all )?(?P<n>\d+) onboarding actions? as completed"))
+def response_reports_n_actions_completed(n: str, request) -> None:
+    count = int(n)
     body = request.node._resp.json()
-    assert len(body["completed_actions"]) == n, f"Expected {n} completed actions, got {body}"
-
-
-@then(parsers.parse("the response reports {n:d} onboarding action as completed"))
-def response_reports_n_actions_completed(n: int, request) -> None:
-    body = request.node._resp.json()
-    assert len(body["completed_actions"]) == n, f"Expected {n} completed actions, got {body}"
+    assert len(body["completed_actions"]) == count, f"Expected {count} completed actions, got {body}"
 
 
 @then("the response reports 100% progress")
