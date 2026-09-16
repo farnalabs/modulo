@@ -76,10 +76,6 @@ export function useHitlGateState(runId: string, gateId: string) {
     },
   })
 
-  function setSelectedOptionId(value: string | null): void {
-    ensureEntry(key).selectedOptionId = value
-  }
-
   return {
     claimToken,
     notes,
@@ -89,7 +85,6 @@ export function useHitlGateState(runId: string, gateId: string) {
     setEditingSubject,
     setModifiedSubject,
     selectedOptionId,
-    setSelectedOptionId,
     clear,
   }
 }
