@@ -156,7 +156,11 @@ async function fetchLoginContext() {
   try {
     const res = await fetch('/api/v1/auth/login-context')
     if (!res.ok) {
-      contextLoading.value = false
+      // login-context is unavailable (e.g. a transient 429 from the anonymous
+      // GET rate limit). Fall back to the single-org direct login, but still
+      // discover SSO providers — the SSO affordance must not depend on this
+      // call succeeding.
+      await discoverSsoProviders()
       return
     }
     const data = await res.json()
@@ -173,8 +177,11 @@ async function fetchLoginContext() {
       multiOrg.value = true
       singleOrg.value = null
     }
-    contextLoading.value = false
   } catch {
+    // Network failure resolving the login context: same fallback as a non-ok
+    // response — render the direct login and still surface SSO providers.
+    await discoverSsoProviders()
+  } finally {
     contextLoading.value = false
   }
 }

@@ -204,4 +204,30 @@ describe('LoginView - login-context integration', () => {
     expect(wrapper.find('[data-testid="login-sso-oidc-okta"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="login-sso-saml"]').exists()).toBe(true)
   })
+
+  it('surfaces SSO providers when login-context is rate-limited (429)', async () => {
+    // Regression: a transient 429 from the anonymous login-context rate limit
+    // must not hide configured SSO providers — SSO discovery is independent of
+    // the org-resolution call.
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        json: () => Promise.resolve({ detail: 'Too Many Requests' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          oidc: [{ provider_id: 'google' }],
+          saml: true,
+        }),
+      } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-sso-section"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-testid="login-sso-oidc-google"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="login-sso-saml"]').exists()).toBe(true)
+  })
 })
