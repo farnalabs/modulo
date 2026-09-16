@@ -57,24 +57,17 @@
     <path d="M8 8h3v3H8V8zm0 5h3v3H8v-3zm5-5h3v3h-3V8zm0 5h3v3h-3v-3z" fill="#fff"/>
   </svg>
 
-  <svg
+  <Lock
     v-else
     class="h-5 w-5 shrink-0 text-muted-foreground"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
     aria-hidden="true"
     focusable="false"
-  >
-    <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
-    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-  </svg>
+  />
 </template>
 
 <script setup lang="ts">
+import { Lock } from "@lucide/vue"
+
 defineProps<{
   preset: string
 }>()

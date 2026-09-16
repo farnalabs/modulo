@@ -5,7 +5,7 @@
       <span class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.provider_type') }}</span>
       <div class="flex gap-2">
         <button type="button"
-          class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors"
+          class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           :class="
             data.provider_type === 'oidc'
               ? 'border-primary bg-primary/10 text-primary'
@@ -27,7 +27,7 @@
           {{ $t('components.SsoProviderForm.oidc_label') }}
         </button>
         <button type="button"
-          class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors"
+          class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           :class="
             data.provider_type === 'saml'
               ? 'border-primary bg-primary/10 text-primary'
@@ -61,7 +61,7 @@
           v-for="p in presets"
           :key="p.id"
           type="button"
-          class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors"
+          class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           :class="
             data.preset === p.id
               ? 'border-primary bg-primary/10 text-primary'
@@ -139,7 +139,7 @@
           :value="data.tenant_domain"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          :placeholder="$t('components.SsoProviderForm.tenant_domain_placeholder')"
+          :placeholder="$t(tenantPlaceholderKey)"
           data-testid="sso-tenant-domain"
           @input="
             emitUpdate({
@@ -335,7 +335,7 @@
         {{ saving ? savingLabel : submitLabel }}
       </Button>
       <button type="button"
-        class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+        class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         @click="$emit('cancel')"
       >
         {{ $t('components.SsoProviderForm.cancel') }}
@@ -345,7 +345,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import Button from 'primevue/button'
 import Select from './shared/AppSelect.vue'
 import SsoBrandMark from './SsoBrandMark.vue'
@@ -397,6 +397,21 @@ const activePreset = computed(() =>
   props.presets.find(p => p.id === props.data.preset) ?? null
 )
 
+// Per-preset tenant placeholder so subdomain-style values (e.g. "acme") are not
+// mistaken for full domains on presets that interpolate the whole hostname.
+const TENANT_PLACEHOLDER_KEYS: Record<string, string> = {
+  auth0: 'components.SsoProviderForm.tenant_placeholder_auth0',
+  okta: 'components.SsoProviderForm.tenant_placeholder_okta',
+  'azure-ad': 'components.SsoProviderForm.tenant_placeholder_azure_ad',
+  onelogin: 'components.SsoProviderForm.tenant_placeholder_onelogin',
+}
+
+const tenantPlaceholderKey = computed(
+  () =>
+    TENANT_PLACEHOLDER_KEYS[props.data.preset] ??
+    'components.SsoProviderForm.tenant_domain_placeholder'
+)
+
 // Derived values for native presets (read-only display)
 const derivedDiscoveryUrl = computed(() => {
   if (props.data.preset === 'custom') return ''
@@ -416,15 +431,25 @@ const derivedScopes = computed(() => {
 
 // Copy to clipboard
 const copySuccess = ref(false)
+let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+
+function scheduleCopyReset() {
+  if (copyResetTimer) clearTimeout(copyResetTimer)
+  copyResetTimer = setTimeout(() => {
+    copySuccess.value = false
+  }, 2000)
+}
+
+onBeforeUnmount(() => {
+  if (copyResetTimer) clearTimeout(copyResetTimer)
+})
 
 async function copyCallbackUrl() {
   if (!props.callbackUrl) return
   try {
     await navigator.clipboard.writeText(props.callbackUrl)
     copySuccess.value = true
-    setTimeout(() => {
-      copySuccess.value = false
-    }, 2000)
+    scheduleCopyReset()
   } catch {
     // Fallback for non-secure contexts
     const textarea = document.createElement('textarea')
@@ -434,9 +459,7 @@ async function copyCallbackUrl() {
     document.execCommand('copy')
     document.body.removeChild(textarea)
     copySuccess.value = true
-    setTimeout(() => {
-      copySuccess.value = false
-    }, 2000)
+    scheduleCopyReset()
   }
 }
 

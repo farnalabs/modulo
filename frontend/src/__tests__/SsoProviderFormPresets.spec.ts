@@ -184,6 +184,28 @@ describe('SsoProviderForm — preset selection', () => {
     await nextTick()
     expect(wrapper.text()).not.toContain('Discovery URL (derived)')
   })
+
+  it('exposes a focus-visible ring on every preset button (A11Y-3)', () => {
+    const wrapper = mountForm()
+    for (const p of PRESETS) {
+      const btn = wrapper.find(`[data-testid="sso-preset-${p.id}"]`)
+      expect(btn.classes()).toContain('focus-visible:ring-2')
+    }
+  })
+
+  it('uses a per-preset tenant placeholder hint', async () => {
+    const okta = mountForm(makeData({ preset: 'okta' }))
+    await nextTick()
+    expect(okta.find('[data-testid="sso-tenant-domain"]').attributes('placeholder')).toBe('e.g. acme.okta.com')
+
+    const auth0 = mountForm(makeData({ preset: 'auth0' }))
+    await nextTick()
+    expect(auth0.find('[data-testid="sso-tenant-domain"]').attributes('placeholder')).toBe('e.g. acme.auth0.com')
+
+    const onelogin = mountForm(makeData({ preset: 'onelogin' }))
+    await nextTick()
+    expect(onelogin.find('[data-testid="sso-tenant-domain"]').attributes('placeholder')).toBe('e.g. acme')
+  })
 })
 
 describe('SsoProviderForm — callback URL', () => {
@@ -250,6 +272,32 @@ describe('SsoProviderForm — callback URL', () => {
     await flushPromises()
     expect(execCommand).toHaveBeenCalledWith('copy')
     expect(wrapper.find('[data-testid="sso-callback-url-copied"]').exists()).toBe(true)
+  })
+
+  it('clears the copy-success timer when the form unmounts', async () => {
+    vi.useFakeTimers()
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    try {
+      const writeText = vi.fn().mockResolvedValue(undefined)
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText },
+        configurable: true,
+      })
+      const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+      const wrapper = mountForm(makeData(), { callbackUrl })
+      await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
+      await flushPromises()
+      const timerId = setTimeoutSpy.mock.results.at(-1)?.value
+      clearTimeoutSpy.mockClear()
+      wrapper.unmount()
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(timerId)
+      vi.runOnlyPendingTimers()
+    } finally {
+      clearTimeoutSpy.mockRestore()
+      setTimeoutSpy.mockRestore()
+      vi.useRealTimers()
+    }
   })
 })
 
