@@ -553,6 +553,12 @@ watch(() => store.requestRename, () => {
 
 onMounted(async () => {
   window.addEventListener("resize", onWindowResize)
+  // Clamp any stale persisted position/size from a previous viewport so the
+  // panel cannot render off-screen or cover the full viewport on mount.
+  if (store.panelState === 'floating') {
+    store.reclampPosition()
+  }
+  store.updateSize(store.panelSize)
   await store.fetchSessions();
   const savedId = store.activeSessionId
   if (savedId && store.sessions.some(s => s.id === savedId)) {
