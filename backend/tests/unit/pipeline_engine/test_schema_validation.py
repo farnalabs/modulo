@@ -757,3 +757,86 @@ class TestSchemaValidationOutcome:
         }
         actual = {o.value for o in SchemaValidationOutcome}
         assert expected == actual
+
+
+# ---------------------------------------------------------------------------
+# Regression: non-UUID model_backend_id must not crash node execution
+# ---------------------------------------------------------------------------
+
+
+class TestNonUuidBackendId:
+    """Regression: a node whose ``model_backend_id`` is not a valid UUID (e.g.
+    ``"stub"``, ``"mock-backend"``, or an aliased name) must complete without
+    raising ``ValueError: badly formed hexadecimal UUID string``.
+
+    This was introduced by a Branch Fixer commit that wired the repair loop
+    using a hard ``uuid.UUID(...)`` parse.  The safe parse (``_parse_uuid_opt``)
+    returns ``None`` for non-UUID strings; the repair invoke is skipped, and the
+    node takes the documented hard-fail path (no repair, no crash).
+    """
+
+    def test_parse_uuid_opt_rejects_non_uuid(self) -> None:
+        """_parse_uuid_opt returns None for non-UUID strings."""
+        assert nr._parse_uuid_opt("stub") is None
+        assert nr._parse_uuid_opt("mock-backend") is None
+        assert nr._parse_uuid_opt("") is None
+        assert nr._parse_uuid_opt(None) is None
+
+    def test_parse_uuid_opt_accepts_valid_uuid(self) -> None:
+        """_parse_uuid_opt returns a UUID for valid UUID strings."""
+        import uuid as _uuid
+
+        u = _uuid.uuid4()
+        assert nr._parse_uuid_opt(str(u)) == u
+
+    async def test_node_with_non_uuid_backend_id_completes(self) -> None:
+        """A make_node_fn node with a non-UUID model_backend_id completes
+        successfully (no ValueError crash from the repair path).
+
+        Regression guard for the FAR-899 repair-loop wiring bug.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        node_def = {
+            "id": "test-non-uuid",
+            "model_backend_id": "stub-backend",
+            "prompt_template": "hello",
+        }
+        fn = nr.make_node_fn(node_def)
+        state = {
+            "run_context": {"cancelled": False, "input": {}},
+            "artifacts": [],
+        }
+        with (
+            patch("modulo.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
+            patch("modulo.core.pipeline_engine.node_runner._invoke_node_model", new=AsyncMock(return_value="out")),
+            patch("modulo.core.pipeline_engine.node_runner._render_agent_prompt", new=lambda **kw: ("ok", None)),
+        ):
+            result = await fn(state)
+        # Node completed without raising — the non-UUID backend id was handled
+        # gracefully by skipping the repair invoke.
+        assert result["artifacts"][0]["node_id"] == "test-non-uuid"
+        assert result["artifacts"][0]["status"] == "completed"
+
+    async def test_node_with_none_backend_id_completes(self) -> None:
+        """A make_node_fn node with a missing (None) model_backend_id returns
+        the early stub-artifact path without touching the repair code at all.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        node_def = {
+            "id": "test-no-backend",
+            "prompt_template": "hello",
+            # model_backend_id deliberately absent
+        }
+        fn = nr.make_node_fn(node_def)
+        state = {
+            "run_context": {"cancelled": False, "input": {}},
+            "artifacts": [],
+        }
+        with (
+            patch("modulo.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
+        ):
+            result = await fn(state)
+        # The early-return path fires before the repair code is reached
+        assert result["artifacts"][0]["status"] == "executed"

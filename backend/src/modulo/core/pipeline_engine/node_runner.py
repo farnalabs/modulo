@@ -3562,18 +3562,29 @@ def make_node_fn(
         from modulo.core.pipeline_engine.decorator import get_model_backend_hub
 
         _repair_hub = get_model_backend_hub()
-        _repair_backend_id = uuid.UUID(model_backend_id_str)
+        # FAR-899 repair: parse the backend id safely — non-UUID backend ids
+        # (mock/stub/aliased backends, common in unit tests and some real
+        # graphs) must not crash the node.  When the id cannot be resolved
+        # to a UUID, skip the repair invoke entirely and let the node take
+        # the existing documented hard-fail path.
+        _repair_backend_id = _parse_uuid_opt(model_backend_id_str)
 
-        def _std_repair_invoke(prompt: str) -> str:
-            """Re-invoke the same model backend with the repair prompt."""
-            if _repair_hub is None:
-                raise RuntimeError("ModelBackendHub not available for repair invoke")
-            _resp = _run_coroutine_sync(
-                _invoke_backend(_repair_hub, _repair_backend_id, [HumanMessage(content=prompt)])
-            )
-            return _resp.content if hasattr(_resp, "content") else str(_resp)
+        if _repair_backend_id is not None:
 
-        _repair_fn: Any = _std_repair_invoke
+            def _std_repair_invoke(prompt: str) -> str:
+                """Re-invoke the same model backend with the repair prompt."""
+                if _repair_hub is None:
+                    raise RuntimeError("ModelBackendHub not available for repair invoke")
+                _resp = _run_coroutine_sync(
+                    _invoke_backend(_repair_hub, _repair_backend_id, [HumanMessage(content=prompt)])
+                )
+                return _resp.content if hasattr(_resp, "content") else str(_resp)
+
+            _repair_fn: Any = _std_repair_invoke
+        else:
+            # Non-UUID backend id → repair invoke unavailable; strict-mode
+            # validation failures are terminal (the documented hard-fail path).
+            _repair_fn = None
 
         return _finalize_node_result(
             node_id,
