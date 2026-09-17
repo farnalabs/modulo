@@ -198,7 +198,8 @@ async def test_manual_node_resume_with_output():
     assert result["manual_output"] == {"title": "Test"}
 
 
-async def test_manual_node_resume_validates_required_fields():
+async def test_manual_node_resume_validates_required_fields(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
     node_def = {
         "id": "manual-node-2",
         "node_type": "manual",
@@ -206,7 +207,7 @@ async def test_manual_node_resume_validates_required_fields():
     }
     node_fn = make_manual_node_fn(node_def)
 
-    with pytest.raises(ValueError, match="missing required field"):
+    with pytest.raises(ValueError, match="Strict schema validation failed"):
         await node_fn(
             {
                 "artifacts": [],

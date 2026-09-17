@@ -8504,33 +8504,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
 
         # FIX C: validate ANY output against non-empty schema (not just dicts)
         if isinstance(output_schema_json, dict) and output_schema_json:
-            # FIX B: sandbox path — create a repair invoke callable that
-            # re-runs the agent in the still-alive sandbox. The sandbox is
-            # destroyed in the finally block, so it is safe to re-invoke here.
-            _sandbox_repair_invoke_fn: Any = None
-            if sandbox is not None:
-
-                async def _sandbox_repair_invoke(prompt: str) -> str:
-                    """Write repair prompt and re-run agent in the sandbox."""
-                    _repair_prompt_path = "/home/user/repair_prompt.md"
-                    await sandbox.files.write(_repair_prompt_path, prompt)
-                    # Re-run the agent command with the repair prompt
-                    _repair_result = await sandbox.commands.run(
-                        agent_command.replace("/home/user/prompt.md", _repair_prompt_path),
-                        timeout=sandbox_timeout,
-                    )
-                    # Read the repaired output
-                    try:
-                        return str(await sandbox.files.read("/home/user/output.json"))
-                    except Exception:
-                        return str(_repair_result.stdout)
-
-                _sandbox_repair_invoke_fn = _sandbox_repair_invoke
-            else:
-                _log.warning(
-                    "schema_repair.sandbox_unavailable",
-                    extra={"node_id": node_id, "msg": "Sandbox not available for repair invoke"},
-                )
+            # FIX B: sandbox path — no synchronous repair invoke available
+            # (run_repair_loop calls invoke synchronously; sandbox APIs are
+            # async). Strict-mode validation failures are terminal with no
+            # auto-repair — documented hard-fail for this path.
+            _sandbox_repair_invoke_fn = None
 
             try:
                 # FAR-899: use real JSON Schema validation with mode support

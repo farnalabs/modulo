@@ -908,7 +908,7 @@ def test_finalize_node_result_validates_schema_and_extracts_route():
 
 def test_finalize_node_result_schema_violation_raises():
     with pytest.raises(nr.OutputSchemaValidationError):
-        nr._finalize_node_result("n1", {"verdict": "ok"}, {"required": ["missing_field"]}, None)
+        nr._finalize_node_result("n1", {"verdict": "ok"}, {"required": ["missing_field"]}, None, mode="strict")
 
 
 # ---------------------------------------------------------------------------
@@ -2818,6 +2818,7 @@ async def test_sandbox_script_schema_violation_raises_script_invalid_output(monk
     POST-CLAIM fault: the terminal ``ScriptInvalidOutputError`` (never
     retryable), distinct from the shared retryable schema code."""
     monkeypatch.setenv("MODULO_E2B_API_KEY", "k")
+    monkeypatch.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
     fn = make_sandbox_agent_fn(_script_node_def(output_schema_json={"required": ["result"]}))
     sandbox = _make_sandbox_mock(output_json='{"other": 1}')
     with (
