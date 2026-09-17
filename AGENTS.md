@@ -57,6 +57,15 @@ modulo/
 > **dogfood / autonomous SDLC pipeline**, or **developer environments** (machine
 > setup, OS quirks, worktrees, CI infrastructure) do **not** belong here; those
 > live in the workspace-level `AGENTS.md` and `Repos/devtools/`.
+>
+> Relocated out of this file to the workspace-level `AGENTS.md` on 2026-09-17
+> ([PR #686](https://github.com/farnalabs/modulo/pull/686)):
+>
+> - Postgres NUL-byte json-to-jsonb migration gotcha (2026-08-26)
+> - E2B sandbox `timeout_seconds` 1-hour cap (2026-08-31)
+> - GitHub Actions API 404 means token scope, not 'not found' (2026-09-01)
+> - Windows semgrep fail-open wrapper (`run_semgrep.py`) (2026-09-16)
+> - Bot PR closures must leave a loud, auditable reason (2026-08-31)
 
 ### Repo-wide pnpm overrides silently clobber transitive exact pins (2026-09-06)
 
