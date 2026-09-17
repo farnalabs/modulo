@@ -66,7 +66,7 @@ def _retry_delay(attempt: int) -> float:
 class LinearConnector(TicketTrackerBase):
     """Thin Linear GraphQL adapter for resolve / read / scoped status+comment writes."""
 
-    def __init__(self, token: str = "") -> None:
+    def __init__(self, token: str | None = None) -> None:
         if not token:
             raise ValueError("LinearConnector requires a 'token' credential (Linear API key)")
         self._token = token
