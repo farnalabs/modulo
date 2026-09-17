@@ -11,8 +11,12 @@ import { createI18n } from 'vue-i18n'
 
 const routerPushMock = vi.fn()
 
+function defaultRoute() {
+  return { params: { id: 'map-1' }, query: {}, meta: {}, name: 'lifecycle-map-detail' }
+}
+
 vi.mock('vue-router', () => ({
-  useRoute: vi.fn(() => ({ params: { id: 'map-1' }, query: {}, meta: {}, name: 'lifecycle-map-detail' })),
+  useRoute: vi.fn(() => defaultRoute()),
   useRouter: vi.fn(() => ({ push: routerPushMock })),
 }))
 
@@ -115,8 +119,10 @@ function seedPlan(flags: Record<string, boolean> = {}) {
 }
 
 
-beforeEach(() => {
+beforeEach(async () => {
   setActivePinia(createPinia())
+  const { useRoute } = await import('vue-router')
+  vi.mocked(useRoute).mockReturnValue(defaultRoute() as never)
   routerPushMock.mockClear()
   seedPlan()
   journeysResponse = { items: [] }
