@@ -21,11 +21,15 @@ from modulo.api.mcp_server import (
     _analytics_deep_link,
     _apply_node_connector_binding,
     _assert_admin_scope,
+    _assert_create_eval_definition_params,
     _assert_eval_type,
     _assert_failure_behaviour,
     _assert_pass_threshold,
+    _assert_update_eval_definition_params,
     _build_analytics_params,
     _check_agent_tool_scope,
+    _clamp_mcp_number,
+    _collect_eval_definition_updates,
     _create_manual_run,
     _detect_masked_fields,
     _extract_node_id_from_key_name,
@@ -42,6 +46,8 @@ from modulo.api.mcp_server import (
     _run_status_base,
     _run_status_detail,
     _run_status_node,
+    _sanitize_cost_breakdown,
+    _sanitize_cost_breakdown_entry,
     _serialize_edges,
     _serialize_run_evals,
     _team_scope_error,
@@ -1199,3 +1205,234 @@ class TestCreateManualRun(_Ctx):
             )
         assert err is not None
         assert err["error"] == "validation_failed"
+
+
+# ─── Sanitize string helpers ───────────────────────────────────────
+
+
+class TestSanitizeString:
+    def test_strips_control_chars(self) -> None:
+        from modulo.api.mcp_server import _sanitize_mcp_string
+
+        result = _sanitize_mcp_string("hello\x00\x01\x1f world")
+        assert "\x00" not in result
+        assert "\x01" not in result
+        assert "hello" in result
+        assert "world" in result
+
+    def test_preserves_tab(self) -> None:
+        from modulo.api.mcp_server import _sanitize_mcp_string
+
+        result = _sanitize_mcp_string("hello\tworld")
+        assert "\t" in result
+
+    def test_truncates_at_256(self) -> None:
+        from modulo.api.mcp_server import _sanitize_mcp_string
+
+        result = _sanitize_mcp_string("x" * 300)
+        assert len(result) == 256
+
+
+class TestClampMcpNumber:
+    def test_inf_returns_clamp(self) -> None:
+        result = _clamp_mcp_number(float("inf"))
+        from modulo.api.mcp_server import RAW_REPORTED_DISPLAY_CLAMP
+
+        assert result == float(RAW_REPORTED_DISPLAY_CLAMP)
+
+    def test_nan_returns_clamp(self) -> None:
+        result = _clamp_mcp_number(float("nan"))
+        from modulo.api.mcp_server import RAW_REPORTED_DISPLAY_CLAMP
+
+        assert result == float(RAW_REPORTED_DISPLAY_CLAMP)
+
+    def test_negative_inf_returns_clamp(self) -> None:
+        result = _clamp_mcp_number(float("-inf"))
+        from modulo.api.mcp_server import RAW_REPORTED_DISPLAY_CLAMP
+
+        assert result == float(RAW_REPORTED_DISPLAY_CLAMP)
+
+
+class TestSanitizeCostBreakdown:
+    def test_non_list_returns_empty(self) -> None:
+        assert not _sanitize_cost_breakdown("not-a-list")
+        assert not _sanitize_cost_breakdown(42)
+        assert not _sanitize_cost_breakdown(None)
+
+    def test_non_dict_entries_skipped(self) -> None:
+        result = _sanitize_cost_breakdown(["not-a-dict", 42, None])
+        assert not result
+
+    def test_mixed_entries(self) -> None:
+        result = _sanitize_cost_breakdown(
+            [
+                "skip",
+                {"component": "llm", "amount_usd": 0.5, "unknown_key": "gone"},
+            ]
+        )
+        assert len(result) == 1
+        assert result[0]["component"] == "llm"
+        assert "unknown_key" not in result[0]
+
+    def test_basis_sanitized(self) -> None:
+        result = _sanitize_cost_breakdown(
+            [
+                {
+                    "component": "test",
+                    "basis": {"raw_reported": 1e300},
+                }
+            ]
+        )
+        assert result[0]["basis"]["raw_reported"] == 1e6
+
+
+class TestSanitizeCostBreakdownEntry:
+    def test_all_branches(self) -> None:
+        entry = {
+            "component": "x" * 300,
+            "display_name": "test",
+            "amount_usd": 0.5,
+            "formula_applied": "cost = x",
+            "source": datetime(2026, 1, 1, tzinfo=UTC),
+            "missing_self_report": True,
+            "error": "something went wrong",
+            "unknown_key": "dropped",
+        }
+        out = _sanitize_cost_breakdown_entry(entry)
+        assert out["component"] == "x" * 256
+        assert "unknown_key" not in out
+        assert out["amount_usd"] == 0.5
+
+
+# ─── Eval definition validation ───────────────────────────────────
+
+
+class TestAssertCreateEvalDefinitionParams:
+    def test_empty_name(self) -> None:
+        err = _assert_create_eval_definition_params("", "llm_judge", "warn", None)
+        assert err is not None
+        assert err["error"] == "invalid_name"
+
+    def test_whitespace_name(self) -> None:
+        err = _assert_create_eval_definition_params("   ", "llm_judge", "warn", None)
+        assert err is not None
+        assert err["error"] == "invalid_name"
+
+    def test_name_too_long(self) -> None:
+        err = _assert_create_eval_definition_params("x" * 256, "llm_judge", "warn", None)
+        assert err is not None
+        assert err["error"] == "invalid_name"
+
+    def test_bad_eval_type(self) -> None:
+        err = _assert_create_eval_definition_params("test", "bogus", "warn", None)
+        assert err is not None
+        assert err["error"] == "invalid_eval_type"
+
+    def test_bad_failure_behaviour(self) -> None:
+        err = _assert_create_eval_definition_params("test", "llm_judge", "crash", None)
+        assert err is not None
+        assert err["error"] == "invalid_failure_behaviour"
+
+    def test_bad_pass_threshold(self) -> None:
+        err = _assert_create_eval_definition_params("test", "llm_judge", "warn", 2.0)
+        assert err is not None
+        assert err["error"] == "invalid_pass_threshold"
+
+    def test_all_valid(self) -> None:
+        assert _assert_create_eval_definition_params("my eval", "llm_judge", "warn", 0.5) is None
+
+
+class TestAssertUpdateEvalDefinitionParams:
+    def test_bad_eval_type(self) -> None:
+        err = _assert_update_eval_definition_params("bogus", None, None, None)
+        assert err is not None
+
+    def test_bad_failure_behaviour(self) -> None:
+        err = _assert_update_eval_definition_params(None, "crash", None, None)
+        assert err is not None
+
+    def test_bad_pass_threshold(self) -> None:
+        err = _assert_update_eval_definition_params(None, None, -1.0, None)
+        assert err is not None
+
+    def test_empty_name(self) -> None:
+        err = _assert_update_eval_definition_params(None, None, None, "  ")
+        assert err is not None
+        assert err["error"] == "invalid_name"
+
+    def test_name_too_long(self) -> None:
+        err = _assert_update_eval_definition_params(None, None, None, "x" * 256)
+        assert err is not None
+        assert err["error"] == "invalid_name"
+
+    def test_all_valid(self) -> None:
+        assert _assert_update_eval_definition_params("llm_judge", "block", 0.8, "new name") is None
+
+    def test_all_none(self) -> None:
+        assert _assert_update_eval_definition_params(None, None, None, None) is None
+
+
+class TestCollectEvalDefinitionUpdates:
+    def test_all_provided(self) -> None:
+        nid = uuid.uuid4()
+        updates = _collect_eval_definition_updates(
+            node_id=str(nid),
+            nid=nid,
+            name="test",
+            eval_type="llm_judge",
+            config_json={"key": "val"},
+            failure_behaviour="warn",
+            pass_threshold=0.5,
+            suite_id="suite-1",
+        )
+        assert updates["node_id"] == nid
+        assert updates["name"] == "test"
+        assert updates["eval_type"] == "llm_judge"
+        assert updates["failure_behaviour"] == "warn"
+        assert updates["pass_threshold"] == 0.5
+        assert updates["suite_id"] == "suite-1"
+
+    def test_none_values_skipped(self) -> None:
+        updates = _collect_eval_definition_updates(
+            node_id=None,
+            nid=None,
+            name=None,
+            eval_type=None,
+            config_json=None,
+            failure_behaviour=None,
+            pass_threshold=None,
+            suite_id=None,
+        )
+        assert not updates
+
+
+# ─── More _create_manual_run error paths ──────────────────────────
+
+
+class TestCreateManualRunTeamScope(_Ctx):
+    async def test_team_scope_mismatch(self) -> None:
+        session = _mock_session()
+        pipeline = MagicMock()
+        pipeline.owner_team_id = uuid.uuid4()
+        ms._ctx_team_id.set(_TEAM)
+        with (
+            patch.object(ms, "_session", return_value=_make_session_ctx(session)),
+            patch(
+                "modulo.api.mcp_server.get_pipeline",
+                new_callable=AsyncMock,
+                return_value=pipeline,
+            ),
+            patch(
+                "modulo.api.mcp_server._team_scoped_key_mismatch",
+                return_value=True,
+            ),
+        ):
+            _run_id, _thread_id, err = await _create_manual_run(
+                session,
+                _ORG,
+                uuid.uuid4(),
+                str(uuid.uuid4()),
+                {},
+            )
+        assert err is not None
+        assert err["error"] == "team_boundary_violation"
