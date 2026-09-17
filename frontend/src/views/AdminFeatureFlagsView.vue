@@ -185,7 +185,7 @@
                     <td class="table-cell">
                       <span :class="isFlagTierLocked(flag) ? 'badge badge-status-warning' : (flag.currently_active ? 'badge badge-status-success' : 'badge badge-status-muted')">
                         <template v-if="isFlagTierLocked(flag)">
-                          <svg class="inline-block w-3 h-3 mr-1 align-middle" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clip-rule="evenodd" /></svg>
+                          <Lock class="inline-block w-3 h-3 mr-1 align-middle" aria-hidden="true" focusable="false" />
                           {{ $t('views.AdminFeatureFlagsView.locked_requires_team') }}
                         </template>
                         <template v-else>
@@ -262,6 +262,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
 import Button from 'primevue/button'
+import { Lock } from '@lucide/vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import Select from '../components/shared/AppSelect.vue'
 import { formatDateShort } from '../lib/formatDate'
