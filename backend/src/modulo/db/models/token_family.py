@@ -30,7 +30,10 @@ class TokenFamily(Base):
         ForeignKey("organisations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
-        server_default=text(f"'{ORPHAN_ORG_ID}'"),
+        # Plain-string server_default is quoted by SQLAlchemy's DDL compiler
+        # (renders DEFAULT '00000000-0000-0000-0000-000000000000'), so the
+        # value never enters DDL as free-form SQL.
+        server_default=str(ORPHAN_ORG_ID),
     )
     max_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_blacklisted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

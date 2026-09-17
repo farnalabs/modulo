@@ -54,6 +54,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import select
 import signal
 import sys
@@ -74,6 +75,19 @@ _log = logging.getLogger(__name__)
 BUNDLED_BIN_DIR_ENV = "MODULO_BUNDLED_BIN_DIR"
 POSTGRES_HOST = "127.0.0.1"
 APP_DB_NAME = "modulo"
+
+# Strict grammar for any SQL identifier the launcher interpolates into DDL
+# (CREATE DATABASE cannot take a bound parameter).
+_SQL_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _validate_sql_identifier(name: str, what: str) -> str:
+    """Return ``name`` if it is a safe SQL identifier, else raise BootError."""
+    if not _SQL_IDENTIFIER_RE.fullmatch(name):
+        raise BootError(f"{what} is not a safe SQL identifier: {name!r}")
+    return name
+
+
 SECRETS_FILENAME = "secrets.json"
 PGDATA_DIRNAME = "pgdata"
 LAUNCHER_LOG_FILENAME = "launcher.log"
@@ -810,6 +824,11 @@ def _ensure_app_database(launcher_state: Any, secrets: Any) -> None:
 
     import asyncpg
 
+    # CREATE DATABASE cannot take a bound parameter, so the database name must
+    # be interpolated. Validate it against the strict identifier grammar
+    # before the execute below.
+    app_db_name = _validate_sql_identifier(APP_DB_NAME, "APP_DB_NAME")
+
     async def _create() -> None:
         root_url = (
             f"postgresql://modulo:{secrets.postgres_password}@{POSTGRES_HOST}:{launcher_state.postgres_port}/postgres"
@@ -818,7 +837,12 @@ def _ensure_app_database(launcher_state: Any, secrets: Any) -> None:
         try:
             exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", APP_DB_NAME)
             if not exists:
-                await conn.execute(f"CREATE DATABASE {APP_DB_NAME}")
+                # app_db_name is the module constant APP_DB_NAME, validated
+                # against the strict identifier grammar in
+                # _validate_sql_identifier and double-quoted here, so it cannot
+                # escape the identifier position of the CREATE DATABASE
+                # statement (CREATE DATABASE cannot take a bound parameter).
+                await conn.execute(f'CREATE DATABASE "{app_db_name}"')  # nosemgrep: raw-sql-fstring
         finally:
             await conn.close()
 
