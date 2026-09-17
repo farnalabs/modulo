@@ -121,6 +121,7 @@ __all__ = [
     "apply",
     "describe_chain",
     "list_migrations",
+    "describe",  # DispatchPhaseTracker.describe — exercised by tests (test_dispatch_phase_tracker.py)
     # --- Auth / feature helpers referenced only by tests ---
     "get_effective_team_role",
     "refresh_access_token",

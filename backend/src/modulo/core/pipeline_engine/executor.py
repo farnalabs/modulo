@@ -1792,6 +1792,11 @@ class PipelineExecutor:
         # execute/resume path (which already builds a Notifier for the system
         # worker crons); None skips dispatch (fail-open, never blocks the run).
         self._notifier: Any | None = notifier
+        # FAR-893: dispatch phase tracker (optional, wired by execute_run).
+        # The tracker reports which phase the executor is in between claim and
+        # first node dispatch.  Read by the zombie watchdog when the grace
+        # period fires.
+        self._dispatch_phase_tracker: Any | None = None
 
     async def _check_capacity(
         self,
@@ -3750,7 +3755,13 @@ class PipelineExecutor:
         ``dispatcher_reconcile`` (cron_helpers) and ``stale_run_recovery_sweep``.
         """
         self._claim_token = claim_token
+        # FAR-893: phase tracking — enter EXECUTOR_RUNNING before any work begins.
+        _tracker = self._dispatch_phase_tracker
+        if _tracker is not None:
+            _tracker.enter_phase("executor_running")
         # Load run + pipeline + snapshot in one short-lived transaction.
+        if _tracker is not None:
+            _tracker.enter_phase("loading_context")
         run, pipeline, snapshot, graph_json, node_type_map = await self._load_execution_context(
             run_id=run_id,
             org_id=org_id,
@@ -3788,6 +3799,8 @@ class PipelineExecutor:
         # Non-blocking capacity check — if at limit the run is demoted back to
         # pending (with a reason marker) and recovered by dispatcher_reconcile /
         # the stale-run sweep (plan F3b).
+        if _tracker is not None:
+            _tracker.enter_phase("capacity_check")
         capacity_run = await self._check_capacity(
             run_id=run_id,
             org_id=org_id,
@@ -3813,6 +3826,8 @@ class PipelineExecutor:
         # FAIL-OPEN: any error reading the ceilings must never block the run —
         # the terminal ledger block (finalize.py) is the authoritative hard
         # ceiling that refuses billing beyond the limit regardless.
+        if _tracker is not None:
+            _tracker.enter_phase("spend_check")
         ceiling_run = await self._check_spend_ceiling_gate(run_id=run_id, org_id=org_id, claim_token=claim_token)
         if ceiling_run is not None:
             return ceiling_run
@@ -4453,6 +4468,10 @@ class PipelineExecutor:
         finalization path sees the same ids the original inline rebinding
         produced.
         """
+        # FAR-893: enter graph_compile phase.
+        _tracker = self._dispatch_phase_tracker
+        if _tracker is not None:
+            _tracker.enter_phase("graph_compile")
         # Compile (or retrieve from cache) the StateGraph. ``pipeline_retry_policy``
         # and ``idempotency_key`` are threaded into the per-node retry/compensation
         # wrapper (FAR-402 P5) — the latter is runtime-derived so a cached graph
@@ -4561,6 +4580,9 @@ class PipelineExecutor:
                 fernet_key=_settings.fernet_key,
             ) as saver:
                 compiled.checkpointer = saver
+                # FAR-893: enter streaming phase.
+                if _tracker is not None:
+                    _tracker.enter_phase("streaming")
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                     compiled,
                     initial_state,
@@ -4578,6 +4600,9 @@ class PipelineExecutor:
                 )
         else:
             compiled.checkpointer = None
+            # FAR-893: enter streaming phase.
+            if _tracker is not None:
+                _tracker.enter_phase("streaming")
             final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                 compiled,
                 initial_state,
@@ -5759,6 +5784,10 @@ class PipelineExecutor:
             # execute_run watchdog (pipeline_execution.zombie_watchdog).
             if not state.first_node_signalled:
                 state.first_node_signalled = True
+                # FAR-893: update phase tracker so the watchdog logs the transition.
+                _tracker = self._dispatch_phase_tracker
+                if _tracker is not None:
+                    _tracker.enter_phase("first_node_dispatched")
                 if self.on_first_progress is not None:
                     self.on_first_progress()
             # FAR-369 absolute node-deadline watchdog: signal per-node

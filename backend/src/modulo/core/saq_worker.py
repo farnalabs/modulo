@@ -408,7 +408,12 @@ async def execute_run(
     re-stamped.
     """
     from modulo.core.pipeline_execution import (
+        DISPATCH_TRACKER_ATTR,
         EXECUTOR_SETUP_FAILED_ERROR_CODE,
+        PHASE_CLAIMED,
+        PHASE_LOADING_SETUP,
+        PHASE_SETUP_COMPLETE,
+        DispatchPhaseTracker,
         claim_run_async,
         fail_run_terminal,
         load_and_setup,
@@ -421,10 +426,23 @@ async def execute_run(
     oid = uuid.UUID(org_id)
     job = ctx.get("job")
 
+    # FAR-893: phase tracker shared between the claim path, the executor, and
+    # the zombie watchdog.  The watchdog reads it when the grace period fires
+    # to report WHERE the executor is stuck.
+    tracker = DispatchPhaseTracker(run_id=run_id, org_id=org_id)
+
     claim_token = await claim_run_async(aeng, run_id, org_id)
     if not claim_token:
         _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
         return {"status": "not_claimed"}
+
+    tracker.enter_phase(PHASE_CLAIMED)
+    _log.info(
+        "execute_run.claimed run=%s org=%s claim_token=%s",
+        run_id,
+        org_id,
+        str(claim_token)[:8] if claim_token else None,
+    )
 
     # Stamp the claim token into the job hash so the after_process task_failure
     # hook can fence its terminal write: a failed job must not mark the run
@@ -440,6 +458,7 @@ async def execute_run(
             _log.warning("SAQ execute_run: job kwargs stamp failed for run %s", rid, exc_info=True)
 
     settings = get_settings()
+    tracker.enter_phase(PHASE_LOADING_SETUP)
     try:
         run, executor = await asyncio.wait_for(
             load_and_setup(aeng, rid, oid),
@@ -487,6 +506,16 @@ async def execute_run(
         )
         return {"status": "missing"}
 
+    tracker.enter_phase(PHASE_SETUP_COMPLETE)
+    _log.info(
+        "execute_run.setup_complete run=%s elapsed=%.1fs",
+        run_id,
+        tracker.elapsed_in_phase(),
+    )
+
+    # Wire the tracker onto the executor so it can report phases during execute().
+    setattr(executor, DISPATCH_TRACKER_ATTR, tracker)
+
     outcome = await run_executor_with_watchdog(
         aeng,
         run_id=run_id,
@@ -494,6 +523,7 @@ async def execute_run(
         executor=executor,
         job=job,
         claim_token=claim_token,
+        dispatch_tracker=tracker,
         execute_fn=lambda: executor.execute(
             run_id=rid,
             org_id=oid,
