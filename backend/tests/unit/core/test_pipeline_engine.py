@@ -210,8 +210,11 @@ class TestOutputSchemaValidation:
     """Manual/agent node output validation raises a domain-specific error."""
 
     def test_missing_required_field_raises_domain_error(self) -> None:
-        with pytest.raises(OutputSchemaValidationError, match="Strict schema validation failed"):
-            _validate_against_schema({"id": "1"}, {"required": ["name"]}, mode="strict")
+        # Graduated lenient mode: "required" violations raise even in lenient
+        # (pre-existing enforcement contract).  The error names the specific
+        # missing field ("name"), not just the constraint keyword.
+        with pytest.raises(OutputSchemaValidationError, match="'name' is a required property"):
+            _validate_against_schema({"id": "1"}, {"required": ["name"]})
 
     def test_valid_output_passes(self) -> None:
         schema = {"required": ["name", "status"]}
@@ -220,13 +223,25 @@ class TestOutputSchemaValidation:
         assert errors == []
 
     def test_error_is_a_value_error_subclass(self) -> None:
-        with pytest.raises(ValueError, match="Strict schema validation failed"):
-            _validate_against_schema({}, {"required": ["x"]}, mode="strict")
+        # Graduated: required violations raise ValueError in lenient mode.
+        with pytest.raises(ValueError, match="'x' is a required property"):
+            _validate_against_schema({}, {"required": ["x"]})
 
     def test_schema_validation_failure_maps_to_contract_schema(self) -> None:
         from modulo.core.pipeline_engine.error_codes import map_legacy_code
 
         assert map_legacy_code("schema_validation_failure") == "contract.schema"
+
+    def test_non_required_constraint_warns_in_lenient(self) -> None:
+        """New-constraint violations (non-required) are warn-only under lenient."""
+        outcome, errors, _ = _validate_against_schema(
+            {"name": 42},
+            {"type": "object", "properties": {"name": {"type": "string"}}},
+        )
+        # Should NOT raise — type mismatch is a new constraint, warn-only in lenient.
+        assert outcome == "lenient_validation_bypassed"
+        assert len(errors) == 1
+        assert errors[0]["constraint"] == "type"
 
 
 class _AsyncStubAdapter:
@@ -387,6 +402,9 @@ class TestAgentRepairWiring:
     """
 
     async def test_strict_failure_repairs_through_real_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Repair loop is a strict-only feature: graduated lenient raises on
+        # "required" violations without reaching repair.  This test deliberately
+        # forces strict mode to exercise the repair path.
         monkeypatch.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
         node_id = str(uuid.uuid4())
         backend_id = uuid.uuid4()

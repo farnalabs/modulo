@@ -404,7 +404,8 @@ async def test_run_schema_validation_failure_llm_retryable_real_schema(patch_nod
     cfg = _config(
         sandbox_mode="llm",
         output_schema_json={"type": "object", "required": ["pr_url"]},
-        schema_validator_mode="strict",
+        # No schema_validator_mode override — graduated lenient mode raises
+        # on "required" violations (pre-existing enforcement contract).
     )
     with pytest.raises(_RealSandboxNodeFailedError) as excinfo:
         await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))

@@ -2619,10 +2619,13 @@ async def test_output_read_failure_still_kills_sandbox():
     sandbox.kill.assert_awaited()
 
 
-async def test_schema_validation_failure_still_kills_sandbox(monkeypatch: pytest.MonkeyPatch):
+async def test_schema_validation_failure_still_kills_sandbox():
     """A schema-rejected output raises the retryable SandboxNodeFailedError AND
-    the sandbox is still killed in the finally block (FAR-488b / FAR-780)."""
-    monkeypatch.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+    the sandbox is still killed in the finally block (FAR-488b / FAR-780).
+
+    Graduated lenient mode: 'required' violations raise even in lenient
+    (pre-existing enforcement contract).  No monkeypatch needed.
+    """
     node_def = _base_node_def(timeout_seconds=30)
     node_def["output_schema_json"] = {"required": ["status", "summary"]}
     fn = make_sandbox_agent_fn(node_def)
@@ -2796,12 +2799,15 @@ async def test_json_null_output_message_says_null():
     assert "JSON null" in message
 
 
-async def test_schema_validation_summary_names_missing_field(monkeypatch: pytest.MonkeyPatch):
+async def test_schema_validation_summary_names_missing_field():
     """FAR-487: the schema-rejection message names the rejected field so an
     operator can align the agent's output shape with the schema (no schema
     loosening). FAR-780: the schema-rejected output RAISES retryably rather
-    than returning a completed-node envelope."""
-    monkeypatch.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+    than returning a completed-node envelope.
+
+    Graduated lenient mode: 'required' violations raise even in lenient
+    (pre-existing enforcement contract).  No monkeypatch needed.
+    """
     node_def = _base_node_def(timeout_seconds=30)
     node_def["output_schema_json"] = {"required": ["status", "summary"]}
     fn = make_sandbox_agent_fn(node_def)
@@ -2818,14 +2824,17 @@ async def test_schema_validation_summary_names_missing_field(monkeypatch: pytest
     assert "'status'" in message
 
 
-async def test_schema_validation_missing_pr_url_raises_retryable(monkeypatch: pytest.MonkeyPatch):
+async def test_schema_validation_missing_pr_url_raises_retryable():
     """FAR-780 E2B-parity regression: an llm-mode output that lacks a
     schema-required field (``pr_url``) must fail RETRYABLY — ``runtime_retry``
     re-dispatches the node in a fresh sandbox — instead of returning the
     synthetic ``status="failed"`` envelope (modulo_synthetic_failure=True) that
     completed the node non-retryably and eval-blocked the run
-    (``EvalBlockedError`` is a never-retryable control-flow fault)."""
-    monkeypatch.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+    (``EvalBlockedError`` is a never-retryable control-flow fault).
+
+    Graduated lenient mode: 'required' violations raise even in lenient
+    (pre-existing enforcement contract).  No monkeypatch needed.
+    """
     from modulo.core.pipeline_engine import runtime_retry
 
     node_def = _base_node_def(timeout_seconds=30)

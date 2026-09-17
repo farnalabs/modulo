@@ -236,7 +236,8 @@ class TestNodeRunnerValidateAgainstSchema:
         assert errors == []
 
     def test_invalid_data_lenient_mode_succeeds_with_warning(self, caplog: Any) -> None:
-        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        # Graduated lenient: non-required violations (additionalProperties) warn-only.
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "additionalProperties": False}
         outcome, errors, _ = nr._validate_against_schema(
             {"age": 30},
             schema,
@@ -246,6 +247,17 @@ class TestNodeRunnerValidateAgainstSchema:
         assert len(errors) > 0
         # Node does NOT fail
         assert "schema_validation.lenient_bypass" in caplog.text
+
+    def test_required_violation_raises_in_lenient_mode(self) -> None:
+        """Graduated lenient: 'required' violations raise even in lenient
+        (pre-existing enforcement contract)."""
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        with pytest.raises(nr.OutputSchemaValidationError, match="'name' is a required property"):
+            nr._validate_against_schema(
+                {"age": 30},
+                schema,
+                mode="lenient",
+            )
 
     def test_invalid_data_strict_mode_raises(self) -> None:
         schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
@@ -538,7 +550,8 @@ class TestFinalizeNodeResult:
         assert result["artifacts"][0]["status"] == "completed"
 
     def test_invalid_schema_lenient_returns_completed(self) -> None:
-        schema = {"type": "object", "properties": {"data": {"type": "integer"}}, "required": ["data"]}
+        # Graduated lenient: non-required violations (type) warn-only.
+        schema = {"type": "object", "properties": {"data": {"type": "integer"}}}
         result = nr._finalize_node_result(
             "n1",
             {"wrong": "field"},
@@ -548,6 +561,18 @@ class TestFinalizeNodeResult:
         )
         # Lenient mode: node succeeds despite validation failure
         assert result["artifacts"][0]["status"] == "completed"
+
+    def test_required_violation_raises_in_lenient_finalize(self) -> None:
+        """Graduated lenient: 'required' violations raise in _finalize_node_result."""
+        schema = {"type": "object", "properties": {"data": {"type": "integer"}}, "required": ["data"]}
+        with pytest.raises(nr.OutputSchemaValidationError, match="'data' is a required property"):
+            nr._finalize_node_result(
+                "n1",
+                {"wrong": "field"},
+                schema,
+                None,
+                mode="lenient",
+            )
 
     def test_invalid_schema_strict_raises(self) -> None:
         schema = {"type": "object", "properties": {"data": {"type": "integer"}}, "required": ["data"]}
@@ -607,8 +632,9 @@ class TestManualResumeOutput:
             )
 
     def test_invalid_output_lenient_succeeds(self) -> None:
+        # Graduated lenient: non-required violations (type) warn-only.
         decision = {"output": {"age": 30}}
-        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
         result = nr._manual_resume_output(
             decision,
             schema,
@@ -616,6 +642,17 @@ class TestManualResumeOutput:
         )
         # Lenient mode: returns the output despite validation failure
         assert result == {"age": 30}
+
+    def test_required_violation_raises_in_lenient_manual_resume(self) -> None:
+        """Graduated lenient: 'required' violations raise in _manual_resume_output."""
+        decision = {"output": {"age": 30}}
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        with pytest.raises(nr.OutputSchemaValidationError, match="'name' is a required property"):
+            nr._manual_resume_output(
+                decision,
+                schema,
+                mode="lenient",
+            )
 
 
 # ---------------------------------------------------------------------------

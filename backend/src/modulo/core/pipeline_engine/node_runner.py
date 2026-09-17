@@ -9561,7 +9561,26 @@ def _validate_against_schema(
 
     # Validation failed — handle based on mode
     if mode == "lenient":
-        # Lenient: record warning, node does NOT fail
+        # Graduated validation (FAR-899 reviewer fix — option B):
+        # Split enforcement by constraint provenance:
+        #   - "required" (the pre-existing enforcement that existed before
+        #     FAR-899) MUST STILL RAISE the same retryable error as before.
+        #     This preserves the pre-existing contract exactly: pipelines that
+        #     used to fail on a bad schema still fail on missing required fields.
+        #   - All other constraints (type, enum, const, pattern, format,
+        #     bounds, anyOf/oneOf, etc.) are NEWLY-ADDED strictness; under
+        #     lenient they are WARN-only so operators can stage the new
+        #     strictness without breaking existing pipelines.
+        required_errors = [e for e in errors if e.get("constraint") == "required"]
+        if required_errors:
+            # Pre-existing enforcement: required-field violations raise even
+            # in lenient mode, preserving the pre-FAR-899 contract exactly.
+            raise OutputSchemaValidationError(
+                f"Schema validation failed (required fields missing): "
+                f"(schema={schema_id} v{schema_version}): "
+                f"{format_error_summary(required_errors)}"
+            )
+        # New-constraint violations (non-required) are warn-only under lenient.
         _log.warning(
             "schema_validation.lenient_bypass",
             extra={

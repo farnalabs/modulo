@@ -219,9 +219,13 @@ async def test_manual_node_accepts_human_output_on_resume():
     assert artifacts[0]["human_output"] == {"review": "approved", "comments": "LGTM"}
 
 
-async def test_manual_node_validates_required_fields(monkeypatch: pytest.MonkeyPatch):
-    """Manual node should raise ValueError when required fields are missing."""
-    monkeypatch.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+async def test_manual_node_validates_required_fields():
+    """Manual node should raise ValueError when required fields are missing.
+
+    Graduated lenient mode: 'required' violations raise even in lenient
+    (pre-existing enforcement contract).  No monkeypatch needed — the
+    default mode is 'lenient' and required-field failures raise.
+    """
     node_def = {
         "id": "manual-unit-4",
         "node_type": "manual",
@@ -231,7 +235,7 @@ async def test_manual_node_validates_required_fields(monkeypatch: pytest.MonkeyP
     }
     node_fn = make_manual_node_fn(node_def)
 
-    with pytest.raises(ValueError, match="Strict schema validation failed"):
+    with pytest.raises(ValueError, match="'reason' is a required property"):
         await node_fn(
             {
                 "artifacts": [],
