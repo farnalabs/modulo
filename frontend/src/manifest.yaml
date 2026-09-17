@@ -715,7 +715,7 @@ routes:
         sidebar_group:
         sidebar_order:
         type: page
-        <<: *community
+        <<: *team
         deprecated: false
 
     /admin/system/config:
@@ -1322,15 +1322,6 @@ elements:
       - testid: developer-mode-toggle
         type: element
         dynamic_testid: false
-      - testid: feature-gate
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-disabled
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-lock
-        type: element
-        dynamic_testid: false
       - testid: flags-prev-page
         type: button
         dynamic_testid: false
@@ -1415,15 +1406,6 @@ elements:
         type: element
         dynamic_testid: false
     /admin/housekeeping:
-      - testid: feature-gate
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-disabled
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-lock
-        type: element
-        dynamic_testid: false
       - testid: hk-refresh
         type: button
         dynamic_testid: false
@@ -1813,15 +1795,6 @@ elements:
         type: element
         dynamic_testid: false
     /admin/product-analytics:
-      - testid: feature-gate
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-disabled
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-lock
-        type: element
-        dynamic_testid: false
       - testid: last-dump
         type: element
         dynamic_testid: false
@@ -3770,15 +3743,6 @@ elements:
         type: button
         dynamic_testid: false
     /settings/guardrails:
-      - testid: feature-gate
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-disabled
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-lock
-        type: element
-        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
