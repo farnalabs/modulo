@@ -12,11 +12,14 @@ unit-tests:
   - backend/tests/unit/api/test_run_events_endpoint.py
   - backend/tests/unit/api/test_run_ws.py
   - backend/tests/unit/api/test_run_api_key_auth.py
+  - backend/tests/unit/api/test_runs_team_scope.py
 bdd:
   - backend/tests/bdd/features/errors
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
   - backend/tests/bdd/features/pipelines/run_sequential.feature
+  - backend/tests/bdd/features/users/runner_role.feature
   - backend/tests/bdd/steps/test_pipelines.py
+  - backend/tests/bdd/steps/test_alpha_users.py
 depends-on:
   - feat-pipelines
 status: covered
@@ -57,6 +60,12 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
       /nodes/{node_id}/prompt/reveal` reveals a node's prompt
 - [x] Only authenticated/authorized principals can trigger/inspect runs; api-key
       principals are scoped per key policy (`test_run_api_key_auth.py`)
+- [x] `POST /api/v1/runs` team-scope gate (FAR-946): team-private pipelines
+      (`visibility='team'`) require membership in the owning team or org-admin
+      role; org-visible pipelines remain open to any runner.  Uses the shared
+      `require_team_membership_or_admin_any_credential` gate with a body-based
+      resolver that reads `pipeline_id` from the JSON request (`test_runs_team_scope.py`,
+      `runner_role.feature`)
 - [x] Error-state handling: failed states, retries and recovery flows are covered by
       `backend/tests/bdd/features/errors/{failed_state,retry,recovery}.feature`
 - [x] Run lifecycle is BDD-exercised end to end: a manual trigger creates a pending run
