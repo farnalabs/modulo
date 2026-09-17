@@ -933,28 +933,28 @@ class TestResolveTierLicensing:
 
 
 class TestEnforceTeamTierGate:
-    async def test_enable_team_flag_on_community_is_forbidden(self) -> None:
+    def test_enable_team_flag_on_community_is_forbidden(self) -> None:
         registry = _mock_registry()
         flag = registry.get_flag("sso")
         assert flag is not None
         with pytest.raises(HTTPException) as exc_info:
-            await _enforce_team_tier_gate(flag, "sso", registry, enabled=True)
+            _enforce_team_tier_gate(flag, "sso", registry, enabled=True)
         assert exc_info.value.status_code == 403
 
-    async def test_disable_team_flag_on_community_is_allowed(self) -> None:
+    def test_disable_team_flag_on_community_is_allowed(self) -> None:
         registry = _mock_registry()
         flag = registry.get_flag("sso")
         assert flag is not None
-        await _enforce_team_tier_gate(flag, "sso", registry, enabled=False)
+        _enforce_team_tier_gate(flag, "sso", registry, enabled=False)
 
-    async def test_enable_community_flag_on_community_is_allowed(self) -> None:
+    def test_enable_community_flag_on_community_is_allowed(self) -> None:
         registry = _mock_registry()
         flag = registry.get_flag("webhook_trigger")
         assert flag is not None
-        await _enforce_team_tier_gate(flag, "webhook_trigger", registry, enabled=True)
+        _enforce_team_tier_gate(flag, "webhook_trigger", registry, enabled=True)
 
-    async def test_enable_team_flag_on_team_is_allowed(self) -> None:
+    def test_enable_team_flag_on_team_is_allowed(self) -> None:
         registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
         flag = registry.get_flag("sso")
         assert flag is not None
-        await _enforce_team_tier_gate(flag, "sso", registry, enabled=True)
+        _enforce_team_tier_gate(flag, "sso", registry, enabled=True)

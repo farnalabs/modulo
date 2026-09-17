@@ -417,10 +417,7 @@ async def _reconstruct_messages(session: AsyncSession, session_id: uuid.UUID) ->
     return [_message_to_langchain(m) for m in db_messages]
 
 
-async def _is_ui_driving_enabled(
-    org_id: uuid.UUID,
-    user_id: uuid.UUID | None = None,
-) -> bool:
+async def _is_ui_driving_enabled(org_id: uuid.UUID) -> bool:
     """Check if the remy_ui_driving feature flag is enabled for the given org.
 
     Uses FeatureFlagRegistry backed by the DB tier catalog, with org-level

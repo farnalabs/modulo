@@ -144,7 +144,7 @@ async def _write_org_override(session: AsyncSession, org_id: uuid.UUID, flag_nam
         session.add(org)
 
 
-async def _enforce_team_tier_gate(
+def _enforce_team_tier_gate(
     flag: Any,
     flag_name: str,
     registry: FeatureFlagRegistry,
@@ -197,7 +197,7 @@ async def _apply_org_flag_override(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown feature flag: {flag_name}",
         )
-    await _enforce_team_tier_gate(flag, flag_name, registry, enabled)
+    _enforce_team_tier_gate(flag, flag_name, registry, enabled)
     await _write_org_override(session, current_user.organisation_id, flag_name, enabled)
     await _invalidate_cache(settings, current_user.organisation_id)
     return flag

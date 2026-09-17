@@ -291,4 +291,48 @@ describe('AdminFeatureFlagsView', () => {
       expect.objectContaining({ body: { enabled: false } }),
     )
   })
+
+  it('does not offer or preselect Force enabled for a locked-but-active flag', async () => {
+    const flagsData = {
+      license: { tier: 'community', has_license_key: false, is_valid: true },
+      flags: [
+        { name: 'flag-audit-log', description: 'Audit log retention', tier: 'team', currently_active: true, depends_on: null },
+      ],
+      would_activate: [],
+    }
+    api.GET = vi.fn((path: string) => {
+      if (path.startsWith('/api/v1/admin/feature-flags') && path.includes('org-override')) {
+        // The org previously forced this locked flag on; the dialog must not
+        // reopen with the (removed) 'true' option selected.
+        return Promise.resolve({ data: { override: true }, error: undefined })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: flagsData, error: undefined })
+      }
+      if (path === '/api/v1/admin/license') {
+        return Promise.resolve({ data: mockLicenseData, error: undefined })
+      }
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: mockTiersData, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    }) as unknown as typeof api.GET
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(AdminFeatureFlagsView, {
+      global: {
+        plugins: [pinia],
+        stubs: { FormDialog: { props: ['open'], template: '<div v-if="open"><slot /></div>' } },
+      },
+    })
+    for (let i = 0; i < 10; i++) {
+      await flushPromises()
+    }
+    await wrapper.find('[data-testid="flag-override-flag-audit-log"]').trigger('click')
+    await flushPromises()
+    const select = wrapper.find('[data-testid="flag-override-select"]')
+    expect(select.exists()).toBe(true)
+    expect(select.text()).not.toContain('Force enabled')
+    expect(select.text()).toContain('System default')
+  })
 })

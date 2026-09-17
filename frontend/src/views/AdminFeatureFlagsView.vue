@@ -392,6 +392,13 @@ function isFlagTierLocked(flag: FlagItem): boolean {
   return flagRank > currentRank
 }
 
+// The backend only rejects ENABLING a flag whose tier outranks the org's
+// current tier; disabling (or clearing the override) stays allowed so a
+// downgraded org can turn a paid flag off.
+function canForceEnable(flag: FlagItem): boolean {
+  return !isFlagTierLocked(flag)
+}
+
 watch(searchQuery, () => {
   currentPage.value = 1
 })
@@ -437,7 +444,7 @@ const overrideOptions = computed(() => {
     { value: 'false', label: t('views.AdminFeatureFlagsView.force_disabled') },
   ]
   const flag = overrideDialogFlag.value
-  if (flag && isFlagTierLocked(flag)) {
+  if (flag && !canForceEnable(flag)) {
     return options.filter(option => option.value !== 'true')
   }
   return options
@@ -446,7 +453,12 @@ const overrideOptions = computed(() => {
 function openOverrideDialog(flag: FlagItem) {
   const current = planStore.orgOverrides[flag.name]
   overrideDialogFlag.value = flag
-  overrideDialogValue.value = current === true ? 'true' : current === false ? 'false' : 'null'
+  const preferred = current === true ? 'true' : current === false ? 'false' : 'null'
+  // A locked flag cannot be force-enabled (the backend 403s), so never
+  // pre-select the hidden 'true' option for it: the dialog must not appear
+  // to offer an action it cannot perform.
+  overrideDialogValue.value =
+    preferred === 'true' && !canForceEnable(flag) ? 'null' : preferred
   overrideDialogOpen.value = true
 }
 
