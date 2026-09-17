@@ -1,5 +1,4 @@
 <template>
-  <FeatureGate feature-name="admin_housekeeping" required-tier="community" show-disabled>
     <div class="page-wide">
       <PageHeader
         :title="$t('views.AdminHousekeepingView.title')"
@@ -190,7 +189,6 @@
         </template>
       </Dialog>
     </div>
-  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -202,7 +200,6 @@ import Dialog from 'primevue/dialog'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
-import FeatureGate from '../components/FeatureGate.vue'
 
 interface CandidateItem {
   id: string

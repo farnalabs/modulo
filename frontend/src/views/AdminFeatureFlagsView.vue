@@ -1,5 +1,4 @@
 <template>
-  <FeatureGate feature-name="admin_feature_flags" required-tier="team" show-disabled>
   <div data-theme="agent" class="page-wide">
     <header>
       <PageHeader :title="$t('views.AdminFeatureFlagsView.feature_flags')" :subtitle="$t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status')" />
@@ -238,13 +237,11 @@
       </div>
     </FormDialog>
   </div>
-  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import FeatureGate from '../components/FeatureGate.vue'
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'

@@ -36,12 +36,7 @@ _FRONTEND_SRC = _REPO_ROOT / "frontend" / "src"
 # pipeline_delete in the FRONTEND — so the detector correctly classifies them
 # as enforced and they do NOT belong in this gap set.
 KNOWN_UNENFORCED_TEAM_FLAGS: set[str] = {
-    "checkpoint_encryption",
-    "audit_crypto_chain",
     "community_registry",
-    "prompt_optimization",
-    "schema_union_types",
-    "migration_cli",
 }
 
 
