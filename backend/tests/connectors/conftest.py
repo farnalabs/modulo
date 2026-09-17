@@ -1,5 +1,9 @@
 """Connector conformance fixtures — NOT the project-level conftest."""
 
+import http.server
+import json
+import socketserver
+import threading
 import uuid
 import warnings
 from pathlib import Path
@@ -12,6 +16,172 @@ from modulo.connectors.base import ConnectorBase
 from modulo.connectors.rest import RestConnector
 from tests.connectors._conformance import get_registered_fixture, get_registered_types, register_conformance_connector
 from tests.connectors._noop_guard import make_noop_security_guard
+
+# ── VCR config for pytest-recording ────────────────────────────────────────
+
+
+@pytest.fixture
+def vcr_config() -> dict[str, Any]:
+    """Wire the VCR config from the shared helpers module.
+
+    ``pytest-recording`` picks up this fixture automatically when a test is
+    marked ``@pytest.mark.vcr``.  ``record_mode`` defaults to ``"none"``
+    (replay-only) so the committed suite runs offline; set
+    ``VCR_RECORD_MODE=once`` to record new cassettes.
+    """
+    from tests.helpers.vcr import vcr_config as _vcr_config
+
+    return _vcr_config()
+
+
+# ── In-process HTTP test server ────────────────────────────────────────────
+
+
+class _RequestHandler(http.server.BaseHTTPRequestHandler):
+    """Routes requests to the owning ``_TestHttpServer`` and records them."""
+
+    def do_request(self) -> None:
+        server = self.server.test_http_server  # type: ignore[attr-defined]  # _TestHttpServer instance
+        length = int(self.headers.get("content-length", 0))
+        body = self.rfile.read(length) if length else b""
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        client_addr = f"{self.client_address[0]}:{self.client_address[1]}"
+        server.request_log.append(
+            {
+                "method": self.command,
+                "path": self.path,
+                "query": query,
+                "headers": {k.lower(): v for k, v in self.headers.items()},
+                "body": body.decode("utf-8", errors="replace"),
+                "client": client_addr,
+            }
+        )
+        status, resp_headers, resp_body = server.route_request(self.command, self.path, dict(self.headers), body)
+        self.send_response(status)
+        for key, val in resp_headers.items():
+            self.send_header(key, val)
+        self.end_headers()
+        if resp_body:
+            self.wfile.write(resp_body)
+
+    do_GET = do_request  # noqa: N815 — http.server method names are mixedCase
+    do_POST = do_request  # noqa: N815
+    do_PUT = do_request  # noqa: N815
+    do_PATCH = do_request  # noqa: N815
+    do_DELETE = do_request  # noqa: N815
+    do_HEAD = do_request  # noqa: N815
+    do_OPTIONS = do_request  # noqa: N815
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass  # suppress stderr noise
+
+
+class _TestHttpServer:
+    """Real in-process HTTP server on a free port (port 0) for connector tests.
+
+    Routes are registered via ``set_response``.  Every request is recorded in
+    ``request_log`` so tests can assert what the connector actually sent over
+    the wire (method, path, headers, body, client address).
+    """
+
+    def __init__(self) -> None:
+        self.request_log: list[dict[str, Any]] = []
+        self._routes: dict[tuple[str, str], tuple[int, dict[str, str], bytes]] = {}
+        self._default_response: tuple[int, dict[str, str], bytes] = (
+            200,
+            {"Content-Type": "application/json"},
+            json.dumps({"items": [{"id": 1}]}).encode(),
+        )
+        self._server: socketserver.ThreadingTCPServer | None = None
+        self._thread: threading.Thread | None = None
+        self.host = "127.0.0.1"
+        self.port = 0
+
+    def set_response(
+        self,
+        method: str,
+        path: str,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+        body: Any = None,
+    ) -> None:
+        if isinstance(body, (dict, list)):
+            body_bytes = json.dumps(body).encode()
+            headers = {**(headers or {}), "Content-Type": "application/json"}
+        elif isinstance(body, str):
+            body_bytes = body.encode()
+            headers = {**(headers or {}), "Content-Type": "text/plain"}
+        elif isinstance(body, bytes):
+            body_bytes = body
+        else:
+            body_bytes = json.dumps(body).encode() if body is not None else b""
+            if body is not None:
+                headers = {**(headers or {}), "Content-Type": "application/json"}
+        self._routes[(method.upper(), path)] = (status, headers or {}, body_bytes)
+
+    def set_default_response(self, status: int = 200, headers: dict[str, str] | None = None, body: Any = None) -> None:
+        if isinstance(body, (dict, list)):
+            body_bytes = json.dumps(body).encode()
+            headers = {**(headers or {}), "Content-Type": "application/json"}
+        elif isinstance(body, str):
+            body_bytes = body.encode()
+            headers = {**(headers or {}), "Content-Type": "text/plain"}
+        elif isinstance(body, bytes):
+            body_bytes = body
+        else:
+            body_bytes = b""
+        self._default_response = (status, headers or {}, body_bytes)
+
+    def route_request(
+        self, method: str, path: str, headers: dict[str, str], body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        key = (method.upper(), path)
+        if key in self._routes:
+            return self._routes[key]
+        return self._default_response
+
+    def start(self) -> None:
+        self._server = socketserver.ThreadingTCPServer((self.host, 0), _RequestHandler)
+        self._server.daemon_threads = True
+        self._server.test_http_server = self  # type: ignore[attr-defined]
+        self.port = self._server.server_address[1]
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+            self._server = None
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
+
+    def url(self, path: str = "") -> str:
+        return f"http://{self.host}:{self.port}{path}"
+
+
+@pytest.fixture
+def rest_test_server(monkeypatch: pytest.MonkeyPatch):
+    """Yield a real in-process HTTP server on 127.0.0.1 with an OS-assigned port.
+
+    The server records every request in ``request_log`` so tests can assert on
+    what the connector actually sent over the wire.  Use ``set_response`` to
+    configure per-route responses; unhandled routes return the default 200 JSON
+    response.
+
+    Sets ``SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128`` for the test scope
+    so the connector's pinned transport permits loopback — the documented
+    operator mechanism for self-hosted deployments reaching localhost backends
+    (Trivy, SonarQube, Ollama, etc.).  This does NOT weaken the SSRF guard;
+    link-local / metadata / multicast ranges remain blocked.
+    """
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "127.0.0.0/8,::1/128")
+    server = _TestHttpServer()
+    server.start()
+    yield server
+    server.stop()
+
 
 # ── Connector fixture definitions ──────────────────────────────────────────
 
@@ -89,6 +259,34 @@ def rest_connector():
 
 
 register_conformance_connector("rest", "rest_connector")
+
+
+# ── npm / pypi (VCR-backed, no live credential needed) ────────────────────
+# These connectors can be instantiated without credentials but do NOT support
+# the standard conformance resources ("directory" read / "file" write) — they
+# have their own resource model (package, search, etc.).  They are tested in
+# dedicated VCR-backed contract tests (test_npm_contract.py,
+# test_pypi_contract.py) and are NOT registered for the shared conformance
+# suite.
+#
+# NOTE — trivy and codeclimate are REST API clients that require a running
+# remote service (Trivy server, Code Climate API).  trivy accepts an optional
+# token; codeclimate requires an API token.  Neither is a local scanner.
+# Both are excluded from conformance because they need live network access.
+
+
+@pytest.fixture
+def npm_connector():
+    from modulo.connectors.npm import NpmConnector
+
+    return NpmConnector(token="")
+
+
+@pytest.fixture
+def pypi_connector():
+    from modulo.connectors.pypi import PyPIConnector
+
+    return PyPIConnector(token="")
 
 
 # ── Auto-parametrisation hook ──────────────────────────────────────────────

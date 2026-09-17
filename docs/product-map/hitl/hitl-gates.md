@@ -36,6 +36,7 @@ bdd:
   - backend/tests/bdd/features/hitl/reject.feature
   - backend/tests/bdd/features/hitl/deliver_manual.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
+  - backend/tests/bdd/features/hitl/gate_policies.feature
   - backend/tests/bdd/features/hitl/feedback_handler.feature
   - backend/tests/bdd/features/teams/team_hitl_gate.feature
   - backend/tests/bdd/features/evals/conditional_hitl.feature
@@ -105,6 +106,21 @@ may decide.
       before resuming; missing/expired claim_token → 403/410, already-decided
       → 409 (`test_hitl_manager` approve-with-modification cases,
       `test_node_runner_hitl` modified-output resume cases)
+- [x] Modify-then-approve BDD surface: `POST
+      /api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification` returns
+      200 and resumes the graph with `action: approved` +
+      `modified_output` when the reviewer holds a claim, 422 when the
+      `claim_token` is missing (body validation), and 410 when it is expired
+      (gate_policies.feature, `test_hitl_gate_policies.py`)
+- [x] `human_only` refusal BDD surface: a non-browser credential (API key)
+      deciding a `human_only` gate receives a real 403 from the REST verdict
+      (`human_only_denial` over a `{"human_only": true}` config resolved from
+      the run), with the failure-isolated denial audit emission
+      (gate_policies.feature, `test_hitl_gate_policies.py`)
+- [x] Overdue-warning BDD surface: `get_overdue_claims` reports held claims
+      with `age_hours` and a `warning`/`escalated` status per the
+      warning/escalation thresholds (gate_policies.feature,
+      `test_hitl_gate_policies.py`)
 - [x] Deliver-manual / submit-manual validates reviewer-supplied output and
       passes it to the pipeline; manual output delivery is audited
       (deliver_manual.feature, `test_output_delivery_audit`)
@@ -226,19 +242,20 @@ may decide.
 - **Claim expiry runs on the SAQ worker cadence** — a held claim that expires
   between ticks stays claimed until the next `claim_expiry` sweep
   (`expiry_job.py`).
-- **No executing BDD surface for modify-then-approve, `human_only` refusal, or
-  overdue warnings** — the pre-existing `modify_then_approve.feature`,
-  `human_only_gate.feature` and `overdue_warning.feature` drafts shipped under
-  `tests/bdd/features/hitl/` were removed in the 2026-09-07 product-map walk:
-  they described a removed API surface (`/api/runs/{id}/human-input`, the
-  `waiting_for_human` status, pre-claim-token flows), were never registered via
-  `scenarios(...)`, and therefore never executed. The behaviours themselves are
-  unit-tested (`test_hitl_manager`, `test_node_runner_hitl`, `test_mcp_security`,
-  `test_mcp_runtime_tools`, `test_overdue_warning`, `test_claim_expiry_job`);
-  an executing BDD surface would need the drafts rewritten against the current
-  API before registration.
 
 ## QA History
+
+- 2026-09-17: **improve-architecture (product-map walk)** — closed the "No
+  executing BDD surface for modify-then-approve, `human_only` refusal, or
+  overdue warnings" Known Gap: registered the new `gate_policies.feature`
+  (scenarios in `test_hitl_gate_policies.py`) into the executing BDD suite,
+  driving the real `/approve-with-modification` route (200 with modified
+  output in the resume payload, 422 without a claim token, 410 with an
+  expired token), the real REST `human_only` denial verdict (an API-key
+  principal deciding a human_only gate → 403), and the real
+  `get_overdue_claims` aggregation (warning vs escalated status + age).
+  `_ORPHANED_BDD_FEATURES` stays empty; the three behaviours are now
+  BDD-covered as well as unit-covered. Status: covered.
 
 - 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids

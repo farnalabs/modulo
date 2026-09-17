@@ -1,9 +1,25 @@
 """Connector contract conformance suite.
 
-Every ConnectorType implementation must pass these scenarios.  When a new
-connector is added, register it in its test module via
-``register_conformance_connector()`` and the tests below are parametrised
-automatically.
+Every registered connector type must pass these scenarios.  Types are
+registered in ``conftest.py`` via ``register_conformance_connector()`` —
+only connectors that can be instantiated without live vendor credentials
+and without a running external service are included (currently:
+filesystem, shell, rest).
+
+Excluded types and why:
+
+- **npm, pypi** — can be instantiated without credentials but have their
+  own resource model (package, search) incompatible with the standard
+  conformance resources (directory/file read/write).  Tested in
+  dedicated VCR-backed contract tests (test_npm_contract.py,
+  test_pypi_contract.py).
+- **trivy, codeclimate** — REST API clients that require a running
+  remote service (Trivy server, Code Climate API).  Neither is a local
+  scanner.  trivy accepts an optional token; codeclimate requires an
+  API token.  Both are excluded because they need live network access,
+  not solely because of credentials.
+- **github, linear, jira, slack** — require a live vendor credential.
+- **ci-runner, ticket-tracker** — abstract bases, not instantiable.
 
 Run with::
 
