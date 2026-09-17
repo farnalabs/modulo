@@ -30,7 +30,9 @@ manage org-level licenses.
 - [x] POST `/api/v1/admin/orgs/{org_id}/users` creates a user within an org with
       cross-tenant account takeover protection and password validation
       (`backend/tests/bdd/features/system_admin/system_admin_users.feature`)
-- [x] DELETE `/api/v1/admin/orgs/{org_id}` deletes an organisation
+- [x] DELETE `/api/v1/admin/orgs/{org_id}` deletes an organisation; returns 404
+      if not found and 403 for a regular admin
+      (`backend/tests/bdd/features/system_admin/system_admin_orgs.feature`)
 - [x] Org-level license management: GET/PUT/DELETE on
       `/api/v1/admin/orgs/{org_id}/license` with validation via
       `parse_and_verify` (`admin_orgs.py`)
@@ -39,9 +41,15 @@ manage org-level licenses.
 
 ## Known Gaps
 
-- No BDD for DELETE org or license management; coverage is via unit tests.
+- No BDD for org-level license management (GET/PUT/DELETE on
+  `/api/v1/admin/orgs/{org_id}/license`); coverage is via unit tests.
 
 ## QA History
+- 2026-09-17: **improve-architecture (product-map walk)** — closed the "No BDD
+  for DELETE org" half of the `feat-system-orgs` BDD gap: added DELETE coverage
+  to `system_admin_orgs.feature` (successful 204 delete, 404 for a missing org,
+  and 403 for a regular org admin). The narrower license-management BDD gap
+  remains tracked below.
 
 - 2026-09-12: **improve-architecture (product-map walk)** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to

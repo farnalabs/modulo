@@ -224,6 +224,15 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `pipelines/pipeline_config_validation.feature`, closing `feat-pipelines`'s
 > graph/config-validation BDD gap (`pipelines/pipelines.md`).
 > `_ORPHANED_BDD_FEATURES` is now empty — no orphaned feature files remain.
+>
+> **Closed this walk (2026-09-17):** added DELETE coverage to the executing
+> system-admin BDD suite. `system_admin_config.feature` gained successful-delete,
+> unknown-key-404 and regular-admin-403 scenarios, closing `feat-system-config`'s
+> "No BDD for DELETE system config" gap (`system/system-config.md`).
+> `system_admin_orgs.feature` gained the same three DELETE scenarios, closing the
+> "No BDD for DELETE org" half of `feat-system-orgs`'s gap
+> (`system/system-orgs.md`); the narrower org-license-management BDD gap remains
+> tracked in that entry.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

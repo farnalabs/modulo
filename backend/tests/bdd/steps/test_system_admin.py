@@ -149,6 +149,41 @@ def _attempt_create_org_duplicate(slug: str, request, client):
     request.node._resp = resp
 
 
+@when("I delete the organisation")
+def _delete_org(request, client):
+    _set_auth_override(True)
+
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    mock_org = _make_mock_org(id=org_id, slug=getattr(request.node, "_org_slug", "test-org"))
+
+    with (
+        patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=mock_org),
+        patch("modulo.api.routes.admin_orgs.delete_organisation", new_callable=AsyncMock, return_value=True),
+    ):
+        resp = client.delete(f"/api/v1/admin/orgs/{org_id}")
+    request.node._resp = resp
+
+
+@when("I delete a missing organisation")
+def _delete_missing_org(request, client):
+    _set_auth_override(True)
+
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    with (
+        patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.admin_orgs.delete_organisation", new_callable=AsyncMock, return_value=False),
+    ):
+        resp = client.delete(f"/api/v1/admin/orgs/{org_id}")
+    request.node._resp = resp
+
+
+@when("I attempt to delete the organisation")
+def _attempt_delete_org(request, client):
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    resp = client.delete(f"/api/v1/admin/orgs/{org_id}")
+    request.node._resp = resp
+
+
 # ===========================================================================
 # When steps — Users
 # ===========================================================================
@@ -240,6 +275,30 @@ def _attempt_list_system_config(request, client):
     request.node._resp = resp
 
 
+@when(parsers.parse('I delete system config "{key}"'))
+def _delete_system_config(key: str, request, client):
+    _set_auth_override(True)
+
+    with patch("modulo.api.routes.admin_system_config.delete_config", new_callable=AsyncMock, return_value=True):
+        resp = client.delete(f"/api/v1/system-admin/config/{key}")
+    request.node._resp = resp
+
+
+@when(parsers.parse('I delete a missing config key "{key}"'))
+def _delete_missing_system_config(key: str, request, client):
+    _set_auth_override(True)
+
+    with patch("modulo.api.routes.admin_system_config.delete_config", new_callable=AsyncMock, return_value=False):
+        resp = client.delete(f"/api/v1/system-admin/config/{key}")
+    request.node._resp = resp
+
+
+@when(parsers.parse('I attempt to delete system config "{key}"'))
+def _attempt_delete_system_config(key: str, request, client):
+    resp = client.delete(f"/api/v1/system-admin/config/{key}")
+    request.node._resp = resp
+
+
 # ===========================================================================
 # Then steps
 # ===========================================================================
@@ -255,6 +314,12 @@ def _org_created(request):
     assert "slug" in body
     assert "status" in body
     assert "created_at" in body
+
+
+@then("the organisation is deleted")
+def _org_deleted(request):
+    resp = request.node._resp
+    assert resp.status_code == 204, f"Expected 204, got {resp.status_code}: {resp.text[:200]}"
 
 
 @then(parsers.parse('it has status "{expected_status}"'))
@@ -296,6 +361,12 @@ def _config_saved(request):
     body = resp.json()
     assert "key" in body
     assert "value" in body
+
+
+@then("the config entry is deleted")
+def _config_deleted(request):
+    resp = request.node._resp
+    assert resp.status_code == 204, f"Expected 204, got {resp.status_code}: {resp.text[:200]}"
 
 
 @then("I see all configured keys and values")
