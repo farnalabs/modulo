@@ -182,6 +182,8 @@ class TestRunsSpecialCase:
             "environment_profiles",
             "library_primitives",
             "lifecycle_maps",
+            "eval_datasets",
+            "eval_suites",
         }
 
     def test_run_model_has_no_visibility_column(self) -> None:
