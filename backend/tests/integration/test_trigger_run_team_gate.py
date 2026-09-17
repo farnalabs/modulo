@@ -106,22 +106,43 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str, role
     return account_id
 
 
-async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, name: str) -> uuid.UUID:
-    team_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text("INSERT INTO teams (id, organisation_id, name) VALUES (:id, :oid, :name)"),
-            {"id": str(team_id), "oid": str(org_id), "name": name},
+async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, owner_id: uuid.UUID, name: str) -> uuid.UUID:
+    """Create a team through the CRUD layer.
+
+    ``teams`` has NOT NULL ``account_id`` (owner), ``notification_endpoints``
+    and ``settings`` columns with no SQL server defaults, so a raw INSERT must
+    supply them. The ORM ``create_team`` helper applies the Python-side defaults
+    and keeps this seed in step with the model.
+    """
+    from modulo.db.crud.team import create_team
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org_id)},
         )
-    return team_id
+        team = await create_team(session, org_id=org_id, name=name, account_id=owner_id)
+        return team.id
 
 
-async def _seed_team_membership(db_engine: AsyncEngine, team_id: uuid.UUID, account_id: uuid.UUID) -> None:
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text("INSERT INTO team_memberships (id, team_id, account_id, role) VALUES (:id, :tid, :aid, 'member')"),
-            {"id": str(uuid.uuid4()), "tid": str(team_id), "aid": str(account_id)},
+async def _seed_team_membership(
+    db_engine: AsyncEngine, org_id: uuid.UUID, team_id: uuid.UUID, account_id: uuid.UUID
+) -> None:
+    """Add a team member via the CRUD layer.
+
+    ``team_memberships.role`` is constrained to ``viewer``/``runner``/``operator``
+    (``ck_team_memberships_role``); ``member`` is not a valid value.
+    """
+    from modulo.db.crud.team_membership import add_team_member
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org_id)},
         )
+        await add_team_member(session, org_id=org_id, team_id=team_id, account_id=account_id, role="runner")
 
 
 async def _seed_pipeline(
@@ -189,28 +210,32 @@ async def admin_user(db_engine: AsyncEngine, org: uuid.UUID) -> uuid.UUID:
 
 @pytest_asyncio.fixture(scope="module")
 async def member_user(db_engine: AsyncEngine, org: uuid.UUID) -> uuid.UUID:
-    return await _seed_user(db_engine, org, "member@teamgate.test", role="member")
+    return await _seed_user(db_engine, org, "member@teamgate.test", role="runner")
 
 
 @pytest_asyncio.fixture(scope="module")
 async def non_member_user(db_engine: AsyncEngine, org: uuid.UUID) -> uuid.UUID:
     """Org member who is NOT in the team that owns the private pipeline."""
-    return await _seed_user(db_engine, org, "outsider@teamgate.test", role="member")
+    return await _seed_user(db_engine, org, "outsider@teamgate.test", role="runner")
 
 
 @pytest_asyncio.fixture(scope="module")
-async def team(db_engine: AsyncEngine, org: uuid.UUID) -> uuid.UUID:
-    return await _seed_team(db_engine, org, "ci-team")
+async def team(db_engine: AsyncEngine, org: uuid.UUID, admin_user: uuid.UUID) -> uuid.UUID:
+    return await _seed_team(db_engine, org, admin_user, "ci-team")
 
 
 @pytest_asyncio.fixture(scope="module")
-async def _add_member_to_team(db_engine: AsyncEngine, team: uuid.UUID, member_user: uuid.UUID) -> None:
-    await _seed_team_membership(db_engine, team, member_user)
+async def _add_member_to_team(db_engine: AsyncEngine, org: uuid.UUID, team: uuid.UUID, member_user: uuid.UUID) -> None:
+    await _seed_team_membership(db_engine, org, team, member_user)
 
 
 @pytest_asyncio.fixture(scope="module")
 async def team_private_pipeline(
-    db_engine: AsyncEngine, org: uuid.UUID, admin_user: uuid.UUID, team: uuid.UUID
+    db_engine: AsyncEngine,
+    org: uuid.UUID,
+    admin_user: uuid.UUID,
+    team: uuid.UUID,
+    _add_member_to_team: None,
 ) -> uuid.UUID:
     return await _seed_pipeline(
         db_engine,
