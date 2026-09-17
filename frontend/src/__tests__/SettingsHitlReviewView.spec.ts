@@ -1395,9 +1395,9 @@ describe('SettingsHitlReviewView', () => {
     await nextTick()
     expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(true)
 
-    const clearBtn = wrapper!.findAll('button').find(b => b.text() === 'Clear Selection')
-    expect(clearBtn).toBeTruthy()
-    await clearBtn!.trigger('click')
+    const clearBtn = wrapper!.find('[data-testid="hitl-review-bulk-clear"]')
+    expect(clearBtn.exists()).toBe(true)
+    await clearBtn.trigger('click')
     await nextTick()
 
     expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(false)
@@ -1452,5 +1452,106 @@ describe('SettingsHitlReviewView', () => {
     expect(outcomes.exists()).toBe(true)
     expect(outcomes.text()).toContain('Claimed / Rejected')
     expect(outcomes.text()).toContain('Skipped (already decided)')
+  })
+
+  it('registers testids on the bulk clear and bulk-reject cancel buttons (VIS-4)', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockResolvedValue(gatesResponse([claimedGate({ claimed_by_me: true })]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-select-all"]').setValue(true)
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-clear"]').exists()).toBe(true)
+
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject"]').trigger('click')
+    await nextTick()
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-reject-cancel"]').exists()).toBe(true)
+
+    // Cancelling collapses the reason input but leaves the selection intact.
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject-cancel"]').trigger('click')
+    await nextTick()
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-reject-reason"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(true)
+  })
+
+  it('bulk claim reports an own claimed gate distinctly from another reviewer', async () => {
+    const { api } = await import('../lib/api/client')
+    const mine = claimedGate({ claimed_by_me: true })
+    ;(api.GET as any).mockResolvedValue(gatesResponse([mine]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-select-all"]').setValue(true)
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-bulk-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const outcomes = wrapper!.find('[data-testid="hitl-review-bulk-outcomes"]')
+    expect(outcomes.exists()).toBe(true)
+    expect(outcomes.text()).toContain('Skipped (already claimed by you)')
+    expect(outcomes.text()).not.toContain('claimed by another reviewer')
+    const claimCalls = (api.POST as any).mock.calls.filter((c: unknown[]) => (c[0] as string).endsWith('/claim'))
+    expect(claimCalls).toHaveLength(0)
+  })
+
+  it('bulk reject reports an own claim without a token as expired, not another reviewer', async () => {
+    const { api } = await import('../lib/api/client')
+    const mine = claimedGate({ claimed_by_me: true })
+    ;(api.GET as any).mockResolvedValue(gatesResponse([mine]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-select-all"]').setValue(true)
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject"]').trigger('click')
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject-confirm"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const outcomes = wrapper!.find('[data-testid="hitl-review-bulk-outcomes"]')
+    expect(outcomes.exists()).toBe(true)
+    expect(outcomes.text()).toContain('Skipped (your claim expired')
+    expect(outcomes.text()).not.toContain('claimed by another reviewer')
+    const rejectCalls = (api.POST as any).mock.calls.filter((c: unknown[]) => (c[0] as string).endsWith('/reject'))
+    expect(rejectCalls).toHaveLength(0)
+  })
+
+  it('prunes the selection when a refetch drops a previously-selected gate', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-row-checkbox"]').setValue(true)
+    await nextTick()
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(true)
+
+    // The gate is gone from the next page of results (decided / terminal run).
+    ;(api.GET as any).mockResolvedValue(gatesResponse([]))
+    wrapper!.findComponent(FilterBar).vm.$emit('update:filter', 'status', 'claimed')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(false)
   })
 })

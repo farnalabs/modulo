@@ -3945,6 +3945,9 @@ elements:
       - testid: hitl-review-bulk-reject
         type: button
         dynamic_testid: false
+      - testid: hitl-review-bulk-clear
+        type: button
+        dynamic_testid: false
       - testid: hitl-review-bulk-outcomes
         type: element
         dynamic_testid: false
@@ -3952,6 +3955,9 @@ elements:
         type: textarea
         dynamic_testid: false
       - testid: hitl-review-bulk-reject-confirm
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-reject-cancel
         type: button
         dynamic_testid: false
       - testid: hitl-review-bulk-outcomes-dismiss

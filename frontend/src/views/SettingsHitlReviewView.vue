@@ -84,6 +84,7 @@
         <button
           type="button"
           :disabled="bulkClaiming || bulkRejecting"
+          data-testid="hitl-review-bulk-clear"
           class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
           @click="clearSelection"
         >
@@ -115,6 +116,7 @@
           <button
             type="button"
             :disabled="bulkRejecting"
+            data-testid="hitl-review-bulk-reject-cancel"
             class="rounded-lg border border-input bg-background px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
             @click="cancelBulkReject"
           >
@@ -345,7 +347,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { api } from '../lib/api/client'
@@ -358,6 +360,7 @@ import HitlGateCard from '../components/hitl/HitlGateCard.vue'
 import { usePlanStore } from '../stores/planStore'
 import { useHitlGateState } from '../composables/useHitlGateState'
 import { formatApiError } from '../lib/api/formatError'
+import { claimFailureMessage } from '../lib/hitlClaimFailure'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
 import Select from '../components/shared/AppSelect.vue'
@@ -603,9 +606,9 @@ const filteredGates = computed(() => {
 // RunDetailView). The view only hoists the card's feedback: failures persist
 // in the view-level banner (FAR-612), successes clear it and refresh the list.
 // FAR-645 (rebased onto FAR-686): the claim-conflict discrimination by the
-// backend's machine-readable problem type (urn:problem:modulo:<type>) lives
-// inside HitlGateCard's claimFailureMessage -- the card is where the claim
-// errors are handled now, so the typed switch was ported there.
+// backend's machine-readable problem type (urn:problem:modulo:<type>) lives in
+// the shared lib/hitlClaimFailure module, used by both the card and the bulk
+// path below so the two cannot drift.
 
 async function onClaimFailed(payload: { text: string }) {
   showClaimFailureBanner(payload.text)
@@ -634,7 +637,14 @@ const showBulkRejectInput = ref(false)
 
 interface BulkOutcome {
   key: string
-  status: 'succeeded' | 'skipped-already-decided' | 'skipped-claimed-by-other' | 'skipped-pending' | 'failed'
+  status:
+    | 'succeeded'
+    | 'skipped-already-decided'
+    | 'skipped-claimed-by-other'
+    | 'skipped-claimed-by-you'
+    | 'skipped-claim-expired'
+    | 'skipped-pending'
+    | 'failed'
   error?: string
 }
 
@@ -652,6 +662,17 @@ const allSelected = computed(() => {
 const someSelected = computed(() => selectedKeys.value.size > 0)
 
 const selectedCount = computed(() => selectedKeys.value.size)
+
+// FAR-861: keep the selection in sync with the loaded page. The 30s
+// auto-refresh and the post-action refetches can drop gates (decided / terminal
+// run) that the operator had selected; without pruning they keep counting
+// toward the bulk bar and inflate the "N gates selected" label.
+watch(gates, (rows) => {
+  if (selectedKeys.value.size === 0) return
+  const visible = new Set(rows.map(gateKey))
+  const next = new Set([...selectedKeys.value].filter(key => visible.has(key)))
+  if (next.size !== selectedKeys.value.size) selectedKeys.value = next
+})
 
 function toggleSelectAll() {
   if (allSelected.value) {
@@ -687,23 +708,6 @@ function dismissBulkOutcomes() {
   bulkOutcomes.value = null
 }
 
-function claimFailureMessage(err: unknown): string {
-  const detail = formatApiError(err)
-  const problemType = typeof err === 'object' && err !== null
-    ? (err as Record<string, unknown>).type
-    : undefined
-  if (problemType === 'urn:problem:modulo:hitl_gate_already_claimed') {
-    return t('hitl.gate.claim_failed_already_claimed')
-  }
-  if (problemType === 'urn:problem:modulo:hitl_gate_already_decided') {
-    return t('hitl.gate.claim_failed_already_decided')
-  }
-  if (problemType === 'urn:problem:modulo:hitl_run_not_awaiting') {
-    return t('hitl.gate.claim_failed_run_not_awaiting', { reason: detail })
-  }
-  return `${t('hitl.gate.claim_failed')} ${detail}`
-}
-
 async function bulkClaim() {
   bulkClaiming.value = true
   bulkOutcomes.value = null
@@ -720,7 +724,10 @@ async function bulkClaim() {
       continue
     }
     if (status === 'claimed') {
-      outcomes.push({ key, status: 'skipped-claimed-by-other' })
+      // A claimed gate cannot be re-claimed; distinguish the operator's own
+      // claim (e.g. this session lost the token) from another reviewer's so
+      // the outcome report is not misleading.
+      outcomes.push({ key, status: gate.claimed_by_me ? 'skipped-claimed-by-you' : 'skipped-claimed-by-other' })
       continue
     }
 
@@ -730,7 +737,7 @@ async function bulkClaim() {
         body: { expiry_minutes: 15 },
       })
       if (err) {
-        outcomes.push({ key, status: 'failed', error: claimFailureMessage(err) })
+        outcomes.push({ key, status: 'failed', error: claimFailureMessage(err, t) })
         anyFailed = true
       } else if (data) {
         const d = data as { claim_token: string; expires_at: string }
@@ -739,7 +746,7 @@ async function bulkClaim() {
         outcomes.push({ key, status: 'succeeded' })
       }
     } catch (e: unknown) {
-      outcomes.push({ key, status: 'failed', error: claimFailureMessage(e) })
+      outcomes.push({ key, status: 'failed', error: claimFailureMessage(e, t) })
       anyFailed = true
     }
   }
@@ -795,7 +802,10 @@ async function confirmBulkReject() {
       continue
     }
     if (!token) {
-      outcomes.push({ key, status: 'skipped-claimed-by-other' })
+      // The gate is claimed by this operator, but this browser session has no
+      // claim token (a reload drops it). It is not "claimed by another
+      // reviewer" -- the operator must claim it again before rejecting.
+      outcomes.push({ key, status: 'skipped-claim-expired' })
       continue
     }
 

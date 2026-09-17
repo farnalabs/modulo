@@ -884,6 +884,8 @@ export default {
       "bulk_outcome_succeeded": "Claimed / Rejected",
       "bulk_outcome_skipped_already_decided": "Skipped (already decided)",
       "bulk_outcome_skipped_claimed_by_other": "Skipped (claimed by another reviewer)",
+      "bulk_outcome_skipped_claimed_by_you": "Skipped (already claimed by you)",
+      "bulk_outcome_skipped_claim_expired": "Skipped (your claim expired — claim the gate again)",
       "bulk_outcome_skipped_pending": "Skipped (pending — must be claimed first)",
       "bulk_outcome_failed": "Failed",
       "bulk_outcomes_dismiss": "Dismiss",
