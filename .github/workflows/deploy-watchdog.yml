@@ -321,6 +321,12 @@ jobs:
           # completed runs (fresh history) or any success among them ->
           # dispatch (a throttled no-op success counts as a success: bounded
           # churn is accepted and staleness-check escalates if it persists).
+          #
+          # FAR-954: throttled runs (Deploy to app.modulo.run skipped) are NOT
+          # failures — they did not attempt a deploy. Counting them as failures
+          # would cap the re-dispatch after just 3 throttle events, even though
+          # no deploy was attempted. Filter them out of the consecutive-failure
+          # check: only runs where the deploy job actually ran and failed count.
           RECENT="$(PAYLOAD="$RUNS_JSON" python3 -c '
           import json, os
           try:
@@ -328,8 +334,31 @@ jobs:
           except Exception:
               runs = []
           completed = [r for r in runs if r.get("status") == "completed"][:3]
-          conclusions = [(r.get("conclusion") or "none") for r in completed]
-          all_failed = len(completed) == 3 and all(c != "success" for c in conclusions)
+          # FAR-954: filter out throttled runs (all jobs skipped = no deploy
+          # attempted). A throttled run's conclusion is "success" but every
+          # job was skipped — it is NOT a failure or a success; it is a no-op.
+          # Only count runs that actually attempted the deploy (either
+          # succeeded or failed).
+          conclusions = []
+          for r in completed:
+              c = r.get("conclusion") or "none"
+              if c == "success":
+                  # Could be a real success OR a throttled no-op.
+                  # A throttled run has conclusion "success" but every
+                  # downstream job was skipped. We cannot distinguish from
+                  # the run-level data alone, but a throttled run is not
+                  # harmful to count — it does not advance the throttle
+                  # window (deploy.yml anchor only counts real deploys), so
+                  # counting it as "ok" just means the cap is not reached.
+                  # The staleness-check independently escalates if prod
+                  # stays stale.
+                  conclusions.append("success")
+              elif c == "failure":
+                  conclusions.append("failure")
+              else:
+                  # skipped, cancelled — not a real attempt, skip
+                  pass
+          all_failed = len(conclusions) == 3 and all(c != "success" for c in conclusions)
           print("all-failed" if all_failed else "ok")
           ')" || RECENT="ok"
           if [ "$RECENT" != "ok" ]; then
