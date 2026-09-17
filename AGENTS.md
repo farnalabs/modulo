@@ -96,6 +96,19 @@ Rules:
 3. "Covered" is a claim about user-reachable behaviour, not about the existence of tests. A feature whose primary entry point is unreachable is not covered.
 4. A mocked or authenticated test client does not exercise the unauthenticated path — add the unauthenticated case explicitly.
 
+### Config-as-code is always the `modulo apply` CLI — never an in-product UI/API (2026-09-17)
+
+Modulo already ships a terraform-style declarative config tool: `Repos/modulo/backend/src/modulo/cli/apply/` (`modulo apply -f config.yaml`, driven by `MODULO_URL`+`MODULO_API_KEY`, external to the product). It does name-based plan/diff/apply for `schemas`, `model_backends`, `pipelines`, `triggers` — canonical-hash change detection (`plan.py`), dependency-ordered execution (`executor.py`), a read-only `--diff` drift mode for CI gating. This is the ONE place declarative/GitOps-style config management lives in Modulo.
+
+**Rule: any feature that wants a propose/apply/diff/drift "config-as-code" workflow extends `cli/apply/` with a new entity kind. It must never be built as in-product REST endpoints or UI.** Modulo governs executions, not change-management ceremony — a git-style authoring workflow (propose → diff → apply → drift) is exactly the kind of business-logic-shaped feature the product's users/CLI should own, not something baked into the app itself.
+
+**We already broke this rule once.** `guardrail_config.py` + `guardrails/config.py` (FAR-219 T3) independently reinvent the same concepts from scratch as in-product endpoints: `POST /api/v1/guardrails/config/{propose,apply,reject}` + `GET .../drift`, with their own `hash_config_set()`, `diff_config_sets()`, and pin/status machinery — a parallel, duplicate implementation of what `cli/apply/plan.py`'s `canonical_hash()` + `executor.py` + `drift.py` already do generically. Nobody connected the two because they were built in different sessions without checking for an existing declarative-config surface first.
+
+Rules going forward:
+1. Before building any propose/apply/diff/drift/pin workflow for a new entity, check `Repos/modulo/backend/src/modulo/cli/apply/` first — the pattern almost certainly already exists there.
+2. Extend it: add the entity to the YAML schema (`models.py`), a new `KIND_*` + view function in `plan.py`, an `*_apply.py` executor module (mirroring `pipeline_apply.py`/`trigger_apply.py`), never a new REST propose/apply surface.
+3. The guardrail config-as-code REST endpoints are a known, standing violation of this rule — tracked for migration into `cli/apply/` (fold guardrails in as `entities.guardrails`) rather than left to accumulate a third parallel implementation.
+
 ### Semgrep cannot run on Windows via pip — fail-open in run_semgrep.py (2026-09-16)
 
 The semgrep pip package on Windows ships a Linux ELF `semgrep-core` binary and a Python entry-point script that imports the Unix-only `resource` module. Neither works on Windows: the bare `semgrep` command has no `.exe` wrapper (so `uv run semgrep` fails with "Failed to spawn"), and `python -m semgrep` is a dead stub (prints deprecation warning, exits 2). This caused the pre-commit hook chain to abort on every Windows commit touching `backend/src/`, pushing agents toward `--no-verify` — which also bypasses gitleaks.
