@@ -12,6 +12,8 @@ org.settings_json → SystemConfig → default resolution chain:
     SQLAlchemyError propagation (never fabricate "paused").
   * ``ensure_triggers_resumable`` — raises ``TriggersPausedError`` when paused,
     no-op when active, and lets read failures propagate untouched.
+  * ``resolve_schema_validator_mode`` — FAR-899 effective-setting resolution with
+    env-var seed fallback and invalid-value coercion.
 
 Mock/fake based — no Postgres.
 """
@@ -28,6 +30,7 @@ from modulo.db.settings_resolver import (
     get_effective_setting,
     org_is_paused,
     org_row_is_paused,
+    resolve_schema_validator_mode,
 )
 
 _ORG_ID = uuid.uuid4()
@@ -273,3 +276,104 @@ class TestEnsureTriggersResumable:
             )
             with pytest.raises(SQLAlchemyError):
                 await ensure_triggers_resumable(session, _ORG_ID)
+
+
+# ---------------------------------------------------------------------------
+# resolve_schema_validator_mode — FAR-899 effective-setting resolution
+# ---------------------------------------------------------------------------
+
+
+class TestResolveSchemaValidatorMode:
+    """Tests for the single-source-of-truth schema validator mode resolver.
+
+    Verifies:
+    (a) runtime setting wins over env var when one exists
+    (b) env var applies only when no runtime setting exists
+    (c) invalid values resolve to "lenient"
+    """
+
+    async def test_runtime_org_setting_wins_over_env_var(self) -> None:
+        """When the org has ``schema_validator_mode`` in settings_json, it wins
+        over the env var."""
+        session = AsyncMock()
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(
+                "modulo.db.settings_resolver.get_organisation",
+                AsyncMock(return_value=_Org({"schema_validator_mode": "strict"})),
+            )
+            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+            assert await resolve_schema_validator_mode(session, _ORG_ID) == "strict"
+
+    async def test_system_config_wins_over_env_var(self) -> None:
+        """When system_config has the key set, it wins over the env var."""
+        session = AsyncMock()
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
+            m.setattr(
+                "modulo.db.settings_resolver.get_config",
+                AsyncMock(return_value=MagicMock(value="strict")),
+            )
+            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+            assert await resolve_schema_validator_mode(session, _ORG_ID) == "strict"
+
+    async def test_env_var_applies_when_no_runtime_setting(self) -> None:
+        """When neither org nor system_config has the key, the env var value is
+        used as the first-boot seed."""
+        session = AsyncMock()
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
+            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+            assert await resolve_schema_validator_mode(session, _ORG_ID) == "strict"
+
+    async def test_defaults_to_lenient_when_nothing_set(self) -> None:
+        """When no runtime setting AND no env var, defaults to 'lenient'."""
+        session = AsyncMock()
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
+            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.delenv("MODULO_SCHEMA_VALIDATOR_MODE", raising=False)
+            assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"
+
+    async def test_invalid_runtime_value_coerces_to_lenient(self) -> None:
+        """An invalid value in the DB coerces to 'lenient'."""
+        session = AsyncMock()
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(
+                "modulo.db.settings_resolver.get_organisation",
+                AsyncMock(return_value=_Org({"schema_validator_mode": "bogus"})),
+            )
+            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"
+
+    async def test_invalid_env_var_coerces_to_lenient(self) -> None:
+        """An invalid env var value with no DB setting coerces to 'lenient'."""
+        session = AsyncMock()
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
+            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "BOGUS")
+            assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"
+
+    async def test_none_org_id_resolves_from_env(self) -> None:
+        """When org_id is None, the resolver skips org lookup and falls to
+        system_config then env var."""
+        session = AsyncMock()
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=None))
+            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+            assert await resolve_schema_validator_mode(session, None) == "strict"
+
+    async def test_env_var_does_not_override_runtime(self) -> None:
+        """Env var set to 'strict' but runtime has 'lenient' — runtime wins."""
+        session = AsyncMock()
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(
+                "modulo.db.settings_resolver.get_organisation",
+                AsyncMock(return_value=_Org({"schema_validator_mode": "lenient"})),
+            )
+            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+            assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"

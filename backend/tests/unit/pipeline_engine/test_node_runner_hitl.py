@@ -199,6 +199,8 @@ async def test_manual_node_resume_with_output():
 
 
 async def test_manual_node_resume_validates_required_fields():
+    """Graduated lenient mode: 'required' violations raise even in lenient
+    (pre-existing enforcement contract).  No monkeypatch needed."""
     node_def = {
         "id": "manual-node-2",
         "node_type": "manual",
@@ -206,7 +208,7 @@ async def test_manual_node_resume_validates_required_fields():
     }
     node_fn = make_manual_node_fn(node_def)
 
-    with pytest.raises(ValueError, match="missing required field"):
+    with pytest.raises(ValueError, match="'body' is a required property"):
         await node_fn(
             {
                 "artifacts": [],

@@ -2621,7 +2621,11 @@ async def test_output_read_failure_still_kills_sandbox():
 
 async def test_schema_validation_failure_still_kills_sandbox():
     """A schema-rejected output raises the retryable SandboxNodeFailedError AND
-    the sandbox is still killed in the finally block (FAR-488b / FAR-780)."""
+    the sandbox is still killed in the finally block (FAR-488b / FAR-780).
+
+    Graduated lenient mode: 'required' violations raise even in lenient
+    (pre-existing enforcement contract).  No monkeypatch needed.
+    """
     node_def = _base_node_def(timeout_seconds=30)
     node_def["output_schema_json"] = {"required": ["status", "summary"]}
     fn = make_sandbox_agent_fn(node_def)
@@ -2799,7 +2803,11 @@ async def test_schema_validation_summary_names_missing_field():
     """FAR-487: the schema-rejection message names the rejected field so an
     operator can align the agent's output shape with the schema (no schema
     loosening). FAR-780: the schema-rejected output RAISES retryably rather
-    than returning a completed-node envelope."""
+    than returning a completed-node envelope.
+
+    Graduated lenient mode: 'required' violations raise even in lenient
+    (pre-existing enforcement contract).  No monkeypatch needed.
+    """
     node_def = _base_node_def(timeout_seconds=30)
     node_def["output_schema_json"] = {"required": ["status", "summary"]}
     fn = make_sandbox_agent_fn(node_def)
@@ -2822,7 +2830,11 @@ async def test_schema_validation_missing_pr_url_raises_retryable():
     re-dispatches the node in a fresh sandbox — instead of returning the
     synthetic ``status="failed"`` envelope (modulo_synthetic_failure=True) that
     completed the node non-retryably and eval-blocked the run
-    (``EvalBlockedError`` is a never-retryable control-flow fault)."""
+    (``EvalBlockedError`` is a never-retryable control-flow fault).
+
+    Graduated lenient mode: 'required' violations raise even in lenient
+    (pre-existing enforcement contract).  No monkeypatch needed.
+    """
     from modulo.core.pipeline_engine import runtime_retry
 
     node_def = _base_node_def(timeout_seconds=30)

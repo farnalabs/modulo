@@ -893,6 +893,7 @@ async def _read_and_validate_output(
     sandbox_mode: str,
     script_lease_claimed: bool,
     output_schema_json: Any,
+    schema_validator_mode: str = "lenient",
 ) -> Any:
     """Read output.json from the workspace, parse it, and validate against schema.
 
@@ -948,7 +949,9 @@ async def _read_and_validate_output(
 
     if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
         try:
-            _validate_against_schema(output_json, output_schema_json)
+            # FAR-899: honour the operator-toggled schema validator mode
+            # (resolved by _sandbox_agent_impl and threaded through the config).
+            _validate_against_schema(output_json, output_schema_json, mode=schema_validator_mode)
         except ValueError as schema_exc:
             _log.exception(
                 "sandbox_agent.runner.schema_validation_failed",
@@ -1143,6 +1146,10 @@ async def run_bundled_runner_node(
     single_sandbox_node = config.single_sandbox_node
     loop_intercept = config.loop_intercept_config
     workspace_inputs: list[dict[str, Any]] = getattr(config, "workspace_inputs", None) or []
+    # FAR-899: schema validator mode resolved by the async caller
+    # (_sandbox_agent_impl) and threaded through the config. Defaults to
+    # "lenient" when unset (e.g. direct callers / tests).
+    schema_validator_mode: str = getattr(config, "schema_validator_mode", "lenient")
 
     # FAR-800 follow-up: the Bundled Runner path does NOT yet support managed
     # workspace inputs (no host-side ref resolution, no in-workspace clone
@@ -1343,6 +1350,7 @@ async def run_bundled_runner_node(
             sandbox_mode=sandbox_mode,
             script_lease_claimed=script_lease_claimed,
             output_schema_json=output_schema_json,
+            schema_validator_mode=schema_validator_mode,
         )
 
         # FAR-792: redact BEFORE truncation so credential-scrubbing sees the

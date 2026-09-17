@@ -59,6 +59,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
+from dataclasses import replace as _dc_replace
 from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard
@@ -2800,6 +2801,66 @@ def _parse_uuid_opt(value: Any) -> uuid.UUID | None:
         return None
 
 
+# FIX E: mode-resolution helper — single source of truth, replaces 3 copy-pasted blocks
+_SCHEMA_MODE_CACHE: dict[str, str] = {}  # last-known-good cache per org
+# FAR-899: bound the mode-resolution DB read (3s — a hung DB must fail open to
+# the last-known-good cache / env / default, never hang the node hot path).
+_SCHEMA_MODE_RESOLVE_TIMEOUT = 3.0
+
+
+async def _resolve_schema_validator_mode(
+    state: dict[str, Any],
+    *,
+    session_factory: Any | None = None,
+    node_id: str = "",
+) -> str:
+    """Resolve schema_validator_mode from the effective-setting store.
+
+    Resolution order: DB effective-setting store → last-known-good cache →
+    env var → "lenient". On resolver failure, emits ERROR-level log and a
+    distinguishable telemetry marker, then falls through to cache/env/default.
+
+    Returns:
+        "lenient" or "strict".
+    """
+    # Fast path: no session factory → env/default
+    if session_factory is None:
+        return os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+
+    _org_raw = state.get("_org_id")
+    _org_uuid = _parse_uuid_opt(_org_raw)
+    if _org_uuid is None:
+        return os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+
+    from modulo.db.settings_resolver import resolve_schema_validator_mode
+
+    try:
+        async with session_factory() as _sess, _sess.begin():
+            mode = await asyncio.wait_for(
+                resolve_schema_validator_mode(_sess, _org_uuid),
+                timeout=_SCHEMA_MODE_RESOLVE_TIMEOUT,
+            )
+    except Exception:
+        _org_key = str(_org_uuid)
+        cached = _SCHEMA_MODE_CACHE.get(_org_key)
+        _log.error(
+            "schema_validator_mode.resolve_failed",
+            extra={
+                "node_id": node_id,
+                "org_id": _org_key,
+                "last_known_good": cached,
+                "fallback": "lenient",
+            },
+            exc_info=True,
+        )
+        # Return cached value if available, else env/default
+        return cached or os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+    else:
+        # Cache the resolved value as last-known-good
+        _SCHEMA_MODE_CACHE[str(_org_uuid)] = mode
+        return mode
+
+
 async def _run_conformance_gate(
     state: dict[str, Any],
     *,
@@ -3290,10 +3351,33 @@ def _finalize_node_result(
     output_data: Any,
     output_schema_json: dict[str, Any] | None,
     routing_mode: str | None,
+    *,
+    mode: str = "lenient",
+    schema_id: str = "unknown",
+    schema_version: int = 0,
+    _repair_invoke_fn: Any | None = None,
 ) -> dict[str, Any]:
     """Validate schema, build the node artifact result, and surface a routed hop."""
-    if isinstance(output_schema_json, dict) and isinstance(output_data, dict):
-        _validate_against_schema(output_data, output_schema_json)
+    if isinstance(output_schema_json, dict) and output_schema_json:
+        outcome, errors, effective_output = _validate_against_schema(
+            output_data,
+            output_schema_json,
+            mode=mode,
+            schema_id=schema_id,
+            schema_version=schema_version,
+            _repair_invoke_fn=_repair_invoke_fn,
+        )
+        # A successful strict-mode repair replaces the schema-invalid payload;
+        # otherwise effective_output IS output_data. Never emit a payload that
+        # failed the declared contract after repair reported success.
+        output_data = effective_output
+        # Log outcome for observability
+        # TODO(FAR-902): persist the outcome
+        if errors:
+            _log.info(
+                "schema_validation.outcome",
+                extra={"node_id": node_id, "outcome": outcome, "error_count": len(errors)},
+            )
 
     result: dict[str, Any] = {
         "artifacts": [{"node_id": node_id, "status": "completed", "output": output_data}],
@@ -3456,7 +3540,62 @@ def make_node_fn(
             output_schema_json=output_schema_json,
         )
 
-        return _finalize_node_result(node_id, output_data, output_schema_json, routing_mode)
+        # FAR-899: schema validator mode — resolved from the effective-setting
+        # store (org.settings_json → system_config → env var → "lenient").
+        # FIX E: single helper replaces 3 copy-pasted blocks.
+        _ctx = get_conformance_ctx()
+        _sf = _ctx[0] if _ctx is not None else None
+        _schema_validator_mode = await _resolve_schema_validator_mode(
+            state,
+            session_factory=_sf,
+            node_id=node_id,
+        )
+
+        # FIX B: create a repair invoke callable so the repair loop is reachable.
+        # The standard agent path has access to the ModelBackendHub and can
+        # re-invoke the same backend with the repair prompt. ``run_repair_loop``
+        # calls this SYNCHRONOUSLY while the node coroutine is already on the
+        # event loop, so bridge to the async backend with ``_run_coroutine_sync``
+        # (the same worker-loop bridge the LLM-judge callable uses). An async
+        # repair fn here would hand ``json.loads`` an un-awaited coroutine and
+        # crash the node instead of repairing it.
+        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+        _repair_hub = get_model_backend_hub()
+        # FAR-899 repair: parse the backend id safely — non-UUID backend ids
+        # (mock/stub/aliased backends, common in unit tests and some real
+        # graphs) must not crash the node.  When the id cannot be resolved
+        # to a UUID, skip the repair invoke entirely and let the node take
+        # the existing documented hard-fail path.
+        _repair_backend_id = _parse_uuid_opt(model_backend_id_str)
+
+        if _repair_backend_id is not None:
+
+            def _std_repair_invoke(prompt: str) -> str:
+                """Re-invoke the same model backend with the repair prompt."""
+                if _repair_hub is None:
+                    raise RuntimeError("ModelBackendHub not available for repair invoke")
+                _resp = _run_coroutine_sync(
+                    _invoke_backend(_repair_hub, _repair_backend_id, [HumanMessage(content=prompt)])
+                )
+                return _resp.content if hasattr(_resp, "content") else str(_resp)
+
+            _repair_fn: Any = _std_repair_invoke
+        else:
+            # Non-UUID backend id → repair invoke unavailable; strict-mode
+            # validation failures are terminal (the documented hard-fail path).
+            _repair_fn = None
+
+        return _finalize_node_result(
+            node_id,
+            output_data,
+            output_schema_json,
+            routing_mode,
+            mode=_schema_validator_mode,
+            schema_id=node_def.get("output_schema_id", "unknown"),
+            schema_version=node_def.get("output_schema_version", 0),
+            _repair_invoke_fn=_repair_fn,
+        )
 
     _node.__name__ = f"node_{node_id}"
     return _node
@@ -4371,6 +4510,11 @@ def make_hitl_gate_fn(
 def _manual_resume_output(
     decision: dict[str, Any],
     output_schema_json: dict[str, Any] | None,
+    *,
+    mode: str = "lenient",
+    schema_id: str = "unknown",
+    schema_version: int = 0,
+    _repair_invoke_fn: Any | None = None,
 ) -> dict[str, Any] | None:
     """Manual output carried by a decision stamped for THIS node, schema-validated.
 
@@ -4382,7 +4526,14 @@ def _manual_resume_output(
     resume_data = decision.get("output")
     manual_output: dict[str, Any] | None = resume_data if isinstance(resume_data, dict) else None
     if output_schema_json and manual_output is not None:
-        _validate_against_schema(manual_output, output_schema_json)
+        _validate_against_schema(
+            manual_output,
+            output_schema_json,
+            mode=mode,
+            schema_id=schema_id,
+            schema_version=schema_version,
+            _repair_invoke_fn=_repair_invoke_fn,
+        )
     return manual_output
 
 
@@ -4424,7 +4575,28 @@ def make_manual_node_fn(
         decision = state.get("_hitl_decision")
         stamped_gate = decision.get("gate_id") if isinstance(decision, dict) else None
         if isinstance(decision, dict) and stamped_gate == node_id:
-            manual_output = _manual_resume_output(decision, output_schema_json)
+            # FAR-899: schema validator mode — resolved from the effective-
+            # setting store (org.settings_json → system_config → env var →
+            # "lenient").  FIX E: single helper replaces 3 copy-pasted blocks.
+            _mctx = get_conformance_ctx()
+            _msf = _mctx[0] if _mctx is not None else None
+            _schema_validator_mode = await _resolve_schema_validator_mode(
+                state,
+                session_factory=_msf,
+                node_id=node_id,
+            )
+
+            # FIX B: manual path has no model backend — repair invoke is
+            # explicitly None. Strict-mode validation failures are terminal
+            # with no auto-repair (the human provides the output, not a model).
+            manual_output = _manual_resume_output(
+                decision,
+                output_schema_json,
+                mode=_schema_validator_mode,
+                schema_id=node_def.get("output_schema_id", "unknown"),
+                schema_version=node_def.get("output_schema_version", 0),
+                _repair_invoke_fn=None,  # FIX B: no model backend for manual nodes
+            )
 
             _log.info(
                 "manual_node.completed",
@@ -6225,6 +6397,14 @@ class _SandboxNodeConfig:
     # definition (url, dest, ref, connector_instance_id).  Resolved host-side
     # before sandbox creation, provisioned inside the sandbox.
     workspace_inputs: list[dict[str, Any]]
+    # FAR-899: schema validator mode for output validation.
+    # Resolved at runtime from the effective-setting store via
+    # resolve_schema_validator_mode(); the env var MODULO_SCHEMA_VALIDATOR_MODE
+    # is a first-boot seed only.  Default: "lenient".
+    schema_validator_mode: str = "lenient"
+    # FAR-899: schema identifier and version for logging/repair.
+    schema_id: str = "unknown"
+    schema_version: int = 0
 
 
 def _check_wallclock_budget_pre_run(
@@ -6770,6 +6950,18 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     session_factory = config.session_factory
     single_sandbox_node = config.single_sandbox_node
     workspace_inputs = config.workspace_inputs
+    schema_id = config.schema_id
+    schema_version = config.schema_version
+
+    # FAR-899: resolve schema_validator_mode from the effective-setting store
+    # (org.settings_json → system_config → env var → "lenient") instead of
+    # reading the env var directly.  FIX E: single helper replaces 3
+    # copy-pasted blocks.
+    schema_validator_mode = await _resolve_schema_validator_mode(
+        state,
+        session_factory=config.session_factory,
+        node_id=node_id,
+    )
 
     # FAR-582: the sandbox watchdog + artifact writer are created during
     # provisioning (after the sandbox is created). Bind them up-front so the
@@ -6856,7 +7048,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         if _route.provider_type == "runner_docker":
             from modulo.core.bundled_runner.runner_dispatch import run_bundled_runner_node
 
-            return await run_bundled_runner_node(state, config, _route)
+            # FAR-899: thread the resolved mode into the Bundled Runner path so
+            # its output-schema gate honours the operator toggle (the config is
+            # frozen, so replace rather than mutate).
+            return await run_bundled_runner_node(
+                state,
+                _dc_replace(config, schema_validator_mode=schema_validator_mode),
+                _route,
+            )
         _resolved_provider = RUNNER_PROVIDER_E2B
         if _route.provider_type == "e2b":
             validate_e2b_dispatch_timeout(sandbox_timeout)
@@ -8325,9 +8524,34 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 },
             )
 
-        if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
+        # FIX C: validate ANY output against non-empty schema (not just dicts)
+        if isinstance(output_schema_json, dict) and output_schema_json:
+            # FIX B: sandbox path — no synchronous repair invoke available
+            # (run_repair_loop calls invoke synchronously; sandbox APIs are
+            # async). Strict-mode validation failures are terminal with no
+            # auto-repair — documented hard-fail for this path.
+            _sandbox_repair_invoke_fn = None
+
             try:
-                _validate_against_schema(output_json, output_schema_json)
+                # FAR-899: use real JSON Schema validation with mode support
+                # FIX H: capture the returned (outcome, errors, data) tuple —
+                # the sandbox path passes no repair fn, so the third element is
+                # always the original output_json (no repair to apply).
+                _val_outcome, _val_errors, _ = _validate_against_schema(
+                    output_json,
+                    output_schema_json,
+                    mode=schema_validator_mode,
+                    schema_id=schema_id,
+                    schema_version=schema_version,
+                    _repair_invoke_fn=_sandbox_repair_invoke_fn,
+                )
+                # FIX H: log the validation outcome for observability
+                # TODO(FAR-902): persist the outcome
+                if _val_errors:
+                    _log.info(
+                        "schema_validation.outcome",
+                        extra={"node_id": node_id, "outcome": _val_outcome, "error_count": len(_val_errors)},
+                    )
             except ValueError as _schema_exc:
                 _log.exception(
                     "sandbox_agent.schema_validation_failed",
@@ -9163,6 +9387,15 @@ def _build_sandbox_node_config(
         except LoopInterceptConfigError as exc:
             raise ValueError(f"sandbox_agent node '{node_id}' has malformed loop_intercept config: {exc}") from exc
 
+    # FIX E: schema_validator_mode — env-var seed removed; the async caller
+    # (_sandbox_agent_impl) resolves the authoritative value via
+    # _resolve_schema_validator_mode() so a DB-stored runtime value always wins.
+    # Default "lenient" is set in the _SandboxNodeConfig dataclass.
+
+    # Schema identifier and version for logging/repair
+    _schema_id = node_def.get("output_schema_id", "unknown")
+    _schema_version = node_def.get("output_schema_version", 0)
+
     return _SandboxNodeConfig(
         node_id=node_id,
         node_def=node_def,
@@ -9192,6 +9425,8 @@ def _build_sandbox_node_config(
         session_factory=session_factory,
         single_sandbox_node=single_sandbox_node,
         workspace_inputs=node_def.get("workspace_inputs") or [],
+        schema_id=_schema_id,
+        schema_version=_schema_version,
     )
 
 
@@ -9289,15 +9524,106 @@ def make_sandbox_agent_fn(
     return _sandbox_agent
 
 
-def _validate_against_schema(data: dict[str, Any], schema: dict[str, Any]) -> None:
-    """Lightweight field-presence validation against a JSON schema.
+def _validate_against_schema(
+    data: Any,
+    schema: dict[str, Any],
+    *,
+    mode: str = "lenient",
+    schema_id: str = "unknown",
+    schema_version: int = 0,
+    repair_budget_config: Any = None,
+    _repair_invoke_fn: Any | None = None,
+) -> tuple[str, list[dict[str, Any]], Any]:
+    """Validate *data* against *schema* using Draft202012Validator.
 
-    Raises :class:`OutputSchemaValidationError` on first missing required field
-    (a ValueError subclass the executor maps to the domain-specific
-    ``schema_validation_failure`` error code). Full JSON Schema validation (via
-    a library like `jsonschema`) is deferred to v1.
+    FAR-899: thin mode-switching dispatcher. Repair orchestration lives in
+    ``schema_repair.run_repair_loop``; error-summary formatting in
+    ``schema_repair.format_error_summary``.
+
+    Returns:
+        ``(outcome, errors, effective_data)`` where outcome is a
+        SchemaValidationOutcome value, errors is a list of structured error
+        dicts, and ``effective_data`` is the REPAIRED payload when strict-mode
+        repair succeeds (PASSED_AFTER_REPAIR) and the ORIGINAL *data*
+        otherwise — so a caller never emits a schema-invalid payload after a
+        successful repair.
+
+    Raises:
+        OutputSchemaValidationError: In strict mode when validation fails
+            and repair is exhausted or not applicable.
     """
-    required: list[str] = schema.get("required", [])
-    for field in required:
-        if field not in data:
-            raise OutputSchemaValidationError(f"Manual output missing required field {field!r} (required: {required})")
+    from modulo.core.pipeline_engine.schema_repair import (
+        SchemaValidationOutcome,
+        format_error_summary,
+        get_repair_budget,
+        run_repair_loop,
+        validate_against_schema,
+    )
+
+    # No schema → nothing to validate
+    if not isinstance(schema, dict) or not schema:
+        return SchemaValidationOutcome.NO_SCHEMA.value, [], data
+
+    # Run validation
+    is_valid, errors = validate_against_schema(data, schema)
+
+    if is_valid:
+        return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, [], data
+
+    # Validation failed — handle based on mode
+    if mode == "lenient":
+        # Graduated validation (FAR-899 reviewer fix — option B):
+        # Split enforcement by constraint provenance:
+        #   - "required" (the pre-existing enforcement that existed before
+        #     FAR-899) MUST STILL RAISE the same retryable error as before.
+        #     This preserves the pre-existing contract exactly: pipelines that
+        #     used to fail on a bad schema still fail on missing required fields.
+        #   - All other constraints (type, enum, const, pattern, format,
+        #     bounds, anyOf/oneOf, etc.) are NEWLY-ADDED strictness; under
+        #     lenient they are WARN-only so operators can stage the new
+        #     strictness without breaking existing pipelines.
+        required_errors = [e for e in errors if e.get("constraint") == "required"]
+        if required_errors:
+            # Pre-existing enforcement: required-field violations raise even
+            # in lenient mode, preserving the pre-FAR-899 contract exactly.
+            raise OutputSchemaValidationError(
+                f"Schema validation failed (required fields missing): "
+                f"(schema={schema_id} v{schema_version}): "
+                f"{format_error_summary(required_errors)}"
+            )
+        # New-constraint violations (non-required) are warn-only under lenient.
+        _log.warning(
+            "schema_validation.lenient_bypass",
+            extra={
+                "schema_id": schema_id,
+                "error_count": len(errors),
+                "first_error": errors[0] if errors else None,
+            },
+        )
+        return SchemaValidationOutcome.LENIENT_VALIDATION_BYPASSED.value, errors, data
+
+    # Strict mode: delegate repair orchestration to schema_repair.run_repair_loop
+    budget = get_repair_budget(repair_budget_config)
+    outcome_val, final_errors, effective_data = run_repair_loop(
+        data,
+        schema,
+        budget=budget,
+        schema_id=schema_id,
+        schema_version=schema_version,
+        repair_invoke_fn=_repair_invoke_fn,
+    )
+
+    # Terminal failure → raise
+    if outcome_val in (
+        SchemaValidationOutcome.REPAIR_EXHAUSTED.value,
+        SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON.value,
+        SchemaValidationOutcome.NATIVE_DECODE_FAILED.value,
+    ):
+        raise OutputSchemaValidationError(
+            f"Strict schema validation failed ({outcome_val}): "
+            f"(schema={schema_id} v{schema_version}): "
+            f"{format_error_summary(final_errors)}"
+        )
+
+    # PASSED_AFTER_REPAIR or other success
+    return outcome_val, final_errors, effective_data

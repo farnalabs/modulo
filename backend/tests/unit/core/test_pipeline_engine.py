@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.decorator import set_model_backend_hub
@@ -210,21 +210,38 @@ class TestOutputSchemaValidation:
     """Manual/agent node output validation raises a domain-specific error."""
 
     def test_missing_required_field_raises_domain_error(self) -> None:
-        with pytest.raises(OutputSchemaValidationError, match="missing required field 'name'"):
+        # Graduated lenient mode: "required" violations raise even in lenient
+        # (pre-existing enforcement contract).  The error names the specific
+        # missing field ("name"), not just the constraint keyword.
+        with pytest.raises(OutputSchemaValidationError, match="'name' is a required property"):
             _validate_against_schema({"id": "1"}, {"required": ["name"]})
 
     def test_valid_output_passes(self) -> None:
         schema = {"required": ["name", "status"]}
-        assert _validate_against_schema({"name": "x", "status": "done"}, schema) is None
+        outcome, errors, _ = _validate_against_schema({"name": "x", "status": "done"}, schema)
+        assert outcome == "native_decoded_and_validated"
+        assert errors == []
 
     def test_error_is_a_value_error_subclass(self) -> None:
-        with pytest.raises(ValueError, match="missing required field 'x'"):
+        # Graduated: required violations raise ValueError in lenient mode.
+        with pytest.raises(ValueError, match="'x' is a required property"):
             _validate_against_schema({}, {"required": ["x"]})
 
     def test_schema_validation_failure_maps_to_contract_schema(self) -> None:
         from modulo.core.pipeline_engine.error_codes import map_legacy_code
 
         assert map_legacy_code("schema_validation_failure") == "contract.schema"
+
+    def test_non_required_constraint_warns_in_lenient(self) -> None:
+        """New-constraint violations (non-required) are warn-only under lenient."""
+        outcome, errors, _ = _validate_against_schema(
+            {"name": 42},
+            {"type": "object", "properties": {"name": {"type": "string"}}},
+        )
+        # Should NOT raise — type mismatch is a new constraint, warn-only in lenient.
+        assert outcome == "lenient_validation_bypassed"
+        assert len(errors) == 1
+        assert errors[0]["constraint"] == "type"
 
 
 class _AsyncStubAdapter:
@@ -349,3 +366,73 @@ class TestRunContextPromptTemplates:
         # the state.run_context view.
         assert "tier=tier-2" in captured["prompt"]
         assert "leak=X" not in captured["prompt"]
+
+
+class _SequenceAdapter:
+    """Async backend fake returning queued responses in call order.
+
+    ``make_node_fn``'s repair hook re-invokes the backend through
+    ``_run_coroutine_sync``; this adapter proves the async backend is really
+    reached (not a sync fake) and records each prompt.
+    """
+
+    supports_native_structured_output = False
+
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = list(responses)
+        self.prompts: list[str] = []
+
+    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+        self.prompts.append(str(messages[-1].content))
+        return AIMessage(content=self._responses.pop(0))
+
+    @property
+    def backend_id(self) -> str:
+        return "stub"
+
+
+class TestAgentRepairWiring:
+    """FAR-899: strict-mode schema repair must reach the async backend.
+
+    Regression for the reviewer finding that ``_std_repair_invoke`` was an
+    ``async def`` invoked synchronously by ``run_repair_loop`` — the repair
+    loop received an un-awaited coroutine, ``json.loads`` raised ``TypeError``,
+    and the node crashed instead of repairing. The sync bridge must actually
+    run the coroutine and the corrected output must be returned.
+    """
+
+    async def test_strict_failure_repairs_through_real_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Repair loop is a strict-only feature: graduated lenient raises on
+        # "required" violations without reaching repair.  This test deliberately
+        # forces strict mode to exercise the repair path.
+        monkeypatch.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+        node_id = str(uuid.uuid4())
+        backend_id = uuid.uuid4()
+        node_def = {
+            "id": node_id,
+            "prompt_template": "produce output",
+            "model_backend_id": str(backend_id),
+            "output_schema_json": {"required": ["name"]},
+            "output_schema_id": "demo",
+            "output_schema_version": 1,
+        }
+        node_fn = make_node_fn(node_def, role="agent")
+
+        adapter = _SequenceAdapter([json.dumps({"wrong": True}), json.dumps({"name": "Alice"})])
+        hub = ModelBackendHub()
+        await hub.__aenter__()
+        hub.register(backend_id, adapter)
+        set_model_backend_hub(hub)
+
+        state: dict[str, Any] = {"run_context": {"input": {}}, "artifacts": []}
+        try:
+            result = await node_fn(state)
+        finally:
+            set_model_backend_hub(None)
+            await hub.__aexit__(None, None, None)
+
+        assert result["artifacts"][0]["status"] == "completed"
+        assert result["artifacts"][0]["output"] == {"name": "Alice"}
+        # Initial invoke + exactly one repair invoke through the async backend.
+        assert len(adapter.prompts) == 2
+        assert "Schema validation failed" in adapter.prompts[1]

@@ -908,7 +908,7 @@ def test_finalize_node_result_validates_schema_and_extracts_route():
 
 def test_finalize_node_result_schema_violation_raises():
     with pytest.raises(nr.OutputSchemaValidationError):
-        nr._finalize_node_result("n1", {"verdict": "ok"}, {"required": ["missing_field"]}, None)
+        nr._finalize_node_result("n1", {"verdict": "ok"}, {"required": ["missing_field"]}, None, mode="strict")
 
 
 # ---------------------------------------------------------------------------
@@ -2816,7 +2816,12 @@ async def test_sandbox_budget_killed_on_timeout_raises_script_budget_killed():
 async def test_sandbox_script_schema_violation_raises_script_invalid_output(monkeypatch: pytest.MonkeyPatch):
     """A script-mode output that parses but fails schema validation is a
     POST-CLAIM fault: the terminal ``ScriptInvalidOutputError`` (never
-    retryable), distinct from the shared retryable schema code."""
+    retryable), distinct from the shared retryable schema code.
+
+    Graduated lenient mode: 'required' violations raise even in lenient
+    (pre-existing enforcement contract).  No schema_validator_mode
+    monkeypatch needed.
+    """
     monkeypatch.setenv("MODULO_E2B_API_KEY", "k")
     fn = make_sandbox_agent_fn(_script_node_def(output_schema_json={"required": ["result"]}))
     sandbox = _make_sandbox_mock(output_json='{"other": 1}')
