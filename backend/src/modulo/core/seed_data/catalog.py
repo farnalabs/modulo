@@ -32,7 +32,7 @@ TIERS: list[dict[str, str | int | bool]] = [
 # Each flag's name/description/tier/depends_on is declared once in
 # _KNOWN_FLAGS; this list is generated automatically so the DB seed
 # catalog stays in sync without manual duplication.
-FLAGS: list[dict[str, str | None]] = [
+FLAGS: list[dict[str, str | list[str] | None]] = [
     {
         "name": flag.name,
         "description": flag.description,
