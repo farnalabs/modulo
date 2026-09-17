@@ -196,6 +196,12 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
+      # The "Close GitHub issues referenced by merged PRs" step runs
+      # `gh issue comment` / `gh issue close`, which need issues:write on
+      # GITHUB_TOKEN; without it every call 403s and the step silently
+      # fail-opens. Least privilege holds: this step only touches issues
+      # in this repo.
+      issues: write
     runs-on: ubicloud-standard-2
     steps:
       - name: Cancel stale stuck runs (self-healing)
@@ -1130,9 +1136,12 @@ jobs:
           echo "Candidate PRs for GitHub issue close: $CANDIDATES"
 
           # Closing-keyword regex: matches case-insensitive fixes/closes/resolves
-          # followed by optional whitespace and #<number>. The \b word boundary
-          # prevents matching inside words (e.g. "closesourced").
-          CLOSING_REGEX='[[:space:]]+(fixes|closes|resolves):?[[:space:]]+#[0-9]+'
+          # followed by optional whitespace and #<number>. Requiring start-of-line
+          # OR preceding whitespace before the keyword prevents matching inside
+          # words (e.g. "closesourced") while still matching the most natural
+          # placement - a title like "Closes #42" or a body line starting with
+          # "Fixes #94". grep -E is line-based, so ^ anchors per line.
+          CLOSING_REGEX='(^|[[:space:]]+)(fixes|closes|resolves):?[[:space:]]+#[0-9]+'
 
           for NUM in $CANDIDATES; do
             TITLE=$(gh pr view "$NUM" --json title --jq '.title' 2>/dev/null || echo "")
