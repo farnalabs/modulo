@@ -596,6 +596,7 @@ OWNED_PAGES = {
     ),
     "/settings/sso": (
         "frontend/src/views/SettingsSsoView.vue",
+        "frontend/src/components/SsoProviderForm.vue",
         "frontend/src/components/shared/JsonViewer.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
