@@ -47,14 +47,28 @@ jobs:
           # if the repo ever exceeds 200 open PRs this silently truncates and
           # conflicted PRs beyond the cap would go undetected for a cycle. Raise
           # the limit (or page) if modulo's open-PR count approaches this bound.
-          gh pr list --state open --limit 200 \
+          #
+          # --repo is load-bearing: this job has no actions/checkout step, so
+          # there is no git remote for `gh` to infer the repository from and
+          # every run died with `failed to run git: fatal: not a git repository`
+          # (all 31 scheduled runs red since the workflow landed). The other gh
+          # calls here are unaffected because they hit explicit
+          # /repos/farnalabs/modulo/... REST paths.
+          #
+          # The `|| GH_RC=$?` is a second safeguard: under `set -e` a bare
+          # non-zero `gh pr list` aborts the step before the fail-open guard
+          # below can run, so a transient API/token failure would be a hard red
+          # instead of the documented FAR-528 graceful skip. Capture the exit
+          # code instead of letting `set -e` fire.
+          GH_RC=0
+          gh pr list --repo farnalabs/modulo --state open --limit 200 \
             --json number,headRefName,mergeable,isDraft,labels \
-            > /tmp/open_prs.json 2>/tmp/gh_pr_list_stderr.txt
+            > /tmp/open_prs.json 2>/tmp/gh_pr_list_stderr.txt || GH_RC=$?
 
           # Validate the API call succeeded (fail open loudly, FAR-528)
-          if [ ! -s /tmp/open_prs.json ]; then
+          if [ "$GH_RC" -ne 0 ] || [ ! -s /tmp/open_prs.json ]; then
             ERR=$(cat /tmp/gh_pr_list_stderr.txt 2>/dev/null | head -c 500)
-            echo "::warning::Failed to fetch open PRs from GitHub API (empty response). Reconciler cannot run this cycle.${ERR:+$'\n'}gh pr list stderr: $ERR"
+            echo "::warning::Failed to fetch open PRs from GitHub API (rc=$GH_RC). Reconciler cannot run this cycle.${ERR:+$'\n'}gh pr list stderr: $ERR"
             echo "api_failed=true" >> "${GITHUB_OUTPUT:-/dev/null}"
             exit 0
           fi
