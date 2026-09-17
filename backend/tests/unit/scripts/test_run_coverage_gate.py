@@ -8,6 +8,7 @@ mocked so the tests are fast and offline.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -335,6 +336,37 @@ def test_evaluate_unmeasured_file_fails(tmp_path):
     assert result.skipped is False
     assert result.passed is False
     assert result.unmeasured_lines == 30
+
+
+# ---------------------------------------------------------------------------
+# Merge-base diff range
+# ---------------------------------------------------------------------------
+def test_changed_production_files_uses_merge_base_range():
+    """Regression: ``git diff`` must use the three-dot merge-base range.
+
+    diff-cover's ``GitDiffTool.diff_committed`` diffs ``<branch>...HEAD``.  If
+    the gate counts changed lines with a two-dot ``<branch> HEAD`` range
+    instead, every commit that landed on the base branch after the PR branched
+    is counted as a changed line that diff-cover never measures — producing a
+    bogus "N unmeasured lines" failure on a PR that touched no production files
+    (observed on PR #699: 31 phantom unmeasured JS lines).
+    """
+    captured: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        if "--name-only" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "frontend/src/foo.ts\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "+++ b/frontend/src/foo.ts\n+line one\n+line two\n", "")
+
+    with patch.object(mod.subprocess, "run", side_effect=fake_run):
+        files = mod._get_changed_production_files("origin/main", "JavaScript")
+
+    assert files == {"frontend/src/foo.ts": 2}
+    assert captured, "expected git diff invocations"
+    for cmd in captured:
+        assert "origin/main...HEAD" in cmd, cmd
+        assert "origin/main" not in cmd, cmd
 
 
 # ---------------------------------------------------------------------------

@@ -141,20 +141,38 @@ def _is_excluded(path: str) -> bool:
 def _get_changed_production_files(compare_branch: str, language: str) -> dict[str, int]:
     """Return {filepath: non_blank_line_count} for changed production files.
 
-    Uses ``git diff`` to find changed files, then counts non-blank added
-    lines in the diff hunks.  Excludes files matching the exclusion patterns.
-    Returns empty dict if git diff fails.
+    Uses ``git diff <compare_branch>...HEAD`` (three-dot / merge-base) to find
+    changed files, then counts non-blank added lines in the diff hunks.
+    Excludes files matching the exclusion patterns.  Returns empty dict if git
+    diff fails.
+
+    The three-dot range MUST match the one diff-cover uses internally
+    (``GitDiffTool.diff_committed`` defaults to ``<compare_branch>...HEAD``).  A
+    two-dot ``<compare_branch> HEAD`` range compares the tips instead, so every
+    commit that landed on the base branch after this branch diverged shows up as
+    a changed line that diff-cover never measures.  That inflates
+    ``changed_lines`` and fails the gate with a bogus "N unmeasured lines"
+    result even though the PR touched no production files at all.
     """
     if language == "Python":
-        diff_args = ["git", "diff", "--diff-filter=ACM", "--name-only", compare_branch, "--", "*.py"]
+        globs = ["*.py"]
     elif language == "JavaScript":
-        diff_args = ["git", "diff", "--diff-filter=ACM", "--name-only", compare_branch, "--",
-                      "*.ts", "*.tsx", "*.js", "*.jsx", "*.vue"]
+        globs = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.vue"]
     else:
         return {}
 
+    # Validate before it reaches subprocess (defense against argument
+    # injection), then widen to the merge-base range diff-cover uses.
     try:
-        result = subprocess.run(
+        safe_compare_branch = _validate_ref(compare_branch, "compare-branch")
+    except ValueError:
+        return {}
+    diff_range = f"{safe_compare_branch}...HEAD"
+
+    diff_args = ["git", "diff", "--diff-filter=ACM", "--name-only", diff_range, "--", *globs]
+
+    try:
+        result = subprocess.run(  # NOSONAR - diff_range is regex fullmatch-bounded by _validate_ref (rejects values starting with '-' and disallowed characters); subprocess has no shell, so no argument injection is reachable
             diff_args,
             capture_output=True,
             text=True,
@@ -172,9 +190,9 @@ def _get_changed_production_files(compare_branch: str, language: str) -> dict[st
         if not filepath or _is_excluded(filepath):
             continue
         # Count non-blank added lines in the diff for this file
-        file_diff_args = ["git", "diff", "--diff-filter=ACM", compare_branch, "--", filepath]
+        file_diff_args = ["git", "diff", "--diff-filter=ACM", diff_range, "--", filepath]
         try:
-            fd_result = subprocess.run(
+            fd_result = subprocess.run(  # NOSONAR - diff_range is regex fullmatch-bounded by _validate_ref (rejects values starting with '-' and disallowed characters); filepath comes from git stdout, not caller input; subprocess has no shell
                 file_diff_args,
                 capture_output=True,
                 text=True,
