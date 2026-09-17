@@ -253,7 +253,13 @@ def test_evaluate_below_threshold_fails(tmp_path):
     assert result.skipped is False
     assert result.passed is False
     assert result.actual_pct == 0.0
-    assert result.unmeasured_lines > 0
+    # src/calc.py is present in the report, so the gate scores it against its
+    # coverable changed lines (the single violation) rather than the raw 50
+    # non-blank changed lines.  There are no *unmeasured* lines — the one
+    # coverable line is simply uncovered.
+    assert result.changed_lines == 1
+    assert result.measured_lines == 1
+    assert result.unmeasured_lines == 0
 
 
 # ---------------------------------------------------------------------------
@@ -615,3 +621,76 @@ def test_normalize_js_report_does_not_escape_src_root(tmp_path):
     report.write_text("SF:../../../etc/passwd\n")
 
     assert mod._normalize_js_report(report, "frontend") is None
+
+
+# ---------------------------------------------------------------------------
+# Present-file denominator regression (PR #704)
+# ---------------------------------------------------------------------------
+def test_evaluate_present_file_scores_only_coverable_lines(tmp_path):
+    """A file present in the report is scored against its coverable changed
+    lines, not the raw non-blank changed-line count.
+
+    Regression: v8 never instruments static ``.vue`` template markup, so a
+    component whose executable lines are well covered failed the gate because
+    its template lines were counted as unmeasured 0% lines (observed on PR
+    #704: 31.2% effective coverage while SonarCloud reported 100% new-code
+    coverage).
+    """
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+
+    # 100 non-blank changed lines in the diff, but only 20 are coverable and 18
+    # of those are covered → 90% effective, not 18%.
+    json_present = {
+        "src_stats": {
+            "frontend/src/components/Foo.vue": {
+                "percent_covered": 90.0,
+                "covered_lines": list(range(1, 19)),
+                "violation_lines": [19, 20],
+            }
+        },
+        "total_num_lines": 20,
+        "total_num_violations": 2,
+        "total_percent_covered": 90.0,
+        "num_changed_lines": 100,
+    }
+    with (
+        patch.object(
+            mod,
+            "_get_changed_production_files",
+            return_value={"frontend/src/components/Foo.vue": 100},
+        ),
+        patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_90_STDOUT)),
+        patch.object(mod, "_get_diff_cover_json", return_value=json_present),
+    ):
+        result = mod.evaluate(
+            language="JavaScript",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+
+    assert result.passed is True
+    assert result.actual_pct == 90.0
+    assert result.changed_lines == 20
+    assert result.measured_lines == 20
+    assert result.unmeasured_lines == 0
+
+
+def test_excludes_repo_test_and_generated_paths():
+    """Exclusion patterns must cover this repo's real test/generated paths.
+
+    The generic ``tests/**`` globs did not match ``frontend/src/__tests__/**``
+    or ``frontend/tests/e2e/**``, so changed spec lines were counted as 0%
+    production coverage on PR #704.
+    """
+    for path in (
+        "frontend/src/__tests__/Foo.spec.ts",
+        "frontend/tests/e2e/foo.spec.ts",
+        "frontend/src/locales/en-US.js",
+        "frontend/src/lib/api/schema.ts",
+        "backend/tests/unit/scripts/test_run_coverage_gate.py",
+    ):
+        assert mod._is_excluded(path) is True, path
+
+    assert mod._is_excluded("frontend/src/components/variants/Foo.vue") is False
