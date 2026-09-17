@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 
 import EdgeConfigPanel from '../components/lifecycle-map/editor/EdgeConfigPanel.vue'
+import type { TriggerType } from '../types/lifecycleMap'
 
 /* ── Helper to mount with controlled props ────────────────────────────── */
 
@@ -80,7 +81,7 @@ describe('EdgeConfigPanel initial form sync', () => {
 
 describe('EdgeConfigPanel null/empty prop fallbacks', () => {
   it('defaults trigger_type to pipeline_completed when prop is null', async () => {
-    const wrapper = mountPanel({ trigger_type: null as unknown as string })
+    const wrapper = mountPanel({ trigger_type: null as unknown as TriggerType })
     await flushPromises()
     const vm = wrapper.vm as unknown as { form: { trigger_type: string } }
     expect(vm.form.trigger_type).toBe('pipeline_completed')
@@ -126,7 +127,7 @@ describe('EdgeConfigPanel emits', () => {
     await wrapper.setProps({ trigger_type: 'webhook', description: 'new desc' })
     await flushPromises()
 
-    const emitted = wrapper.emitted('update')!
+    const emitted = wrapper.emitted('update')! as Array<[string, unknown]>
     expect(emitted).toBeDefined()
 
     const fields = emitted.map(([field]: [string, unknown]) => field)
@@ -144,7 +145,7 @@ describe('EdgeConfigPanel emits', () => {
     await wrapper.setProps({ trigger_type: 'cron' })
     await flushPromises()
 
-    const emitted = wrapper.emitted('update')!
+    const emitted = wrapper.emitted('update')! as Array<[string, unknown]>
     const triggerUpdates = emitted.filter(([f]: [string, unknown]) => f === 'trigger_type')
     expect(triggerUpdates.length).toBeGreaterThan(0)
     expect(triggerUpdates[triggerUpdates.length - 1][1]).toBe('cron')
@@ -157,7 +158,7 @@ describe('EdgeConfigPanel emits', () => {
     await wrapper.setProps({ condition_expression: 'status == "ok"' })
     await flushPromises()
 
-    const emitted = wrapper.emitted('update')!
+    const emitted = wrapper.emitted('update')! as Array<[string, unknown]>
     const condUpdates = emitted.filter(([f]: [string, unknown]) => f === 'condition_expression')
     expect(condUpdates.length).toBeGreaterThan(0)
     // The last emission should be the new value
@@ -171,7 +172,7 @@ describe('EdgeConfigPanel emits', () => {
     await wrapper.setProps({ estimated_frequency: 'daily' })
     await flushPromises()
 
-    const emitted = wrapper.emitted('update')!
+    const emitted = wrapper.emitted('update')! as Array<[string, unknown]>
     const freqUpdates = emitted.filter(([f]: [string, unknown]) => f === 'estimated_frequency')
     expect(freqUpdates.length).toBeGreaterThan(0)
     expect(freqUpdates[freqUpdates.length - 1][1]).toBe('daily')
@@ -184,7 +185,7 @@ describe('EdgeConfigPanel emits', () => {
     await wrapper.setProps({ trigger_link: 'https://example.com' })
     await flushPromises()
 
-    const emitted = wrapper.emitted('update')!
+    const emitted = wrapper.emitted('update')! as Array<[string, unknown]>
     const linkUpdates = emitted.filter(([f]: [string, unknown]) => f === 'trigger_link')
     expect(linkUpdates.length).toBeGreaterThan(0)
     expect(linkUpdates[linkUpdates.length - 1][1]).toBe('https://example.com')

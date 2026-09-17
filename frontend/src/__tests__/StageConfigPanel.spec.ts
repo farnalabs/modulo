@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 
 import StageConfigPanel from '../components/lifecycle-map/editor/StageConfigPanel.vue'
+import type { StageType } from '../types/lifecycleMap'
 
 const pipelines = [
   { id: 'pipe-1', name: 'Deploy Pipeline', visibility: 'org', created_at: '2026-01-01T00:00:00Z' },
@@ -119,7 +120,7 @@ describe('StageConfigPanel null prop fallbacks', () => {
   })
 
   it('defaults stage_type to placeholder when null', async () => {
-    const wrapper = mountPanel({ stage_type: null as unknown as string })
+    const wrapper = mountPanel({ stage_type: null as unknown as StageType })
     await flushPromises()
     const vm = wrapper.vm as unknown as { form: { stage_type: string } }
     expect(vm.form.stage_type).toBe('placeholder')
@@ -158,7 +159,7 @@ describe('StageConfigPanel emits', () => {
     await wrapper.setProps({ name: 'Deploy', stage_type: 'external' })
     await flushPromises()
 
-    const emitted = wrapper.emitted('update')!
+    const emitted = wrapper.emitted('update')! as Array<[string, unknown]>
     expect(emitted).toBeDefined()
 
     const fields = emitted.map(([field]: [string, unknown]) => field)
@@ -177,7 +178,7 @@ describe('StageConfigPanel emits', () => {
     await wrapper.setProps({ stage_type: 'external' })
     await flushPromises()
 
-    const emitted = wrapper.emitted('update')!
+    const emitted = wrapper.emitted('update')! as Array<[string, unknown]>
     const typeUpdates = emitted.filter(([f]: [string, unknown]) => f === 'stage_type')
     expect(typeUpdates.length).toBeGreaterThan(0)
     expect(typeUpdates[typeUpdates.length - 1][1]).toBe('external')
@@ -190,7 +191,7 @@ describe('StageConfigPanel emits', () => {
     await wrapper.setProps({ external_url: 'https://example.com' })
     await flushPromises()
 
-    const emitted = wrapper.emitted('update')!
+    const emitted = wrapper.emitted('update')! as Array<[string, unknown]>
     const urlUpdates = emitted.filter(([f]: [string, unknown]) => f === 'external_url')
     expect(urlUpdates.length).toBeGreaterThan(0)
     expect(urlUpdates[urlUpdates.length - 1][1]).toBe('https://example.com')
@@ -203,7 +204,7 @@ describe('StageConfigPanel emits', () => {
     await wrapper.setProps({ owner: 'team-beta' })
     await flushPromises()
 
-    const emitted = wrapper.emitted('update')!
+    const emitted = wrapper.emitted('update')! as Array<[string, unknown]>
     const ownerUpdates = emitted.filter(([f]: [string, unknown]) => f === 'owner')
     expect(ownerUpdates.length).toBeGreaterThan(0)
     expect(ownerUpdates[ownerUpdates.length - 1][1]).toBe('team-beta')
