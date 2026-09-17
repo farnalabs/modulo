@@ -36,20 +36,42 @@ manage org-level licenses.
 - [x] Org-level license management: GET/PUT/DELETE on
       `/api/v1/admin/orgs/{org_id}/license` with validation via
       `parse_and_verify` (`admin_orgs.py`)
+- [x] GET `/api/v1/admin/orgs/{org_id}/license` resolves the effective org
+      license — the org's own `settings_json.license_key` when it verifies,
+      otherwise the system license; `has_license=false` only when neither
+      exists, and a missing org is 404. BDD: system_admin_orgs.feature
+      (org-key resolution, system fallback, invalid-stored-key fallback,
+      missing org)
+- [x] PUT `/api/v1/admin/orgs/{org_id}/license` verifies the key via
+      `parse_and_verify` (invalid key 422; missing org 404 before verification),
+      then writes it in one FOR-UPDATE transaction preserving pre-existing
+      settings keys. BDD: system_admin_orgs.feature
+- [x] DELETE `/api/v1/admin/orgs/{org_id}/license` clears the org key in the
+      same locked read-modify-write and returns `has_license=false`; a missing
+      org is 404. BDD: system_admin_orgs.feature
+- [x] License endpoints are role-gated via `require_target_org_role`:
+      GET needs `org.license.view` (operator), PUT/DELETE need
+      `org.license.manage` (admin); a regular org admin without the live role
+      receives 403 on all three. BDD: system_admin_orgs.feature
 - [x] Regular admin receives 403 on org creation and user creation in other orgs
       (`system_admin_orgs.feature`, `system_admin_users.feature`)
 
-## Known Gaps
-
-- No BDD for org-level license management (GET/PUT/DELETE on
-  `/api/v1/admin/orgs/{org_id}/license`); coverage is via unit tests.
-
 ## QA History
+- 2026-09-17: **improve-architecture (product-map walk)** — closed the "No BDD
+  for org-level license management" gap: added 10 license scenarios to
+  `system_admin_orgs.feature` (GET org-key resolution / system fallback /
+  invalid-stored-key fallback / missing-org 404; PUT valid-200 + invalid-422 +
+  missing-org 404; DELETE clears key + missing-org 404; and regular-admin 403
+  across GET/PUT/DELETE), driving the real `require_target_org_role` gate and
+  `admin_orgs._resolve_org_license` / `_verify_license_key` / locked
+  read-modify-write. Removed the tracked known gap.
+  Status: covered with no remaining known gaps.
+
 - 2026-09-17: **improve-architecture (product-map walk)** — closed the "No BDD
   for DELETE org" half of the `feat-system-orgs` BDD gap: added DELETE coverage
   to `system_admin_orgs.feature` (successful 204 delete, 404 for a missing org,
-  and 403 for a regular org admin). The narrower license-management BDD gap
-  remains tracked below.
+  and 403 for a regular org admin). The narrower license-management BDD gap was
+  subsequently closed by the 2026-09-17 license walk above.
 
 - 2026-09-12: **improve-architecture (product-map walk)** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
