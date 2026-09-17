@@ -30,14 +30,16 @@ with sensitive value masking.
       (`backend/tests/bdd/features/system_admin/system_admin_config.feature`)
 - [x] DELETE `/api/v1/system-admin/config/{key}` deletes a config entry; returns
       404 if not found
+      (`backend/tests/bdd/features/system_admin/system_admin_config.feature`)
 - [x] Regular admin receives 403 Forbidden on all system-config endpoints
       (`backend/tests/bdd/features/system_admin/system_admin_config.feature`)
 
-## Known Gaps
-
-- No BDD for DELETE system config; coverage is via unit tests.
-
 ## QA History
+- 2026-09-17: **improve-architecture (product-map walk)** — closed the last
+  `feat-system-config` BDD gap: added DELETE coverage to
+  `system_admin_config.feature` (successful 204 delete, 404 for an unknown key,
+  and 403 for a regular org admin), closing the "No BDD for DELETE system
+  config" known gap. Status: covered with no remaining known gaps.
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)

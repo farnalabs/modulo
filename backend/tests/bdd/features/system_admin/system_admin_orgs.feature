@@ -19,3 +19,21 @@ Feature: System Admin — Organisation Management
     And an organisation with slug "acme-corp" already exists
     When I attempt to create an organisation with slug "acme-corp"
     Then I receive a 409 Conflict error
+
+  Scenario: System admin deletes an org
+    Given I am authenticated as a system admin
+    And an organisation "acme-corp" exists
+    When I delete the organisation
+    Then the organisation is deleted
+
+  Scenario: Deleting a missing org returns not found
+    Given I am authenticated as a system admin
+    And an organisation "missing" exists
+    When I delete a missing organisation
+    Then I receive a 404 Not Found error
+
+  Scenario: Regular admin cannot delete an org
+    Given I am authenticated as an org admin
+    And an organisation "acme-corp" exists
+    When I attempt to delete the organisation
+    Then I receive a 403 Forbidden error

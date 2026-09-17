@@ -17,3 +17,18 @@ Feature: System Admin — Configuration Management
     Given I am authenticated as an org admin
     When I attempt to list system config
     Then I receive a 403 Forbidden error
+
+  Scenario: System admin deletes a config value
+    Given I am authenticated as a system admin
+    When I delete system config "default_plan"
+    Then the config entry is deleted
+
+  Scenario: Deleting an unknown config key returns not found
+    Given I am authenticated as a system admin
+    When I delete a missing config key "does_not_exist"
+    Then I receive a 404 Not Found error
+
+  Scenario: Regular admin cannot delete a config value
+    Given I am authenticated as an org admin
+    When I attempt to delete system config "default_plan"
+    Then I receive a 403 Forbidden error
