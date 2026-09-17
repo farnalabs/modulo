@@ -1672,3 +1672,42 @@ def test_run_foreground_shutdown_failure_during_error(monkeypatch: pytest.Monkey
     # Should still raise BootError (the original error, not a shutdown error)
     with pytest.raises(BootError, match="boom"):
         entry_module._run_foreground(tmp_path / "data", bin_dir=tmp_path, serve=None)
+
+
+class TestEnsureAppDatabaseSafety:
+    """FAR-922: CREATE DATABASE cannot bind the DB name, so the launcher must
+    validate APP_DB_NAME as a SQL identifier before interpolating it."""
+
+    def test_validate_sql_identifier_accepts_grammar_valid_names(self) -> None:
+        from modulo.launcher.entry import _validate_sql_identifier
+
+        assert _validate_sql_identifier("modulo", "APP_DB_NAME") == "modulo"
+        assert _validate_sql_identifier("_priv_db9", "APP_DB_NAME") == "_priv_db9"
+
+    def test_validate_sql_identifier_rejects_hostile_names(self) -> None:
+        from modulo.launcher.entry import _validate_sql_identifier
+
+        for hostile in ("dup; DROP SCHEMA public", 'dup"; DELETE', "dup-name", "dup d"):
+            with pytest.raises(BootError, match="not a safe SQL identifier"):
+                _validate_sql_identifier(hostile, "APP_DB_NAME")
+
+    def test_ensure_app_database_refuses_unsafe_name_before_connect(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from types import SimpleNamespace
+
+        import asyncpg
+
+        connects: list[object] = []
+
+        async def _record_connect(*args: object, **kwargs: object) -> object:
+            connects.append(args)
+            return object()
+
+        monkeypatch.setattr(asyncpg, "connect", _record_connect)
+        monkeypatch.setattr(entry_module, "APP_DB_NAME", 'modulo"; DROP SCHEMA public;')
+        secrets = SimpleNamespace(postgres_password="pw")
+        launcher_state = SimpleNamespace(postgres_port=5432)
+
+        with pytest.raises(BootError, match="not a safe SQL identifier"):
+            entry_module._ensure_app_database(launcher_state, secrets)
+
+        assert connects == []
