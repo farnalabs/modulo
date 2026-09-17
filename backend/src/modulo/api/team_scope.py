@@ -11,7 +11,8 @@ RLS policy exactly:
 
 Team-scoped resource set (Phase-1 floor): ``pipelines``,
 ``connector_instances``, ``model_backends``, ``environment_profiles``,
-``library_primitives``, ``lifecycle_maps``. ``lifecycle_maps`` carries the
+``library_primitives``, ``lifecycle_maps``, ``eval_datasets``,
+``eval_suites``. ``lifecycle_maps`` carries the
 visibility CHECK constraint but only strict org RLS at the DB layer — the
 membership gate here is its only team enforcement.
 
@@ -38,6 +39,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.db.models.eval_dataset import EvalDataset
+from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.model_backend import ModelBackend
@@ -120,6 +123,8 @@ resolve_model_backend_team_scope = team_scope_resolver(ModelBackend, path_param=
 resolve_environment_profile_team_scope = team_scope_resolver(EnvironmentProfile, path_param="profile_id")
 resolve_library_primitive_team_scope = team_scope_resolver(LibraryPrimitive, path_param="primitive_id")
 resolve_lifecycle_map_team_scope = team_scope_resolver(LifecycleMap, path_param="lifecycle_map_id")
+resolve_eval_dataset_team_scope = team_scope_resolver(EvalDataset, path_param="dataset_id")
+resolve_eval_suite_team_scope = team_scope_resolver(EvalSuite, path_param="suite_id")
 
 
 async def resolve_trigger_run_team_scope(
@@ -156,10 +161,13 @@ async def resolve_trigger_run_team_scope(
     return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
 
 
-# The team-scoped resource set (ADR 017 DECISION 2). ``runs`` is deliberately
-# absent from the path-param resolvers: it has ``owner_team_id`` but no
-# ``visibility`` column and strict org RLS, so it stays on the org-role floor
-# only (RLS parity). The trigger_run body resolver is wired separately via
+# The team-scoped resource set (ADR 017 DECISION 2, extended by ADR 038).
+# ``runs`` is deliberately absent from the path-param resolvers: it has
+# ``owner_team_id`` but no ``visibility`` column and strict org RLS, so it
+# stays on the org-role floor only (RLS parity). ``eval_suite_run`` and
+# ``journey`` are derived entities (ADR 038 Decision §5) that stay on the
+# org-role floor — their parent's team gate controls access.  The
+# trigger_run body resolver is wired separately via
 # ``require_team_membership_or_admin_any_credential``.
 TEAM_SCOPED_RESOLVERS: dict[str, TeamScopeProvider] = {
     "pipelines": resolve_pipeline_team_scope,
@@ -168,6 +176,8 @@ TEAM_SCOPED_RESOLVERS: dict[str, TeamScopeProvider] = {
     "environment_profiles": resolve_environment_profile_team_scope,
     "library_primitives": resolve_library_primitive_team_scope,
     "lifecycle_maps": resolve_lifecycle_map_team_scope,
+    "eval_datasets": resolve_eval_dataset_team_scope,
+    "eval_suites": resolve_eval_suite_team_scope,
 }
 
 _CREATE_DENIAL_DETAIL = "Cannot assign a resource to a team you are not a member of"

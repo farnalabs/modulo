@@ -88,6 +88,19 @@ def _make_session(begin_exc: Exception | None = None) -> AsyncMock:
     session.flush = AsyncMock(return_value=None)
     session.delete = AsyncMock(return_value=None)
     session.refresh = AsyncMock(return_value=None)
+
+    # Make execute return a MagicMock (not a coroutine) so the team scope
+    # resolver's synchronous `row = result.first(); row[0]` works.
+    default_result = MagicMock()
+    default_result.first.return_value = None
+    default_result.scalar_one_or_none.return_value = None
+    default_result.scalar.return_value = None
+    default_result.all.return_value = []
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        return default_result
+
+    session.execute = AsyncMock(side_effect=_execute)
     return session
 
 
@@ -395,6 +408,29 @@ def test_update_suite_alerting_rejects_operators() -> None:
     _install_overrides(session, org_role="operator")
     try:
         http = TestClient(app)
+        # The team scope resolver queries EvalSuite before the admin check in
+        # the handler fires.  Return a valid org-visible suite so the resolver
+        # doesn't 404 and the admin 403 can execute.
+        suite_mock = MagicMock()
+        suite_mock.id = _SUITE_ID
+        suite_mock.visibility = "org"
+        suite_mock.owner_team_id = None
+        suite_result = MagicMock()
+        suite_result.first.return_value = (None, "org")
+        suite_result.scalar_one_or_none.return_value = suite_mock
+
+        authz_result = MagicMock()
+        authz_result.scalar_one_or_none.return_value = None
+
+        async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+            stmt_str = str(stmt)
+            if "authz_enforce" in stmt_str:
+                return authz_result
+            if "eval_suites" in stmt_str:
+                return suite_result
+            return authz_result
+
+        session.execute = AsyncMock(side_effect=_execute)
         resp = http.put(f"/api/v1/evals/suites/{_SUITE_ID}/alerting", json={"cooldown": 30})
         assert resp.status_code == 403
         assert "Only admins" in resp.json()["detail"]

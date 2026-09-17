@@ -7,6 +7,16 @@ URLs:
     GET    /api/v1/evals/coverage     — eval coverage map for a pipeline
     POST   /api/v1/evals/from-run     — create eval definition from run data
     PUT    /api/v1/evals/suites/{suite_id}/alerting — configure regression alerting (admin only)
+    POST   /api/v1/eval-datasets      — create an eval dataset (admin only)
+    GET    /api/v1/eval-datasets      — list eval datasets
+    GET    /api/v1/eval-datasets/{id} — get eval dataset (team-scoped)
+    PATCH  /api/v1/eval-datasets/{id} — update eval dataset (team-scoped, admin only)
+    DELETE /api/v1/eval-datasets/{id} — soft-delete eval dataset (team-scoped, admin only)
+    POST   /api/v1/eval-suites        — create an eval suite (admin only)
+    GET    /api/v1/eval-suites        — list eval suites
+    GET    /api/v1/eval-suites/{id}   — get eval suite (team-scoped)
+    PATCH  /api/v1/eval-suites/{id}   — update eval suite (team-scoped, admin only)
+    DELETE /api/v1/eval-suites/{id}   — delete eval suite (team-scoped, admin only)
 """
 
 import logging
@@ -27,7 +37,17 @@ from modulo.api.constants import (
     MSG_RESOURCE_ALREADY_EXISTS,
 )
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
+from modulo.api.dependencies import (
+    deny_break_glass_mint,
+    get_db_session,
+    require_permission,
+    require_team_membership_or_admin,
+)
+from modulo.api.team_scope import (
+    resolve_eval_dataset_team_scope,
+    resolve_eval_suite_team_scope,
+    validate_owner_team_for_create,
+)
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine.coverage_gap import (
@@ -48,6 +68,7 @@ from modulo.core.eval_engine.suite_run import (
 from modulo.core.node_output_split import node_return
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run_node_outputs import read_run_blobs
+from modulo.db.models.eval_dataset import EvalDataset
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
@@ -846,6 +867,7 @@ async def update_suite_alerting(
     req: EvalSuiteAlertingRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("eval.definition.update"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_suite_team_scope),
 ) -> EvalSuiteAlertingResponse:
     """Configure regression alerting for an eval suite (FAR-379).
 
@@ -920,6 +942,623 @@ async def update_suite_alerting(
         minimum_delta=float(suite.minimum_delta) if suite.minimum_delta is not None else None,
         cooldown=suite.cooldown,
     )
+
+
+# ---------------------------------------------------------------------------
+# Eval Dataset CRUD (FAR-947: team-scope gates)
+# ---------------------------------------------------------------------------
+
+
+class CreateEvalDatasetRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    owner_team_id: uuid.UUID | None = None
+    visibility: str = Field(default="org", pattern=r"^(org|team)$")
+
+
+class UpdateEvalDatasetRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    owner_team_id: uuid.UUID | None = None
+    visibility: str | None = Field(None, pattern=r"^(org|team)$")
+
+
+class EvalDatasetResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    version: int
+    owner_team_id: uuid.UUID | None = None
+    visibility: str = "org"
+    organisation_id: uuid.UUID
+    created_at: Any = None
+    updated_at: Any = None
+
+
+class EvalDatasetListResponse(BaseModel):
+    items: list[EvalDatasetResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+_CODE_EVAL_DATASETS_CREATE = "evals.create_eval_dataset"
+_CODE_EVAL_DATASETS_LIST = "evals.list_eval_datasets"
+_CODE_EVAL_DATASETS_GET = "evals.get_eval_dataset"
+_CODE_EVAL_DATASETS_UPDATE = "evals.update_eval_dataset"
+_CODE_EVAL_DATASETS_DELETE = "evals.delete_eval_dataset"
+_MSG_EVAL_DATASET_NOT_FOUND = "Eval dataset not found"
+
+
+@router.post(
+    "/eval-datasets",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
+@handle_db_errors(_CODE_EVAL_DATASETS_CREATE)
+async def create_eval_dataset(
+    req: CreateEvalDatasetRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.create"),
+) -> EvalDatasetResponse:
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can create eval datasets",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
+            dataset = EvalDataset(
+                organisation_id=principal.organisation_id,
+                name=req.name,
+                owner_team_id=req.owner_team_id,
+                visibility=req.visibility,
+                version=1,
+            )
+            session.add(dataset)
+            await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_EVAL_DATASETS_CREATE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Eval dataset name already exists in this organisation.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVAL_DATASETS_CREATE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+
+    return EvalDatasetResponse(
+        id=dataset.id,
+        name=dataset.name,
+        version=dataset.version,
+        owner_team_id=dataset.owner_team_id,
+        visibility=dataset.visibility,
+        organisation_id=dataset.organisation_id,
+        created_at=dataset.created_at.isoformat() if hasattr(dataset, "created_at") and dataset.created_at else None,
+        updated_at=dataset.updated_at.isoformat() if hasattr(dataset, "updated_at") and dataset.updated_at else None,
+    )
+
+
+@router.get("/eval-datasets")
+@handle_db_errors(_CODE_EVAL_DATASETS_LIST)
+async def list_eval_datasets(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
+) -> EvalDatasetListResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            from sqlalchemy import func as sa_func
+
+            total_q = select(sa_func.count(EvalDataset.id)).where(
+                EvalDataset.organisation_id == principal.organisation_id,
+                EvalDataset.deleted_at.is_(None),
+            )
+            total = (await session.execute(total_q)).scalar() or 0
+
+            q = (
+                select(EvalDataset)
+                .where(
+                    EvalDataset.organisation_id == principal.organisation_id,
+                    EvalDataset.deleted_at.is_(None),
+                )
+                .order_by(EvalDataset.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+            rows = (await session.execute(q)).scalars().all()
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVAL_DATASETS_LIST)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+
+    return EvalDatasetListResponse(
+        items=[
+            EvalDatasetResponse(
+                id=d.id,
+                name=d.name,
+                version=d.version,
+                owner_team_id=d.owner_team_id,
+                visibility=d.visibility,
+                organisation_id=d.organisation_id,
+                created_at=d.created_at.isoformat() if hasattr(d, "created_at") and d.created_at else None,
+                updated_at=d.updated_at.isoformat() if hasattr(d, "updated_at") and d.updated_at else None,
+            )
+            for d in rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/eval-datasets/{dataset_id}")
+@handle_db_errors(_CODE_EVAL_DATASETS_GET)
+async def get_eval_dataset(
+    dataset_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_dataset_team_scope),
+) -> EvalDatasetResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                select(EvalDataset).where(
+                    EvalDataset.id == dataset_id,
+                    EvalDataset.organisation_id == principal.organisation_id,
+                    EvalDataset.deleted_at.is_(None),
+                )
+            )
+            dataset = result.scalar_one_or_none()
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVAL_DATASETS_GET)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+
+    if dataset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DATASET_NOT_FOUND)
+    return EvalDatasetResponse(
+        id=dataset.id,
+        name=dataset.name,
+        version=dataset.version,
+        owner_team_id=dataset.owner_team_id,
+        visibility=dataset.visibility,
+        organisation_id=dataset.organisation_id,
+        created_at=dataset.created_at.isoformat() if hasattr(dataset, "created_at") and dataset.created_at else None,
+        updated_at=dataset.updated_at.isoformat() if hasattr(dataset, "updated_at") and dataset.updated_at else None,
+    )
+
+
+@router.patch("/eval-datasets/{dataset_id}", dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors(_CODE_EVAL_DATASETS_UPDATE)
+async def update_eval_dataset(
+    dataset_id: uuid.UUID,
+    req: UpdateEvalDatasetRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.update"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_dataset_team_scope),
+) -> EvalDatasetResponse:
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can update eval datasets",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                select(EvalDataset).where(
+                    EvalDataset.id == dataset_id,
+                    EvalDataset.organisation_id == principal.organisation_id,
+                    EvalDataset.deleted_at.is_(None),
+                )
+            )
+            dataset = result.scalar_one_or_none()
+            if dataset is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DATASET_NOT_FOUND)
+
+            updates = req.model_dump(exclude_unset=True)
+            for key, value in updates.items():
+                setattr(dataset, key, value)
+            await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_EVAL_DATASETS_UPDATE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Eval dataset name already exists in this organisation.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVAL_DATASETS_UPDATE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+
+    return EvalDatasetResponse(
+        id=dataset.id,
+        name=dataset.name,
+        version=dataset.version,
+        owner_team_id=dataset.owner_team_id,
+        visibility=dataset.visibility,
+        organisation_id=dataset.organisation_id,
+        created_at=dataset.created_at.isoformat() if hasattr(dataset, "created_at") and dataset.created_at else None,
+        updated_at=dataset.updated_at.isoformat() if hasattr(dataset, "updated_at") and dataset.updated_at else None,
+    )
+
+
+@router.delete(
+    "/eval-datasets/{dataset_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
+@handle_db_errors(_CODE_EVAL_DATASETS_DELETE)
+async def delete_eval_dataset(
+    dataset_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.delete"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_dataset_team_scope),
+) -> None:
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can delete eval datasets",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                select(EvalDataset).where(
+                    EvalDataset.id == dataset_id,
+                    EvalDataset.organisation_id == principal.organisation_id,
+                    EvalDataset.deleted_at.is_(None),
+                )
+            )
+            dataset = result.scalar_one_or_none()
+            if dataset is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DATASET_NOT_FOUND)
+            dataset.deleted_at = datetime.now(UTC)
+            dataset.deleted_by = principal.account_id
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVAL_DATASETS_DELETE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+
+
+# ---------------------------------------------------------------------------
+# Eval Suite CRUD (FAR-947: team-scope gates)
+# ---------------------------------------------------------------------------
+
+
+class CreateEvalSuiteRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    owner_team_id: uuid.UUID | None = None
+    visibility: str = Field(default="org", pattern=r"^(org|team)$")
+
+
+class UpdateEvalSuiteRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = None
+    owner_team_id: uuid.UUID | None = None
+    visibility: str | None = Field(None, pattern=r"^(org|team)$")
+
+
+class EvalSuiteResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None = None
+    version: int = 1
+    owner_team_id: uuid.UUID | None = None
+    visibility: str = "org"
+    organisation_id: uuid.UUID
+    eval_definition_ids: list[uuid.UUID] = Field(default_factory=list)
+    created_at: Any = None
+    updated_at: Any = None
+
+
+class EvalSuiteListResponse(BaseModel):
+    items: list[EvalSuiteResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+_CODE_EVAL_SUITES_CREATE = "evals.create_eval_suite"
+_CODE_EVAL_SUITES_LIST = "evals.list_eval_suites"
+_CODE_EVAL_SUITES_GET = "evals.get_eval_suite"
+_CODE_EVAL_SUITES_UPDATE = "evals.update_eval_suite"
+_CODE_EVAL_SUITES_DELETE = "evals.delete_eval_suite"
+_MSG_EVAL_SUITE_NOT_FOUND_DETAIL = "Eval suite not found"
+
+
+@router.post(
+    "/eval-suites",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
+@handle_db_errors(_CODE_EVAL_SUITES_CREATE)
+async def create_eval_suite(
+    req: CreateEvalSuiteRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.create"),
+) -> EvalSuiteResponse:
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can create eval suites",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
+            suite = EvalSuite(
+                organisation_id=principal.organisation_id,
+                name=req.name,
+                description=req.description,
+                owner_team_id=req.owner_team_id,
+                visibility=req.visibility,
+                version=1,
+            )
+            session.add(suite)
+            await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_EVAL_SUITES_CREATE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Eval suite with this name already exists in this organisation.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVAL_SUITES_CREATE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+
+    return EvalSuiteResponse(
+        id=suite.id,
+        name=suite.name,
+        description=suite.description,
+        version=suite.version,
+        owner_team_id=suite.owner_team_id,
+        visibility=suite.visibility,
+        organisation_id=suite.organisation_id,
+        eval_definition_ids=suite.eval_definition_ids or [],
+        created_at=suite.created_at.isoformat() if hasattr(suite, "created_at") and suite.created_at else None,
+        updated_at=suite.updated_at.isoformat() if hasattr(suite, "updated_at") and suite.updated_at else None,
+    )
+
+
+@router.get("/eval-suites")
+@handle_db_errors(_CODE_EVAL_SUITES_LIST)
+async def list_eval_suites(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
+) -> EvalSuiteListResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            from sqlalchemy import func as sa_func
+
+            total_q = select(sa_func.count(EvalSuite.id)).where(
+                EvalSuite.organisation_id == principal.organisation_id,
+            )
+            total = (await session.execute(total_q)).scalar() or 0
+
+            q = (
+                select(EvalSuite)
+                .where(EvalSuite.organisation_id == principal.organisation_id)
+                .order_by(EvalSuite.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+            rows = (await session.execute(q)).scalars().all()
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVAL_SUITES_LIST)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+
+    return EvalSuiteListResponse(
+        items=[
+            EvalSuiteResponse(
+                id=s.id,
+                name=s.name,
+                description=s.description,
+                version=s.version,
+                owner_team_id=s.owner_team_id,
+                visibility=s.visibility,
+                organisation_id=s.organisation_id,
+                eval_definition_ids=s.eval_definition_ids or [],
+                created_at=s.created_at.isoformat() if hasattr(s, "created_at") and s.created_at else None,
+                updated_at=s.updated_at.isoformat() if hasattr(s, "updated_at") and s.updated_at else None,
+            )
+            for s in rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/eval-suites/{suite_id}")
+@handle_db_errors(_CODE_EVAL_SUITES_GET)
+async def get_eval_suite(
+    suite_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_suite_team_scope),
+) -> EvalSuiteResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                select(EvalSuite).where(
+                    EvalSuite.id == suite_id,
+                    EvalSuite.organisation_id == principal.organisation_id,
+                )
+            )
+            suite = result.scalar_one_or_none()
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVAL_SUITES_GET)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+
+    if suite is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_SUITE_NOT_FOUND_DETAIL)
+    return EvalSuiteResponse(
+        id=suite.id,
+        name=suite.name,
+        description=suite.description,
+        version=suite.version,
+        owner_team_id=suite.owner_team_id,
+        visibility=suite.visibility,
+        organisation_id=suite.organisation_id,
+        eval_definition_ids=suite.eval_definition_ids or [],
+        created_at=suite.created_at.isoformat() if hasattr(suite, "created_at") and suite.created_at else None,
+        updated_at=suite.updated_at.isoformat() if hasattr(suite, "updated_at") and suite.updated_at else None,
+    )
+
+
+@router.patch("/eval-suites/{suite_id}", dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors(_CODE_EVAL_SUITES_UPDATE)
+async def update_eval_suite(
+    suite_id: uuid.UUID,
+    req: UpdateEvalSuiteRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.update"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_suite_team_scope),
+) -> EvalSuiteResponse:
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can update eval suites",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                select(EvalSuite).where(
+                    EvalSuite.id == suite_id,
+                    EvalSuite.organisation_id == principal.organisation_id,
+                )
+            )
+            suite = result.scalar_one_or_none()
+            if suite is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_SUITE_NOT_FOUND_DETAIL)
+
+            updates = req.model_dump(exclude_unset=True)
+            for key, value in updates.items():
+                setattr(suite, key, value)
+            await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_EVAL_SUITES_UPDATE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Eval suite with this name already exists in this organisation.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVAL_SUITES_UPDATE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+
+    return EvalSuiteResponse(
+        id=suite.id,
+        name=suite.name,
+        description=suite.description,
+        version=suite.version,
+        owner_team_id=suite.owner_team_id,
+        visibility=suite.visibility,
+        organisation_id=suite.organisation_id,
+        eval_definition_ids=suite.eval_definition_ids or [],
+        created_at=suite.created_at.isoformat() if hasattr(suite, "created_at") and suite.created_at else None,
+        updated_at=suite.updated_at.isoformat() if hasattr(suite, "updated_at") and suite.updated_at else None,
+    )
+
+
+@router.delete(
+    "/eval-suites/{suite_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
+@handle_db_errors(_CODE_EVAL_SUITES_DELETE)
+async def delete_eval_suite(
+    suite_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.delete"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_eval_suite_team_scope),
+) -> None:
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can delete eval suites",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await session.execute(
+                select(EvalSuite).where(
+                    EvalSuite.id == suite_id,
+                    EvalSuite.organisation_id == principal.organisation_id,
+                )
+            )
+            suite = result.scalar_one_or_none()
+            if suite is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_SUITE_NOT_FOUND_DETAIL)
+            await session.delete(suite)
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_EVAL_SUITES_DELETE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete eval suite: it is referenced by other resources.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVAL_SUITES_DELETE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
 
 
 @router.get("/evals/{eval_id}")
