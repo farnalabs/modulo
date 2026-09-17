@@ -979,6 +979,20 @@ class EvalDatasetListResponse(BaseModel):
     page_size: int
 
 
+def _eval_dataset_response(dataset: EvalDataset) -> EvalDatasetResponse:
+    """Serialise an :class:`EvalDataset` row for API responses."""
+    return EvalDatasetResponse(
+        id=dataset.id,
+        name=dataset.name,
+        version=dataset.version,
+        owner_team_id=dataset.owner_team_id,
+        visibility=dataset.visibility,
+        organisation_id=dataset.organisation_id,
+        created_at=_iso_or_none(dataset.created_at),
+        updated_at=_iso_or_none(dataset.updated_at),
+    )
+
+
 _CODE_EVAL_DATASETS_CREATE = "evals.create_eval_dataset"
 _CODE_EVAL_DATASETS_LIST = "evals.list_eval_datasets"
 _CODE_EVAL_DATASETS_GET = "evals.get_eval_dataset"
@@ -1031,16 +1045,7 @@ async def create_eval_dataset(
             detail=MSG_DB_OPERATION_FAILED,
         ) from None
 
-    return EvalDatasetResponse(
-        id=dataset.id,
-        name=dataset.name,
-        version=dataset.version,
-        owner_team_id=dataset.owner_team_id,
-        visibility=dataset.visibility,
-        organisation_id=dataset.organisation_id,
-        created_at=dataset.created_at.isoformat() if hasattr(dataset, "created_at") and dataset.created_at else None,
-        updated_at=dataset.updated_at.isoformat() if hasattr(dataset, "updated_at") and dataset.updated_at else None,
-    )
+    return _eval_dataset_response(dataset)
 
 
 @router.get("/eval-datasets")
@@ -1083,19 +1088,7 @@ async def list_eval_datasets(
         ) from None
 
     return EvalDatasetListResponse(
-        items=[
-            EvalDatasetResponse(
-                id=d.id,
-                name=d.name,
-                version=d.version,
-                owner_team_id=d.owner_team_id,
-                visibility=d.visibility,
-                organisation_id=d.organisation_id,
-                created_at=d.created_at.isoformat() if hasattr(d, "created_at") and d.created_at else None,
-                updated_at=d.updated_at.isoformat() if hasattr(d, "updated_at") and d.updated_at else None,
-            )
-            for d in rows
-        ],
+        items=[_eval_dataset_response(d) for d in rows],
         total=total,
         page=page,
         page_size=page_size,
@@ -1131,16 +1124,7 @@ async def get_eval_dataset(
 
     if dataset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DATASET_NOT_FOUND)
-    return EvalDatasetResponse(
-        id=dataset.id,
-        name=dataset.name,
-        version=dataset.version,
-        owner_team_id=dataset.owner_team_id,
-        visibility=dataset.visibility,
-        organisation_id=dataset.organisation_id,
-        created_at=dataset.created_at.isoformat() if hasattr(dataset, "created_at") and dataset.created_at else None,
-        updated_at=dataset.updated_at.isoformat() if hasattr(dataset, "updated_at") and dataset.updated_at else None,
-    )
+    return _eval_dataset_response(dataset)
 
 
 @router.patch("/eval-datasets/{dataset_id}")
@@ -1191,16 +1175,7 @@ async def update_eval_dataset(
             detail=MSG_DB_OPERATION_FAILED,
         ) from None
 
-    return EvalDatasetResponse(
-        id=dataset.id,
-        name=dataset.name,
-        version=dataset.version,
-        owner_team_id=dataset.owner_team_id,
-        visibility=dataset.visibility,
-        organisation_id=dataset.organisation_id,
-        created_at=dataset.created_at.isoformat() if hasattr(dataset, "created_at") and dataset.created_at else None,
-        updated_at=dataset.updated_at.isoformat() if hasattr(dataset, "updated_at") and dataset.updated_at else None,
-    )
+    return _eval_dataset_response(dataset)
 
 
 @router.delete(
@@ -1284,6 +1259,22 @@ class EvalSuiteListResponse(BaseModel):
     page_size: int
 
 
+def _eval_suite_response(suite: EvalSuite) -> EvalSuiteResponse:
+    """Serialise an :class:`EvalSuite` row for API responses."""
+    return EvalSuiteResponse(
+        id=suite.id,
+        name=suite.name,
+        description=suite.description,
+        version=suite.version,
+        owner_team_id=suite.owner_team_id,
+        visibility=suite.visibility,
+        organisation_id=suite.organisation_id,
+        eval_definition_ids=suite.eval_definition_ids or [],
+        created_at=_iso_or_none(suite.created_at),
+        updated_at=_iso_or_none(suite.updated_at),
+    )
+
+
 _CODE_EVAL_SUITES_CREATE = "evals.create_eval_suite"
 _CODE_EVAL_SUITES_LIST = "evals.list_eval_suites"
 _CODE_EVAL_SUITES_GET = "evals.get_eval_suite"
@@ -1337,18 +1328,7 @@ async def create_eval_suite(
             detail=MSG_DB_OPERATION_FAILED,
         ) from None
 
-    return EvalSuiteResponse(
-        id=suite.id,
-        name=suite.name,
-        description=suite.description,
-        version=suite.version,
-        owner_team_id=suite.owner_team_id,
-        visibility=suite.visibility,
-        organisation_id=suite.organisation_id,
-        eval_definition_ids=suite.eval_definition_ids or [],
-        created_at=suite.created_at.isoformat() if hasattr(suite, "created_at") and suite.created_at else None,
-        updated_at=suite.updated_at.isoformat() if hasattr(suite, "updated_at") and suite.updated_at else None,
-    )
+    return _eval_suite_response(suite)
 
 
 @router.get("/eval-suites")
@@ -1387,21 +1367,7 @@ async def list_eval_suites(
         ) from None
 
     return EvalSuiteListResponse(
-        items=[
-            EvalSuiteResponse(
-                id=s.id,
-                name=s.name,
-                description=s.description,
-                version=s.version,
-                owner_team_id=s.owner_team_id,
-                visibility=s.visibility,
-                organisation_id=s.organisation_id,
-                eval_definition_ids=s.eval_definition_ids or [],
-                created_at=s.created_at.isoformat() if hasattr(s, "created_at") and s.created_at else None,
-                updated_at=s.updated_at.isoformat() if hasattr(s, "updated_at") and s.updated_at else None,
-            )
-            for s in rows
-        ],
+        items=[_eval_suite_response(s) for s in rows],
         total=total,
         page=page,
         page_size=page_size,
@@ -1436,18 +1402,7 @@ async def get_eval_suite(
 
     if suite is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_SUITE_NOT_FOUND_DETAIL)
-    return EvalSuiteResponse(
-        id=suite.id,
-        name=suite.name,
-        description=suite.description,
-        version=suite.version,
-        owner_team_id=suite.owner_team_id,
-        visibility=suite.visibility,
-        organisation_id=suite.organisation_id,
-        eval_definition_ids=suite.eval_definition_ids or [],
-        created_at=suite.created_at.isoformat() if hasattr(suite, "created_at") and suite.created_at else None,
-        updated_at=suite.updated_at.isoformat() if hasattr(suite, "updated_at") and suite.updated_at else None,
-    )
+    return _eval_suite_response(suite)
 
 
 @router.patch("/eval-suites/{suite_id}")
@@ -1497,18 +1452,7 @@ async def update_eval_suite(
             detail=MSG_DB_OPERATION_FAILED,
         ) from None
 
-    return EvalSuiteResponse(
-        id=suite.id,
-        name=suite.name,
-        description=suite.description,
-        version=suite.version,
-        owner_team_id=suite.owner_team_id,
-        visibility=suite.visibility,
-        organisation_id=suite.organisation_id,
-        eval_definition_ids=suite.eval_definition_ids or [],
-        created_at=suite.created_at.isoformat() if hasattr(suite, "created_at") and suite.created_at else None,
-        updated_at=suite.updated_at.isoformat() if hasattr(suite, "updated_at") and suite.updated_at else None,
-    )
+    return _eval_suite_response(suite)
 
 
 @router.delete(
