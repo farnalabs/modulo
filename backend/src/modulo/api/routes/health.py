@@ -47,7 +47,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
-from modulo.db.migration_guard import check_migration_divergence
+from modulo.db.migration_guard import DivergenceCheckResult, check_migration_divergence
 from modulo.settings import Settings, break_glass_boot_findings, get_settings
 from modulo.version import get_version
 
@@ -343,19 +343,27 @@ async def _check_migrations() -> CheckResult:
         # FAR-872: check for repo-vs-DB migration divergence (DB has applied
         # revisions the repo does not ship).  Logged at ERROR in
         # migration_guard; surfaced here so it is visible without grepping logs.
+        divergence: DivergenceCheckResult | None = None
+        divergence_check_failed = False
         try:
             divergence = check_migration_divergence(applied)
         except Exception:
             # Contractually fail-open, but never silent: a failure here would
             # otherwise hide a real bug behind the "migrations up to date" path.
             _log.exception("health._check_migrations divergence check failed")
-            divergence = None
+            divergence_check_failed = True
 
         pending = heads - applied
         parts: list[str] = []
         if pending:
             parts.append(f"pending migrations: {', '.join(sorted(pending))}")
-        if divergence is not None and divergence.diverged:
+        if divergence_check_failed:
+            # FAR-925: the divergence guard itself crashed — report degraded
+            # (not ok) so this state cannot be mistaken for "checked and clean".
+            # Fail-open: the check is advisory, so a crashed guard degrades
+            # the report without blocking readiness.
+            parts.append("divergence check could not run (exception raised, see logs)")
+        elif divergence is not None and divergence.diverged:
             parts.append(
                 f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}"
             )

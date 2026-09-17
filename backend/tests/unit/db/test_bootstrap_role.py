@@ -22,11 +22,13 @@ from modulo.db.bootstrap_role import (
     _SYSTEM_ROLE,
     ACCOUNTS_WRITABLE_COLUMNS,
     REQUIRED_VARS,
+    _alter_role,
     _apply_accounts_allow_list,
     _assert_role_posture,
     _asyncpg_admin_connect,
     _bootstrap,
     _create_or_update_role,
+    _create_role,
     _existing_columns,
     _find_allow_list_violations,
     _grant_break_glass,
@@ -34,6 +36,7 @@ from modulo.db.bootstrap_role import (
     _parse_password,
     _parse_role,
     _table_exists,
+    _validate_identifier,
     bootstrap_roles,
     main,
 )
@@ -262,6 +265,55 @@ class TestCreateOrUpdateRole:
         assert escaped
         assert "p''word" in escaped[0]
 
+    async def test_create_role_escapes_hostile_url_decoded_password(self) -> None:
+        """FAR-918 Major: _create_role itself must escape the PASSWORD literal.
+
+        _parse_password URL-decodes the DB URL, so a value like
+        %27%3BCREATE%20ROLE%20pwned... arrives as raw SQL metacharacters.
+        asyncpg execute() runs multi-statement SQL on this SUPERUSER
+        connection, so an unescaped quote terminates the PASSWORD literal and
+        injects role DDL.
+        """
+        hostile = "';CREATE ROLE pwned SUPERUSER;--"
+        conn = _FakeConn()
+        await _create_role(conn, "modulo_app", login=True, password=hostile, bypassrls=False)
+        assert len(conn.executed) == 1
+        sql = conn.executed[0]
+        assert "'';CREATE ROLE pwned SUPERUSER;--" in sql  # doubled quote — inert literal
+        # Exactly 4 single quotes: PASSWORD literal opener + doubled pair + closer.
+        # A raw breakout (';CREATE ...) would leave a different quote count and
+        # terminate the literal before the injection text.
+        assert sql.count("'") == 4
+
+    async def test_alter_role_escapes_hostile_url_decoded_password(self) -> None:
+        """FAR-918 Major: _alter_role must escape the PASSWORD literal too."""
+        hostile = "';CREATE ROLE pwned SUPERUSER;--"
+        conn = _FakeConn()
+        await _alter_role(conn, "modulo_app", login=True, password=hostile, bypassrls=False)
+        assert len(conn.executed) == 1
+        sql = conn.executed[0]
+        assert "'';CREATE ROLE pwned SUPERUSER;--" in sql
+        assert sql.count("'") == 4
+
+    async def test_password_with_quote_not_double_escaped(self, conn: _FakeConn) -> None:
+        """Escape exactly once: the caller no longer escapes, the DDL helpers
+        do. A pre-escaped value passed straight through would become ''''.
+        """
+        await _create_or_update_role(conn, "modulo_app", login=True, password="p'word")
+        create = next(q for q in conn.executed if "CREATE ROLE" in q)
+        assert "PASSWORD 'p''word'" in create  # exactly one escape
+        assert "PASSWORD 'p''''word'" not in create  # not double-escaped
+
+        await _create_or_update_role(conn, "modulo_app", login=True, password="p''''word")
+        # The fake conn does not record created roles — mark it existing so the
+        # second call exercises the ALTER path.
+        conn.roles["modulo_app"] = True
+        await _create_or_update_role(conn, "modulo_app", login=True, password="p''''word")
+        alter = next(q for q in conn.executed if "ALTER ROLE" in q)
+        # 4 raw quotes -> 8 escaped quote chars, exactly once.
+        assert "PASSWORD 'p''''''''word'" in alter
+        assert "PASSWORD 'p''''''''''''''''word'" not in alter  # not double-escaped
+
     async def test_alter_of_app_role_states_nobypassrls_explicitly(self, conn: _FakeConn) -> None:
         """Regression: prod 2026-09-03.
 
@@ -286,7 +338,11 @@ class TestCreateOrUpdateRole:
 
 
 # ---------------------------------------------------------------------------
-# role name validation (FAR-915 / GitHub #129 defence-in-depth)
+# role-name DDL guards (FAR-915 / FAR-918 / GitHub #129 defence-in-depth)
+#
+# #675 and #681 independently added an equivalent guard; the merge resolves
+# both onto a single ``_validate_identifier`` helper. These tests assert
+# hostile names are rejected BEFORE any statement reaches the connection.
 # ---------------------------------------------------------------------------
 
 
@@ -296,19 +352,72 @@ class TestRoleNameValidation:
     today; the guard keeps it that way (defence-in-depth)."""
 
     async def test_rejects_sql_metacharacters_in_create_or_update(self, conn: _FakeConn) -> None:
-        with pytest.raises(ValueError, match="Invalid Postgres role name"):
+        with pytest.raises(ValueError, match="Invalid role identifier"):
             await _create_or_update_role(conn, 'modulo_app"; DROP TABLE accounts; --', login=True, password="pw")
         assert not conn.executed
 
     async def test_rejects_space_and_uppercase(self, conn: _FakeConn) -> None:
         for bad in ("modulo app", "Modulo_App", "modulo-app"):
-            with pytest.raises(ValueError, match="Invalid Postgres role name"):
+            with pytest.raises(ValueError, match="Invalid role identifier"):
                 await _create_or_update_role(conn, bad, login=True, password="pw")
 
     def test_parse_role_rejects_equivalently(self) -> None:
         """URL-derived names hit the same guard before any interpolation."""
         url = "postgres://modulo_admin:pw@localhost/db"
         assert _parse_role(url) == "modulo_admin"
+
+
+# ---------------------------------------------------------------------------
+# _validate_identifier (role-name DDL guard)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateIdentifier:
+    @pytest.mark.parametrize(
+        "name",
+        ["modulo_app", "_leads", "a", "modulo_migrate9", "x_a"],
+    )
+    def test_accepts_plain_identifiers(self, name: str) -> None:
+        assert _validate_identifier(name) == name
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            'role"); DROP TABLE accounts;--',
+            'role" ; ALTER',
+            'role\\"',
+            "Role9",
+            "9role",
+            "role-app",
+            "role name",
+            "role$",
+        ],
+        ids=[
+            "statement-breakout",
+            "semicolon",
+            "escaped-quote",
+            "uppercase",
+            "leading-digit",
+            "dash",
+            "space",
+            "dollar",
+        ],
+    )
+    async def test_rejects_metacharacter_role_names(self, name: str) -> None:
+        with pytest.raises(ValueError, match="Invalid role identifier"):
+            await _create_role(_FakeConn(), name, login=True, password="pw", bypassrls=False)
+        with pytest.raises(ValueError, match="Invalid role identifier"):
+            await _alter_role(_FakeConn(), name, login=True, password="pw", bypassrls=False)
+
+    async def test_metacharacter_role_name_never_reaches_ddl(self, conn: _FakeConn) -> None:
+        hostile = 'modulo_app"); DROP TABLE accounts;--'
+        with pytest.raises(ValueError, match="Invalid role identifier"):
+            await _create_or_update_role(conn, hostile, login=True, password="pw")
+        assert not any("DROP TABLE" in q for q in conn.executed)
+
+    async def test_valid_role_name_still_creates(self, conn: _FakeConn) -> None:
+        await _create_or_update_role(conn, "modulo_app", login=True, password="pw")
+        assert any('CREATE ROLE "modulo_app"' in q for q in conn.executed)
 
 
 # ---------------------------------------------------------------------------

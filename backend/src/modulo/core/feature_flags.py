@@ -85,11 +85,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
-        name="agent_signal_trigger",
-        description="Trigger pipelines via agent-to-agent signals",
-        tier="community",
-    ),
-    FeatureFlag(
         name="ongoing_trigger",
         description="Keep a pipeline topped up to a target number of in-flight runs",
         tier="community",
@@ -173,33 +168,8 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="team",
     ),
     FeatureFlag(
-        name="schema_union_types",
-        description="Union types and polymorphic schemas",
-        tier="team",
-    ),
-    FeatureFlag(
-        name="migration_cli",
-        description="CLI tool for migrating pipelines across instances",
-        tier="team",
-    ),
-    FeatureFlag(
-        name="checkpoint_encryption",
-        description="Encrypt pipeline checkpoints at rest",
-        tier="team",
-    ),
-    FeatureFlag(
-        name="audit_crypto_chain",
-        description="Cryptographic chaining of audit events for tamper evidence",
-        tier="team",
-    ),
-    FeatureFlag(
         name="community_registry",
         description="Publish and discover community pipeline primitives",
-        tier="team",
-    ),
-    FeatureFlag(
-        name="prompt_optimization",
-        description="Automated prompt tuning and optimisation",
         tier="team",
     ),
     FeatureFlag(
@@ -251,11 +221,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="notification_log",
         description="In-app notification delivery log",
-        tier="community",
-    ),
-    FeatureFlag(
-        name="api_changelog",
-        description="API changelog and version history",
         tier="community",
     ),
     # ── Team tier (runtime / system config) ─────────────────────────────

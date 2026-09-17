@@ -9,15 +9,14 @@ Feature: Runner Role
   # ADR 017 reconciliation (PR B):
   # - REST never accepts `mk_` API keys on the run-trigger route, so "Runner
   #   can trigger a pipeline run" now uses a runner JWT principal.
-  # - "Runner role is scoped to pipelines they own" (team scope) is deferred to
-  #   Phase 3 (team-scope enforcement for run triggering) — marked @skip.
-  @skip
-  Scenario: Runner role is scoped to pipelines they own
+  # - Team-private pipelines require membership in the owning team (FAR-946).
+  #   The denial path is unit-tested in test_runs_team_scope.py::test_non_member_denied_403.
+  Scenario: Runner can trigger a team-private pipeline they are a member of
     Given org "acme" has pipeline "ci-pipeline" owned by team "ci-team"
     And a runner with team scope "ci-team" exists
     When the runner triggers a run for pipeline "ci-pipeline"
     Then the response status is 202
-    And the runner cannot trigger runs for pipelines outside their scope
+    And the run is created
 
   Scenario: Runner can trigger a pipeline run
     Given org "acme" has pipeline "ci-pipeline"

@@ -15,10 +15,11 @@ Team-scoped resource set (Phase-1 floor): ``pipelines``,
 visibility CHECK constraint but only strict org RLS at the DB layer — the
 membership gate here is its only team enforcement.
 
-``runs`` is deliberately NOT team-scoped at the app layer: it has
-``owner_team_id`` but no ``visibility`` column and strict org RLS, so it stays on
-the org-role floor only (RLS parity — iteration-7 pinned special case; team
-scoping of runs arrives with Phase-2 ``WITH CHECK``).
+``runs`` has ``owner_team_id`` but no ``visibility`` column and strict org RLS.
+For ``trigger_run`` (POST /runs), the pipeline_id arrives in the **request body**
+(not the path), so a body-based resolver reads it and returns the pipeline's
+team scope.  For all other run endpoints, runs stay on the org-role floor only
+(RLS parity — iteration-7 pinned special case).
 
 The matrix mapping each team-scoped route to its ``owner_team_id`` source is the
 PR B deliverable; this module builds the MECHANISM and the pipeline resolver.
@@ -120,10 +121,46 @@ resolve_environment_profile_team_scope = team_scope_resolver(EnvironmentProfile,
 resolve_library_primitive_team_scope = team_scope_resolver(LibraryPrimitive, path_param="primitive_id")
 resolve_lifecycle_map_team_scope = team_scope_resolver(LifecycleMap, path_param="lifecycle_map_id")
 
+
+async def resolve_trigger_run_team_scope(
+    request: Request,
+    session: AsyncSession,
+) -> TeamScopedResource | None:
+    """Resolve team scope from the pipeline_id in a trigger_run request body.
+
+    Unlike path-param resolvers, this reads ``pipeline_id`` from the JSON body
+    (a Pydantic model that FastAPI has already validated).  The body is parsed
+    lazily only when this resolver runs, avoiding an extra dependency-layer read.
+    """
+    import json as _json
+
+    try:
+        raw_body = await request.body()
+        body = _json.loads(raw_body) if raw_body else {}
+    except Exception:
+        return None
+    raw_pid = body.get("pipeline_id")
+    if raw_pid is None:
+        return None
+    try:
+        obj_id = uuid.UUID(str(raw_pid))
+    except (ValueError, TypeError):
+        return None
+    stmt = select(Pipeline.owner_team_id, Pipeline.visibility).where(Pipeline.id == obj_id)
+    if hasattr(Pipeline, "deleted_at"):
+        stmt = stmt.where(Pipeline.deleted_at.is_(None))
+    result = await session.execute(stmt)
+    row = result.first()
+    if row is None:
+        return None
+    return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
+
+
 # The team-scoped resource set (ADR 017 DECISION 2). ``runs`` is deliberately
-# absent: it has ``owner_team_id`` but no ``visibility`` column and strict org
-# RLS, so it stays on the org-role floor only (RLS parity). Pin that here so an
-# accidental runs resolver is a test failure, not a silent scoping regression.
+# absent from the path-param resolvers: it has ``owner_team_id`` but no
+# ``visibility`` column and strict org RLS, so it stays on the org-role floor
+# only (RLS parity). The trigger_run body resolver is wired separately via
+# ``require_team_membership_or_admin_any_credential``.
 TEAM_SCOPED_RESOLVERS: dict[str, TeamScopeProvider] = {
     "pipelines": resolve_pipeline_team_scope,
     "connector_instances": resolve_connector_team_scope,

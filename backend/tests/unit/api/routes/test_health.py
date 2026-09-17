@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -17,6 +18,7 @@ import pytest
 
 from modulo.api.routes.health import (
     _check_dispatcher_reconcile,
+    _check_migrations,
     _check_runner_health_probe,
     _check_slot_reconciliation,
     _check_stale_run_recovery,
@@ -533,3 +535,140 @@ class TestCheckSlotReconciliation:
         assert result.status == "ok"
         assert result.detail is not None
         assert "unavailable" in result.detail
+
+
+class TestCheckMigrationsDivergence:
+    """FAR-925: the migration divergence check must produce distinguishable
+    output for three states: checked-and-clean, divergence-found, and
+    check-could-not-run.  A crashed guard must not read identically to a
+    clean one."""
+
+    @pytest.mark.asyncio
+    async def test_checked_and_clean_ok(self) -> None:
+        """Divergence check ran and found nothing — detail says 'up to date'."""
+        from contextlib import asynccontextmanager
+
+        from modulo.db.migration_guard import DivergenceCheckResult
+
+        fake_divergence = DivergenceCheckResult(
+            diverged=False,
+            db_revisions={"001"},
+            repo_revisions={"001"},
+            orphaned_revisions=set(),
+            detail="All applied revisions are present in the repo migration tree",
+        )
+
+        @asynccontextmanager
+        async def fake_connect():
+            class FakeConn:
+                async def execute(self, stmt):
+                    class FakeResult:
+                        def fetchall(self):
+                            return [("001",)]
+
+                    return FakeResult()
+
+            yield FakeConn()
+
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
+            patch("modulo.api.routes.health.ScriptDirectory") as mock_sd,
+            patch("modulo.api.routes.health.get_or_create_engine") as mock_eng,
+            patch("modulo.api.routes.health.check_migration_divergence", return_value=fake_divergence),
+            patch.object(Path, "exists", return_value=True),
+        ):
+            mock_cfg = mock_sd.from_config.return_value
+            mock_cfg.get_heads.return_value = {"001"}
+            mock_eng.return_value.connect = fake_connect
+
+            result = await _check_migrations()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "migrations up to date" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_divergence_found_degraded(self) -> None:
+        """Divergence check found orphaned revisions — degraded with detail."""
+        from contextlib import asynccontextmanager
+
+        from modulo.db.migration_guard import DivergenceCheckResult
+
+        fake_divergence = DivergenceCheckResult(
+            diverged=True,
+            db_revisions={"001", "orphan"},
+            repo_revisions={"001"},
+            orphaned_revisions={"orphan"},
+            detail="Migration divergence detected",
+        )
+
+        @asynccontextmanager
+        async def fake_connect():
+            class FakeConn:
+                async def execute(self, stmt):
+                    class FakeResult:
+                        def fetchall(self):
+                            return [("001",)]
+
+                    return FakeResult()
+
+            yield FakeConn()
+
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
+            patch("modulo.api.routes.health.ScriptDirectory") as mock_sd,
+            patch("modulo.api.routes.health.get_or_create_engine") as mock_eng,
+            patch("modulo.api.routes.health.check_migration_divergence", return_value=fake_divergence),
+            patch.object(Path, "exists", return_value=True),
+        ):
+            mock_cfg = mock_sd.from_config.return_value
+            mock_cfg.get_heads.return_value = {"001"}
+            mock_eng.return_value.connect = fake_connect
+
+            result = await _check_migrations()
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "DIVERGENCE" in result.detail
+        assert "orphan" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_divergence_check_failed_degraded(self) -> None:
+        """FAR-925: when the divergence check raises, the result must be
+        degraded (not ok) with a detail that makes clear the check did NOT
+        run.  This MUST fail against the old behaviour (which returned ok /
+        'migrations up to date')."""
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def fake_connect():
+            class FakeConn:
+                async def execute(self, stmt):
+                    class FakeResult:
+                        def fetchall(self):
+                            return [("001",)]
+
+                    return FakeResult()
+
+            yield FakeConn()
+
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
+            patch("modulo.api.routes.health.ScriptDirectory") as mock_sd,
+            patch("modulo.api.routes.health.get_or_create_engine") as mock_eng,
+            patch(
+                "modulo.api.routes.health.check_migration_divergence",
+                side_effect=RuntimeError("guard crashed"),
+            ),
+            patch.object(Path, "exists", return_value=True),
+        ):
+            mock_cfg = mock_sd.from_config.return_value
+            mock_cfg.get_heads.return_value = {"001"}
+            mock_eng.return_value.connect = fake_connect
+
+            result = await _check_migrations()
+        # Must NOT be "ok" / "migrations up to date" — that was the old bug.
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "could not run" in result.detail.lower()

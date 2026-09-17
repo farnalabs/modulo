@@ -461,15 +461,11 @@ OWNED_PAGES = {
     "/admin/feature-flags": (
         "frontend/src/views/AdminFeatureFlagsView.vue",
         "frontend/src/components/shared/FilterBar.vue",
-        "frontend/src/components/FeatureGate.vue",
-        "frontend/src/components/LockIcon.vue",
     ),
     "/admin/housekeeping": (
         "frontend/src/views/AdminHousekeepingView.vue",
         "frontend/src/components/DbCapacityBanner.vue",
         "frontend/src/components/shared/PageHeader.vue",
-        "frontend/src/components/FeatureGate.vue",
-        "frontend/src/components/LockIcon.vue",
     ),
     "/admin/notification-delivery": (
         "frontend/src/views/AdminNotificationDeliveryLogView.vue",
@@ -579,11 +575,7 @@ OWNED_PAGES = {
         "frontend/src/components/hitl/HitlGateCard.vue",
         "frontend/src/components/HitlBriefing.vue",
     ),
-    "/settings/guardrails": (
-        "frontend/src/views/SettingsGuardrailsView.vue",
-        "frontend/src/components/FeatureGate.vue",
-        "frontend/src/components/LockIcon.vue",
-    ),
+    "/settings/guardrails": "frontend/src/views/SettingsGuardrailsView.vue",
     "/settings/mcp": (
         "frontend/src/views/SettingsMcpView.vue",
         "frontend/src/components/FeatureGate.vue",
@@ -596,6 +588,7 @@ OWNED_PAGES = {
     ),
     "/settings/sso": (
         "frontend/src/views/SettingsSsoView.vue",
+        "frontend/src/components/SsoProviderForm.vue",
         "frontend/src/components/shared/JsonViewer.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
@@ -636,8 +629,6 @@ OWNED_PAGES = {
     "/admin/product-analytics": (
         "frontend/src/views/AdminProductAnalyticsView.vue",
         "frontend/src/components/product-analytics/ProductAnalyticsConsentPrompt.vue",
-        "frontend/src/components/FeatureGate.vue",
-        "frontend/src/components/LockIcon.vue",
     ),
     "/library": (
         "frontend/src/views/LibraryView.vue",

@@ -715,7 +715,7 @@ routes:
         sidebar_group:
         sidebar_order:
         type: page
-        <<: *community
+        <<: *team
         deprecated: false
 
     /admin/system/config:
@@ -1322,15 +1322,6 @@ elements:
       - testid: developer-mode-toggle
         type: element
         dynamic_testid: false
-      - testid: feature-gate
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-disabled
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-lock
-        type: element
-        dynamic_testid: false
       - testid: flags-prev-page
         type: button
         dynamic_testid: false
@@ -1344,9 +1335,6 @@ elements:
         type: input
         dynamic_testid: false
       - testid: filter-bar-search-wrapper
-        type: element
-        dynamic_testid: false
-      - testid: lock-icon
         type: element
         dynamic_testid: false
     /admin/errors:
@@ -1415,15 +1403,6 @@ elements:
         type: element
         dynamic_testid: false
     /admin/housekeeping:
-      - testid: feature-gate
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-disabled
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-lock
-        type: element
-        dynamic_testid: false
       - testid: hk-refresh
         type: button
         dynamic_testid: false
@@ -1498,9 +1477,6 @@ elements:
         dynamic_testid: false
       - testid: db-capacity-housekeeping-link
         type: link
-        dynamic_testid: false
-      - testid: lock-icon
-        type: element
         dynamic_testid: false
     /admin/model-backends:
       - testid: admin-model-backends-add
@@ -1813,15 +1789,6 @@ elements:
         type: element
         dynamic_testid: false
     /admin/product-analytics:
-      - testid: feature-gate
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-disabled
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-lock
-        type: element
-        dynamic_testid: false
       - testid: last-dump
         type: element
         dynamic_testid: false
@@ -1835,9 +1802,6 @@ elements:
         type: element
         dynamic_testid: false
       - testid: enforcement-enabled
-        type: element
-        dynamic_testid: false
-      - testid: lock-icon
         type: element
         dynamic_testid: false
       - testid: product-analytics-consent-prompt
@@ -3770,18 +3734,6 @@ elements:
         type: button
         dynamic_testid: false
     /settings/guardrails:
-      - testid: feature-gate
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-disabled
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-lock
-        type: element
-        dynamic_testid: false
-      - testid: lock-icon
-        type: element
-        dynamic_testid: false
       - testid: settings-guardrails-create
         type: button
         dynamic_testid: false
@@ -3929,6 +3881,39 @@ elements:
         dynamic_testid: false
       - testid: hitl-review-column-headers
         type: element
+        dynamic_testid: false
+      - testid: hitl-review-select-all
+        type: checkbox
+        dynamic_testid: false
+      - testid: hitl-review-row-checkbox
+        type: checkbox
+        dynamic_testid: false
+      - testid: hitl-review-bulk-bar
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-bulk-claim
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-reject
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-clear
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-outcomes
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-bulk-reject-reason
+        type: textarea
+        dynamic_testid: false
+      - testid: hitl-review-bulk-reject-confirm
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-reject-cancel
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-outcomes-dismiss
+        type: button
         dynamic_testid: false
       - testid: hitl-gate-card
         type: element
@@ -4266,6 +4251,15 @@ elements:
         dynamic_testid: false
       - testid: settings-sso-delete-cancel
         type: button
+        dynamic_testid: false
+      - testid: sso-callback-url-copy
+        type: button
+        dynamic_testid: false
+      - testid: sso-callback-url-copied
+        type: element
+        dynamic_testid: false
+      - testid: sso-tenant-domain
+        type: input
         dynamic_testid: false
       - testid: json-viewer
         type: element
