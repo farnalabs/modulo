@@ -198,23 +198,6 @@ async def _seed_pipeline(
     return pipeline_id
 
 
-async def _seed_pipeline_snapshot(db_engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.UUID) -> uuid.UUID:
-    snapshot_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
-                "snapshot_version, graph_json, connector_bindings_json, "
-                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
-                "run_context_defaults, config_json) "
-                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
-                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)"
-            ),
-            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
-        )
-    return snapshot_id
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -270,11 +253,6 @@ async def team_private_pipeline(
 
 
 @pytest_asyncio.fixture(scope="module")
-async def team_private_snapshot(db_engine: AsyncEngine, org: uuid.UUID, team_private_pipeline: uuid.UUID) -> uuid.UUID:
-    return await _seed_pipeline_snapshot(db_engine, org, team_private_pipeline)
-
-
-@pytest_asyncio.fixture(scope="module")
 async def org_visible_pipeline(db_engine: AsyncEngine, org: uuid.UUID, admin_user: uuid.UUID) -> uuid.UUID:
     return await _seed_pipeline(
         db_engine,
@@ -284,11 +262,6 @@ async def org_visible_pipeline(db_engine: AsyncEngine, org: uuid.UUID, admin_use
         visibility="org",
         owner_team_id=None,
     )
-
-
-@pytest_asyncio.fixture(scope="module")
-async def org_visible_snapshot(db_engine: AsyncEngine, org: uuid.UUID, org_visible_pipeline: uuid.UUID) -> uuid.UUID:
-    return await _seed_pipeline_snapshot(db_engine, org, org_visible_pipeline)
 
 
 @pytest_asyncio.fixture
