@@ -286,6 +286,32 @@ class TestCreateOrUpdateRole:
 
 
 # ---------------------------------------------------------------------------
+# role name validation (FAR-915 / GitHub #129 defence-in-depth)
+# ---------------------------------------------------------------------------
+
+
+class TestRoleNameValidation:
+    """Role names are interpolated as SQL identifiers — injectable names must
+    be rejected BEFORE any DDL interpolation. Callers pass hardcoded constants
+    today; the guard keeps it that way (defence-in-depth)."""
+
+    async def test_rejects_sql_metacharacters_in_create_or_update(self, conn: _FakeConn) -> None:
+        with pytest.raises(ValueError, match="Invalid Postgres role name"):
+            await _create_or_update_role(conn, 'modulo_app"; DROP TABLE accounts; --', login=True, password="pw")
+        assert not conn.executed
+
+    async def test_rejects_space_and_uppercase(self, conn: _FakeConn) -> None:
+        for bad in ("modulo app", "Modulo_App", "modulo-app"):
+            with pytest.raises(ValueError, match="Invalid Postgres role name"):
+                await _create_or_update_role(conn, bad, login=True, password="pw")
+
+    def test_parse_role_rejects_equivalently(self) -> None:
+        """URL-derived names hit the same guard before any interpolation."""
+        url = "postgres://modulo_admin:pw@localhost/db"
+        assert _parse_role(url) == "modulo_admin"
+
+
+# ---------------------------------------------------------------------------
 # _table_exists / _existing_columns
 # ---------------------------------------------------------------------------
 

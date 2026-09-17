@@ -36,6 +36,7 @@ Deliverable (A) of the break-glass admin recovery plan adds:
 import asyncio
 import logging
 import os
+import re
 import secrets
 import sys
 from urllib.parse import unquote, urlparse, urlunparse
@@ -49,6 +50,27 @@ REQUIRED_VARS = ["DATABASE_ADMIN_URL", "DATABASE_URL"]
 _BREAK_GLASS_ROLE = "modulo_breakglass"
 _MIGRATE_ROLE = "modulo_migrate"
 _SYSTEM_ROLE = "modulo_system"
+
+# Defence-in-depth (FAR-915 / GitHub #129): role names are interpolated as
+# SQL identifiers in CREATE/ALTER ROLE + GRANT statements from this module.
+# Callers pass hardcoded constants today, so this is hygiene — but a future
+# env-driven name must not be able to smuggle a quote or space into the DDL.
+_ROLE_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def _validate_role_name(name: str) -> str:
+    """Return *name* when it is a safe GUC-free Postgres role identifier.
+
+    Raises a clear error before any interpolation when it is not — the DDL
+    statements below carry no quote-escaping for the role NAME.
+    """
+    if not _ROLE_NAME_RE.fullmatch(name):
+        raise ValueError(
+            f"Invalid Postgres role name: {name!r} — must match "
+            f"{_ROLE_NAME_RE.pattern} (refusing to interpolate into DDL)"
+        )
+    return name
+
 
 # The single-sourced allow-list constant for writable accounts columns.
 # Every future column added to accounts must be allow-listed here or be
@@ -124,6 +146,7 @@ async def _create_or_update_role(
     isolation. Only ``modulo_breakglass`` and ``modulo_migrate`` (cross-org
     system roles) receive BYPASSRLS.
     """
+    _validate_role_name(name)
     quoted_pass = (password or "").replace("'", "''")
     exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", name)
     if exists:
@@ -317,6 +340,11 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     sys_url = os.environ.get("MODULO_SYSTEM_DATABASE_URL", "")
     sys_user = _parse_role(sys_url) or _SYSTEM_ROLE
     sys_pass = _parse_password(sys_url) or secrets.token_urlsafe(24)
+
+    # Fail closed before any DDL interpolation (FAR-915 hygiene): the names
+    # below are embedded in CREATE/ALTER/GRANT f-strings throughout this flow.
+    for role_name in (app_user, bg_user, sys_user):
+        _validate_role_name(role_name)
 
     conn = await asyncpg.connect(admin_conn_str, ssl=admin_ssl)
     try:
