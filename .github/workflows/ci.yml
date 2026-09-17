@@ -348,7 +348,7 @@ jobs:
         # hack. Invoke vitest directly so the script's --maxWorkers=4 is never
         # inherited. 15000ms test/hook timeouts (vite.config.ts, from #817)
         # remain the safety net for heavy mount+settle specs.
-        run: pnpm exec vitest run src --pool=threads --maxWorkers=2
+        run: pnpm exec vitest run src --pool=threads --maxWorkers=2 --coverage
       - run: pnpm run build
       - name: Audit dependencies (critical)
         # Best-effort against npm registry outages: a failed audit caused by an
