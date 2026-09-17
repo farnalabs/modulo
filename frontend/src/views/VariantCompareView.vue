@@ -229,7 +229,7 @@
       <EmptyState
         v-else-if="!loading && groups.length === 0"
         title="Variant Groups"
-        description="No variant groups found. Create a variant group from the Variants page to compare model outputs side by side."
+        description="No variant groups found."
       />
 
       <div
@@ -457,8 +457,12 @@ onBeforeUnmount(() => {
 watch(groups, (list) => {
   if (list.length === 0) return
   const paramId = typeof route.params.batchId === 'string' ? route.params.batchId : null
+  const pipelineId = typeof route.query.pipeline_id === 'string' ? route.query.pipeline_id : null
+  const pipelineGroup = pipelineId ? list.find(g => g.pipeline_id === pipelineId) : undefined
   if (paramId && list.some(g => g.id === paramId)) {
     selectedGroupId.value = paramId
+  } else if (pipelineGroup) {
+    selectedGroupId.value = pipelineGroup.id
   } else if (!selectedGroupId.value) {
     selectedGroupId.value = list[0].id
   }

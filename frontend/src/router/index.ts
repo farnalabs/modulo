@@ -68,7 +68,6 @@ const EvalEditorView = () => import('../views/EvalEditorView.vue')
 const EvalProposalsQueueView = () => import('../views/EvalProposalsQueueView.vue')
 const VariantCompareView = () => import('../views/VariantCompareView.vue')
 const VariantBatchCompareView = () => import('../views/VariantBatchCompareView.vue')
-
 const RunsListView = () => import('../views/RunsListView.vue')
 const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
@@ -348,8 +347,6 @@ const router = createRouter({
       props: true,
       meta: { breadcrumb: 'Variant Batch Compare', parent: 'variant-compare', testid: 'variant-batch-compare' },
     },
-
-
     {
       path: '/runs',
       name: 'runs-list',

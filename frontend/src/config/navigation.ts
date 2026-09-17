@@ -36,8 +36,6 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'eval-editor': { icon: 'CheckSquare', labelKey: 'components.SidebarNav.item_evals' },
   'eval-proposals-queue': { icon: 'Clipboard', labelKey: 'components.SidebarNav.item_eval_proposals' },
   'variant-compare': { icon: 'GitFork', labelKey: 'components.SidebarNav.item_variants' },
-
-
   schemas: { icon: 'Database', labelKey: 'components.SidebarNav.item_schemas' },
   'schema-editor': { icon: 'FileText', labelKey: 'components.SidebarNav.item_editor' },
   'schema-infer': { icon: 'Search', labelKey: 'components.SidebarNav.item_infer' },
