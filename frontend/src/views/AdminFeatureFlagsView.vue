@@ -166,6 +166,7 @@
                       <ToggleSwitch
                         :checked="flag.currently_active"
                         :toggling="flagToggling[flag.name]"
+                        :disabled="isFlagTierLocked(flag) && !flag.currently_active"
                         :label="$t('views.AdminFeatureFlagsView.toggle_flag', { name: flag.name })"
                         :data-testid="'flag-toggle-' + flag.name"
                         @toggle="toggleFlag(flag)"
@@ -181,13 +182,19 @@
                       </span>
                     </td>
                     <td class="table-cell">
-                      <span :class="flag.currently_active ? 'badge badge-status-success' : 'badge badge-status-muted'">
-                        {{ flag.currently_active ? $t('views.AdminFeatureFlagsView.active') : $t('views.AdminFeatureFlagsView.inactive') }}
+                      <span :class="isFlagTierLocked(flag) ? 'badge badge-status-warning' : (flag.currently_active ? 'badge badge-status-success' : 'badge badge-status-muted')">
+                        <template v-if="isFlagTierLocked(flag)">
+                          <Lock class="inline-block w-3 h-3 mr-1 align-middle" aria-hidden="true" focusable="false" />
+                          {{ $t('views.AdminFeatureFlagsView.locked_requires_team') }}
+                        </template>
+                        <template v-else>
+                          {{ flag.currently_active ? $t('views.AdminFeatureFlagsView.active') : $t('views.AdminFeatureFlagsView.inactive') }}
+                        </template>
                       </span>
                     </td>
                     <td class="table-cell text-muted-foreground">{{ flag.description }}</td>
                     <td class="table-cell-numeric">
-                      <Button severity="secondary" outlined size="small" :data-testid="'flag-override-' + flag.name" @click.stop="openOverrideDialog(flag)">
+                      <Button severity="secondary" outlined size="small" :disabled="isFlagTierLocked(flag) && !flag.currently_active" :data-testid="'flag-override-' + flag.name" @click.stop="openOverrideDialog(flag)">
                         {{ getCurrentOverride(flag.name) === null ? $t('views.AdminFeatureFlagsView.default') : (getCurrentOverride(flag.name) ? $t('common.enabled') : $t('common.disabled')) }}
                       </Button>
                     </td>
@@ -226,7 +233,7 @@
   data-testid="flag-override-select"
   v-model="overrideDialogValue"
   :placeholder="$t('views.AdminFeatureFlagsView.select_override')"
-  :options="[{ value: 'null', label: $t('views.AdminFeatureFlagsView.system_default') }, { value: 'true', label: $t('views.AdminFeatureFlagsView.force_enabled') }, { value: 'false', label: $t('views.AdminFeatureFlagsView.force_disabled') }]"
+  :options="overrideOptions"
   option-label="label"
   option-value="value"
 >
@@ -252,6 +259,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
 import Button from 'primevue/button'
+import { Lock } from '@lucide/vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import Select from '../components/shared/AppSelect.vue'
 import { formatDateShort } from '../lib/formatDate'
@@ -375,6 +383,20 @@ const filteredWouldActivate = computed(() => {
 
 const hasResults = computed(() => filteredFlags.value.length > 0)
 
+function isFlagTierLocked(flag: FlagItem): boolean {
+  const flagRank = planStore.tierRanks[flag.tier]
+  const currentRank = planStore.tierRanks[planStore.currentTier]
+  if (flagRank === undefined || currentRank === undefined) return false
+  return flagRank > currentRank
+}
+
+// The backend only rejects ENABLING a flag whose tier outranks the org's
+// current tier; disabling (or clearing the override) stays allowed so a
+// downgraded org can turn a paid flag off.
+function canForceEnable(flag: FlagItem): boolean {
+  return !isFlagTierLocked(flag)
+}
+
 watch(searchQuery, () => {
   currentPage.value = 1
 })
@@ -413,10 +435,28 @@ const overrideDescription = computed(() =>
     : ''
 )
 
+const overrideOptions = computed(() => {
+  const options = [
+    { value: 'null', label: t('views.AdminFeatureFlagsView.system_default') },
+    { value: 'true', label: t('views.AdminFeatureFlagsView.force_enabled') },
+    { value: 'false', label: t('views.AdminFeatureFlagsView.force_disabled') },
+  ]
+  const flag = overrideDialogFlag.value
+  if (flag && !canForceEnable(flag)) {
+    return options.filter(option => option.value !== 'true')
+  }
+  return options
+})
+
 function openOverrideDialog(flag: FlagItem) {
   const current = planStore.orgOverrides[flag.name]
   overrideDialogFlag.value = flag
-  overrideDialogValue.value = current === true ? 'true' : current === false ? 'false' : 'null'
+  const preferred = current === true ? 'true' : current === false ? 'false' : 'null'
+  // A locked flag cannot be force-enabled (the backend 403s), so never
+  // pre-select the hidden 'true' option for it: the dialog must not appear
+  // to offer an action it cannot perform.
+  overrideDialogValue.value =
+    preferred === 'true' && !canForceEnable(flag) ? 'null' : preferred
   overrideDialogOpen.value = true
 }
 

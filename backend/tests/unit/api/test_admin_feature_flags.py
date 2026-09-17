@@ -5,12 +5,13 @@ from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.routes.admin_feature_flags import _resolve_tier
+from modulo.api.routes.admin_feature_flags import _enforce_team_tier_gate, _resolve_tier
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
@@ -89,6 +90,23 @@ def _clear_registry_overrides() -> Generator[None, None, None]:
     """
     yield
     FeatureFlagRegistry._overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _patch_resolve_tier() -> Generator[None, None, None]:
+    """Patch _resolve_tier to return 'community' by default.
+
+    The toggle and org-override endpoints now call _resolve_tier to check the
+    tier gate. Without this patch, the endpoint tries to hit the DB via
+    resolve_plan_context and fails with a MagicMock await error. Tests that
+    need a specific tier can override this mock.
+    """
+    with patch(
+        "modulo.api.routes.admin_feature_flags._resolve_tier",
+        new_callable=AsyncMock,
+        return_value="community",
+    ):
+        yield
 
 
 def _mock_registry() -> FeatureFlagRegistry:
@@ -430,15 +448,20 @@ class TestToggleFeatureFlag:
                 return_value=org,
             ),
             patch(
+                "modulo.api.routes.admin_feature_flags._resolve_tier",
+                new_callable=AsyncMock,
+                return_value="community",
+            ),
+            patch(
                 "modulo.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["name"] == "sso"
+        assert body["name"] == "webhook_trigger"
         assert "overridden" in body
 
     def test_toggle_unknown_flag_returns_404(self, client: TestClient) -> None:
@@ -509,20 +532,17 @@ class TestTogglePersistence:
                 return_value=redis_mock,
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
             assert resp.status_code == 200
             body = resp.json()
             assert body["overridden"] is True
             assert body["currently_active"] is True
-            # The durable write landed in the org settings (the DB-row proxy).
-            assert org.settings_json["feature_overrides"]["sso"] is True
-            # Cache invalidated so app-wide readers see the change immediately.
+            assert org.settings_json["feature_overrides"]["webhook_trigger"] is True
             redis_mock.delete.assert_awaited_once_with("feature-flags:00000000-0000-0000-0000-000000000001")
-            # Second request: a fresh build + org-override overlay must agree.
             listing = client.get("/api/v1/admin/feature-flags")
             assert listing.status_code == 200
-            sso = next(f for f in listing.json()["flags"] if f["name"] == "sso")
-            assert sso["currently_active"] is True
+            flag = next(f for f in listing.json()["flags"] if f["name"] == "webhook_trigger")
+            assert flag["currently_active"] is True
 
     def test_toggle_off_persists_and_second_request_sees_flag_inactive(self, client: TestClient) -> None:
         """Disabling via toggle must persist too: parallel_branches is active on
@@ -569,7 +589,7 @@ class TestTogglePersistence:
                 side_effect=RuntimeError("db down"),
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
         assert resp.status_code == 500
         body = resp.json()
         assert "overridden" not in body
@@ -594,7 +614,7 @@ class TestTogglePersistence:
                 side_effect=RuntimeError("redis down"),
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
         assert resp.status_code == 200
         assert resp.json()["overridden"] is True
 
@@ -629,18 +649,22 @@ class TestOrgOverrideCacheInvalidation:
                 return_value=org,
             ),
             patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
                 "modulo.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso/org-override", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger/org-override", json={"enabled": True})
         assert resp.status_code == 200
         assert resp.json()["override"] is True
         redis_mock.delete.assert_awaited_once_with(f"feature-flags:{self._ORG_ID}")
 
     def test_clear_org_override_invalidates_redis_cache(self, client: TestClient) -> None:
-        org = _org_with_overrides(sso=True)
+        org = _org_with_overrides(webhook_trigger=True)
         redis_mock = AsyncMock()
         with (
             patch(
@@ -649,12 +673,16 @@ class TestOrgOverrideCacheInvalidation:
                 return_value=org,
             ),
             patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
                 "modulo.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
         ):
-            resp = client.delete("/api/v1/admin/feature-flags/sso/org-override")
+            resp = client.delete("/api/v1/admin/feature-flags/webhook_trigger/org-override")
         assert resp.status_code == 200
         assert resp.json()["override"] is None
         redis_mock.delete.assert_awaited_once_with(f"feature-flags:{self._ORG_ID}")
@@ -670,11 +698,15 @@ class TestOrgOverrideCacheInvalidation:
                 return_value=org,
             ),
             patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
                 "modulo.api.routes.admin_feature_flags.Redis.from_url",
                 side_effect=RuntimeError("redis down"),
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso/org-override", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger/org-override", json={"enabled": True})
         assert resp.status_code == 200
         assert resp.json()["override"] is True
 
@@ -692,15 +724,19 @@ class TestOrgOverrideRoundTrip:
                 return_value=org,
             ),
             patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
                 "modulo.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
         ):
-            set_resp = client.put("/api/v1/admin/feature-flags/sso/org-override", json={"enabled": True})
+            set_resp = client.put("/api/v1/admin/feature-flags/webhook_trigger/org-override", json={"enabled": True})
             assert set_resp.status_code == 200
             assert set_resp.json()["override"] is True
-            get_resp = client.get("/api/v1/admin/feature-flags/sso/org-override")
+            get_resp = client.get("/api/v1/admin/feature-flags/webhook_trigger/org-override")
         assert get_resp.status_code == 200
         assert get_resp.json()["override"] is True
 
@@ -884,3 +920,41 @@ class TestResolveTierLicensing:
 
     async def test_community_plan_id_returns_community(self) -> None:
         assert await _resolve_tier_value(_org("community")) == "community"
+
+
+# ---------------------------------------------------------------------------
+# _enforce_team_tier_gate — org-level enable/disable asymmetry
+# ---------------------------------------------------------------------------
+# The gate is rank-based over the registry's effective tier ranks and only
+# rejects ENABLING a flag that outranks the org's current tier. Disabling must
+# always be permitted so an org that enabled a paid flag under a team licence
+# and later downgraded can still turn it off. Pinned here as a direct unit
+# test, independent of the hermetic BDD mock session setup.
+
+
+class TestEnforceTeamTierGate:
+    def test_enable_team_flag_on_community_is_forbidden(self) -> None:
+        registry = _mock_registry()
+        flag = registry.get_flag("sso")
+        assert flag is not None
+        with pytest.raises(HTTPException) as exc_info:
+            _enforce_team_tier_gate(flag, "sso", registry, enabled=True)
+        assert exc_info.value.status_code == 403
+
+    def test_disable_team_flag_on_community_is_allowed(self) -> None:
+        registry = _mock_registry()
+        flag = registry.get_flag("sso")
+        assert flag is not None
+        _enforce_team_tier_gate(flag, "sso", registry, enabled=False)
+
+    def test_enable_community_flag_on_community_is_allowed(self) -> None:
+        registry = _mock_registry()
+        flag = registry.get_flag("webhook_trigger")
+        assert flag is not None
+        _enforce_team_tier_gate(flag, "webhook_trigger", registry, enabled=True)
+
+    def test_enable_team_flag_on_team_is_allowed(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
+        flag = registry.get_flag("sso")
+        assert flag is not None
+        _enforce_team_tier_gate(flag, "sso", registry, enabled=True)

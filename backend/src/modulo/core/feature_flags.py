@@ -601,8 +601,25 @@ class FeatureFlagRegistry:
     def has_license_key(self) -> bool:
         return self._has_license_key
 
+    def _effective_tier_ranks(self) -> dict[str, int]:
+        """The tier -> rank map this registry ranks flags against.
+
+        Prefers the DB-backed catalog ranks loaded by ``_load_catalog`` and
+        falls back to the hardcoded ``TIER_RANK`` before/without a DB load, so
+        every rank comparison uses the same map that produced
+        ``currently_active``.
+        """
+        return getattr(self, "_tier_rank", TIER_RANK)
+
+    def tier_rank(self, tier: str) -> int:
+        """Rank of ``tier`` using this registry's effective rank map.
+
+        Unknown tiers rank 0 (community-equivalent), matching ``_refresh``.
+        """
+        return self._effective_tier_ranks().get(tier, 0)
+
     def _refresh(self) -> None:
-        tier_rank: dict[str, int] = getattr(self, "_tier_rank", TIER_RANK)
+        tier_rank = self._effective_tier_ranks()
         current_rank = tier_rank.get(self._current_tier, 0)
         # Flags seeded ``is_active=false`` in the DB catalog (experiments that
         # must ship default-OFF everywhere). ``__init__`` runs ``_refresh()``
@@ -652,7 +669,7 @@ class FeatureFlagRegistry:
         """Return flags whose tier is above community but inactive because license is community."""
         if self._current_tier != "community":
             return []
-        tier_rank: dict[str, int] = getattr(self, "_tier_rank", TIER_RANK)
+        tier_rank = self._effective_tier_ranks()
         community_rank = tier_rank.get("community", 0)
         return [f for f in self._flags if tier_rank.get(f.tier, 0) > community_rank and not f.currently_active]
 
@@ -660,26 +677,16 @@ class FeatureFlagRegistry:
         self,
         flag_name: str,
         org_id: uuid.UUID | None = None,
-        team_id: uuid.UUID | None = None,
-        user_id: uuid.UUID | None = None,
     ) -> bool:
-        """Resolve a flag with org/team/user overrides in resolution order:
+        """Resolve a flag from two layers: system override > org override > tier default.
 
-        user > team > org > system default.
+        Team-level and user-level overrides were removed (FAR-927). The
+        resolution order is now:
+            system override > org override > tier default.
         """
         sys_override = self._overrides.get(flag_name)
         if sys_override is not None:
             return sys_override
-
-        if user_id is not None:
-            user_val = await self._get_user_override(flag_name, user_id)
-            if user_val is not None:
-                return user_val
-
-        if team_id is not None:
-            team_val = await self._get_team_override(flag_name, team_id)
-            if team_val is not None:
-                return team_val
 
         if org_id is not None:
             org_val = await self._get_org_override(flag_name, org_id)
@@ -762,36 +769,6 @@ class FeatureFlagRegistry:
             flag_name, _load_factory, "settings_json", "Failed to check org flag override"
         )
 
-    async def _get_team_override(self, flag_name: str, team_id: uuid.UUID) -> bool | None:
-        """Check team.settings.feature_overrides for this flag."""
-
-        def _load_factory() -> Callable[[Any], Awaitable[Any]]:
-            from modulo.db.crud.team import get_team
-
-            async def _load(session: Any) -> Any:
-                return await get_team(session, team_id)
-
-            return _load
-
-        return await self._override_from_entity(
-            flag_name, _load_factory, "settings", "Failed to check team flag override"
-        )
-
-    async def _get_user_override(self, flag_name: str, user_id: uuid.UUID) -> bool | None:
-        """Check account.preferences.feature_overrides for this flag."""
-
-        def _load_factory() -> Callable[[Any], Awaitable[Any]]:
-            from modulo.db.crud.account import get_account_by_id
-
-            async def _load(session: Any) -> Any:
-                return await get_account_by_id(session, user_id)
-
-            return _load
-
-        return await self._override_from_entity(
-            flag_name, _load_factory, "preferences", "Failed to check user flag override"
-        )
-
 
 _registry: FeatureFlagRegistry | None = None
 
@@ -824,7 +801,7 @@ def get_registry() -> FeatureFlagRegistry:
     """Return a process-global default FeatureFlagRegistry.
 
     The registry uses the hardcoded ``_KNOWN_FLAGS`` list with a ``"community"``
-    tier.  Granular overrides (org/team/user) are resolved from the DB at query
+    tier.  Granular overrides (org) are resolved from the DB at query
     time via ``resolve_flag()``.
     """
     global _registry
