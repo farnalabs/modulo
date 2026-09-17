@@ -85,7 +85,7 @@ class TestStripReservedKeys:
         assert result["_work_item_refs"] == refs
 
     def test_empty_payload(self):
-        assert _strip_reserved_keys({}) == {}
+        assert not _strip_reserved_keys({})
 
     def test_non_reserved_keys_pass_through(self):
         payload = {"user_data": [1, 2, 3], "name": "test"}
@@ -414,9 +414,9 @@ class TestEmptyRunStats:
         stats = _empty_run_stats()
         assert stats["total_runs"] == 0
         assert stats["success_rate"] == 0.0
-        assert stats["runs_by_day"] == []
-        assert stats["failure_by_reason"] == []
-        assert stats["avg_duration_by_day"] == []
+        assert not stats["runs_by_day"]
+        assert not stats["failure_by_reason"]
+        assert not stats["avg_duration_by_day"]
 
 
 class TestFloorWorkItemId:
@@ -472,7 +472,7 @@ class TestCompletedDurationsMs:
         assert result == [1000, 3000]
 
     def test_empty_list(self):
-        assert _completed_durations_ms([]) == []
+        assert not _completed_durations_ms([])
 
 
 class TestRunsByDay:
@@ -490,7 +490,7 @@ class TestRunsByDay:
         assert result["2024-01-02"]["failed"] == 1
 
     def test_empty_list(self):
-        assert _runs_by_day({}) == {} or _runs_by_day([]) == {}
+        assert not _runs_by_day([])
 
 
 class TestFailureReasonCounts:
@@ -511,7 +511,7 @@ class TestFailureReasonCounts:
         assert len(result) == 0
 
     def test_empty_list(self):
-        assert _failure_reason_counts([]) == {}
+        assert not _failure_reason_counts([])
 
 
 class TestDurationByDay:
@@ -846,8 +846,9 @@ class TestEnsureOrgNotDeleted:
 
         from modulo.db.crud.run import _ensure_org_not_deleted
 
-        # Should not raise
         await _ensure_org_not_deleted(session, uuid.uuid4())
+        # If no exception was raised, the org status check passed.
+        session.execute.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
