@@ -312,6 +312,37 @@ jobs:
           # pre-deploy gate and schemathesis-nightly.yml both set REDIS_URL.
           REDIS_URL: "redis://localhost:6379/0"
 
+  tier1b-light:
+    # Tier 1b connectors (FAR-934): container-hosted LIGHT set only.
+    # Boots self-hostable connector servers + light local model servers via
+    # Testcontainers and drives the real Modulo connectors/backends against
+    # them. The heavy set (gitlab, vllm, tgi) is nightly-only — see
+    # tier1b-nightly.yml (it must NOT be a schedule trigger here: a
+    # schedule trigger fires this ENTIRE fast-validation suite, FAR-773).
+    name: Tier 1b testcontainers (light)
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Run Tier 1b light connector + model-server suites
+        run: |
+          uv run --no-build --no-sync pytest \
+            tests/integration/test_tier1b_connectors_light.py \
+            tests/integration/test_tier1b_models_light.py \
+            -q --tb=short --timeout=900 -p no:warnings
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+          # Tier 1b fixtures deliberately loud-skip (with a recorded reason)
+          # when a server cannot be stood up on the runner; successes assert
+          # against REAL server responses only.
+
   runner-ci-harness:
     # Bundled Runner CI harness (FAR-773): boots the deploy/compose/
     # runner-ci.yml rig (socket-proxy + dind + workspace network) and runs

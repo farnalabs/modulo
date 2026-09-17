@@ -1,0 +1,35 @@
+name: "CI: Tier 1b Nightly (heavy)"
+# Tier 1b heavy set (FAR-934): self-hosted GitLab CE, vllm, tgi. These images
+# are multi-GB and boot for minutes, so they are exercised on a nightly cron
+# here instead of on every PR. This is deliberately a separate workflow, NOT
+# a schedule trigger on ci.yml — a schedule trigger there fires the ENTIRE
+# fast-validation suite (FAR-773), while these tests need only one job.
+on:
+  schedule:
+    # Nightly at 03:07 UTC (offset from other nightlies to avoid runner pileup).
+    - cron: "7 3 * * *"
+  workflow_dispatch:
+
+env:
+  TESTCONTAINERS_RYUK_DISABLED: "true"
+
+jobs:
+  tier1b-nightly:
+    name: "Tier 1b testcontainers (heavy: gitlab, vllm, tgi)"
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Run Tier 1b heavy connector + model-server suites
+        run: |
+          uv run --no-build --no-sync pytest \
+            tests/integration/test_tier1b_connectors_heavy.py \
+            tests/integration/test_tier1b_models_heavy.py \
+            -q --tb=short --timeout=2400 -p no:warnings
