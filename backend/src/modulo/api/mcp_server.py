@@ -6954,18 +6954,20 @@ async def get_integration_status() -> dict[str, Any]:
 
         connector_list: list[dict[str, Any]] = []
         connector_lines = [
-            "| Name | Type | Status | Last Check | Error |",
-            "|------|------|--------|------------|-------|",
+            "| Name | Type | Status | Validation Level | Last Check | Error |",
+            "|------|------|--------|------------------|------------|-------|",
         ]
         for c in connector_rows:
             last_check = c.last_health_check_at.isoformat() if c.last_health_check_at else "never"
             error = c.last_health_check_error or ""
-            connector_lines.append(f"| {c.name} | {c.connector_type_id} | {c.status} | {last_check} | {error} |")
+            vl = getattr(c, "validation_level", None) or "unit-only"
+            connector_lines.append(f"| {c.name} | {c.connector_type_id} | {c.status} | {vl} | {last_check} | {error} |")
             connector_list.append(
                 {
                     "name": c.name,
                     "type": c.connector_type_id,
                     "status": c.status,
+                    "validation_level": vl,
                     "last_check": last_check,
                     "error": error,
                 }
@@ -6973,12 +6975,13 @@ async def get_integration_status() -> dict[str, Any]:
 
         backend_list: list[dict[str, Any]] = []
         backend_lines = [
-            "| Name | Provider | Model | Has Credentials | Status |",
-            "|------|----------|-------|-----------------|--------|",
+            "| Name | Provider | Model | Has Credentials | Status | Validation Level |",
+            "|------|----------|-------|-----------------|--------|------------------|",
         ]
         for b in backend_rows:
             has_creds = "yes" if b.credentials_ciphertext else "no"
-            backend_lines.append(f"| {b.name} | {b.provider} | {b.model_id} | {has_creds} | {b.status} |")
+            vl = getattr(b, "validation_level", None) or "unit-only"
+            backend_lines.append(f"| {b.name} | {b.provider} | {b.model_id} | {has_creds} | {b.status} | {vl} |")
             backend_list.append(
                 {
                     "name": b.name,
@@ -6986,6 +6989,7 @@ async def get_integration_status() -> dict[str, Any]:
                     "model": b.model_id,
                     "has_credentials": bool(b.credentials_ciphertext),
                     "status": b.status,
+                    "validation_level": vl,
                 }
             )
 
