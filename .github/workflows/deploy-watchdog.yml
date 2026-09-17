@@ -327,7 +327,7 @@ jobs:
           # would cap the re-dispatch after just 3 throttle events, even though
           # no deploy was attempted. Filter them out of the consecutive-failure
           # check: only runs where the deploy job actually ran and failed count.
-          RECENT="$(PAYLOAD="$RUNS_JSON" python3 -c '
+          RECENT="$(PAYLOAD="$RUNS_JSON" python3 - <<'PYEOF'
           import json, os
           try:
               runs = json.loads(os.environ["PAYLOAD"])
@@ -360,7 +360,8 @@ jobs:
                   pass
           all_failed = len(conclusions) == 3 and all(c != "success" for c in conclusions)
           print("all-failed" if all_failed else "ok")
-          ')" || RECENT="ok"
+          PYEOF
+          )" || RECENT="ok"
           if [ "$RECENT" != "ok" ]; then
             echo "::error::deploy-watchdog: 3 consecutive failed deploys; not re-dispatching - investigate deploy.yml failures; deploy-staleness-check.yml escalates staleness independently"
             echo "consecutive_failures=true" >> "$GITHUB_OUTPUT"
