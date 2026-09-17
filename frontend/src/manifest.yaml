@@ -4267,6 +4267,15 @@ elements:
       - testid: settings-sso-delete-cancel
         type: button
         dynamic_testid: false
+      - testid: sso-callback-url-copy
+        type: button
+        dynamic_testid: false
+      - testid: sso-callback-url-copied
+        type: element
+        dynamic_testid: false
+      - testid: sso-tenant-domain
+        type: input
+        dynamic_testid: false
       - testid: json-viewer
         type: element
         dynamic_testid: false
