@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.daily_run_count import (
@@ -44,6 +45,16 @@ def _exec_scalars(items: list[object]) -> MagicMock:
     scalars_mock.all = MagicMock(return_value=items)
     result.scalars = MagicMock(return_value=scalars_mock)
     return result
+
+
+def _where_sql(mock_session: AsyncMock) -> str:
+    """Compile the WHERE clause of the statement passed to ``session.execute``.
+
+    Asserting on the compiled predicates (rather than only that ``execute`` was
+    awaited) proves the requested filters were actually applied to the query.
+    """
+    stmt = mock_session.execute.await_args.args[0]
+    return str(stmt.whereclause.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
 
 
 # ── upsert_daily_run_count ──────────────────────────────────────────
@@ -129,42 +140,46 @@ class TestGetDailyRunCounts:
 
         await get_daily_run_counts(mock_session, org_id=_ORG_ID, team_id=_UNSET)
 
-        mock_session.execute.assert_awaited_once()
+        where = _where_sql(mock_session)
+        assert f"organisation_id = '{_ORG_ID}'" in where
+        assert "team_id" not in where
 
     async def test_team_id_none_filters_org_level(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_scalars([]))
 
         await get_daily_run_counts(mock_session, org_id=_ORG_ID, team_id=None)
 
-        mock_session.execute.assert_awaited_once()
+        assert "org_daily_run_counts.team_id IS NULL" in _where_sql(mock_session)
 
     async def test_team_id_specific_filters_by_team(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_scalars([]))
 
         await get_daily_run_counts(mock_session, org_id=_ORG_ID, team_id=_TEAM_ID)
 
-        mock_session.execute.assert_awaited_once()
+        assert f"org_daily_run_counts.team_id = '{_TEAM_ID}'" in _where_sql(mock_session)
 
     async def test_since_filter(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_scalars([]))
 
         await get_daily_run_counts(mock_session, org_id=_ORG_ID, since=date(2026, 1, 1))
 
-        mock_session.execute.assert_awaited_once()
+        assert "org_daily_run_counts.run_date >= '2026-01-01'" in _where_sql(mock_session)
 
     async def test_until_filter(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_scalars([]))
 
         await get_daily_run_counts(mock_session, org_id=_ORG_ID, until=date(2026, 12, 31))
 
-        mock_session.execute.assert_awaited_once()
+        assert "org_daily_run_counts.run_date <= '2026-12-31'" in _where_sql(mock_session)
 
     async def test_both_date_filters(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_scalars([]))
 
         await get_daily_run_counts(mock_session, org_id=_ORG_ID, since=date(2026, 1, 1), until=date(2026, 6, 30))
 
-        mock_session.execute.assert_awaited_once()
+        where = _where_sql(mock_session)
+        assert "org_daily_run_counts.run_date >= '2026-01-01'" in where
+        assert "org_daily_run_counts.run_date <= '2026-06-30'" in where
 
 
 # ── get_org_spend_total ────────────────────────────────────────────
@@ -197,4 +212,6 @@ class TestGetOrgSpendTotal:
         total = await get_org_spend_total(mock_session, org_id=_ORG_ID, since=date(2026, 1, 1))
 
         assert total == Decimal("10.00")
-        mock_session.execute.assert_awaited_once()
+        where = _where_sql(mock_session)
+        assert "org_daily_run_counts.team_id IS NULL" in where
+        assert "org_daily_run_counts.run_date >= '2026-01-01'" in where
