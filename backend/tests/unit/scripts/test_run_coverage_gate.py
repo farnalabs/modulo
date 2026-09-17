@@ -301,7 +301,8 @@ def test_evaluate_unmeasured_file_fails(tmp_path):
     fake_report = tmp_path / "coverage.xml"
     fake_report.write_text("<coverage/>")
 
-    # 50 changed lines total, diff-cover only measured 20
+    # 50 changed production lines total, diff-cover only measured 20 of them
+    # (all in src/calc.py); src/new_module.py is absent from the report.
     with (
         patch.object(
             mod,
@@ -317,7 +318,11 @@ def test_evaluate_unmeasured_file_fails(tmp_path):
             "_get_diff_cover_json",
             return_value={
                 "src_stats": {
-                    "src/calc.py": {"percent_covered": 100.0, "covered_lines": [1, 2], "violation_lines": []}
+                    "src/calc.py": {
+                        "percent_covered": 100.0,
+                        "covered_lines": list(range(1, 21)),
+                        "violation_lines": [],
+                    }
                 },
                 "total_num_lines": 20,
                 "total_num_violations": 0,
@@ -542,3 +547,64 @@ def test_zero_changed_lines_skips(tmp_path):
     assert result.passed is True
     assert result.tiny_diff is False
     assert result.skipped is True
+
+
+# ---------------------------------------------------------------------------
+# Production-only coverage (excluded/test-file lines must not inflate it)
+# ---------------------------------------------------------------------------
+def test_production_coverage_ignores_non_production_files():
+    changed = {"frontend/src/App.vue": 4}
+    json_data = {
+        "src_stats": {
+            "frontend/src/App.vue": {"covered_lines": [1, 2], "violation_lines": []},
+            "frontend/src/foo.spec.ts": {"covered_lines": [1, 2, 3, 4, 5, 6], "violation_lines": []},
+        },
+        "total_num_lines": 8,
+        "num_changed_lines": 8,
+        "total_percent_covered": 100.0,
+    }
+
+    assert mod._production_coverage_from_json(changed, json_data) == (2, 2)
+
+
+def test_production_coverage_caps_measured_at_changed_lines():
+    changed = {"src/calc.py": 3}
+    json_data = {
+        "src_stats": {"src/calc.py": {"covered_lines": [1, 2, 3, 4, 5], "violation_lines": []}},
+        "total_num_lines": 5,
+        "num_changed_lines": 5,
+        "total_percent_covered": 100.0,
+    }
+
+    assert mod._production_coverage_from_json(changed, json_data) == (3, 3)
+
+
+def test_production_coverage_from_text_detects_unmeasured_lines():
+    pct, measured, unmeasured = mod._production_coverage_from_text(REAL_DIFF_COVER_PASS_STDOUT, 2)
+
+    assert measured == 1
+    assert unmeasured == 1
+    assert pct == 50.0
+
+
+# ---------------------------------------------------------------------------
+# LCOV path normalisation (vitest emits paths relative to frontend/)
+# ---------------------------------------------------------------------------
+def test_normalize_js_report_resolves_relative_paths(tmp_path):
+    report = tmp_path / "lcov.info"
+    report.write_text("TN:\nSF:src/App.vue\nDA:1,1\nSF:/abs/other.vue\nDA:2,1\nend_of_record\n")
+
+    normalised = mod._normalize_js_report(report, "frontend")
+
+    assert normalised != report
+    content = normalised.read_text()
+    assert f"SF:{(mod.REPO_ROOT / 'frontend' / 'src/App.vue').resolve()}" in content
+    assert "SF:/abs/other.vue" in content
+    normalised.unlink()
+
+
+def test_normalize_js_report_is_noop_for_absolute_paths(tmp_path):
+    report = tmp_path / "lcov.info"
+    report.write_text("SF:/abs/App.vue\n")
+
+    assert mod._normalize_js_report(report, "frontend") == report

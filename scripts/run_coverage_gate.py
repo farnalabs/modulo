@@ -9,8 +9,12 @@ ourselves in CI via this script.
 
 The script runs ``diff-cover`` against the backend Cobertura XML report and
 the frontend LCOV report *separately*, using ``--compare-branch`` to diff
-against the PR's base branch.  It prints a clear summary per language and
-exits non-zero when a threshold is breached or a required report is missing.
+against the PR's base branch.  The comparison uses diff-cover's merge-base
+semantics (the branch's actual changes, not main's newer content), and the
+frontend LCOV paths are normalised before the run because vitest emits them
+relative to ``frontend/`` rather than the repo root.  It prints a clear
+summary per language and exits non-zero when a threshold is breached or a
+required report is missing.
 
 Gate semantics (fail-closed):
 - **Report file missing** → ERROR, exit 1.  A missing report means the
@@ -18,16 +22,20 @@ Gate semantics (fail-closed):
   Fail-closed so a broken pipeline never silently disables the gate.
   Use ``--allow-missing-reports`` for local runs where you may not have
   every report.
-- **No changed coverable lines** → SKIP, exit 0.  This is the legitimate
-  test-only / docs-only case where diff-cover reports "No lines with
-  coverage information in this diff".
+- **No changed production lines** → SKIP, exit 0.  A test-only or docs-only
+  diff has no production files once the exclusions are applied.
+- **Changed production lines, but no coverage data for them** → FAIL,
+  exit 1.  If production lines changed but diff-cover cannot match any of
+  them to the coverage report (the report does not contain those files),
+  every changed line counts as unmeasured coverage, i.e. 0%.
 - **Threshold breach** → FAIL, exit 1.
 - **Tiny diff (≤10 non-blank lines)** → PASS with a note.  Trivial
   changes (typo fixes, label tweaks) should not fail the gate.
 - **Unmeasured changed file** → counts as 0% coverage.  A brand-new
   production file with no coverage in the report is a gate failure.
-  Detected by comparing diff-cover's ``total_num_lines`` against the
-  actual number of non-blank changed lines from ``git diff``.
+  Detected by comparing the production-only measured lines reported by
+  diff-cover against the non-blank changed production lines from
+  ``git diff`` (both scoped to the same file set).
 
 Usage (local)::
 
@@ -43,11 +51,13 @@ Usage (CI)::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,6 +99,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 _NO_CHANGED_LINES_RE = re.compile(r"No lines with coverage information in this diff", re.IGNORECASE)
 _COVERAGE_LINE_RE = re.compile(r"Coverage:\s*(\d+(?:\.\d+)?)\s*%")
 _THRESHOLD_NOT_MET_RE = re.compile(r"Failure\. Coverage is below", re.IGNORECASE)
+_DIFF_COVER_TOTAL_RE = re.compile(r"Total:\s*(\d+)\s+line", re.IGNORECASE)
+
+# ``git diff`` filter and language pathspecs for changed-file discovery.
+_DIFF_FILTER = "--diff-filter=ACM"
+_EXTENSIONS: dict[str, tuple[str, ...]] = {
+    "Python": ("*.py",),
+    "JavaScript": ("*.ts", "*.tsx", "*.js", "*.jsx", "*.vue"),
+}
+
+# Directory (relative to the repo root) that the frontend LCOV report's
+# relative ``SF:`` paths are resolved against.
+DEFAULT_JS_SRC_ROOT = "frontend"
 
 # Allow-list for values that flow into a subprocess command line.  Deriving the
 # value from a regex ``fullmatch().group(0)`` gives the taint analyser a string
@@ -132,56 +154,101 @@ def _sanitize_path(value: str, name: str) -> str:
 def _is_excluded(path: str) -> bool:
     """Check if a file path matches any exclusion pattern."""
     from fnmatch import fnmatch
-    for pattern in _EXCLUDE_PATTERNS:
-        if fnmatch(path, pattern):
-            return True
-    return False
+
+    return any(fnmatch(path, pattern) for pattern in _EXCLUDE_PATTERNS)
 
 
-def _get_changed_production_files(compare_branch: str, language: str) -> dict[str, int]:
-    """Return {filepath: non_blank_line_count} for changed production files.
+def _safe_repo_path(value: str) -> str | None:
+    """Constrain a repo-relative path to a safe character set.
 
-    Uses ``git diff <compare_branch>...HEAD`` (three-dot / merge-base) to find
-    changed files, then counts non-blank added lines in the diff hunks.
-    Excludes files matching the exclusion patterns.  Returns empty dict if git
-    diff fails.
+    Returns the matched value (so the taint analyser sees a string bounded by
+    the regex) or ``None`` when the path is empty or contains disallowed
+    characters.  Values that start with ``-`` are rejected so a path can never
+    be mistaken for a CLI flag.
+    """
+    if not value or value.startswith("-"):
+        return None
+    matched = _PATH_CHARS_RE.fullmatch(value)
+    return matched.group(0) if matched else None
+
+
+def _diff_range(compare_branch: str) -> str:
+    """Return the validated ``<compare_branch>...HEAD`` merge-base range.
 
     The three-dot range MUST match the one diff-cover uses internally
     (``GitDiffTool.diff_committed`` defaults to ``<compare_branch>...HEAD``).  A
     two-dot ``<compare_branch> HEAD`` range compares the tips instead, so every
-    commit that landed on the base branch after this branch diverged shows up as
-    a changed line that diff-cover never measures.  That inflates
-    ``changed_lines`` and fails the gate with a bogus "N unmeasured lines"
+    commit that landed on the base branch after this branch diverged shows up
+    as a changed line that diff-cover never measures - inflating
+    ``changed_lines`` and failing the gate with a bogus "N unmeasured lines"
     result even though the PR touched no production files at all.
+
+    ``compare_branch`` is validated with ``_validate_ref`` (regex fullmatch,
+    rejects a leading ``-``) before it is embedded, so the range cannot carry an
+    injection payload or be read as an extra argument.
     """
-    if language == "Python":
-        globs = ["*.py"]
-    elif language == "JavaScript":
-        globs = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.vue"]
-    else:
-        return {}
+    safe_ref = _validate_ref(compare_branch, "compare-branch")
+    return f"{safe_ref}...HEAD"
 
-    # Validate before it reaches subprocess (defense against argument
-    # injection), then widen to the merge-base range diff-cover uses.
+
+def _count_added_lines(diff_range: str, filepath: str) -> int:
+    """Count non-blank lines added to *filepath* within *diff_range*.
+
+    Both arguments are regex fullmatch-bounded before they reach
+    ``subprocess`` (resolves pythonsecurity:S8705).
+    """
+    safe_range = _safe_repo_path(diff_range)
+    safe_path = _safe_repo_path(filepath)
+    if safe_range is None or safe_path is None:
+        return 0
     try:
-        safe_compare_branch = _validate_ref(compare_branch, "compare-branch")
-    except ValueError:
-        return {}
-    diff_range = f"{safe_compare_branch}...HEAD"
-
-    diff_args = ["git", "diff", "--diff-filter=ACM", "--name-only", diff_range, "--", *globs]
-
-    try:
-        result = subprocess.run(  # NOSONAR - diff_range is regex fullmatch-bounded by _validate_ref (rejects values starting with '-' and disallowed characters); subprocess has no shell, so no argument injection is reachable
-            diff_args,
+        result = subprocess.run(
+            ["git", "diff", _DIFF_FILTER, safe_range, "--", safe_path],
             capture_output=True,
             text=True,
             check=False,
             cwd=str(REPO_ROOT),
         )
-        if result.returncode != 0:
-            return {}
     except Exception:
+        return 0
+    if result.returncode != 0:
+        return 0
+    return sum(
+        1
+        for diff_line in result.stdout.splitlines()
+        if diff_line.startswith("+") and not diff_line.startswith("+++") and diff_line[1:].strip()
+    )
+
+
+def _get_changed_production_files(compare_branch: str, language: str) -> dict[str, int]:
+    """Return {filepath: non_blank_line_count} for changed production files.
+
+    Diffs ``<compare_branch>...HEAD`` (three-dot / merge-base, matching
+    diff-cover) to find changed files, then counts non-blank added lines per
+    file.  Files matching the exclusion patterns are skipped.  Returns an empty
+    dict when the range is invalid or the diff fails.
+    """
+    pathspecs = _EXTENSIONS.get(language)
+    if not pathspecs:
+        return {}
+    try:
+        diff_range = _diff_range(compare_branch)
+    except ValueError:
+        return {}
+    safe_range = _safe_repo_path(diff_range)
+    if safe_range is None:
+        return {}
+    try:
+        result = subprocess.run(
+            ["git", "diff", _DIFF_FILTER, "--name-only", safe_range, "--", *pathspecs],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(REPO_ROOT),
+        )
+    except Exception:
+        return {}
+    if result.returncode != 0:
         return {}
 
     files: dict[str, int] = {}
@@ -189,28 +256,49 @@ def _get_changed_production_files(compare_branch: str, language: str) -> dict[st
         filepath = line.strip()
         if not filepath or _is_excluded(filepath):
             continue
-        # Count non-blank added lines in the diff for this file
-        file_diff_args = ["git", "diff", "--diff-filter=ACM", diff_range, "--", filepath]
-        try:
-            fd_result = subprocess.run(  # NOSONAR - diff_range is regex fullmatch-bounded by _validate_ref (rejects values starting with '-' and disallowed characters); filepath comes from git stdout, not caller input; subprocess has no shell
-                file_diff_args,
-                capture_output=True,
-                text=True,
-                check=False,
-                cwd=str(REPO_ROOT),
-            )
-            if fd_result.returncode != 0:
-                continue
-            count = 0
-            for diff_line in fd_result.stdout.splitlines():
-                if diff_line.startswith("+") and not diff_line.startswith("+++"):
-                    if diff_line[1:].strip():
-                        count += 1
-            if count > 0:
-                files[filepath] = count
-        except Exception:
-            continue
+        count = _count_added_lines(diff_range, filepath)
+        if count > 0:
+            files[filepath] = count
     return files
+
+
+def _normalize_js_report(report_path: Path, src_root: str) -> Path:
+    """Rewrite relative ``SF:`` entries in an LCOV report to absolute paths.
+
+    vitest's v8 reporter emits source paths relative to the frontend project
+    root (e.g. ``src/App.vue``), while diff-cover matches report paths against
+    repo-relative git diff paths (``frontend/src/App.vue``).  Left as-is, no
+    frontend file ever matches and every changed JS line is reported as
+    unmeasured.  Resolving the relative entries against *src_root* (under the
+    repo root) makes diff-cover relativise them back to the same repo-relative
+    paths as the diff.
+
+    Returns the path to a normalised copy when anything changed, otherwise the
+    original path.  The caller owns (and deletes) any returned temp file.
+    """
+    root = (REPO_ROOT / src_root).resolve()
+    try:
+        lines = report_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return report_path
+
+    rewritten: list[str] = []
+    changed = False
+    for line in lines:
+        raw = line[len("SF:") :] if line.startswith("SF:") else ""
+        if raw and not Path(raw).is_absolute():
+            rewritten.append(f"SF:{(root / raw).resolve()}")
+            changed = True
+        else:
+            rewritten.append(line)
+    if not changed:
+        return report_path
+
+    fd, tmp_name = tempfile.mkstemp(prefix="lcov-normalized-", suffix=".info")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    tmp_path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+    return tmp_path
 
 
 @dataclass(frozen=True)
@@ -235,8 +323,8 @@ class GateResult:
             return f"[{self.language}] PASS — tiny diff ({self.changed_lines} lines, ≤{TINY_DIFF_THRESHOLD} threshold)"
         if self.unmeasured_lines > 0 and not self.passed:
             return (
-                f"[{self.language}] FAIL — {self.actual_pct:.1f}% measured, "
-                f"{self.unmeasured_lines} unmeasured lines (0%) < {self.threshold}%"
+                f"[{self.language}] FAIL — {self.actual_pct:.1f}% effective coverage, "
+                f"{self.unmeasured_lines} unmeasured line(s) at 0% < {self.threshold}%"
             )
         if self.passed:
             pct = f"{self.actual_pct:.1f}%" if self.actual_pct is not None else "?"
@@ -309,7 +397,7 @@ def _get_diff_cover_json(report_path: Path, compare_branch: str) -> dict | None:
         "--format",
         f"json:{safe_json_path}",
     ]
-    result = subprocess.run(  # NOSONAR
+    subprocess.run(  # NOSONAR
         cmd,
         capture_output=True,
         text=True,
@@ -320,15 +408,61 @@ def _get_diff_cover_json(report_path: Path, compare_branch: str) -> dict | None:
     if not json_report_path.exists():
         return None
     try:
-        data = json.loads(json_report_path.read_text())
-        return data
+        return json.loads(json_report_path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
     finally:
-        try:
+        with contextlib.suppress(OSError):
             json_report_path.unlink()
-        except OSError:
-            pass
+
+
+def _production_coverage_from_json(changed_files: dict[str, int], json_data: dict | None) -> tuple[int, int] | None:
+    """Return ``(covered_lines, measured_lines)`` over production files only.
+
+    diff-cover's top-level totals cover its *whole* diff - including test files
+    the gate excludes - so pairing them with a production-only denominator can
+    push coverage above 100%.  Instead, sum the per-file ``covered_lines`` and
+    ``violation_lines`` from ``src_stats``, restricted to the production files
+    the gate counts.  Each file's measured lines are capped at its changed-line
+    count so a report measuring more lines than the gate counted cannot inflate
+    the result.
+
+    Returns ``None`` when *json_data* carries no ``src_stats`` mapping.
+    """
+    if not json_data or not isinstance(json_data.get("src_stats"), dict):
+        return None
+    src_stats = json_data["src_stats"]
+    covered = 0
+    measured = 0
+    for path, changed in changed_files.items():
+        stats = src_stats.get(path)
+        if not isinstance(stats, dict):
+            continue
+        file_covered = len(stats.get("covered_lines") or [])
+        file_missing = len(stats.get("violation_lines") or [])
+        file_measured = min(file_covered + file_missing, changed)
+        covered += min(file_covered, file_measured)
+        measured += file_measured
+    return covered, measured
+
+
+def _production_coverage_from_text(output: str, changed_lines: int) -> tuple[float, int, int] | None:
+    """Fallback coverage parse from diff-cover's text output.
+
+    Returns ``(effective_pct, measured_lines, unmeasured_lines)`` or ``None``
+    when the output carries no coverage line.  The ``Total:`` line gives the
+    number of lines diff-cover measured; anything the gate counted beyond that
+    is unmeasured and scored at 0%.
+    """
+    coverage_match = _COVERAGE_LINE_RE.search(output)
+    if coverage_match is None:
+        return None
+    measured_pct_val = float(coverage_match.group(1))
+    total_match = _DIFF_COVER_TOTAL_RE.search(output)
+    measured_lines = min(int(total_match.group(1)), changed_lines) if total_match else changed_lines
+    unmeasured_lines = max(0, changed_lines - measured_lines)
+    effective_pct = measured_pct_val * (measured_lines / changed_lines) if changed_lines else 0.0
+    return effective_pct, measured_lines, unmeasured_lines
 
 
 def evaluate(
@@ -345,10 +479,11 @@ def evaluate(
     report is a gate failure — the upstream job or artifact download broke.
     When True (local convenience), a missing report is a skip.
 
-    The gate detects unmeasured files by comparing the total non-blank changed
-    lines (from ``git diff``) against diff-cover's ``total_num_lines``.  If
-    diff-cover measured fewer lines than were actually changed, the unmeasured
-    lines count as 0% coverage.
+    The gate detects unmeasured files by comparing the non-blank changed
+    production lines (from ``git diff``) against the production-only lines
+    diff-cover measured.  Lines it did not measure count as 0% coverage, and
+    the numerator and denominator always come from the same production-only
+    file set.
     """
     # --- Get changed production files and count non-blank lines ---
     changed_files = _get_changed_production_files(compare_branch, language)
@@ -405,13 +540,10 @@ def evaluate(
     json_data = _get_diff_cover_json(report_path.resolve(), compare_branch)
     rc, output = _run_diff_cover(report_path.resolve(), compare_branch, fail_under)
 
-    # --- No changed coverable lines → skip (legitimate test/docs-only PR) ---
-    # But only if ALL changed lines are unmeasured (diff-cover found nothing)
+    # --- diff-cover found no coverage data for the changed files -> FAIL ---
+    # Reaching here means changed_lines > 0 (zero changed production lines
+    # already skipped above), so every changed line is unmeasured: 0%.
     if _NO_CHANGED_LINES_RE.search(output):
-        # diff-cover found no coverage data for any changed file.
-        # All changed lines are unmeasured → 0% coverage → FAIL.
-        # Exception: if there are genuinely no changed production lines (should
-        # not happen since we checked changed_lines above), skip.
         return GateResult(
             language=language,
             skipped=False,
@@ -424,33 +556,24 @@ def evaluate(
             unmeasured_lines=changed_lines,
         )
 
-    # --- Extract measured coverage from JSON report ---
+    # --- Extract measured coverage (production files only) ---
+    # changed_lines > 0 here: the zero case returned above, so the divisions
+    # below are safe.
     measured_pct: float | None = None
     measured_lines = 0
     unmeasured_lines = 0
 
-    if json_data and "src_stats" in json_data:
-        src_stats = json_data["src_stats"]
-        measured_lines = json_data.get("total_num_lines", 0)
-        total_in_diff = json_data.get("num_changed_lines", changed_lines)
-        # Lines in the diff that diff-cover didn't measure = unmeasured
+    production_stats = _production_coverage_from_json(changed_files, json_data)
+    if production_stats is not None:
+        covered_lines, measured_lines = production_stats
         unmeasured_lines = max(0, changed_lines - measured_lines)
-
-        # Compute weighted coverage: measured lines × their coverage + unmeasured × 0
-        if changed_lines > 0:
-            measured_pct_val = json_data.get("total_percent_covered", 0.0)
-            # total_percent_covered is for measured lines only; recalculate
-            # with unmeasured lines counted as 0%
-            numerator = measured_lines * (measured_pct_val / 100.0)
-            measured_pct = (numerator / changed_lines) * 100.0
+        measured_pct = (covered_lines / changed_lines) * 100.0
     else:
-        # Fallback: parse the text output
-        m = _COVERAGE_LINE_RE.search(output)
-        if m:
-            measured_pct = float(m.group(1))
-            # If we can't get measured_lines from JSON, assume diff-cover
-            # measured all changed lines (conservative)
-            unmeasured_lines = 0
+        # Fallback: parse the text output (with the measured-line count so
+        # unmeasured lines are still detected when the JSON report is absent).
+        text_stats = _production_coverage_from_text(output, changed_lines)
+        if text_stats is not None:
+            measured_pct, measured_lines, unmeasured_lines = text_stats
 
     # --- Determine pass/fail ---
     if measured_pct is not None:
@@ -458,7 +581,9 @@ def evaluate(
         if not passed:
             reason = f"coverage {measured_pct:.1f}% (with {unmeasured_lines} unmeasured lines at 0%) is below threshold {fail_under}%"
         elif unmeasured_lines > 0:
-            reason = f"coverage {measured_pct:.1f}% >= {fail_under}% (but {unmeasured_lines} unmeasured lines counted at 0%)"
+            reason = (
+                f"coverage {measured_pct:.1f}% >= {fail_under}% (but {unmeasured_lines} unmeasured lines counted at 0%)"
+            )
         else:
             reason = ""
     elif rc == 0:
@@ -515,7 +640,7 @@ def _write_summary(results: list[GateResult]) -> None:
     # Write to GITHUB_STEP_SUMMARY if available
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if step_summary:
-        with open(step_summary, "a") as f:
+        with Path(step_summary).open("a") as f:
             f.write("\n".join(summary_lines) + "\n")
 
     # Also print to stdout
@@ -556,6 +681,14 @@ def main() -> int:
         help="Path to the frontend LCOV coverage report.",
     )
     parser.add_argument(
+        "--js-src-root",
+        default=DEFAULT_JS_SRC_ROOT,
+        help=(
+            "Directory (relative to the repo root) that the LCOV report's "
+            f"relative SF paths resolve against (default: {DEFAULT_JS_SRC_ROOT})."
+        ),
+    )
+    parser.add_argument(
         "--allow-missing-reports",
         action="store_true",
         default=False,
@@ -581,49 +714,32 @@ def main() -> int:
     else:
         js_report = None
 
+    # Normalise the LCOV report so diff-cover can match its paths (see
+    # _normalize_js_report).  The temp file, if any, is cleaned up below.
+    normalised_js_report: Path | None = None
+    if js_report is not None and js_report.exists():
+        js_src_root = _sanitize_path(args.js_src_root, "js-src-root")
+        normalised = _normalize_js_report(js_report, js_src_root)
+        if normalised != js_report:
+            normalised_js_report = normalised
+            js_report = normalised
+
     results: list[GateResult] = []
-
-    if python_report is not None:
-        results.append(
-            evaluate(
-                "Python",
-                python_report,
-                args.compare_branch,
-                args.fail_under,
-                allow_missing=args.allow_missing_reports,
+    try:
+        for language, report in (("Python", python_report), ("JavaScript", js_report)):
+            results.append(
+                evaluate(
+                    language,
+                    report,
+                    args.compare_branch,
+                    args.fail_under,
+                    allow_missing=args.allow_missing_reports,
+                )
             )
-        )
-    else:
-        results.append(
-            evaluate(
-                "Python",
-                None,
-                args.compare_branch,
-                args.fail_under,
-                allow_missing=args.allow_missing_reports,
-            )
-        )
-
-    if js_report is not None:
-        results.append(
-            evaluate(
-                "JavaScript",
-                js_report,
-                args.compare_branch,
-                args.fail_under,
-                allow_missing=args.allow_missing_reports,
-            )
-        )
-    else:
-        results.append(
-            evaluate(
-                "JavaScript",
-                None,
-                args.compare_branch,
-                args.fail_under,
-                allow_missing=args.allow_missing_reports,
-            )
-        )
+    finally:
+        if normalised_js_report is not None:
+            with contextlib.suppress(OSError):
+                normalised_js_report.unlink()
 
     # --- Summary ---
     print("\n=== Coverage Gate Summary ===")
