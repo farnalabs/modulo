@@ -25,17 +25,20 @@ Gate semantics (fail-closed):
 - **No changed production lines** → SKIP, exit 0.  A test-only or docs-only
   diff has no production files once the exclusions are applied.
 - **Changed production lines, but no coverage data for them** → FAIL,
-  exit 1.  If production lines changed but diff-cover cannot match any of
-  them to the coverage report (the report does not contain those files),
-  every changed line counts as unmeasured coverage, i.e. 0%.
+  exit 1.  If production lines changed but diff-cover cannot match them to
+  the coverage report (the report does not contain those files at all), every
+  such changed line counts as unmeasured coverage, i.e. 0%.
 - **Threshold breach** → FAIL, exit 1.
 - **Tiny diff (≤10 non-blank lines)** → PASS with a note.  Trivial
   changes (typo fixes, label tweaks) should not fail the gate.
 - **Unmeasured changed file** → counts as 0% coverage.  A brand-new
   production file with no coverage in the report is a gate failure.
-  Detected by comparing the production-only measured lines reported by
-  diff-cover against the non-blank changed production lines from
-  ``git diff`` (both scoped to the same file set).
+  Detected by comparing the changed production files against the report's
+  ``src_stats``: a file with no entry contributes its non-blank changed lines
+  to the denominator at 0%.  Lines in a file that IS in the report are only
+  counted when coverage.py records them as executable, so non-executable
+  additions (annotations, decorators, continuations) never count against a
+  tested module.
 
 Usage (local)::
 
@@ -77,6 +80,15 @@ _EXCLUDE_PATTERNS: list[str] = [
     "scripts/**",
     "frontend/scripts/**",
     "docs/api/examples/**",
+    # Auto-generated code: ``frontend/src/lib/api/schema.ts`` is emitted by
+    # openapi-typescript (scripts/run_generate_api_types.py) and carries no
+    # executable logic, so it never appears in the frontend LCOV report. It is
+    # already excluded from the SonarCloud analysis scope in
+    # sonar-project.properties / .sonarcloud.properties (``**/schema.ts``);
+    # counting its thousands of generated lines here as "0% unmeasured" would
+    # fail the gate on any PR that regenerates the API types.
+    "**/schema.ts",
+    "**/locales/**",
     "tests/**",
     "test_*/**",
     "**/test_*",
@@ -458,6 +470,26 @@ def _production_coverage_from_json(changed_files: dict[str, int], json_data: dic
     return covered, measured
 
 
+def _unmeasured_file_lines(changed_files: dict[str, int], json_data: dict | None) -> int:
+    """Count changed lines in production files ABSENT from the coverage report.
+
+    The "unmeasured lines at 0%" penalty exists to fail a brand-new production
+    file that never reaches the report (see the module docstring).  It must NOT
+    also punish the non-executable lines *inside* a file that IS measured:
+    ``git diff`` counts every non-blank added line (Pydantic field annotations,
+    ``@router`` decorators, multi-line call continuations, ...) while
+    coverage.py only records executable statements, so subtracting the two
+    charged every annotation to the file as uncovered and made a fully-tested
+    route module mathematically unable to clear the threshold.
+
+    Returns the summed changed-line count of files with no ``src_stats`` entry.
+    """
+    if not json_data or not isinstance(json_data.get("src_stats"), dict):
+        return 0
+    src_stats = json_data["src_stats"]
+    return sum(changed for path, changed in changed_files.items() if path not in src_stats)
+
+
 def _production_coverage_from_text(output: str, changed_lines: int) -> tuple[float, int, int] | None:
     """Fallback coverage parse from diff-cover's text output.
 
@@ -578,8 +610,12 @@ def evaluate(
     production_stats = _production_coverage_from_json(changed_files, json_data)
     if production_stats is not None:
         covered_lines, measured_lines = production_stats
-        unmeasured_lines = max(0, changed_lines - measured_lines)
-        measured_pct = (covered_lines / changed_lines) * 100.0
+        # Only production files ABSENT from the report are "unmeasured" and
+        # scored at 0%.  Non-executable lines inside a measured file are simply
+        # not part of the coverage denominator (see _unmeasured_file_lines).
+        unmeasured_lines = _unmeasured_file_lines(changed_files, json_data)
+        denominator = measured_lines + unmeasured_lines
+        measured_pct = (covered_lines / denominator) * 100.0 if denominator else 0.0
     else:
         # Fallback: parse the text output (with the measured-line count so
         # unmeasured lines are still detected when the JSON report is absent).

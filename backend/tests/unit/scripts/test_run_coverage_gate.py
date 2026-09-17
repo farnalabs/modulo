@@ -253,7 +253,10 @@ def test_evaluate_below_threshold_fails(tmp_path):
     assert result.skipped is False
     assert result.passed is False
     assert result.actual_pct == 0.0
-    assert result.unmeasured_lines > 0
+    # The changed lines ARE in the report (just uncovered), so they are not
+    # "unmeasured" — the 0% comes from measured-but-uncovered lines.
+    assert result.unmeasured_lines == 0
+    assert result.measured_lines == 1
 
 
 # ---------------------------------------------------------------------------
@@ -344,8 +347,68 @@ def test_evaluate_unmeasured_file_fails(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Merge-base diff range
+# Non-executable lines in a MEASURED file must not count as unmeasured
 # ---------------------------------------------------------------------------
+def test_evaluate_measured_file_with_non_executable_lines_passes(tmp_path):
+    """A measured file whose executable lines are all covered passes even when
+    ``git diff`` counted extra non-executable (annotation/decorator) lines.
+
+    Regression: the gate used to compute ``covered / non_blank_changed_lines``
+    and score every line coverage.py cannot measure as 0%, which made a fully
+    tested route module fail on its Pydantic/annotation lines.
+    """
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+
+    # 120 non-blank changed lines in the diff, but only 100 executable lines
+    # in the coverage report, all covered.
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={"src/routes.py": 120}),
+        patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+        patch.object(
+            mod,
+            "_get_diff_cover_json",
+            return_value={
+                "src_stats": {
+                    "src/routes.py": {
+                        "percent_covered": 100.0,
+                        "covered_lines": list(range(1, 101)),
+                        "violation_lines": [],
+                    }
+                },
+                "total_num_lines": 100,
+                "num_changed_lines": 120,
+                "total_percent_covered": 100.0,
+            },
+        ),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+
+    assert result.passed is True
+    assert result.actual_pct == 100.0
+    assert result.measured_lines == 100
+    assert result.unmeasured_lines == 0
+
+
+def test_unmeasured_file_lines_counts_only_files_absent_from_report():
+    changed = {"src/present.py": 40, "src/absent.py": 30}
+    json_data = {"src_stats": {"src/present.py": {"covered_lines": [], "violation_lines": []}}}
+
+    assert mod._unmeasured_file_lines(changed, json_data) == 30
+
+
+def test_schema_ts_is_excluded_from_the_gate():
+    """The generated openapi-typescript file is out of scope (as it is for Sonar)."""
+    assert mod._is_excluded("frontend/src/lib/api/schema.ts") is True
+    # A hand-written TS file in the same directory is still gated.
+    assert mod._is_excluded("frontend/src/lib/api/client.ts") is False
+
+
 def test_changed_production_files_uses_merge_base_range():
     """Regression: ``git diff`` must use the three-dot merge-base range.
 
