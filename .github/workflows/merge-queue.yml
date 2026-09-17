@@ -1136,12 +1136,12 @@ jobs:
           echo "Candidate PRs for GitHub issue close: $CANDIDATES"
 
           # Closing-keyword regex: matches case-insensitive fixes/closes/resolves
-          # followed by optional whitespace and #<number>. Requiring start-of-line
-          # OR preceding whitespace before the keyword prevents matching inside
-          # words (e.g. "closesourced") while still matching the most natural
-          # placement - a title like "Closes #42" or a body line starting with
-          # "Fixes #94". grep -E is line-based, so ^ anchors per line.
-          CLOSING_REGEX='(^|[[:space:]]+)(fixes|closes|resolves):?[[:space:]]+#[0-9]+'
+          # followed by optional whitespace and #<number>. Handles comma-separated
+          # (Closes #12, #34) and "and"-separated (Closes #12 and #34) lists as a
+          # single match so the downstream #N extraction picks up every reference.
+          # The leading (^|[[:space:]]+) prevents matching inside words (e.g.
+          # "closesourced") while allowing a match at the start of a line.
+          CLOSING_REGEX='(^|[[:space:]]+)(fixes|closes|resolves):?[[:space:]]+#[0-9]+([[:space:]]*,[[:space:]]*#[0-9]+)*([[:space:]]+and[[:space:]]+#[0-9]+)?'
 
           for NUM in $CANDIDATES; do
             TITLE=$(gh pr view "$NUM" --json title --jq '.title' 2>/dev/null || echo "")
@@ -1151,10 +1151,13 @@ jobs:
             # must comment instead of close, exactly like the Linear step.
             PARTIAL=$(echo "$TITLE" | grep -qi '\[partial\]' && echo "yes" || echo "no")
 
-            # Extract closing references from BOTH title and body. The grep
-            # produces lines like "  Closes #42" or "  Fixes #94"; we pull the
-            # issue number from each match, deduplicated.
+            # Extract closing references from BOTH title and body. First strip
+            # fenced code blocks (``` ... ```) so a Fixes #1 inside a code fence
+            # is not treated as a real closing reference (GitHub's renderer skips
+            # code fences). The grep produces lines like "  Closes #42" or
+            # "  Fixes #94"; we pull the issue number from each match, deduplicated.
             ISSUES=$(echo "$TITLE"$'\n'"$BODY" \
+              | sed '/^```/,/^```/d' \
               | grep -ioE "$CLOSING_REGEX" \
               | grep -oE '#[0-9]+' \
               | sed 's/^#//' \
@@ -1169,6 +1172,16 @@ jobs:
               # Safety: only close issues in THIS repo (never cross-repo).
               # gh issue view defaults to the current repo via GH_REPO/GITHUB_REPOSITORY.
               if [ "$PARTIAL" = "yes" ]; then
+                # Check current state: skip if already closed (idempotent).
+                ISSUE_STATE=$(gh issue view "$ISSUE_NUM" --json state --jq '.state' 2>/dev/null || echo "")
+                if [ "$ISSUE_STATE" = "CLOSED" ]; then
+                  echo "Issue #$ISSUE_NUM is already closed - skipping comment"
+                  continue
+                fi
+                if [ -z "$ISSUE_STATE" ]; then
+                  echo "::warning::Could not fetch state for issue #$ISSUE_NUM (API error or not found) - skipping comment (fail-open)"
+                  continue
+                fi
                 echo "PR #$NUM carries [partial] - commenting on issue #$ISSUE_NUM instead of closing"
                 COMMENT_BODY="PR #$NUM merged (partial slice): \"$TITLE\". Issue left open - close it manually when the sweep completes."
                 if ! gh issue comment "$ISSUE_NUM" --body "$COMMENT_BODY" > /dev/null 2>&1; then
