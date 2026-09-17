@@ -132,11 +132,11 @@ jobs:
         run: uv run --no-build --no-sync pytest tests/architecture/ -q --tb=short --timeout=120 -p no:warnings -n auto
       - name: Run connector contract tests
         # The connector contract suite drives each connector (filesystem,
-        # GitHub, REST, shell, npm, pypi) against a real in-process HTTP
-        # server or a recorded VCR cassette — no Docker and no external
-        # network, so it is safe for this job. Landed in PR #693 (94 tests)
-        # but was never wired into any workflow, so regressions merged
-        # silently. Run it here alongside the other non-Docker test suites.
+        # REST, shell, npm, pypi) against a real in-process HTTP server or
+        # a recorded VCR cassette — no Docker and no external network, so
+        # it is safe for this job. Landed in PR #693 (95 tests) but was
+        # never wired into any workflow, so regressions merged silently.
+        # Run it here alongside the other non-Docker test suites.
         shell: bash
         run: uv run --no-build --no-sync pytest tests/connectors/ -q --tb=short --timeout=180 -p no:warnings
       - name: Run email settings BDD scenarios
