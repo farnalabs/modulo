@@ -67,15 +67,15 @@ jobs:
           DISPATCH=$(jq '[.[] |
             select(.mergeable == "CONFLICTING") |
             select(.isDraft == false) |
-            select([.labels[].name] | index("modulo-cannot-fix") | not) |
-            select([.labels[].name] | index("manual-delivery") | not)
+            select([.labels // [] | .[].name] | index("modulo-cannot-fix") | not) |
+            select([.labels // [] | .[].name] | index("manual-delivery") | not)
           ] | sort_by(-.number) | .[:5]' /tmp/open_prs.json)
 
           NOTIFY=$(jq '[.[] |
             select(.mergeable == "CONFLICTING") |
             select(.isDraft == false) |
-            select([.labels[].name] | index("modulo-cannot-fix") | not) |
-            select([.labels[].name] | index("manual-delivery"))
+            select([.labels // [] | .[].name] | index("modulo-cannot-fix") | not) |
+            select([.labels // [] | .[].name] | index("manual-delivery"))
           ] | sort_by(-.number)' /tmp/open_prs.json)
 
           DISPATCH_COUNT=$(echo "$DISPATCH" | jq 'length')
