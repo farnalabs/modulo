@@ -32,7 +32,8 @@ regression that silently weakens the suite:
   way
 - ``assert len(x) > 0`` / ``assert len(x) >= 1`` / ``assert len(x) != 0``
   (the non-emptiness mirror of the ``len(x) == 0`` lens) — sized containers
-  are truthy exactly when non-empty, so these should read ``assert x``
+  are truthy exactly when non-empty, so these should read ``assert x``. Both
+  operand orders are covered (``0 < len(x)`` is flagged like ``len(x) > 0``)
 - ``assert x == []`` / ``assert x == {}`` against an empty container literal —
   ``== []``/``== {}`` is the equality-based twin of the ``len() == 0`` idiom
   and should read ``assert not x`` (an empty container is falsy)
@@ -1564,6 +1565,38 @@ def test_no_dead_fixtures():
     )
 
 
+def _len_equals_zero_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``len(...) == 0`` comparison
+    that should read ``assert not ...``.
+
+    Both operand orders are covered (``len(x) == 0`` and ``0 == len(x)``). Only
+    operands whose type is statically a container that cannot override
+    truthiness are flagged (attribute access, subscript, call, or a list/dict/
+    tuple literal); a bare ``len(name) == 0`` is left alone because the name may
+    bind a custom object (``__bool__``) or a non-falsy sized type such as a
+    numpy array."""
+    found: list[tuple[int, str]] = []
+    for node in _all_nodes(tree):
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            continue
+        if not isinstance(node.ops[0], ast.Eq):
+            continue
+        for lhs, rhs in ((node.left, node.comparators[0]), (node.comparators[0], node.left)):
+            if not (isinstance(rhs, ast.Constant) and rhs.value == 0):
+                continue
+            if not (isinstance(lhs, ast.Call) and isinstance(lhs.func, ast.Name) and lhs.func.id == "len"):
+                continue
+            if not lhs.args:
+                continue
+            operand = lhs.args[0]
+            if isinstance(operand, ast.Name):
+                continue
+            if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.List, ast.Dict, ast.Tuple)):
+                continue
+            found.append((node.lineno, "assert len(...) == 0 — prefer 'assert not ...'"))
+    return found
+
+
 def test_no_len_equals_zero_assertions():
     """``assert len(x) == 0`` should be ``assert not x`` — every sized container
     is falsy exactly when it is empty, so the explicit length comparison adds
@@ -1578,32 +1611,96 @@ def test_no_len_equals_zero_assertions():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for node in _all_nodes(tree):
-            if not isinstance(node, ast.Compare) or len(node.ops) != 1:
-                continue
-            op = node.ops[0]
-            if not isinstance(op, ast.Eq):
-                continue
-            sides = [(node.left, node.comparators[0]), (node.comparators[0], node.left)]
-            for lhs, rhs in sides:
-                if not (isinstance(rhs, ast.Constant) and rhs.value == 0):
-                    continue
-                if not (isinstance(lhs, ast.Call) and isinstance(lhs.func, ast.Name) and lhs.func.id == "len"):
-                    continue
-                if not lhs.args:
-                    continue
-                operand = lhs.args[0]
-                if isinstance(operand, ast.Name):
-                    continue
-                if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.List, ast.Dict, ast.Tuple)):
-                    continue
-                if any(part in EXCLUDED_PACKAGES for part in path.parts):
-                    continue
-                violations.append(f"  {rel}:{node.lineno}  assert len(...) == 0 — prefer 'assert not ...'")
+        for lineno, detail in _len_equals_zero_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
     assert not violations, (
         f"Found {len(violations)} 'assert len(...) == 0' assertion(s).\n"
         "Sized containers are falsy when empty; write 'assert not <expr>' instead.\n" + "\n".join(violations)
     )
+
+
+def test_len_equals_zero_lens_flags_empty_checks():
+    """Synthetic positive/negative control for the ``len(...) == 0`` lens: it
+    must flag the comparison in either operand order on attribute, subscript,
+    call, or container-literal operands — whether the comparison sits inside an
+    ``assert`` or any other statement — and ignore bare names (which may bind a
+    non-falsy sized type), non-zero bounds, and non-empty forms."""
+    positive_sources = [
+        "def test_foo():\n    assert len(result.items) == 0\n",
+        "def test_foo():\n    assert 0 == len(result.items)\n",
+        "def test_foo():\n    assert len(result['items']) == 0\n",
+        "def test_foo():\n    assert len(collect_items()) == 0\n",
+        "def test_foo():\n    assert len([1, 2]) == 0\n",
+        "def test_foo():\n    if len(result.items) == 0:\n        pass\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _len_equals_zero_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert len(items) == 0\n",
+        "def test_foo():\n    assert len(result.items) == 1\n",
+        "def test_foo():\n    assert len(result.items) == len(other)\n",
+        "def test_foo():\n    assert len(result.items) != 0\n",
+        "def test_foo():\n    assert result.items\n",
+        "def test_foo():\n    assert len(result) == 0\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _len_equals_zero_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _len_gt_zero_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every non-emptiness ``len(...)``
+    assertion (``> 0`` / ``>= 1`` / ``!= 0``) that should read ``assert ...``.
+
+    Both operand orders are covered, so the mirrored ``0 < len(x)`` /
+    ``1 <= len(x)`` / ``0 != len(x)`` spellings are flagged exactly like
+    ``len(x) > 0``. Only operands whose type is statically a container are
+    flagged (attribute access, subscript, call, or await); a bare
+    ``len(name) > 0`` is left alone because the name may bind a non-falsy sized
+    type such as a numpy array."""
+    found: list[tuple[int, str]] = []
+    mirror = {
+        ast.Gt: ast.Lt,
+        ast.Lt: ast.Gt,
+        ast.GtE: ast.LtE,
+        ast.LtE: ast.GtE,
+        ast.NotEq: ast.NotEq,
+    }
+    for node in _all_nodes(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        op_cls = type(test.ops[0])
+        for lhs, rhs, effective in (
+            (test.left, test.comparators[0], op_cls),
+            (test.comparators[0], test.left, mirror.get(op_cls)),
+        ):
+            if effective is None:
+                continue
+            if not (isinstance(lhs, ast.Call) and isinstance(lhs.func, ast.Name) and lhs.func.id == "len"):
+                continue
+            if not lhs.args:
+                continue
+            if not isinstance(rhs, ast.Constant):
+                continue
+            matches = (
+                (effective is ast.Gt and rhs.value == 0)
+                or (effective is ast.GtE and rhs.value == 1)
+                or (effective is ast.NotEq and rhs.value == 0)
+            )
+            if not matches:
+                continue
+            operand = lhs.args[0]
+            if isinstance(operand, ast.Name):
+                continue
+            if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
+                continue
+            found.append((node.lineno, "assert len(...) > 0 — prefer 'assert ...'"))
+    return found
 
 
 def test_no_len_gt_zero_assertions():
@@ -1614,44 +1711,55 @@ def test_no_len_gt_zero_assertions():
     the ``len(x) == 0`` lens, only operands whose type is statically a
     container are flagged (attribute access, subscript, call, or await); a
     bare ``len(name) > 0`` is left alone because the name may bind a
-    non-falsy sized type such as a numpy array."""
+    non-falsy sized type such as a numpy array. Both operand orders are
+    covered, so ``0 < len(x)`` is flagged the same as ``len(x) > 0``."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for node in _all_nodes(tree):
-            if not isinstance(node, ast.Assert):
-                continue
-            test = node.test
-            if not isinstance(test, ast.Compare) or len(test.ops) != 1:
-                continue
-            op = test.ops[0]
-            lhs, rhs = test.left, test.comparators[0]
-            if not (isinstance(lhs, ast.Call) and isinstance(lhs.func, ast.Name) and lhs.func.id == "len"):
-                continue
-            if not lhs.args:
-                continue
-            if not isinstance(rhs, ast.Constant):
-                continue
-            matches = (
-                (isinstance(op, ast.Gt) and rhs.value == 0)
-                or (isinstance(op, ast.GtE) and rhs.value == 1)
-                or (isinstance(op, ast.NotEq) and rhs.value == 0)
-            )
-            if not matches:
-                continue
-            operand = lhs.args[0]
-            if isinstance(operand, ast.Name):
-                continue
-            if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
-                continue
-            violations.append(f"  {rel}:{node.lineno}  assert len(...) > 0 — prefer 'assert ...'")
+        for lineno, detail in _len_gt_zero_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
     assert not violations, (
         f"Found {len(violations)} 'assert len(...) > 0' assertion(s).\n"
         "Sized containers are truthy when non-empty; write 'assert <expr>' instead.\n" + "\n".join(violations)
     )
+
+
+def test_len_gt_zero_lens_flags_nonempty_checks():
+    """Synthetic positive/negative control for the non-emptiness ``len(...)``
+    lens: it must flag ``> 0`` / ``>= 1`` / ``!= 0`` on attribute, subscript,
+    call, or await operands in *either* operand order (the mirrored
+    ``0 < len(x)`` / ``1 <= len(x)`` / ``0 != len(x)`` spellings included), and
+    ignore bare names, other bounds, the empty-forms owned by the sibling lens,
+    and comparisons buried in a compound boolean expression."""
+    positive_sources = [
+        "def test_foo():\n    assert len(result.items) > 0\n",
+        "def test_foo():\n    assert len(result.items) >= 1\n",
+        "def test_foo():\n    assert len(result.items) != 0\n",
+        "def test_foo():\n    assert 0 < len(result.items)\n",
+        "def test_foo():\n    assert 1 <= len(result.items)\n",
+        "def test_foo():\n    assert 0 != len(result.items)\n",
+        "def test_foo():\n    assert len(collect_items()) > 0\n",
+        "def test_foo():\n    assert len(await load_items()) > 0\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _len_gt_zero_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert len(items) > 0\n",
+        "def test_foo():\n    assert len(result.items) > 1\n",
+        "def test_foo():\n    assert len(result.items) >= 2\n",
+        "def test_foo():\n    assert len(result.items) == 0\n",
+        "def test_foo():\n    assert len(result.items) < 1\n",
+        "def test_foo():\n    assert result.items\n",
+        "def test_foo():\n    assert len(result.items) > 0 and ready\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _len_gt_zero_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def test_no_empty_container_literal_equality():
