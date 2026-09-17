@@ -2565,6 +2565,7 @@ jobs:
 
       - name: Check deployed SHA
         if: steps.verify.outputs.rolled_back == 'false'
+        id: deployed
         shell: pwsh
         run: |
           $expectedSha = "${{ steps.git.outputs.git-sha }}".Substring(0, 7)
@@ -2577,6 +2578,15 @@ jobs:
             exit 1
           }
           Write-Host "app.modulo.run SHA match: $deployedSha"
+          "deployed_sha=$deployedSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      # FAR-954: annotate the deployed SHA on the job log so the Actions UI
+      # shows the actual deployed build, not just the run conclusion.
+      - name: Publish deployed SHA annotation
+        if: steps.verify.outputs.rolled_back == 'false' && steps.deployed.outputs.deployed_sha
+        shell: bash
+        run: |
+          echo "::notice::DEPLOYED: app.modulo.run is now running ${{ steps.deployed.outputs.deployed_sha }} (commit ${{ steps.git.outputs.git-sha }})"
 
       - name: Ensure worker machine exists (production)
         if: steps.verify.outputs.rolled_back == 'false'
@@ -2869,6 +2879,47 @@ jobs:
         # No failure masking: a broken deploy must not ship green, so smoke
         # failures hard-fail the run.
 
+  deploy-throttle-status:
+    name: "Deploy throttle status (FAR-954: distinguish throttled from deployed)"
+    needs: [deploy-throttle]
+    if: always()
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Write throttle/deploy summary annotation
+        shell: bash
+        env:
+          SHOULD_DEPLOY: ${{ needs.deploy-throttle.outputs.should_deploy }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${DEPLOY_SHA:0:7}"
+          if [ "$SHOULD_DEPLOY" = "true" ]; then
+            echo "::notice::THIS RUN IS DEPLOYING: deploy pipeline will run pre-deploy tests, staging deploy, staging E2E, production deploy, and prod smoke tests. Deployed SHA will be ${SHORT_SHA}."
+            cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Deploy Pipeline: ACTIVELY DEPLOYING
+
+          **Status:** The deploy throttle passed — this run is executing the full deploy pipeline.
+          **Deploying SHA:** ${SHORT_SHA}
+          **Triggered by:** ${{ github.event_name == 'push' && 'push to main' || 'manual dispatch' }}
+
+          All pre-deploy gates, staging E2E, production deploy, and prod smoke tests will run.
+          EOF
+          else
+            echo "::notice::THROTTLED — NO DEPLOYMENT PERFORMED. Production is unchanged. Production is currently running $(curl -fsS -m 10 'https://app.modulo.run/api/v1/deployment' 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("git_sha","unknown")[:7])' 2>/dev/null || echo 'unknown'). This run will conclude SUCCESS but NO deployment happened."
+            cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Deploy Pipeline: THROTTLED — NO DEPLOYMENT
+
+          **Status:** This run was **THROTTLED** and **NO DEPLOYMENT was performed**.
+          **Production build:** $(curl -fsS -m 10 'https://app.modulo.run/api/v1/deployment' 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("git_sha","unknown")[:7])' 2>/dev/null || echo 'unknown') (unchanged)
+          **Reason:** ${{ github.event.inputs.force_deploy == 'true' && 'Force deploy' || 'Throttle interval not reached' }}
+          **Triggered by:** ${{ github.event_name == 'push' && 'push to main' || 'manual dispatch' }}
+
+          > **This run succeeded WITHOUT deploying.** Production is serving the previous build.
+          > A green checkmark here does NOT mean production was updated.
+          > Use \`workflow_dispatch\` with \`force_deploy=true\` to bypass the throttle.
+          EOF
+          fi
+          echo "Throttle status written to step summary."
+
   deploy-audit:
     name: Deploy job notification audit
     # FAR-908: this job runs on EVERY deploy workflow completion (success or
@@ -2877,15 +2928,18 @@ jobs:
     # UNCOVERED in this table — making gaps visible in the Actions UI rather
     # than discoverable only during an outage.
     #
-    # This is a DOCUMENTATION/ASSERTION job, not a gate. It always succeeds
-    # so it never blocks deploys. The value is in the step summary output
-    # that humans and agents read after a failure.
+    # FAR-954: when the run is throttled (no deployment), do NOT send the
+    # normal notification — the Branch Fixer has nothing to fix, and a
+    # pipeline run for a throttled no-op creates noise. The throttle-status
+    # job already produced a loud summary annotation.
     if: always()
-    needs: [deploy-throttle, pre-deploy-gate, notify-deploy-failure, deploy-staging, notify-deploy-staging-failure, staging-e2e, notify-staging-e2e-failure, deploy-production, notify-deploy-production-failure, prod-smoke, notify-prod-smoke-failure]
+    needs: [deploy-throttle, deploy-throttle-status, pre-deploy-gate, notify-deploy-failure, deploy-staging, notify-deploy-staging-failure, staging-e2e, notify-staging-e2e-failure, deploy-production, notify-deploy-production-failure, prod-smoke, notify-prod-smoke-failure]
     runs-on: ubicloud-standard-2
     steps:
       - name: Audit notification coverage
         shell: bash
+        env:
+          SHOULD_DEPLOY: ${{ needs.deploy-throttle.outputs.should_deploy }}
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'AUDIT'
           ## Deploy Workflow — Job Notification Audit (FAR-908)
@@ -2896,6 +2950,7 @@ jobs:
           | Job | Can fail? | Blocks deploy? | Failure signal | Notified to |
           |---|---|---|---|---|
           | `deploy-throttle` | Yes | Yes (skips deploy) | Fails loud (::error::) | Actions tab |
+          | `deploy-throttle-status` | No | No (visibility only) | N/A — summary annotation | Step summary |
           | `backend-lint` | Yes | Yes (via gate) | Branch Fixer webhook | Modulo pipeline |
           | `backend-unit` | Yes | Yes (via gate) | Branch Fixer webhook | Modulo pipeline |
           | `frontend-checks` | Yes | Yes (via gate) | Branch Fixer webhook | Modulo pipeline |
@@ -2917,6 +2972,7 @@ jobs:
           - **Infrastructure failures** (deploy-staging, deploy-production): routed to Branch Fixer as triage + deploy-watchdog re-dispatches + deploy-staleness-check escalates
           - **ALL deploy-stage failures** (FAR-912): `notify-deploy-failure` now fires on ANY downstream failure (pre-deploy-gate, deploy-staging, staging-e2e, deploy-production, prod-smoke) — the broad catch-all dispatch for the Branch Fixer; the per-stage notify-* jobs add stage-specific feedback
           - **Notification-only jobs** (notify-*): always succeed; their purpose IS the signal
+          - **Throttled runs** (FAR-954): when `deploy-throttle` outputs `should_deploy=false`, all downstream jobs are skipped. The `deploy-throttle-status` job produces a loud summary annotation. No notification dispatches fire (nothing to fix).
 
           ### Adding a new job?
           1. If it can fail and block a deploy, ensure `notify-deploy-failure` covers it (FAR-912: this job now fires on ANY downstream failure)
