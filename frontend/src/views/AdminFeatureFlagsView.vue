@@ -167,7 +167,7 @@
                       <ToggleSwitch
                         :checked="flag.currently_active"
                         :toggling="flagToggling[flag.name]"
-                        :disabled="isFlagTierLocked(flag)"
+                        :disabled="isFlagTierLocked(flag) && !flag.currently_active"
                         :label="$t('views.AdminFeatureFlagsView.toggle_flag', { name: flag.name })"
                         :data-testid="'flag-toggle-' + flag.name"
                         @toggle="toggleFlag(flag)"
@@ -195,7 +195,7 @@
                     </td>
                     <td class="table-cell text-muted-foreground">{{ flag.description }}</td>
                     <td class="table-cell-numeric">
-                      <Button severity="secondary" outlined size="small" :disabled="isFlagTierLocked(flag)" :data-testid="'flag-override-' + flag.name" @click.stop="openOverrideDialog(flag)">
+                      <Button severity="secondary" outlined size="small" :disabled="isFlagTierLocked(flag) && !flag.currently_active" :data-testid="'flag-override-' + flag.name" @click.stop="openOverrideDialog(flag)">
                         {{ getCurrentOverride(flag.name) === null ? $t('views.AdminFeatureFlagsView.default') : (getCurrentOverride(flag.name) ? $t('common.enabled') : $t('common.disabled')) }}
                       </Button>
                     </td>
@@ -234,7 +234,7 @@
   data-testid="flag-override-select"
   v-model="overrideDialogValue"
   :placeholder="$t('views.AdminFeatureFlagsView.select_override')"
-  :options="[{ value: 'null', label: $t('views.AdminFeatureFlagsView.system_default') }, { value: 'true', label: $t('views.AdminFeatureFlagsView.force_enabled') }, { value: 'false', label: $t('views.AdminFeatureFlagsView.force_disabled') }]"
+  :options="overrideOptions"
   option-label="label"
   option-value="value"
 >
@@ -386,7 +386,10 @@ const filteredWouldActivate = computed(() => {
 const hasResults = computed(() => filteredFlags.value.length > 0)
 
 function isFlagTierLocked(flag: FlagItem): boolean {
-  return flag.tier === 'team' && !planStore.isTeam
+  const flagRank = planStore.tierRanks[flag.tier]
+  const currentRank = planStore.tierRanks[planStore.currentTier]
+  if (flagRank === undefined || currentRank === undefined) return false
+  return flagRank > currentRank
 }
 
 watch(searchQuery, () => {
@@ -426,6 +429,19 @@ const overrideDescription = computed(() =>
     ? `${t('views.AdminFeatureFlagsView.org_override_for')} "${overrideDialogFlag.value.name}"`
     : ''
 )
+
+const overrideOptions = computed(() => {
+  const options = [
+    { value: 'null', label: t('views.AdminFeatureFlagsView.system_default') },
+    { value: 'true', label: t('views.AdminFeatureFlagsView.force_enabled') },
+    { value: 'false', label: t('views.AdminFeatureFlagsView.force_disabled') },
+  ]
+  const flag = overrideDialogFlag.value
+  if (flag && isFlagTierLocked(flag)) {
+    return options.filter(option => option.value !== 'true')
+  }
+  return options
+})
 
 function openOverrideDialog(flag: FlagItem) {
   const current = planStore.orgOverrides[flag.name]

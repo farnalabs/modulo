@@ -5,12 +5,13 @@ from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.routes.admin_feature_flags import _resolve_tier
+from modulo.api.routes.admin_feature_flags import _enforce_team_tier_gate, _resolve_tier
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
@@ -919,3 +920,41 @@ class TestResolveTierLicensing:
 
     async def test_community_plan_id_returns_community(self) -> None:
         assert await _resolve_tier_value(_org("community")) == "community"
+
+
+# ---------------------------------------------------------------------------
+# _enforce_team_tier_gate — org-level enable/disable asymmetry
+# ---------------------------------------------------------------------------
+# The gate is rank-based over the registry's effective tier ranks and only
+# rejects ENABLING a flag that outranks the org's current tier. Disabling must
+# always be permitted so an org that enabled a paid flag under a team licence
+# and later downgraded can still turn it off. Pinned here as a direct unit
+# test, independent of the hermetic BDD mock session setup.
+
+
+class TestEnforceTeamTierGate:
+    async def test_enable_team_flag_on_community_is_forbidden(self) -> None:
+        registry = _mock_registry()
+        flag = registry.get_flag("sso")
+        assert flag is not None
+        with pytest.raises(HTTPException) as exc_info:
+            await _enforce_team_tier_gate(flag, "sso", registry, enabled=True)
+        assert exc_info.value.status_code == 403
+
+    async def test_disable_team_flag_on_community_is_allowed(self) -> None:
+        registry = _mock_registry()
+        flag = registry.get_flag("sso")
+        assert flag is not None
+        await _enforce_team_tier_gate(flag, "sso", registry, enabled=False)
+
+    async def test_enable_community_flag_on_community_is_allowed(self) -> None:
+        registry = _mock_registry()
+        flag = registry.get_flag("webhook_trigger")
+        assert flag is not None
+        await _enforce_team_tier_gate(flag, "webhook_trigger", registry, enabled=True)
+
+    async def test_enable_team_flag_on_team_is_allowed(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
+        flag = registry.get_flag("sso")
+        assert flag is not None
+        await _enforce_team_tier_gate(flag, "sso", registry, enabled=True)
