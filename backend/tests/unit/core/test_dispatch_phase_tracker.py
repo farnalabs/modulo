@@ -230,8 +230,7 @@ class TestZombieWatchdogReadsTracker:
 class TestRunExecutorWithWatchdogTracker:
     """Test that run_executor_with_watchdog passes the tracker to the watchdog."""
 
-    @pytest.mark.asyncio
-    async def test_tracker_parameter_accepted(self) -> None:
+    def test_tracker_parameter_accepted(self) -> None:
         """The dispatch_tracker parameter exists in the function signature."""
         import inspect
 
