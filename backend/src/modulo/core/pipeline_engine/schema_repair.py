@@ -23,6 +23,7 @@ from functools import lru_cache
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import UnknownType
 from jsonschema.exceptions import _Error as JsonschemaError
 
 _log = logging.getLogger(__name__)
@@ -113,7 +114,7 @@ def validate_against_schema(
     """
     try:
         validator = _compile_validator(schema)
-    except JsonschemaError as exc:
+    except (JsonschemaError, UnknownType) as exc:
         # FIX G: malformed schema → single validation failure, not a crash
         _log.warning(
             "schema_repair.malformed_schema",
@@ -149,7 +150,7 @@ def validate_against_schema(
                 err_info["allowed"] = capped
 
             errors.append(err_info)
-    except JsonschemaError as exc:
+    except (JsonschemaError, UnknownType) as exc:
         # FIX G: runtime validation failure on a schema that compiled OK
         # but raises during iteration (e.g. recursive schema blow-up)
         _log.warning(

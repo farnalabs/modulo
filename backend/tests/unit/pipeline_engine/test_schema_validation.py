@@ -13,7 +13,6 @@ Verifies:
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 import pytest
@@ -29,8 +28,6 @@ from modulo.core.pipeline_engine.schema_repair import (
     run_repair_loop,
     validate_against_schema,
 )
-
-_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Reusable test double (FAR-898, reused by FAR-899)
@@ -202,18 +199,15 @@ class TestValidateAgainstSchema:
         # Clear cache and test with a schema that raises UnknownType during iter_errors
         _clear_validator_cache()
         try:
-            # Draft202012Validator raises UnknownType during iter_errors for unknown types
+            # Draft202012Validator raises UnknownType during iter_errors for
+            # unknown "type" values; FIX G's guard must convert that into a
+            # schema_error result instead of letting it crash the node.
             schema = {"type": "not_a_real_type"}
-            try:
-                is_valid, errors = validate_against_schema({"test": True}, schema)
-                # If it doesn't raise, it should still return valid results
-                assert isinstance(is_valid, bool)
-                assert isinstance(errors, list)
-            except Exception:
-                # The exception should be caught by FIX G's guard in validate_against_schema
-                # If it propagates, that means the guard isn't working for this case
-                # (Draft202012Validator raises during iter_errors, not compile)
-                _log.warning("schema_repair.malformed_schema_test", exc_info=True)
+            is_valid, errors = validate_against_schema({"test": True}, schema)
+            assert is_valid is False
+            assert len(errors) == 1
+            assert errors[0]["pointer"] == "$"
+            assert errors[0]["constraint"] == "schema_error"
         finally:
             _clear_validator_cache()
 
