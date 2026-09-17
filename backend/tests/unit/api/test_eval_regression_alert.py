@@ -209,6 +209,23 @@ class TestUpdateSuiteAlertingEndpoint:
         mock_plan = MagicMock()
         mock_plan.feature_enabled.return_value = True
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
+
+        # FAR-947: the route now carries the team-scope gate, whose resolver
+        # reads the suite's owner_team_id/visibility before the handler's admin
+        # check fires.  Serve an org-visible suite so the gate passes and the
+        # operator reaches the handler's 403 (a bare AsyncMock returns a
+        # coroutine from result.first(), which raised a 500).
+        async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.first.return_value = None
+            result.scalar_one_or_none.return_value = None
+            result.scalar.return_value = None
+            result.all.return_value = []
+            if "eval_suites" in str(stmt):
+                result.first.return_value = (None, "org")
+            return result
+
+        mock_session.execute.side_effect = _execute
         try:
             resp = TestClient(app).put(self.URL.format(_SUITE_ID), json={"cooldown": 60})
         finally:

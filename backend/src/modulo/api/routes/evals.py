@@ -990,7 +990,6 @@ _MSG_EVAL_DATASET_NOT_FOUND = "Eval dataset not found"
 @router.post(
     "/eval-datasets",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
 )
 @handle_db_errors(_CODE_EVAL_DATASETS_CREATE)
 async def create_eval_dataset(
@@ -1144,7 +1143,7 @@ async def get_eval_dataset(
     )
 
 
-@router.patch("/eval-datasets/{dataset_id}", dependencies=[Depends(deny_break_glass_mint)])
+@router.patch("/eval-datasets/{dataset_id}")
 @handle_db_errors(_CODE_EVAL_DATASETS_UPDATE)
 async def update_eval_dataset(
     dataset_id: uuid.UUID,
@@ -1207,7 +1206,6 @@ async def update_eval_dataset(
 @router.delete(
     "/eval-datasets/{dataset_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(deny_break_glass_mint)],
 )
 @handle_db_errors(_CODE_EVAL_DATASETS_DELETE)
 async def delete_eval_dataset(
@@ -1297,7 +1295,6 @@ _MSG_EVAL_SUITE_NOT_FOUND_DETAIL = "Eval suite not found"
 @router.post(
     "/eval-suites",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
 )
 @handle_db_errors(_CODE_EVAL_SUITES_CREATE)
 async def create_eval_suite(
@@ -1453,7 +1450,7 @@ async def get_eval_suite(
     )
 
 
-@router.patch("/eval-suites/{suite_id}", dependencies=[Depends(deny_break_glass_mint)])
+@router.patch("/eval-suites/{suite_id}")
 @handle_db_errors(_CODE_EVAL_SUITES_UPDATE)
 async def update_eval_suite(
     suite_id: uuid.UUID,
@@ -1517,7 +1514,6 @@ async def update_eval_suite(
 @router.delete(
     "/eval-suites/{suite_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(deny_break_glass_mint)],
 )
 @handle_db_errors(_CODE_EVAL_SUITES_DELETE)
 async def delete_eval_suite(
