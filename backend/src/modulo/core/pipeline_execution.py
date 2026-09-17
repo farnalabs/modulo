@@ -30,6 +30,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from langgraph.errors import NodeCancelledError
@@ -40,6 +41,69 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from modulo.db.crud.run import get_run
 
 _log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# FAR-893: Executor-side dispatch phase tracker.
+# ---------------------------------------------------------------------------
+
+# Named phases the executor passes through between claim and first node
+# dispatch.  The tracker is shared between execute_run / run_executor_with_watchdog
+# (the claim+setup side) and the executor (the dispatch side).  When the
+# zombie watchdog fires, it reads the tracker to report WHERE the executor is
+# stuck — not just THAT it is stuck.
+PHASE_NOT_STARTED = "not_started"
+PHASE_CLAIMED = "claimed"
+PHASE_LOADING_SETUP = "loading_setup"
+PHASE_SETUP_COMPLETE = "setup_complete"
+PHASE_EXECUTOR_RUNNING = "executor_running"
+PHASE_LOADING_CONTEXT = "loading_context"
+PHASE_CAPACITY_CHECK = "capacity_check"
+PHASE_SPEND_CHECK = "spend_check"
+PHASE_INIT_ENV = "init_env"
+PHASE_GRAPH_COMPILE = "graph_compile"
+PHASE_STREAMING = "streaming"
+PHASE_FIRST_NODE_DISPATCHED = "first_node_dispatched"
+
+# Attribute name used to attach the DispatchPhaseTracker to the executor instance.
+DISPATCH_TRACKER_ATTR = "_dispatch_phase_tracker"
+
+
+@dataclass
+class DispatchPhaseTracker:
+    """Track the executor's progress through the claim→first-node-dispatch path.
+
+    Read by the zombie watchdog when the grace period fires to report *where*
+    the executor is stuck, not just *that* it is stuck.  Thread-safe by
+    construction: only one writer (the executor task) and one reader (the
+    watchdog task) via the asyncio single-threaded event loop.
+    """
+
+    phase: str = PHASE_NOT_STARTED
+    phase_entered_at: float | None = None
+    run_id: str = ""
+    org_id: str = ""
+
+    def enter_phase(self, phase: str) -> None:
+        """Transition to a new phase, recording the monotonic entry time."""
+        self.phase = phase
+        self.phase_entered_at = time.monotonic()
+
+    def elapsed_in_phase(self) -> float:
+        """Seconds since the current phase was entered."""
+        if self.phase_entered_at is None:
+            return 0.0
+        return time.monotonic() - self.phase_entered_at
+
+    def describe(self) -> dict[str, Any]:
+        """Structured snapshot for logging."""
+        return {
+            "phase": self.phase,
+            "elapsed_in_phase_seconds": round(self.elapsed_in_phase(), 1),
+            "run_id": self.run_id,
+            "org_id": self.org_id,
+        }
+
 
 # Claim staleness gates (configurable via settings).
 RUN_CLAIM_STALE_SECONDS = 450
@@ -807,6 +871,7 @@ async def zombie_watchdog(
     stall_requested: asyncio.Event | None = None,
     grace_seconds: int | None = None,
     retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
+    dispatch_tracker: DispatchPhaseTracker | None = None,
 ) -> None:
     """Fail a claimed-but-nodeless run when no node dispatches in time.
 
@@ -834,6 +899,12 @@ async def zombie_watchdog(
     + ``RunRetryPolicyError`` re-raise → SAQ job retry) instead of
     terminal-failing it. No coverage / exhausted budget / any hook failure
     keeps today's unconditional terminal fail.
+
+    FAR-893: *dispatch_tracker* (optional) reports the executor's progress
+    through the claim→first-node-dispatch phases.  When the grace period
+    fires, the tracker's current phase and elapsed time are logged so the
+    stall is attributable from logs alone — answering WHERE the executor is
+    stuck, not just THAT it is stuck.
     """
     if grace_seconds is None:
         grace_seconds = int(get_settings().saq_setup_grace_seconds)
@@ -864,12 +935,21 @@ async def zombie_watchdog(
         return
 
     _elapsed = time.monotonic() - _watchdog_start
+    # FAR-893: read the dispatch tracker to report WHERE the executor is stuck.
+    _tracker_phase: str | None = None
+    _tracker_phase_elapsed: float | None = None
+    if dispatch_tracker is not None:
+        _tracker_phase = dispatch_tracker.phase
+        _tracker_phase_elapsed = dispatch_tracker.elapsed_in_phase()
     _log.warning(
         "zombie_watchdog.stalled run=%s elapsed=%.1fs of %ds grace — "
-        "no node dispatched, cancelling executor and failing run",
+        "no node dispatched, dispatch_phase=%s dispatch_phase_elapsed=%.1fs, "
+        "cancelling executor and failing run",
         run_id,
         _elapsed,
         grace_seconds,
+        _tracker_phase,
+        _tracker_phase_elapsed if _tracker_phase_elapsed is not None else 0.0,
     )
     exec_task.cancel()
     if stall_requested is not None:
@@ -882,7 +962,12 @@ async def zombie_watchdog(
         org_id,
         error_code=EXECUTOR_STALLED_ERROR_CODE,
         error_detail=(
-            f"Executor dispatched no node within {grace_seconds}s setup grace (claimed-but-nodeless zombie watchdog)"
+            f"Executor dispatched no node within {grace_seconds}s setup grace "
+            f"(claimed-but-nodeless zombie watchdog); dispatch_phase={_tracker_phase} "
+            f"dispatch_phase_elapsed={_tracker_phase_elapsed:.1f}s"
+            if _tracker_phase is not None
+            else f"Executor dispatched no node within {grace_seconds}s setup grace "
+            "(claimed-but-nodeless zombie watchdog)"
         ),
     )
 
@@ -1186,6 +1271,7 @@ async def run_executor_with_watchdog(
     execute_fn: Callable[[], Awaitable[Any]],
     claim_token: str | None = None,
     superseded: asyncio.Event | None = None,
+    dispatch_tracker: DispatchPhaseTracker | None = None,
 ) -> dict[str, Any]:
     """Run ``execute_fn`` under the DB heartbeat loop + zombie watchdog.
 
@@ -1290,6 +1376,7 @@ async def run_executor_with_watchdog(
             exec_task=exec_task,
             stall_requested=stall_requested,
             retry_hook=watchdog_retry_hook,
+            dispatch_tracker=dispatch_tracker,
         ),
         name=f"saq-zombie-watchdog-{rid}",
     )
