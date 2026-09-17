@@ -244,6 +244,14 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `_resolve_org_license`, `_verify_license_key`, and the FOR-UPDATE locked
 > read-modify-write). Removed the tracked known gap — `feat-system-orgs` is now
 > fully BDD-covered (`system/system-orgs.md`).
+>
+> **Closed this walk (2026-09-17):** closed `feat-auth`'s "No dedicated BDD for
+> `/me` password-change forced flow" gap. `auth/change_password.feature` gained
+> the "Forced password change clears the admin-reset flag in the same
+> transaction" scenario (driven by `steps/test_change_password.py`), asserting
+> the real `PUT /api/v1/me/password` route clears the `must_change_password`
+> flag — the flag App.vue's forced-change gate arms on — in the same transaction
+> as the hash swap (`auth/auth.md`).
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
