@@ -1772,8 +1772,6 @@ jobs:
     needs: [pre-deploy-gate, staging-e2e]
     if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
-    outputs:
-      deployed_sha: ${{ steps.deployed.outputs.deployed_sha }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -2582,8 +2580,8 @@ jobs:
           Write-Host "app.modulo.run SHA match: $deployedSha"
           "deployed_sha=$deployedSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      # FAR-954: publish the deployed SHA as a run-level output so status
-      # readouts can key off the actual deployed build, not the run conclusion.
+      # FAR-954: annotate the deployed SHA on the job log so the Actions UI
+      # shows the actual deployed build, not just the run conclusion.
       - name: Publish deployed SHA annotation
         if: steps.verify.outputs.rolled_back == 'false' && steps.deployed.outputs.deployed_sha
         shell: bash
@@ -2896,17 +2894,15 @@ jobs:
           SHORT_SHA="${DEPLOY_SHA:0:7}"
           if [ "$SHOULD_DEPLOY" = "true" ]; then
             echo "::notice::THIS RUN IS DEPLOYING: deploy pipeline will run pre-deploy tests, staging deploy, staging E2E, production deploy, and prod smoke tests. Deployed SHA will be ${SHORT_SHA}."
-            cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+            cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## Deploy Pipeline: ACTIVELY DEPLOYING
 
           **Status:** The deploy throttle passed — this run is executing the full deploy pipeline.
-          **Deploying SHA:** `${DEPLOY_SHA}`
+          **Deploying SHA:** ${SHORT_SHA}
           **Triggered by:** ${{ github.event_name == 'push' && 'push to main' || 'manual dispatch' }}
 
           All pre-deploy gates, staging E2E, production deploy, and prod smoke tests will run.
           EOF
-            # Substitute variables in the summary
-            sed -i "s|\${DEPLOY_SHA}|${SHORT_SHA}|g" "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           else
             echo "::notice::THROTTLED — NO DEPLOYMENT PERFORMED. Production is unchanged. Production is currently running $(curl -fsS -m 10 'https://app.modulo.run/api/v1/deployment' 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("git_sha","unknown")[:7])' 2>/dev/null || echo 'unknown'). This run will conclude SUCCESS but NO deployment happened."
             cat >> "$GITHUB_STEP_SUMMARY" <<EOF
