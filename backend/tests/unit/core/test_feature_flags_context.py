@@ -280,49 +280,24 @@ class TestResolveFlag:
     def _registry(self) -> FeatureFlagRegistry:
         registry = FeatureFlagRegistry()
         registry._get_org_override = AsyncMock(return_value=None)
-        registry._get_team_override = AsyncMock(return_value=None)
-        registry._get_user_override = AsyncMock(return_value=None)
         return registry
 
     async def test_system_override_wins_over_all(self) -> None:
         registry = self._registry()
         registry.set_override("sso", True)
-        registry._get_user_override = AsyncMock(return_value=False)
+        registry._get_org_override = AsyncMock(return_value=False)
         try:
             assert (
                 await registry.resolve_flag(
                     "sso",
                     org_id=uuid.uuid4(),
-                    team_id=uuid.uuid4(),
-                    user_id=uuid.uuid4(),
                 )
                 is True
             )
         finally:
             registry.clear_override("sso")
 
-    async def test_user_override_beats_team_and_org(self) -> None:
-        registry = self._registry()
-        registry._get_user_override = AsyncMock(return_value=True)
-        registry._get_team_override = AsyncMock(return_value=False)
-        registry._get_org_override = AsyncMock(return_value=False)
-        assert (
-            await registry.resolve_flag(
-                "sso",
-                org_id=uuid.uuid4(),
-                team_id=uuid.uuid4(),
-                user_id=uuid.uuid4(),
-            )
-            is True
-        )
-
-    async def test_team_override_beats_org(self) -> None:
-        registry = self._registry()
-        registry._get_team_override = AsyncMock(return_value=True)
-        registry._get_org_override = AsyncMock(return_value=False)
-        assert await registry.resolve_flag("sso", org_id=uuid.uuid4(), team_id=uuid.uuid4()) is True
-
-    async def test_org_override_used_when_no_higher_scope(self) -> None:
+    async def test_org_override_used_when_no_system_override(self) -> None:
         registry = self._registry()
         registry._get_org_override = AsyncMock(return_value=True)
         assert await registry.resolve_flag("sso", org_id=uuid.uuid4()) is True
@@ -336,17 +311,11 @@ class TestResolveFlag:
         registry = self._registry()
         assert await registry.resolve_flag("nonexistent") is False
 
-    async def test_no_db_calls_without_scoped_ids(self) -> None:
+    async def test_no_db_calls_without_org_id(self) -> None:
         registry = FeatureFlagRegistry()
-        with (
-            patch.object(registry, "_get_org_override", new_callable=AsyncMock) as org,
-            patch.object(registry, "_get_team_override", new_callable=AsyncMock) as team,
-            patch.object(registry, "_get_user_override", new_callable=AsyncMock) as user,
-        ):
+        with patch.object(registry, "_get_org_override", new_callable=AsyncMock) as org:
             assert await registry.resolve_flag("saved_views") is False
         org.assert_not_awaited()
-        team.assert_not_awaited()
-        user.assert_not_awaited()
 
 
 class TestOverrideDbLookups:
@@ -356,18 +325,9 @@ class TestOverrideDbLookups:
         *,
         flag_name: str = "sso",
         org: object | None = None,
-        team: object | None = None,
-        account: object | None = None,
         org_error: Exception | None = None,
-        team_error: Exception | None = None,
-        account_error: Exception | None = None,
     ) -> object:
         session = AsyncMock()
-        # The fixed ``_override_from_entity`` always opens ``session.begin()``.
-        # An AsyncMock's ``begin()`` returns a coroutine (not an async CM), and
-        # its auto-created ``__aexit__`` returns a truthy MagicMock (which
-        # would wrongly suppress in-block exceptions) — wire a proper
-        # transaction context manager instead.
         begin_cm = MagicMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -385,18 +345,6 @@ class TestOverrideDbLookups:
                 new_callable=AsyncMock,
                 return_value=org,
                 side_effect=org_error,
-            ),
-            patch(
-                "modulo.db.crud.team.get_team",
-                new_callable=AsyncMock,
-                return_value=team,
-                side_effect=team_error,
-            ),
-            patch(
-                "modulo.db.crud.account.get_account_by_id",
-                new_callable=AsyncMock,
-                return_value=account,
-                side_effect=account_error,
             ),
         ):
             return await fn(flag_name, uuid.uuid4())
@@ -429,44 +377,6 @@ class TestOverrideDbLookups:
         registry = FeatureFlagRegistry()
         with pytest.raises(asyncio.CancelledError):
             await self._lookup(registry._get_org_override, org_error=asyncio.CancelledError())
-
-    async def test_team_override_returned(self) -> None:
-        registry = FeatureFlagRegistry()
-        team = MagicMock(settings={"feature_overrides": {"sso": True}})
-        assert await self._lookup(registry._get_team_override, team=team) is True
-
-    async def test_team_cancelled_error_propagates(self) -> None:
-        registry = FeatureFlagRegistry()
-        with pytest.raises(asyncio.CancelledError):
-            await self._lookup(registry._get_team_override, team_error=asyncio.CancelledError())
-
-    async def test_team_lookup_error_returns_none(self) -> None:
-        registry = FeatureFlagRegistry()
-        assert await self._lookup(registry._get_team_override, team_error=RuntimeError("db down")) is None
-
-    async def test_team_without_settings_returns_none(self) -> None:
-        registry = FeatureFlagRegistry()
-        team = MagicMock(settings=None)
-        assert await self._lookup(registry._get_team_override, team=team) is None
-
-    async def test_user_override_returned(self) -> None:
-        registry = FeatureFlagRegistry()
-        account = MagicMock(preferences={"feature_overrides": {"sso": True}})
-        assert await self._lookup(registry._get_user_override, account=account) is True
-
-    async def test_user_cancelled_error_propagates(self) -> None:
-        registry = FeatureFlagRegistry()
-        with pytest.raises(asyncio.CancelledError):
-            await self._lookup(registry._get_user_override, account_error=asyncio.CancelledError())
-
-    async def test_user_lookup_error_returns_none(self) -> None:
-        registry = FeatureFlagRegistry()
-        assert await self._lookup(registry._get_user_override, account_error=RuntimeError("db down")) is None
-
-    async def test_user_without_preferences_returns_none(self) -> None:
-        registry = FeatureFlagRegistry()
-        account = MagicMock(preferences=None)
-        assert await self._lookup(registry._get_user_override, account=account) is None
 
 
 class _ExpiringEntity:
@@ -542,7 +452,6 @@ class TestOverrideFromEntitySessionSemantics:
 
     async def _resolve(
         self,
-        scope: str,
         flag_name: str,
         settings_attr: str,
         overrides: dict,
@@ -559,28 +468,13 @@ class TestOverrideFromEntitySessionSemantics:
                 new_callable=AsyncMock,
                 return_value=entity,
             ),
-            patch(
-                "modulo.db.crud.team.get_team",
-                new_callable=AsyncMock,
-                return_value=entity,
-            ),
-            patch(
-                "modulo.db.crud.account.get_account_by_id",
-                new_callable=AsyncMock,
-                return_value=entity,
-            ),
         ):
-            if scope == "org":
-                return await registry.resolve_flag(flag_name, org_id=uuid.uuid4())
-            if scope == "team":
-                return await registry.resolve_flag(flag_name, team_id=uuid.uuid4())
-            return await registry.resolve_flag(flag_name, user_id=uuid.uuid4())
+            return await registry.resolve_flag(flag_name, org_id=uuid.uuid4())
 
     async def test_org_override_true_on_default_off_flag_resolves_true(self) -> None:
         """The prod failure mode: override persisted in settings_json, but
         resolve_flag fell through to the default-off value."""
         result = await self._resolve(
-            "org",
             "library_collection",
             "settings_json",
             {"library_collection": True},
@@ -589,30 +483,11 @@ class TestOverrideFromEntitySessionSemantics:
 
     async def test_org_override_false_on_default_on_flag_resolves_false(self) -> None:
         result = await self._resolve(
-            "org",
             "parallel_branches",
             "settings_json",
             {"parallel_branches": False},
         )
         assert result is False
-
-    async def test_team_override_resolves_inside_transaction(self) -> None:
-        result = await self._resolve(
-            "team",
-            "library_collection",
-            "settings",
-            {"library_collection": True},
-        )
-        assert result is True
-
-    async def test_user_override_resolves_inside_transaction(self) -> None:
-        result = await self._resolve(
-            "user",
-            "library_collection",
-            "preferences",
-            {"library_collection": True},
-        )
-        assert result is True
 
 
 class TestGetRegistry:

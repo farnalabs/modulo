@@ -25,7 +25,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import FeatureFlagRegistry, resolve_plan_context
+from modulo.core.feature_flags import TIER_RANK, FeatureFlagRegistry, resolve_plan_context
 from modulo.core.license import get_license
 from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
@@ -142,6 +142,31 @@ async def _write_org_override(session: AsyncSession, org_id: uuid.UUID, flag_nam
         settings_dict["feature_overrides"] = overrides
         org.settings_json = settings_dict
         session.add(org)
+
+
+async def _enforce_team_tier_gate(
+    flag: Any,
+    flag_name: str,
+    current_tier: str,
+    enabled: bool,
+) -> None:
+    """Reject attempts to ENABLE a team-tier flag when the org is not on the team tier.
+
+    System-level overrides (set_override) remain permitted — this gate only
+    applies to org-level write paths (toggle and org-override endpoints).
+    Raises 403 when the org cannot enable this flag.
+    """
+    if not enabled:
+        return
+    flag_tier_rank = TIER_RANK.get(flag.tier, 0)
+    current_tier_rank = TIER_RANK.get(current_tier, 0)
+    if flag_tier_rank > current_tier_rank:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Cannot enable team-tier flag '{flag_name}' on the '{current_tier}' plan. A team licence is required."
+            ),
+        )
 
 
 @router.get("", response_model=None)
@@ -370,6 +395,8 @@ async def toggle_feature_flag(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Unknown feature flag: {flag_name}",
             )
+        tier = await _resolve_tier(settings, session, current_user)
+        await _enforce_team_tier_gate(flag, flag_name, tier, req.enabled)
         await _write_org_override(session, current_user.organisation_id, flag_name, req.enabled)
         await _invalidate_cache(settings, current_user.organisation_id)
         return {
@@ -488,6 +515,15 @@ async def set_org_flag_override(
             detail=_MSG_ORG_ID_REQUIRED,
         )
     try:
+        registry = await _build_registry(settings, session, current_user)
+        flag = registry.get_flag(flag_name)
+        if flag is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown feature flag: {flag_name}",
+            )
+        tier = await _resolve_tier(settings, session, current_user)
+        await _enforce_team_tier_gate(flag, flag_name, tier, req.enabled)
         await _write_org_override(session, current_user.organisation_id, flag_name, req.enabled)
         await _invalidate_cache(settings, current_user.organisation_id)
         return {"override": req.enabled}

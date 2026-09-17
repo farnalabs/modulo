@@ -1439,7 +1439,8 @@ export default {
       "select_override": "Select override",
       "system_default": "System default",
       "force_enabled": "Force enabled",
-      "force_disabled": "Force disabled"
+      "force_disabled": "Force disabled",
+      "locked_requires_team": "Requires team licence"
     },
     "EvalEditorView": {
       "eval_system_is_not_available_on_your_current_plan": "Eval system is not available on your current plan.",

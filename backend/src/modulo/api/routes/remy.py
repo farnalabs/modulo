@@ -423,13 +423,13 @@ async def _is_ui_driving_enabled(
 ) -> bool:
     """Check if the remy_ui_driving feature flag is enabled for the given org.
 
-    Uses FeatureFlagRegistry backed by the DB tier catalog, with granular
-    override resolution (user > team > org > system default).
-    Falls back to the hardcoded _KNOWN_FLAGS list when DB data is unavailable.
+    Uses FeatureFlagRegistry backed by the DB tier catalog, with org-level
+    override resolution. Falls back to the hardcoded _KNOWN_FLAGS list when
+    DB data is unavailable.
     """
     try:
         registry = get_registry()
-        return await registry.resolve_flag("remy_ui_driving", org_id=org_id, user_id=user_id)
+        return await registry.resolve_flag("remy_ui_driving", org_id=org_id)
     except Exception:
         logger.warning("Failed to resolve plan context for ui_driving check, defaulting to True", exc_info=True)
         return True

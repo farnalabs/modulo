@@ -91,6 +91,23 @@ def _clear_registry_overrides() -> Generator[None, None, None]:
     FeatureFlagRegistry._overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _patch_resolve_tier() -> Generator[None, None, None]:
+    """Patch _resolve_tier to return 'community' by default.
+
+    The toggle and org-override endpoints now call _resolve_tier to check the
+    tier gate. Without this patch, the endpoint tries to hit the DB via
+    resolve_plan_context and fails with a MagicMock await error. Tests that
+    need a specific tier can override this mock.
+    """
+    with patch(
+        "modulo.api.routes.admin_feature_flags._resolve_tier",
+        new_callable=AsyncMock,
+        return_value="community",
+    ):
+        yield
+
+
 def _mock_registry() -> FeatureFlagRegistry:
     """Return a FeatureFlagRegistry with hardcoded flags (no DB)."""
     return FeatureFlagRegistry(current_tier="community", has_license_key=False)
@@ -430,15 +447,20 @@ class TestToggleFeatureFlag:
                 return_value=org,
             ),
             patch(
+                "modulo.api.routes.admin_feature_flags._resolve_tier",
+                new_callable=AsyncMock,
+                return_value="community",
+            ),
+            patch(
                 "modulo.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["name"] == "sso"
+        assert body["name"] == "webhook_trigger"
         assert "overridden" in body
 
     def test_toggle_unknown_flag_returns_404(self, client: TestClient) -> None:
@@ -509,20 +531,17 @@ class TestTogglePersistence:
                 return_value=redis_mock,
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
             assert resp.status_code == 200
             body = resp.json()
             assert body["overridden"] is True
             assert body["currently_active"] is True
-            # The durable write landed in the org settings (the DB-row proxy).
-            assert org.settings_json["feature_overrides"]["sso"] is True
-            # Cache invalidated so app-wide readers see the change immediately.
+            assert org.settings_json["feature_overrides"]["webhook_trigger"] is True
             redis_mock.delete.assert_awaited_once_with("feature-flags:00000000-0000-0000-0000-000000000001")
-            # Second request: a fresh build + org-override overlay must agree.
             listing = client.get("/api/v1/admin/feature-flags")
             assert listing.status_code == 200
-            sso = next(f for f in listing.json()["flags"] if f["name"] == "sso")
-            assert sso["currently_active"] is True
+            flag = next(f for f in listing.json()["flags"] if f["name"] == "webhook_trigger")
+            assert flag["currently_active"] is True
 
     def test_toggle_off_persists_and_second_request_sees_flag_inactive(self, client: TestClient) -> None:
         """Disabling via toggle must persist too: parallel_branches is active on
@@ -569,7 +588,7 @@ class TestTogglePersistence:
                 side_effect=RuntimeError("db down"),
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
         assert resp.status_code == 500
         body = resp.json()
         assert "overridden" not in body
@@ -594,7 +613,7 @@ class TestTogglePersistence:
                 side_effect=RuntimeError("redis down"),
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
         assert resp.status_code == 200
         assert resp.json()["overridden"] is True
 
@@ -629,18 +648,22 @@ class TestOrgOverrideCacheInvalidation:
                 return_value=org,
             ),
             patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
                 "modulo.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso/org-override", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger/org-override", json={"enabled": True})
         assert resp.status_code == 200
         assert resp.json()["override"] is True
         redis_mock.delete.assert_awaited_once_with(f"feature-flags:{self._ORG_ID}")
 
     def test_clear_org_override_invalidates_redis_cache(self, client: TestClient) -> None:
-        org = _org_with_overrides(sso=True)
+        org = _org_with_overrides(webhook_trigger=True)
         redis_mock = AsyncMock()
         with (
             patch(
@@ -649,12 +672,16 @@ class TestOrgOverrideCacheInvalidation:
                 return_value=org,
             ),
             patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
                 "modulo.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
         ):
-            resp = client.delete("/api/v1/admin/feature-flags/sso/org-override")
+            resp = client.delete("/api/v1/admin/feature-flags/webhook_trigger/org-override")
         assert resp.status_code == 200
         assert resp.json()["override"] is None
         redis_mock.delete.assert_awaited_once_with(f"feature-flags:{self._ORG_ID}")
@@ -670,11 +697,15 @@ class TestOrgOverrideCacheInvalidation:
                 return_value=org,
             ),
             patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
                 "modulo.api.routes.admin_feature_flags.Redis.from_url",
                 side_effect=RuntimeError("redis down"),
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/sso/org-override", json={"enabled": True})
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger/org-override", json={"enabled": True})
         assert resp.status_code == 200
         assert resp.json()["override"] is True
 
@@ -692,15 +723,19 @@ class TestOrgOverrideRoundTrip:
                 return_value=org,
             ),
             patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
                 "modulo.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
         ):
-            set_resp = client.put("/api/v1/admin/feature-flags/sso/org-override", json={"enabled": True})
+            set_resp = client.put("/api/v1/admin/feature-flags/webhook_trigger/org-override", json={"enabled": True})
             assert set_resp.status_code == 200
             assert set_resp.json()["override"] is True
-            get_resp = client.get("/api/v1/admin/feature-flags/sso/org-override")
+            get_resp = client.get("/api/v1/admin/feature-flags/webhook_trigger/org-override")
         assert get_resp.status_code == 200
         assert get_resp.json()["override"] is True
 

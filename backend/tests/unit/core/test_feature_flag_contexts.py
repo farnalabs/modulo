@@ -4,8 +4,8 @@ Covers the plan-context adapters (``CommunityTier`` / ``LicenseKeyTier`` /
 ``DbPlanContext``), the ``resolve_plan_context`` resolution order (org license >
 in-memory license > env-var license > org plan_id > community fallback), the
 per-entity flag override resolution (``resolve_flag`` precedence plus the
-org/team/user DB lookups and their failure paths), the process-global registry
-singleton, the ``load_from_db`` transaction entry paths,
+org DB lookup and its failure paths), the process-global registry singleton,
+the ``load_from_db`` transaction entry paths,
 and golden-value pins for the tier contract that must never regress.
 """
 
@@ -343,47 +343,17 @@ class TestResolveFlag:
     async def test_system_override_wins_over_entity_overrides(self) -> None:
         registry = self._registry()
         registry.set_override("sso", True)
-        with (
-            patch.object(registry, "_get_user_override", new=AsyncMock(return_value=False)),
-            patch.object(registry, "_get_team_override", new=AsyncMock(return_value=False)),
-            patch.object(registry, "_get_org_override", new=AsyncMock(return_value=False)),
-        ):
+        with patch.object(registry, "_get_org_override", new=AsyncMock(return_value=False)):
             assert await registry.resolve_flag("sso", org_id=_ORG_ID) is True
 
-    async def test_user_override_wins_over_team_and_org(self) -> None:
+    async def test_org_override_used_when_no_system_override(self) -> None:
         registry = self._registry()
-        with (
-            patch.object(registry, "_get_user_override", new=AsyncMock(return_value=True)),
-            patch.object(registry, "_get_team_override", new=AsyncMock(return_value=False)),
-            patch.object(registry, "_get_org_override", new=AsyncMock(return_value=False)),
-        ):
-            assert await registry.resolve_flag("sso", user_id=_USER_ID) is True
-
-    async def test_team_override_wins_over_org(self) -> None:
-        registry = self._registry()
-        with (
-            patch.object(registry, "_get_user_override", new=AsyncMock(return_value=None)),
-            patch.object(registry, "_get_team_override", new=AsyncMock(return_value=True)),
-            patch.object(registry, "_get_org_override", new=AsyncMock(return_value=False)),
-        ):
-            assert await registry.resolve_flag("sso", team_id=_TEAM_ID) is True
-
-    async def test_org_override_used_when_user_and_team_none(self) -> None:
-        registry = self._registry()
-        with (
-            patch.object(registry, "_get_user_override", new=AsyncMock(return_value=None)),
-            patch.object(registry, "_get_team_override", new=AsyncMock(return_value=None)),
-            patch.object(registry, "_get_org_override", new=AsyncMock(return_value=True)),
-        ):
+        with patch.object(registry, "_get_org_override", new=AsyncMock(return_value=True)):
             assert await registry.resolve_flag("sso", org_id=_ORG_ID) is True
 
     async def test_no_overrides_falls_back_to_flag_default(self) -> None:
         registry = self._registry()
-        with (
-            patch.object(registry, "_get_user_override", new=AsyncMock(return_value=None)),
-            patch.object(registry, "_get_team_override", new=AsyncMock(return_value=None)),
-            patch.object(registry, "_get_org_override", new=AsyncMock(return_value=None)),
-        ):
+        with patch.object(registry, "_get_org_override", new=AsyncMock(return_value=None)):
             assert await registry.resolve_flag("sso") is False
             assert await registry.resolve_flag("parallel_branches") is True
 
@@ -391,12 +361,12 @@ class TestResolveFlag:
         registry = self._registry()
         assert await registry.resolve_flag("does_not_exist") is False
 
-    async def test_user_override_not_queried_without_user_id(self) -> None:
+    async def test_org_override_not_queried_without_org_id(self) -> None:
         registry = self._registry()
-        user = AsyncMock(return_value=None)
-        with patch.object(registry, "_get_user_override", new=user):
+        org = AsyncMock(return_value=None)
+        with patch.object(registry, "_get_org_override", new=org):
             await registry.resolve_flag("parallel_branches")
-        user.assert_not_awaited()
+        org.assert_not_awaited()
 
 
 class TestEntityOverrideLookups:
@@ -471,111 +441,6 @@ class TestEntityOverrideLookups:
             assert await registry._get_org_override("sso", _ORG_ID) is True
         session.begin.assert_not_called()
 
-    async def test_team_override_reads_settings(self) -> None:
-        registry = FeatureFlagRegistry()
-        team = SimpleNamespace(settings={"feature_overrides": {"sso": True}})
-        session = self._session()
-        with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
-            _fake_crud_module("modulo.db.crud.team", get_team=AsyncMock(return_value=team)),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
-            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-        ):
-            assert await registry._get_team_override("sso", _TEAM_ID) is True
-
-    async def test_team_override_error_logs_and_returns_none(self, caplog) -> None:
-        registry = FeatureFlagRegistry()
-        caplog.set_level(logging.ERROR, logger=_LOGGER)
-        session = self._session()
-        with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
-            _fake_crud_module("modulo.db.crud.team", get_team=AsyncMock(side_effect=RuntimeError("db down"))),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
-            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-        ):
-            assert await registry._get_team_override("sso", _TEAM_ID) is None
-        assert any("Failed to check team flag override" in r.getMessage() for r in caplog.records)
-
-    async def test_user_override_reads_preferences(self) -> None:
-        registry = FeatureFlagRegistry()
-        account = SimpleNamespace(preferences={"feature_overrides": {"sso": True}})
-        session = self._session()
-        with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
-            _fake_crud_module("modulo.db.crud.account", get_account_by_id=AsyncMock(return_value=account)),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
-            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-        ):
-            assert await registry._get_user_override("sso", _USER_ID) is True
-
-    async def test_user_override_error_logs_and_returns_none(self, caplog) -> None:
-        registry = FeatureFlagRegistry()
-        caplog.set_level(logging.ERROR, logger=_LOGGER)
-        session = self._session()
-        with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
-            _fake_crud_module(
-                "modulo.db.crud.account",
-                get_account_by_id=AsyncMock(side_effect=RuntimeError("db down")),
-            ),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
-            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-        ):
-            assert await registry._get_user_override("sso", _USER_ID) is None
-        assert any("Failed to check user flag override" in r.getMessage() for r in caplog.records)
-
-    async def test_team_override_active_transaction_skips_begin(self) -> None:
-        registry = FeatureFlagRegistry()
-        team = SimpleNamespace(settings={"feature_overrides": {"sso": True}})
-        session = self._session(in_transaction=True)
-        with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
-            _fake_crud_module("modulo.db.crud.team", get_team=AsyncMock(return_value=team)),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
-            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-        ):
-            assert await registry._get_team_override("sso", _TEAM_ID) is True
-        session.begin.assert_not_called()
-
-    async def test_user_override_active_transaction_skips_begin(self) -> None:
-        registry = FeatureFlagRegistry()
-        account = SimpleNamespace(preferences={"feature_overrides": {"sso": True}})
-        session = self._session(in_transaction=True)
-        with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
-            _fake_crud_module("modulo.db.crud.account", get_account_by_id=AsyncMock(return_value=account)),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
-            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-        ):
-            assert await registry._get_user_override("sso", _USER_ID) is True
-        session.begin.assert_not_called()
-
-    async def test_team_override_async_in_transaction_probe_is_awaited(self) -> None:
-        registry = FeatureFlagRegistry()
-        team = SimpleNamespace(settings={"feature_overrides": {"sso": True}})
-        session = self._session(async_in_transaction=True)
-        with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
-            _fake_crud_module("modulo.db.crud.team", get_team=AsyncMock(return_value=team)),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
-            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-        ):
-            assert await registry._get_team_override("sso", _TEAM_ID) is True
-        session.begin.assert_not_called()
-
-    async def test_user_override_async_in_transaction_probe_is_awaited(self) -> None:
-        registry = FeatureFlagRegistry()
-        account = SimpleNamespace(preferences={"feature_overrides": {"sso": True}})
-        session = self._session(async_in_transaction=True)
-        with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
-            _fake_crud_module("modulo.db.crud.account", get_account_by_id=AsyncMock(return_value=account)),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
-            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-        ):
-            assert await registry._get_user_override("sso", _USER_ID) is True
-        session.begin.assert_not_called()
-
     async def test_org_override_cancelled_error_reraised(self) -> None:
         registry = FeatureFlagRegistry()
         session = self._session()
@@ -590,33 +455,6 @@ class TestEntityOverrideLookups:
             pytest.raises(asyncio.CancelledError),
         ):
             await registry._get_org_override("sso", _ORG_ID)
-
-    async def test_team_override_cancelled_error_reraised(self) -> None:
-        registry = FeatureFlagRegistry()
-        session = self._session()
-        with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
-            _fake_crud_module("modulo.db.crud.team", get_team=AsyncMock(side_effect=asyncio.CancelledError())),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
-            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-            pytest.raises(asyncio.CancelledError),
-        ):
-            await registry._get_team_override("sso", _TEAM_ID)
-
-    async def test_user_override_cancelled_error_reraised(self) -> None:
-        registry = FeatureFlagRegistry()
-        session = self._session()
-        with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
-            _fake_crud_module(
-                "modulo.db.crud.account",
-                get_account_by_id=AsyncMock(side_effect=asyncio.CancelledError()),
-            ),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
-            patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-            pytest.raises(asyncio.CancelledError),
-        ):
-            await registry._get_user_override("sso", _USER_ID)
 
 
 class TestGetRegistry:
