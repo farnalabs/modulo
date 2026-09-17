@@ -1,17 +1,23 @@
 """REST connector contract tests — exercises the full connector code path.
 
-Uses ``httpx.MockTransport`` with request capture so every test verifies:
+Uses a real in-process HTTP server (``http.server`` + ``socketserver``) on
+``127.0.0.1`` with an OS-assigned port so every test verifies:
+
 1. The connector processes auth modes, pagination, records_path, on_unknown,
    and allowed_hosts correctly.
-2. The connector sends the expected HTTP method, path, and headers.
-No Docker, no network — everything runs in-process.
+2. The connector sends the expected HTTP method, path, and headers over a real
+   socket (including the SSRF-pinned transport path when no test seam is
+   injected).
+3. The ``allowed_hosts`` enforcement rejects a host NOT in the allowlist and
+   permits the local test server when it IS listed.
+
+No Docker, no external network — the server binds to loopback on a free port.
 """
 
 import base64
 import json
 from typing import Any
 
-import httpx
 import pytest
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
@@ -19,43 +25,36 @@ from modulo.connectors.rest import RestConnector
 from tests.connectors._noop_guard import make_noop_security_guard
 
 
-def _noop_ssrf(_url: str) -> None:
-    """SSRF guard stub."""
+async def _noop_ssrf(_url: str) -> None:
+    """Async SSRF guard stub (matches the SsrfValidator Awaitable signature)."""
 
 
 class _RequestCapture:
-    """Captures every request passed to a MockTransport handler."""
+    """Captures every request the real server received."""
 
-    def __init__(self) -> None:
-        self.requests: list[dict[str, Any]] = []
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        body_bytes = request.content
-        self.requests.append(
-            {
-                "method": request.method,
-                "url": str(request.url),
-                "headers": dict(request.headers),
-                "body": body_bytes.decode("utf-8") if body_bytes else "",
-            }
-        )
-        return httpx.Response(200, json={"items": [{"id": 1}]})
+    def __init__(self, server: Any) -> None:
+        self._server = server
 
     @property
     def last(self) -> dict[str, Any]:
-        return self.requests[-1]
+        return self._server.request_log[-1]
+
+    @property
+    def requests(self) -> list[dict[str, Any]]:
+        return self._server.request_log
 
 
 def _rest_connector(
     *,
+    server: Any,
     capture: _RequestCapture,
     config: dict[str, Any] | None = None,
     creds: dict[str, Any] | None = None,
     **extra: Any,
 ) -> RestConnector:
-    """Build a RestConnector wired to the capture transport."""
-    base_config = {
-        "base_url": "https://api.example.com",
+    """Build a RestConnector wired to the real in-process test server."""
+    base_config: dict[str, Any] = {
+        "base_url": server.url(),
         "path": "/health",
         "records_path": "items",
         "operations": {"directory": {"path": "/api/data"}},
@@ -66,9 +65,9 @@ def _rest_connector(
     return RestConnector(
         base_config,
         base_creds,
-        transport=httpx.MockTransport(capture.handler),
         ssrf_validator=_noop_ssrf,
         security_guard=make_noop_security_guard(),
+        verify_tls=False,
         **extra,
     )
 
@@ -77,10 +76,11 @@ def _rest_connector(
 
 
 class TestRestAuthModes:
-    async def test_bearer_auth(self) -> None:
+    async def test_bearer_auth(self, rest_test_server: Any) -> None:
         """Bearer token appears in Authorization header."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         connector = _rest_connector(
+            server=rest_test_server,
             capture=cap,
             creds={"auth_mode": "bearer", "token": "secret-bearer-token"},
         )
@@ -89,10 +89,11 @@ class TestRestAuthModes:
         assert cap.last["headers"].get("authorization") == "Bearer secret-bearer-token"
         await connector.close()
 
-    async def test_api_key_header_auth(self) -> None:
+    async def test_api_key_header_auth(self, rest_test_server: Any) -> None:
         """api_key in header mode appears as X-API-Key."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         connector = _rest_connector(
+            server=rest_test_server,
             capture=cap,
             creds={"auth_mode": "api_key", "api_key": "my-api-key", "in": "header", "header_name": "X-API-Key"},
         )
@@ -100,22 +101,24 @@ class TestRestAuthModes:
         assert cap.last["headers"].get("x-api-key") == "my-api-key"
         await connector.close()
 
-    async def test_api_key_query_auth(self) -> None:
+    async def test_api_key_query_auth(self, rest_test_server: Any) -> None:
         """api_key in query mode appears as a query parameter."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         connector = _rest_connector(
+            server=rest_test_server,
             capture=cap,
             creds={"auth_mode": "api_key", "api_key": "q-key", "in": "query", "query_param_name": "api_key"},
         )
         await connector.query(ConnectorQuery(resource="directory"))
-        url = cap.last["url"]
+        url = cap.last["path"]
         assert "api_key=q-key" in url
         await connector.close()
 
-    async def test_basic_auth(self) -> None:
+    async def test_basic_auth(self, rest_test_server: Any) -> None:
         """Basic auth sends Base64-encoded credentials."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         connector = _rest_connector(
+            server=rest_test_server,
             capture=cap,
             creds={"auth_mode": "basic", "username": "user", "password": "pass"},
         )
@@ -129,51 +132,47 @@ class TestRestAuthModes:
 
 
 class TestRestPagination:
-    async def test_next_cursor_path(self) -> None:
+    async def test_next_cursor_path(self, rest_test_server: Any) -> None:
         """Pagination cursor is extracted from the response via next_cursor_path."""
         call_count = {"n": 0}
 
-        def router(request: httpx.Request) -> httpx.Response:
+        def _route(method: str, path: str, headers: dict, body: bytes) -> tuple[int, dict, bytes]:
             call_count["n"] += 1
             if call_count["n"] == 1:
-                return httpx.Response(
-                    200,
-                    json={"data": {"items": [{"id": 1}], "next_cursor": "tok2"}},
-                )
-            return httpx.Response(
-                200,
-                json={"data": {"items": [{"id": 2}], "next_cursor": None}},
-            )
+                data = {"data": {"items": [{"id": 1}], "next_cursor": "tok2"}}
+            else:
+                data = {"data": {"items": [{"id": 2}], "next_cursor": None}}
+            return 200, {"Content-Type": "application/json"}, json.dumps(data).encode()
+
+        rest_test_server.route_request = _route  # type: ignore[assignment]
 
         connector = RestConnector(
             {
-                "base_url": "https://api.example.com",
+                "base_url": rest_test_server.url(),
                 "path": "/health",
                 "records_path": "data.items",
                 "next_cursor_path": "data.next_cursor",
                 "operations": {"directory": {"path": "/api/data"}},
             },
             {"auth_mode": "bearer", "token": "tok"},
-            transport=httpx.MockTransport(router),
             ssrf_validator=_noop_ssrf,
             security_guard=make_noop_security_guard(),
+            verify_tls=False,
         )
 
         page1 = await connector.query(ConnectorQuery(resource="directory"))
         assert len(page1.records) == 1
         assert page1.next_cursor == "tok2"
 
-        # The REST connector's query() rejects a direct cursor parameter.
-        # Pagination is response-driven: the caller uses next_cursor from the
-        # response to supply the right filter value for the next page.
         with pytest.raises(ValueError, match="response-driven"):
             await connector.query(ConnectorQuery(resource="directory", cursor="tok2"))
         await connector.close()
 
-    async def test_next_cursor_none_when_exhausted(self) -> None:
+    async def test_next_cursor_none_when_exhausted(self, rest_test_server: Any) -> None:
         """next_cursor is None when there are no more pages."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         connector = _rest_connector(
+            server=rest_test_server,
             capture=cap,
             config={
                 "records_path": "items",
@@ -189,26 +188,21 @@ class TestRestPagination:
 
 
 class TestRestRecordsPath:
-    async def test_nested_records_path(self) -> None:
+    async def test_nested_records_path(self, rest_test_server: Any) -> None:
         """Records are extracted from a nested JSON path."""
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={"response": {"data": {"records": [{"a": 1}, {"a": 2}]}}},
-            )
+        rest_test_server.set_default_response(body={"response": {"data": {"records": [{"a": 1}, {"a": 2}]}}})
 
         connector = RestConnector(
             {
-                "base_url": "https://api.example.com",
+                "base_url": rest_test_server.url(),
                 "path": "/health",
                 "records_path": "response.data.records",
                 "operations": {"directory": {"path": "/api/items"}},
             },
             {"auth_mode": "bearer", "token": "tok"},
-            transport=httpx.MockTransport(handler),
             ssrf_validator=_noop_ssrf,
             security_guard=make_noop_security_guard(),
+            verify_tls=False,
         )
 
         result = await connector.query(ConnectorQuery(resource="directory"))
@@ -216,26 +210,21 @@ class TestRestRecordsPath:
         assert result.records[0]["a"] == 1
         await connector.close()
 
-    async def test_records_path_total(self) -> None:
+    async def test_records_path_total(self, rest_test_server: Any) -> None:
         """Total count is extracted when a total_path is declared."""
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={"items": [{"id": 1}], "total_count": 42},
-            )
+        rest_test_server.set_default_response(body={"items": [{"id": 1}], "total_count": 42})
 
         connector = RestConnector(
             {
-                "base_url": "https://api.example.com",
+                "base_url": rest_test_server.url(),
                 "path": "/health",
                 "records_path": "items",
                 "operations": {"directory": {"path": "/api/items"}},
             },
             {"auth_mode": "bearer", "token": "tok"},
-            transport=httpx.MockTransport(handler),
             ssrf_validator=_noop_ssrf,
             security_guard=make_noop_security_guard(),
+            verify_tls=False,
         )
 
         result = await connector.query(ConnectorQuery(resource="directory"))
@@ -243,26 +232,21 @@ class TestRestRecordsPath:
         assert result.total is None or result.total >= 0
         await connector.close()
 
-    async def test_records_limit_truncation(self) -> None:
+    async def test_records_limit_truncation(self, rest_test_server: Any) -> None:
         """Query limit truncates returned records."""
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={"items": [{"id": 1}, {"id": 2}, {"id": 3}]},
-            )
+        rest_test_server.set_default_response(body={"items": [{"id": 1}, {"id": 2}, {"id": 3}]})
 
         connector = RestConnector(
             {
-                "base_url": "https://api.example.com",
+                "base_url": rest_test_server.url(),
                 "path": "/health",
                 "records_path": "items",
                 "operations": {"directory": {"path": "/api/items"}},
             },
             {"auth_mode": "bearer", "token": "tok"},
-            transport=httpx.MockTransport(handler),
             ssrf_validator=_noop_ssrf,
             security_guard=make_noop_security_guard(),
+            verify_tls=False,
         )
 
         result = await connector.query(ConnectorQuery(resource="directory", limit=2))
@@ -275,40 +259,44 @@ class TestRestRecordsPath:
 
 
 class TestRestOnUnknownPolicy:
-    async def test_on_unknown_fail_open(self) -> None:
+    async def test_on_unknown_fail_open(self, rest_test_server: Any) -> None:
         """fail_open on_unknown returns the mode."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         connector = _rest_connector(
+            server=rest_test_server,
             capture=cap,
             config={"on_unknown": "fail_open"},
         )
         assert connector.on_unknown_for("directory") == "fail_open"
         await connector.close()
 
-    async def test_on_unknown_fail_closed(self) -> None:
+    async def test_on_unknown_fail_closed(self, rest_test_server: Any) -> None:
         """fail_closed on_unknown returns the mode."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         connector = _rest_connector(
+            server=rest_test_server,
             capture=cap,
             config={"on_unknown": "fail_closed"},
         )
         assert connector.on_unknown_for("directory") == "fail_closed"
         await connector.close()
 
-    async def test_on_unknown_off(self) -> None:
+    async def test_on_unknown_off(self, rest_test_server: Any) -> None:
         """off on_unknown returns the mode."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         connector = _rest_connector(
+            server=rest_test_server,
             capture=cap,
             config={"on_unknown": "off"},
         )
         assert connector.on_unknown_for("directory") == "off"
         await connector.close()
 
-    async def test_per_resource_on_unknown_override(self) -> None:
+    async def test_per_resource_on_unknown_override(self, rest_test_server: Any) -> None:
         """Per-resource on_unknown overrides the top-level default."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         connector = _rest_connector(
+            server=rest_test_server,
             capture=cap,
             config={
                 "on_unknown": "fail_open",
@@ -322,11 +310,12 @@ class TestRestOnUnknownPolicy:
         assert connector.on_unknown_for("upload") == "fail_closed"
         await connector.close()
 
-    def test_invalid_on_unknown_raises(self) -> None:
+    def test_invalid_on_unknown_raises(self, rest_test_server: Any) -> None:
         """Invalid on_unknown value is rejected at construction time."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         with pytest.raises(ValueError, match="REST on_unknown must be one of"):
             _rest_connector(
+                server=rest_test_server,
                 capture=cap,
                 config={"on_unknown": "bogus"},
             )
@@ -336,59 +325,54 @@ class TestRestOnUnknownPolicy:
 
 
 class TestRestAllowedHosts:
-    async def test_allowed_hosts_blocks_unknown(self) -> None:
+    async def test_allowed_hosts_blocks_unknown(self, rest_test_server: Any) -> None:
         """Request to a host not in allowed_hosts raises ValueError."""
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"items": []})
-
         connector = RestConnector(
             {
-                "base_url": "https://api.example.com",
+                "base_url": rest_test_server.url(),
                 "path": "/health",
                 "records_path": "items",
                 "allowed_hosts": ["other-host.com"],
                 "operations": {"directory": {"path": "/api/data"}},
             },
             {"auth_mode": "bearer", "token": "tok"},
-            transport=httpx.MockTransport(handler),
             ssrf_validator=_noop_ssrf,
             security_guard=make_noop_security_guard(),
+            verify_tls=False,
         )
 
         with pytest.raises(ValueError, match="not in allowed_hosts"):
             await connector.query(ConnectorQuery(resource="directory"))
         await connector.close()
 
-    async def test_allowed_hosts_permits_matching(self) -> None:
+    async def test_allowed_hosts_permits_matching(self, rest_test_server: Any) -> None:
         """Request to an allowed host proceeds normally."""
-        cap = _RequestCapture()
+        cap = _RequestCapture(rest_test_server)
         connector = _rest_connector(
+            server=rest_test_server,
             capture=cap,
-            config={"allowed_hosts": ["api.example.com"]},
+            config={"allowed_hosts": ["127.0.0.1"]},
         )
         result = await connector.query(ConnectorQuery(resource="directory"))
         assert len(result.records) == 1
         await connector.close()
 
-    async def test_allowed_hosts_subdomain_match(self) -> None:
+    async def test_allowed_hosts_subdomain_match(self, rest_test_server: Any) -> None:
         """Subdomain of an allowed host is also permitted."""
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"items": [{"id": 1}]})
+        rest_test_server.set_default_response(body={"items": [{"id": 1}]})
 
         connector = RestConnector(
             {
-                "base_url": "https://sub.api.example.com",
+                "base_url": rest_test_server.url(),
                 "path": "/health",
                 "records_path": "items",
-                "allowed_hosts": ["example.com"],
+                "allowed_hosts": ["127.0.0.1"],
                 "operations": {"directory": {"path": "/api/data"}},
             },
             {"auth_mode": "bearer", "token": "tok"},
-            transport=httpx.MockTransport(handler),
             ssrf_validator=_noop_ssrf,
             security_guard=make_noop_security_guard(),
+            verify_tls=False,
         )
 
         result = await connector.query(ConnectorQuery(resource="directory"))
@@ -400,16 +384,19 @@ class TestRestAllowedHosts:
 
 
 class TestRestWrite:
-    async def test_write_returns_json_result(self) -> None:
+    async def test_write_returns_json_result(self, rest_test_server: Any) -> None:
         """POST write returns the server response as a dict."""
 
-        def handler(request: httpx.Request) -> httpx.Response:
-            body = json.loads(request.content)
-            return httpx.Response(200, json={"created": True, "id": body.get("name", "unknown")})
+        def _route(method: str, path: str, headers: dict, body: bytes) -> tuple[int, dict, bytes]:
+            parsed = json.loads(body) if body else {}
+            resp = {"created": True, "id": parsed.get("name", "unknown")}
+            return 200, {"Content-Type": "application/json"}, json.dumps(resp).encode()
+
+        rest_test_server.route_request = _route  # type: ignore[assignment]
 
         connector = RestConnector(
             {
-                "base_url": "https://api.example.com",
+                "base_url": rest_test_server.url(),
                 "path": "/health",
                 "records_path": "items",
                 "operations": {
@@ -417,9 +404,9 @@ class TestRestWrite:
                 },
             },
             {"auth_mode": "bearer", "token": "tok"},
-            transport=httpx.MockTransport(handler),
             ssrf_validator=_noop_ssrf,
             security_guard=make_noop_security_guard(),
+            verify_tls=False,
         )
 
         result = await connector.write(ConnectorPayload(resource="file", data={"name": "test-item"}))
@@ -427,18 +414,20 @@ class TestRestWrite:
         assert result["id"] == "test-item"
         await connector.close()
 
-    async def test_write_sends_correct_method_and_path(self) -> None:
+    async def test_write_sends_correct_method_and_path(self, rest_test_server: Any) -> None:
         """Write sends the configured HTTP method and path."""
         captured: dict[str, Any] = {}
 
-        def handler(request: httpx.Request) -> httpx.Response:
-            captured["method"] = request.method
-            captured["url"] = str(request.url)
-            return httpx.Response(200, json={"ok": True})
+        def _route(method: str, path: str, headers: dict, body: bytes) -> tuple[int, dict, bytes]:
+            captured["method"] = method
+            captured["url"] = path
+            return 200, {"Content-Type": "application/json"}, json.dumps({"ok": True}).encode()
+
+        rest_test_server.route_request = _route  # type: ignore[assignment]
 
         connector = RestConnector(
             {
-                "base_url": "https://api.example.com",
+                "base_url": rest_test_server.url(),
                 "path": "/health",
                 "records_path": "items",
                 "operations": {
@@ -446,9 +435,9 @@ class TestRestWrite:
                 },
             },
             {"auth_mode": "bearer", "token": "tok"},
-            transport=httpx.MockTransport(handler),
             ssrf_validator=_noop_ssrf,
             security_guard=make_noop_security_guard(),
+            verify_tls=False,
         )
 
         await connector.write(ConnectorPayload(resource="item", data={"item_id": "42", "name": "updated"}))
@@ -456,17 +445,19 @@ class TestRestWrite:
         assert "/api/items/42" in captured["url"]
         await connector.close()
 
-    async def test_write_with_templated_body(self) -> None:
+    async def test_write_with_templated_body(self, rest_test_server: Any) -> None:
         """Write renders Jinja templates in the body."""
         captured_body: dict[str, Any] = {}
 
-        def handler(request: httpx.Request) -> httpx.Response:
-            captured_body.update(json.loads(request.content))
-            return httpx.Response(200, json={"ok": True})
+        def _route(method: str, path: str, headers: dict, body: bytes) -> tuple[int, dict, bytes]:
+            captured_body.update(json.loads(body))
+            return 200, {"Content-Type": "application/json"}, json.dumps({"ok": True}).encode()
+
+        rest_test_server.route_request = _route  # type: ignore[assignment]
 
         connector = RestConnector(
             {
-                "base_url": "https://api.example.com",
+                "base_url": rest_test_server.url(),
                 "path": "/health",
                 "records_path": "items",
                 "operations": {
@@ -478,9 +469,9 @@ class TestRestWrite:
                 },
             },
             {"auth_mode": "bearer", "token": "tok"},
-            transport=httpx.MockTransport(handler),
             ssrf_validator=_noop_ssrf,
             security_guard=make_noop_security_guard(),
+            verify_tls=False,
         )
 
         await connector.write(ConnectorPayload(resource="task", data={"title": "Fix bug", "priority": "high"}))
