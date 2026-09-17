@@ -472,14 +472,8 @@ class TestRestWrite:
 
     async def test_write_sends_correct_method_and_path(self, rest_test_server: Any) -> None:
         """Write sends the configured HTTP method and path."""
-        captured: dict[str, Any] = {}
-
-        def _route(method: str, path: str, headers: dict, body: bytes) -> tuple[int, dict, bytes]:
-            captured["method"] = method
-            captured["url"] = path
-            return 200, {"Content-Type": "application/json"}, json.dumps({"ok": True}).encode()
-
-        rest_test_server.route_request = _route  # type: ignore[assignment]
+        cap = _RequestCapture(rest_test_server)
+        rest_test_server.set_response("PUT", "/api/items/42", body={"ok": True})
 
         connector = RestConnector(
             {
@@ -497,19 +491,14 @@ class TestRestWrite:
         )
 
         await connector.write(ConnectorPayload(resource="item", data={"item_id": "42", "name": "updated"}))
-        assert captured["method"] == "PUT"
-        assert "/api/items/42" in captured["url"]
+        assert cap.last["method"] == "PUT"
+        assert "/api/items/42" in cap.last["path"]
         await connector.close()
 
     async def test_write_with_templated_body(self, rest_test_server: Any) -> None:
         """Write renders Jinja templates in the body."""
-        captured_body: dict[str, Any] = {}
-
-        def _route(method: str, path: str, headers: dict, body: bytes) -> tuple[int, dict, bytes]:
-            captured_body.update(json.loads(body))
-            return 200, {"Content-Type": "application/json"}, json.dumps({"ok": True}).encode()
-
-        rest_test_server.route_request = _route  # type: ignore[assignment]
+        cap = _RequestCapture(rest_test_server)
+        rest_test_server.set_response("POST", "/api/tasks", body={"ok": True})
 
         connector = RestConnector(
             {
@@ -531,6 +520,7 @@ class TestRestWrite:
         )
 
         await connector.write(ConnectorPayload(resource="task", data={"title": "Fix bug", "priority": "high"}))
-        assert captured_body["title"] == "Fix bug"
-        assert captured_body["priority"] == "high"
+        sent_body = json.loads(cap.last["body"])
+        assert sent_body["title"] == "Fix bug"
+        assert sent_body["priority"] == "high"
         await connector.close()

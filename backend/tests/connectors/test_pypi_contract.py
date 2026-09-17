@@ -4,6 +4,7 @@ Cassettes are in tests/cassettes/test_pypi_*.yaml.  Run with VCR_RECORD_MODE=onc
 to re-record against the live registry.
 """
 
+import httpx
 import pytest
 
 from modulo.connectors.base import ConnectorQuery, ConnectorType
@@ -24,13 +25,26 @@ def test_pypi_connector_type(pypi_connector):
     assert pypi_connector.connector_type == ConnectorType.PYPI
 
 
-async def test_pypi_health_check(pypi_connector):
-    """Health check returns a HealthResult (may fail without network, but shape is valid)."""
+async def test_pypi_health_check(pypi_connector, monkeypatch):
+    """Health check reports registry reachability — stubbed offline via MockTransport."""
     from modulo.connectors.base import HealthResult
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"info": {"name": "requests"}})
+
+    monkeypatch.setattr(
+        pypi_connector,
+        "_client",
+        lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="https://pypi.org/pypi",
+        ),
+    )
 
     result = await pypi_connector.health_check()
     assert isinstance(result, HealthResult)
-    assert isinstance(result.ok, bool)
+    assert result.ok is True
+    assert result.detail == "PyPI registry reachable"
 
 
 async def test_pypi_write_raises(pypi_connector):

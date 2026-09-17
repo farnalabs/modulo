@@ -4,6 +4,7 @@ Cassettes are in tests/cassettes/test_npm_*.yaml.  Run with VCR_RECORD_MODE=once
 to re-record against the live registry.
 """
 
+import httpx
 import pytest
 
 from modulo.connectors.base import ConnectorQuery, ConnectorType
@@ -34,13 +35,26 @@ def test_npm_connector_type(npm_connector):
     assert npm_connector.connector_type == ConnectorType.NPM
 
 
-async def test_npm_health_check(npm_connector):
-    """Health check returns a HealthResult (may fail without network, but shape is valid)."""
+async def test_npm_health_check(npm_connector, monkeypatch):
+    """Health check reports registry reachability — stubbed offline via MockTransport."""
     from modulo.connectors.base import HealthResult
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"objects": []})
+
+    monkeypatch.setattr(
+        npm_connector,
+        "_client",
+        lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="https://registry.npmjs.org",
+        ),
+    )
 
     result = await npm_connector.health_check()
     assert isinstance(result, HealthResult)
-    assert isinstance(result.ok, bool)
+    assert result.ok is True
+    assert result.detail == "npm registry reachable"
 
 
 async def test_npm_write_raises(npm_connector):
