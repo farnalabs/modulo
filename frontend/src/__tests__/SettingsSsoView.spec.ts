@@ -602,4 +602,46 @@ describe('SettingsSsoView — provisioning modes and allowed_domains', () => {
 
     expect(wrapper.find('[data-testid="sso-mode-unrestricted"]').exists()).toBe(false)
   })
+
+  it('adds the first allowed domain through the real view round-trip (review finding 1)', async () => {
+    // The view round-trips the form payload through Object.assign, which re-derived
+    // domains-mode-with-empty-list back to unrestricted and hid the input. Choosing
+    // domains must keep the input visible so the first domain can be entered.
+    ;(api.POST as Mock).mockResolvedValue({ data: provider({ id: 'sso-new', name: 'New SSO' }), error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-sso-add-provider"]').trigger('click')
+    await nextTick()
+
+    await wrapper.find('#ssoproviderform-field-9').setValue('New SSO')
+    await wrapper.find('[data-testid="sso-mode-domains"]').setValue(true)
+    await nextTick()
+
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    expect(input.exists()).toBe(true)
+    await input.setValue('example.com')
+    await input.trigger('keydown.enter')
+    await nextTick()
+
+    await wrapper.findAll('button').find((b) => b.text() === 'Create')!.trigger('click')
+    await nextTick()
+
+    const body = (api.POST as Mock).mock.calls[0][1].body
+    expect(body.auto_provision).toBe(true)
+    expect(body.allowed_domains).toEqual(['example.com'])
+  })
+
+  it('warns when editing an unrestricted provider while the option is plan-gated off (review finding 2)', async () => {
+    ;(api.GET as Mock).mockResolvedValue({
+      data: [provider({ auto_provision: true, allowed_domains: [] })],
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-sso-edit"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="sso-mode-unrestricted"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sso-unrestricted-locked-notice"]').exists()).toBe(true)
+  })
 })

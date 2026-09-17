@@ -1,6 +1,6 @@
 ﻿import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { defineComponent, nextTick, reactive } from 'vue'
 
 const SelectStub = {
   name: 'Select',
@@ -156,6 +156,43 @@ describe('SsoProviderForm', () => {
     expect(payload.auto_provision).toBe(true)
   })
 
+  it('latches domains mode with an empty allowlist so the first domain can be added', async () => {
+    // Regression (review finding 1): the payload for domains-mode-with-an-empty
+    // list is identical to unrestricted (auto_provision=true, no domains), so
+    // re-deriving the mode from the payload made the radio snap back and the
+    // domain input never appeared. The explicit chosen-mode state keeps the
+    // input visible once the user has chosen it. A harness applies the emits
+    // back into the data prop exactly like SettingsSsoView's Object.assign.
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: false, allowed_domains: [] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: `
+        <SsoProviderForm :data="data" :saving="false" submit-label="Create Provider"
+          saving-label="Creating..." :error="null" :presets="[]" @update:data="onUpdate" />`,
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+
+    await wrapper.find('[data-testid="sso-mode-domains"]').setValue(true)
+    await nextTick()
+
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    expect(input.exists()).toBe(true)
+
+    await input.setValue('first.com')
+    await input.trigger('keydown.enter')
+    await nextTick()
+
+    const last = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(last.auto_provision).toBe(true)
+    expect(last.allowed_domains).toEqual(['first.com'])
+  })
+
   it('hides unrestricted mode when flag is off', () => {
     const wrapper = mountForm(makeData(), { unrestrictedProvisioningAvailable: false })
     expect(wrapper.find('[data-testid="sso-mode-unrestricted"]').exists()).toBe(false)
@@ -178,6 +215,35 @@ describe('SsoProviderForm', () => {
   it('shows unrestricted danger warning when unrestricted mode is selected', async () => {
     const wrapper = mountForm(makeData({ auto_provision: true, allowed_domains: [] }), { unrestrictedProvisioningAvailable: true })
     expect(wrapper.find('[data-testid="sso-unrestricted-warning"]').exists()).toBe(true)
+  })
+
+  it('surfaces a locked notice when the current unrestricted mode is plan-gated off', () => {
+    // Review finding 2: a legacy provider that is already unrestricted shows no
+    // selected radio when the option is hidden, so the state (and the fact that
+    // saving re-commits it) must be made explicit.
+    const wrapper = mountForm(makeData({ auto_provision: true, allowed_domains: [] }), {
+      unrestrictedProvisioningAvailable: false,
+    })
+    expect(wrapper.find('[data-testid="sso-mode-unrestricted"]').exists()).toBe(false)
+    const notice = wrapper.find('[data-testid="sso-unrestricted-locked-notice"]')
+    expect(notice.exists()).toBe(true)
+    expect(notice.text()).toContain('still auto-provisions anyone who authenticates')
+  })
+
+  it('hides the locked notice when the unrestricted option is available', () => {
+    const wrapper = mountForm(makeData({ auto_provision: true, allowed_domains: [] }), {
+      unrestrictedProvisioningAvailable: true,
+    })
+    expect(wrapper.find('[data-testid="sso-unrestricted-locked-notice"]').exists()).toBe(false)
+  })
+
+  it('clears the locked notice once another provisioning mode is chosen', async () => {
+    const wrapper = mountForm(makeData({ auto_provision: true, allowed_domains: [] }), {
+      unrestrictedProvisioningAvailable: false,
+    })
+    expect(wrapper.find('[data-testid="sso-unrestricted-locked-notice"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="sso-mode-invitation"]').setValue(true)
+    expect(wrapper.find('[data-testid="sso-unrestricted-locked-notice"]').exists()).toBe(false)
   })
 
   it('emits the selected default role', async () => {
@@ -261,7 +327,11 @@ describe('SsoProviderForm', () => {
     await input.trigger('keydown.enter')
     await nextTick()
 
-    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
+    const error = wrapper.find('[data-testid="sso-domain-error"]')
+    expect(error.exists()).toBe(true)
+    // Review finding 3: the message must come from the locale, not hardcoded
+    // English in the component.
+    expect(error.text()).toContain('no @, URL scheme, path, or wildcard')
     // No domain-add emit
     const allEmits = wrapper.emitted('update:data')
     expect(allEmits ?? []).toHaveLength(0)
@@ -294,7 +364,10 @@ describe('SsoProviderForm', () => {
     await input.trigger('keydown.enter')
     await nextTick()
 
-    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
+    const error = wrapper.find('[data-testid="sso-domain-error"]')
+    expect(error.exists()).toBe(true)
+    // Review finding 3: the no-dot message is localised too.
+    expect(error.text()).toContain('must contain a dot')
   })
 
   it('deduplicates domains', async () => {
@@ -305,7 +378,7 @@ describe('SsoProviderForm', () => {
     await nextTick()
 
     // Should not add duplicate (normalised) — no new emit
-    expect(wrapper.emitted('update:data')).toBeUndefined()
+    expect(wrapper.emitted('update:data') ?? []).toHaveLength(0)
   })
 
   it('removes a domain via the remove button', async () => {

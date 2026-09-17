@@ -272,6 +272,18 @@
     <div>
       <span class="mb-1 block text-sm font-medium" id="sso-provisioning-mode-label">{{ $t('components.SsoProviderForm.provisioning_mode') }}</span>
       <div role="radiogroup" aria-labelledby="sso-provisioning-mode-label" data-testid="sso-provisioning-mode">
+        <!-- The unrestricted option is plan-gated off while the provider is
+             already in unrestricted mode: surface it so the state is not
+             silently re-committed on save. -->
+        <div
+          v-if="unrestrictedOptionHidden"
+          class="mb-2 rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-xs text-destructive"
+          role="alert"
+          data-testid="sso-unrestricted-locked-notice"
+        >
+          {{ $t('components.SsoProviderForm.mode_unrestricted_locked') }}
+        </div>
+
         <!-- Mode 1: Invitation only -->
         <label
           class="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors mb-2"
@@ -429,6 +441,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import Select from './shared/AppSelect.vue'
 import SsoBrandMark from './SsoBrandMark.vue'
@@ -457,15 +470,20 @@ export interface SsoFormState {
   allowed_domains: string[];
 }
 
-/** Client-side domain validation mirroring backend rules in validate_allowed_domains. */
-function validateDomain(raw: string): string | null {
+type DomainErrorKey =
+  | 'components.SsoProviderForm.domain_invalid'
+  | 'components.SsoProviderForm.domain_invalid_no_dot'
+
+/** Client-side domain validation mirroring backend rules in validate_allowed_domains.
+ *  Returns the locale key of the validation error, or null when the domain is valid. */
+function validateDomain(raw: string): DomainErrorKey | null {
   const domain = raw.trim().toLowerCase().replace(/\.$/, '')
   if (!domain) return null
   if (/[ @/*]/.test(domain)) {
-    return 'Provide a bare domain like example.com — no @, URL scheme, path, or wildcard'
+    return 'components.SsoProviderForm.domain_invalid'
   }
   if (!domain.includes('.')) {
-    return 'A registrable domain must contain a dot'
+    return 'components.SsoProviderForm.domain_invalid_no_dot'
   }
   return null
 }
@@ -491,6 +509,8 @@ function emitUpdate(updated: SsoFormState) {
   emit("update:data", updated);
 }
 
+const { t } = useI18n()
+
 // ── Provisioning mode ──────────────────────────────────────────────
 type ProvisioningMode = 'invitation' | 'domains' | 'unrestricted'
 
@@ -500,9 +520,17 @@ function deriveMode(data: SsoFormState): ProvisioningMode {
   return 'unrestricted'
 }
 
-const provisioningMode = computed<ProvisioningMode>(() => deriveMode(props.data))
+// The payload is ambiguous between domains-mode-with-an-empty-allowlist and
+// unrestricted mode (both are auto_provision=true, allowed_domains=[]), so the
+// selection cannot be re-derived from it: choosing "Email domain allowlist"
+// before adding the first domain would otherwise snap back to unrestricted and
+// the domain input would never appear. Latch the user's explicit choice and
+// fall back to the derived mode only until they choose one.
+const chosenMode = ref<ProvisioningMode | null>(null)
+const provisioningMode = computed<ProvisioningMode>(() => chosenMode.value ?? deriveMode(props.data))
 
 function onModeChange(mode: ProvisioningMode) {
+  chosenMode.value = mode
   if (mode === 'invitation') {
     emitUpdate({ ...props.data, auto_provision: false, allowed_domains: [] })
   } else if (mode === 'domains') {
@@ -511,6 +539,13 @@ function onModeChange(mode: ProvisioningMode) {
     emitUpdate({ ...props.data, auto_provision: true, allowed_domains: [] })
   }
 }
+
+// A provider already in unrestricted mode renders no radio when the plan gates
+// the option off, so the current (dangerous) state would otherwise be invisible
+// and saving would silently re-commit unrestricted provisioning.
+const unrestrictedOptionHidden = computed(
+  () => provisioningMode.value === 'unrestricted' && !props.unrestrictedProvisioningAvailable
+)
 
 // ── Domain tag/list input ──────────────────────────────────────────
 const domainInput = ref('')
@@ -521,7 +556,7 @@ function addDomain() {
   if (!raw) return
   const err = validateDomain(raw)
   if (err) {
-    domainError.value = err
+    domainError.value = t(err)
     return
   }
   domainError.value = null

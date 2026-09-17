@@ -4265,6 +4265,9 @@ elements:
       - testid: sso-unrestricted-warning
         type: element
         dynamic_testid: false
+      - testid: sso-unrestricted-locked-notice
+        type: element
+        dynamic_testid: false
       - testid: sso-domain-list
         type: element
         dynamic_testid: false
