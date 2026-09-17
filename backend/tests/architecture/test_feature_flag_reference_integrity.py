@@ -46,7 +46,6 @@ KNOWN_DEFERRED_FLAGS: set[str] = {
     "ongoing_trigger",
     "parallel_branches",
     "polling_trigger",
-    "sso_unrestricted_provisioning",
 }
 
 # Patterns for backend gate references (production code only).
