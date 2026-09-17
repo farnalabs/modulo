@@ -329,7 +329,7 @@ class TestGetFeatureFlag:
     def test_org_override_false_wins_in_single_flag_payload(self, client: TestClient) -> None:
         """A persisted org override of False must hide a flag that is active by
         tier — the override wins in BOTH directions, matching the list."""
-        org = _org_with_overrides(parallel_branches=False)
+        org = _org_with_overrides(eval_system=False)
         with (
             patch(
                 "modulo.api.routes.admin_feature_flags._build_registry",
@@ -341,9 +341,9 @@ class TestGetFeatureFlag:
                 return_value=org,
             ),
         ):
-            resp = client.get("/api/v1/admin/feature-flags/parallel_branches")
+            resp = client.get("/api/v1/admin/feature-flags/eval_system")
         assert resp.status_code == 200
-        # parallel_branches is community-tier (active on the mock registry);
+        # eval_system is community-tier (active on the mock registry);
         # the org override flips it to False.
         assert resp.json()["currently_active"] is False
 
@@ -545,7 +545,7 @@ class TestTogglePersistence:
             assert flag["currently_active"] is True
 
     def test_toggle_off_persists_and_second_request_sees_flag_inactive(self, client: TestClient) -> None:
-        """Disabling via toggle must persist too: parallel_branches is active on
+        """Disabling via toggle must persist too: eval_system is active on
         community tier by default, so only the persisted org override can flip
         the second request's read to inactive."""
         org = _org_with_overrides()
@@ -567,12 +567,12 @@ class TestTogglePersistence:
                 return_value=redis_mock,
             ),
         ):
-            resp = client.put("/api/v1/admin/feature-flags/parallel_branches", json={"enabled": False})
+            resp = client.put("/api/v1/admin/feature-flags/eval_system", json={"enabled": False})
             assert resp.status_code == 200
-            assert org.settings_json["feature_overrides"]["parallel_branches"] is False
+            assert org.settings_json["feature_overrides"]["eval_system"] is False
             listing = client.get("/api/v1/admin/feature-flags")
             assert listing.status_code == 200
-            flag = next(f for f in listing.json()["flags"] if f["name"] == "parallel_branches")
+            flag = next(f for f in listing.json()["flags"] if f["name"] == "eval_system")
             assert flag["currently_active"] is False
 
     def test_toggle_write_failure_never_claims_overridden(self, client: TestClient) -> None:

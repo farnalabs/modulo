@@ -97,8 +97,8 @@ def _db_flags() -> list[dict[str, object]]:
     return [
         {"name": "sso", "description": "SSO", "tier_id": "team", "depends_on": None, "is_active": True},
         {
-            "name": "parallel_branches",
-            "description": "Parallel branches",
+            "name": "eval_system",
+            "description": "Built-in eval runner for LLM output quality gates",
             "tier_id": "community",
             "depends_on": None,
             "is_active": True,
@@ -116,7 +116,7 @@ def _db_tiers() -> list[dict[str, object]]:
 class TestCommunityTier:
     def test_feature_enabled_reflects_active_flag(self) -> None:
         ctx = CommunityTier()
-        assert ctx.feature_enabled("parallel_branches") is True
+        assert ctx.feature_enabled("eval_system") is True
         assert ctx.feature_enabled("sso") is False
 
     def test_feature_enabled_unknown_flag_returns_false(self) -> None:
@@ -126,7 +126,7 @@ class TestCommunityTier:
     def test_list_enabled_features_only_active(self) -> None:
         ctx = CommunityTier()
         names = {f.name for f in ctx.list_enabled_features()}
-        assert "parallel_branches" in names
+        assert "eval_system" in names
         assert "sso" not in names
 
     def test_tier_and_license_accessors(self) -> None:
@@ -152,7 +152,7 @@ class TestLicenseKeyTier:
         ctx = LicenseKeyTier(_license(tier="community", features=["sso"]))
         names = {f.name for f in ctx.list_enabled_features()}
         assert "sso" in names
-        assert "parallel_branches" in names
+        assert "eval_system" in names
 
     def test_tier_and_license_accessors(self) -> None:
         ctx = LicenseKeyTier(_license())
@@ -183,17 +183,17 @@ class TestDbPlanContext:
     async def test_license_features_activate_flags_regardless_of_tier(self) -> None:
         ctx = await self._ctx("community", has_license_key=True, license_features={"sso"})
         assert ctx.feature_enabled("sso") is True
-        assert ctx.feature_enabled("parallel_branches") is True
+        assert ctx.feature_enabled("eval_system") is True
 
     async def test_no_license_features_keeps_tier_defaults(self) -> None:
         ctx = await self._ctx("community", has_license_key=True)
         assert ctx.feature_enabled("sso") is False
-        assert ctx.feature_enabled("parallel_branches") is True
+        assert ctx.feature_enabled("eval_system") is True
 
     async def test_list_enabled_features(self) -> None:
         ctx = await self._ctx("community", has_license_key=True, license_features={"sso"})
         names = {f.name for f in ctx.list_enabled_features()}
-        assert names == {"sso", "parallel_branches"}
+        assert names == {"sso", "eval_system"}
 
     async def test_tier_and_license_accessors(self) -> None:
         ctx = await self._ctx("team", has_license_key=True)
@@ -355,7 +355,7 @@ class TestResolveFlag:
         registry = self._registry()
         with patch.object(registry, "_get_org_override", new=AsyncMock(return_value=None)):
             assert await registry.resolve_flag("sso") is False
-            assert await registry.resolve_flag("parallel_branches") is True
+            assert await registry.resolve_flag("eval_system") is True
 
     async def test_unknown_flag_returns_false(self) -> None:
         registry = self._registry()
@@ -365,7 +365,7 @@ class TestResolveFlag:
         registry = self._registry()
         org = AsyncMock(return_value=None)
         with patch.object(registry, "_get_org_override", new=org):
-            await registry.resolve_flag("parallel_branches")
+            await registry.resolve_flag("eval_system")
         org.assert_not_awaited()
 
 
@@ -532,7 +532,7 @@ class TestGoldenPins:
     def test_core_flag_tier_contract_pinned(self) -> None:
         registry = FeatureFlagRegistry()
         team_flags = {"sso", "team_rbac", "audit_viewer", "admin_spend_limits", "runtime_config", "rate_limits"}
-        community_flags = {"parallel_branches", "eval_system", "webhook_trigger", "saved_views", "remy"}
+        community_flags = {"eval_system", "webhook_trigger", "saved_views", "remy"}
         for name in team_flags:
             flag = registry.get_flag(name)
             assert flag is not None

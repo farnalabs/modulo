@@ -31,7 +31,7 @@ class TestCommunityTier:
 
     def test_community_feature_enabled(self) -> None:
         ctx = CommunityTier()
-        assert ctx.feature_enabled("parallel_branches") is True
+        assert ctx.feature_enabled("eval_system") is True
 
     def test_team_feature_disabled(self) -> None:
         ctx = CommunityTier()
@@ -72,7 +72,7 @@ class TestLicenseKeyTier:
         ctx = LicenseKeyTier(data)
         enabled_names = {f.name for f in ctx.list_enabled_features()}
         assert "sso" in enabled_names
-        assert "parallel_branches" in enabled_names  # community always active with team tier
+        assert "eval_system" in enabled_names  # community always active with team tier
 
 
 class TestDbPlanContext:
@@ -155,7 +155,7 @@ class TestResolvePlanContext:
         assert plan.tier() == "community"
         assert plan.has_license_key() is False
         assert plan.feature_enabled("sso") is False
-        assert plan.feature_enabled("parallel_branches") is True
+        assert plan.feature_enabled("eval_system") is True
 
     async def test_team_plan_id_with_env_var_license_resolves_to_team(self) -> None:
         """plan_id='team' + a valid MODULO_LICENSE_KEY env license -> team tier."""

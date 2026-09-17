@@ -39,13 +39,7 @@ _REGISTRY_FILES: set[Path] = {
 # gains a gate, remove it from this set; when a new flag is registered
 # without a gate, add it here.
 KNOWN_DEFERRED_FLAGS: set[str] = {
-    "community_library",
-    "community_registry",
-    "cron_trigger",
     "eval_maturity",
-    "ongoing_trigger",
-    "parallel_branches",
-    "polling_trigger",
     "sso_unrestricted_provisioning",
 }
 

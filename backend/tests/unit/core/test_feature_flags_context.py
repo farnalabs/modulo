@@ -483,9 +483,9 @@ class TestOverrideFromEntitySessionSemantics:
 
     async def test_org_override_false_on_default_on_flag_resolves_false(self) -> None:
         result = await self._resolve(
-            "parallel_branches",
+            "eval_system",
             "settings_json",
-            {"parallel_branches": False},
+            {"eval_system": False},
         )
         assert result is False
 

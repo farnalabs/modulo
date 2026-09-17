@@ -98,8 +98,8 @@ def _make_membership(**overrides: object) -> MagicMock:
 def _make_mock_plan_context() -> MagicMock:
     ctx = MagicMock()
     flag1 = MagicMock()
-    flag1.name = "parallel_branches"
-    flag1.description = "Run branching logic in parallel within a pipeline"
+    flag1.name = "eval_system"
+    flag1.description = "Built-in eval runner for LLM output quality gates"
     flag1.tier = "community"
     flag1.currently_active = True
     flag2 = MagicMock()
