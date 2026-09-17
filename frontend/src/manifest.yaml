@@ -269,17 +269,6 @@ routes:
         <<: *community
         deprecated: false
 
-    /variants/ab-test:
-        name: ab-test-models
-        breadcrumb: AB Test Models
-        parent: /
-        product_map: [feat-variants]
-        sidebar_group: improve
-        sidebar_order: 4
-        type: page
-        <<: *community
-        deprecated: false
-
     /schemas:
         name: schemas
         breadcrumb: Schemas
@@ -4505,40 +4494,6 @@ elements:
         dynamic_testid: false
       - testid: settings-triggers-outcomes-toggle
         type: element
-        dynamic_testid: false
-    /variants/ab-test:
-      - testid: variant-builder-pipeline-select
-        type: select
-        dynamic_testid: false
-      - testid: variant-builder-name
-        type: input
-        dynamic_testid: false
-      - testid: variant-builder-headroom
-        type: element
-        dynamic_testid: false
-      - testid: variant-builder-min-two
-        type: element
-        dynamic_testid: false
-      - testid: variant-builder-fire-error
-        type: element
-        dynamic_testid: false
-      - testid: variant-builder-fire
-        type: button
-        dynamic_testid: false
-      - testid: variant-builder-confirm
-        type: element
-        dynamic_testid: false
-      - testid: variant-builder-cancel
-        type: button
-        dynamic_testid: false
-      - testid: variant-builder-confirm-fire
-        type: button
-        dynamic_testid: false
-      - testid: variant-builder-add
-        type: button
-        dynamic_testid: false
-      - testid: variant-builder-create-snapshot
-        type: button
         dynamic_testid: false
     /variants/compare:
       - testid: variant-compare-group-select

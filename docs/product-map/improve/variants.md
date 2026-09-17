@@ -16,11 +16,11 @@ status: covered
 
 # Variants
 
-Variant groups — A/B test models and batch comparison on `/variants/compare` and
-`/variants/ab-test`. A variant group bundles weighted variants (optional
-`run_context_overrides`) and fires one run per variant; comparison surfaces eval scores
-per node, prompt diffs and eval coverage gaps, and a batch-compare flow
-(`/variants/compare/:batchId`) is activated by the `variant_batch_compare` feature flag.
+Variant groups — batch comparison on `/variants/compare`. A variant group bundles
+weighted variants (optional `run_context_overrides`) and fires one run per
+variant; comparison surfaces eval scores per node, prompt diffs and eval
+coverage gaps, and a batch-compare flow (`/variants/compare/:batchId`) is
+activated by the `variant_batch_compare` feature flag.
 
 ## Behaviours
 
@@ -55,11 +55,16 @@ per node, prompt diffs and eval coverage gaps, and a batch-compare flow
 
 - 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
-  `/variants/compare, /variants/compare/:batchId, /variants/ab-test`: the whole-page view(s) `VariantCompareView.vue, VariantBatchCompareView.vue, ABTestModelsView.vue` render static `data-testid`s that the
+  `/variants/compare` and `/variants/compare/:batchId`: the whole-page view(s) `VariantCompareView.vue` and `VariantBatchCompareView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
+
+- 2026-09-17: **FAR-936** — retired the AB Test Models page (`/variants/ab-test`).
+  The A/B comparison use case is achievable via the variant group + batch-run
+  surface on `/variants/compare`. Removed route, view, i18n, manifest entry,
+  elements inventory, tests, and sidebar nav entry.
 
 - 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-variants`, which previously had no

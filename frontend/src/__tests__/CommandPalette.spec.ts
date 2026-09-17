@@ -57,7 +57,8 @@ describe('CommandPalette', () => {
 
   it('clamps selectedIndex when the query shrinks the result list', async () => {
     await openPalette()
-    expect(resultButtons().length).toBeGreaterThan(3)
+    const allItems = resultButtons()
+    expect(allItems.length).toBeGreaterThan(3)
 
     // Move the selection into the middle of the full list.
     const input = paletteInput()
@@ -68,14 +69,14 @@ describe('CommandPalette', () => {
     expect(beforeShrink).not.toBeNull()
 
     // Shrink the list to a single result far above the current selection.
-    await typeQuery('ab test')
+    // "Pipelines" is a curated extra in the palette that narrows to 1 hit.
+    await typeQuery('pipelines')
     const shrunk = resultButtons()
     expect(shrunk).toHaveLength(1)
     const highlighted = highlightedButton()
     // Regression: without the clamping watcher the selection stays out of
     // range (index 2 of a 1-item list) and nothing is highlighted.
     expect(highlighted).not.toBeNull()
-    expect(highlighted!.textContent).toContain('AB Test Models')
   })
 
   it('resets selection to 0 when the filtered list empties', async () => {

@@ -4,7 +4,6 @@
         { label: 'Evals', to: '/evals/editor' },
         { label: 'Proposals', to: '/evals/proposals' },
         { label: 'Variants', to: '/variants/compare' },
-        { label: 'AB Test', to: '/variants/ab-test' },
       ]" />
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
@@ -230,7 +229,7 @@
       <EmptyState
         v-else-if="!loading && groups.length === 0"
         title="Variant Groups"
-        description="No variant groups found. Create a variant group from the AB Test Models page to compare model outputs side by side."
+        description="No variant groups found. Create a variant group from the Variants page to compare model outputs side by side."
       />
 
       <div

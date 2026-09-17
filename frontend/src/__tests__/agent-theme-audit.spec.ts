@@ -42,7 +42,6 @@ vi.mock('../stores/planStore', () => ({
   })),
 }))
 
-import ABTestModelsView from '../views/ABTestModelsView.vue'
 import AdminAuditView from '../views/AdminAuditView.vue'
 import AdminFeatureFlagsView from '../views/AdminFeatureFlagsView.vue'
 import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
@@ -68,7 +67,6 @@ import SettingsTriggerEventLogView from '../views/SettingsTriggerEventLogView.vu
 import VariantCompareView from '../views/VariantCompareView.vue'
 
 const viewModules: Record<string, Component> = {
-  ABTestModelsView,
   AdminAuditView,
   AdminFeatureFlagsView,
   AdminSpendLimitsView,

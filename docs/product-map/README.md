@@ -99,7 +99,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 
 ### Improve
 - **feat-evals** - Evaluation editor and proposal queue - routes: `/evals/editor`, `/evals/proposals`
-- **feat-variants** - Variant comparison and AB test models - routes: `/variants/compare`, `/variants/compare/:batchId`, `/variants/ab-test`
+- **feat-variants** - Variant comparison and batch runs - routes: `/variants/compare`, `/variants/compare/:batchId`
 
 ### Configure
 - **feat-schemas** - Typed JSON schemas, schema editor, inference, and parameter schemas - routes: `/schemas`, `/schemas/editor/:id`, `/schemas/infer`, `/admin/parameter-schemas`
