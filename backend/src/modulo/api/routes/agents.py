@@ -4,7 +4,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from langchain_core.messages import BaseMessage
@@ -99,6 +99,8 @@ class AgentCreate(BaseModel):
     required_environment_capabilities: list[str]
     template_id: str | None
     agent_commands: list[str] | None = Field(default=None)
+    # FAR-900: Agent-level default schema_profile.  Absent/None = verbatim.
+    schema_profile: Literal["verbatim", "provider-strict", "runtime-sdk"] | None = None
 
 
 class AgentUpdate(BaseModel):
@@ -116,6 +118,8 @@ class AgentUpdate(BaseModel):
     required_environment_capabilities: list[str]
     template_id: str | None
     agent_commands: list[str] | None = Field(default=None)
+    # FAR-900: Agent-level default schema_profile.
+    schema_profile: Literal["verbatim", "provider-strict", "runtime-sdk"] | None = None
 
 
 class AgentResponse(BaseModel):
@@ -141,6 +145,8 @@ class AgentResponse(BaseModel):
     required_environment_capabilities: list[str]
     template_id: uuid.UUID | None
     agent_commands: list[str] | None
+    # FAR-900: Agent-level default schema_profile.  NULL = verbatim.
+    schema_profile: str | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime

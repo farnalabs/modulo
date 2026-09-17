@@ -1,5 +1,5 @@
 """Schema Registry — LLM-based schema inference, generation, validation,
-and migration between schema versions.
+migration between schema versions, and profile-based rendering/translation.
 """
 
 from modulo.core.schema_registry.generation import (
@@ -26,6 +26,13 @@ from modulo.core.schema_registry.migration import (
     set_default,
     transform_field,
 )
+from modulo.core.schema_registry.rendering import (
+    RenderResult,
+    RenderWarning,
+    SchemaProfile,
+    preview_strip_warnings,
+    render_for_profile,
+)
 from modulo.core.schema_registry.validation import (
     SchemaValidationError,
     SchemaValidationResult,
@@ -39,11 +46,14 @@ __all__ = [
     "MigrationPlan",
     "MigrationRegistry",
     "MissingMigrationError",
+    "RenderResult",
+    "RenderWarning",
     "SchemaGenerationError",
     "SchemaGenerationService",
     "SchemaInferenceError",
     "SchemaInferenceService",
     "SchemaMigration",
+    "SchemaProfile",
     "SchemaValidationError",
     "SchemaValidationResult",
     "add_field",
@@ -51,8 +61,10 @@ __all__ = [
     "convert_field",
     "create_migration",
     "flag_rare_fields",
+    "preview_strip_warnings",
     "remove_field",
     "rename_field",
+    "render_for_profile",
     "set_default",
     "transform_field",
     "validate_array_schema",

@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
-from tests.unit.api.mock_session import configure_mock_session
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -28,6 +27,7 @@ from modulo.core.eval_engine.okr import (
     track_okr_progress,
 )
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000011")

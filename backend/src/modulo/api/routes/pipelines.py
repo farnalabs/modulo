@@ -824,6 +824,11 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         default=None,
         description="Inline JSON Schema defining the node's output shape.",
     )
+    # FAR-900: node-level schema translation profile.  Absent/None = verbatim
+    # (identity, no translation).  "provider-strict" strips unsupported keywords
+    # for the target provider; "runtime-sdk" renders for the runtime's form.
+    # NO graph migration: the field is optional and defaults to verbatim.
+    schema_profile: Literal["verbatim", "provider-strict", "runtime-sdk"] | None = None
     description: str | None = Field(default=None, max_length=2000)
     # FAR-306: opt-in stall detectors for sandbox_agent nodes. The heartbeat
     # (connection liveness) is enabled by default; the log-growth / stdout-delta
@@ -1346,6 +1351,42 @@ class PipelineGraphUpdate(BaseModel):
 
 class PipelineGraphResponse(PipelineGraphUpdate):
     validation_issues: list[GraphValidationIssue] = Field(default_factory=list)
+    # FAR-900: per-node schema translation warnings emitted at design time.
+    # Each entry: {node_id, keyword, path, message} — only populated for nodes
+    # with a schema_profile that would strip keywords.
+    schema_translation_report: list[dict[str, Any]] = Field(default_factory=list)
+
+
+def _build_schema_translation_report(
+    nodes: list[PipelineGraphNode],
+) -> list[dict[str, Any]]:
+    """Compute per-node schema translation warnings for the graph response.
+
+    Only processes nodes with a non-verbatim ``schema_profile`` and an
+    ``output_schema_json``.  Returns a list of warning dicts suitable for
+    inclusion in the ``PipelineGraphResponse``.
+    """
+    from modulo.core.schema_registry.rendering import preview_strip_warnings
+
+    report: list[dict[str, Any]] = []
+    for node in nodes:
+        profile = getattr(node, "schema_profile", None)
+        if not profile or profile == "verbatim":
+            continue
+        schema = getattr(node, "output_schema_json", None)
+        if not isinstance(schema, dict):
+            continue
+        warnings = preview_strip_warnings(schema, profile)
+        report.extend(
+            {
+                "node_id": str(node.id),
+                "keyword": w.keyword,
+                "path": w.path,
+                "message": w.message,
+            }
+            for w in warnings
+        )
+    return report
 
 
 def _graph_response(
@@ -1353,6 +1394,7 @@ def _graph_response(
     edges: list[Any],
     *,
     validation_issues: list[GraphValidationIssue] | None = None,
+    schema_translation_report: list[dict[str, Any]] | None = None,
 ) -> PipelineGraphResponse:
     """Serialise stored graph data into a validated response.
 
@@ -1509,10 +1551,17 @@ def _graph_response(
     # per-node/per-edge validation already performed above, and fallback
     # nodes constructed via ``model_construct`` (no Pydantic field validation)
     # would fail re-validation here.
+    # FAR-900: compute schema_translation_report if not already provided.
+    report = (
+        schema_translation_report
+        if schema_translation_report is not None
+        else _build_schema_translation_report(valid_nodes)
+    )
     return PipelineGraphResponse.model_construct(
         nodes=valid_nodes,
         edges=valid_edges,
         validation_issues=issues,
+        schema_translation_report=report,
     )
 
 
