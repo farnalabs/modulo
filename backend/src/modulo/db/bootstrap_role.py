@@ -96,6 +96,18 @@ def _validate_identifier(name: str) -> str:
     return name
 
 
+def _escape_pg_string_literal(value: str) -> str:
+    """Escape a value for interpolation into a Postgres single-quoted literal.
+
+    Postgres literals do NOT self-escape a raw ``'`` — an unescaped quote
+    terminates the literal mid-statement, and asyncpg ``execute()`` runs
+    multi-statement SQL on this superuser connection, so a password parsed
+    from a URL-decoded DB URL (``_parse_password``) could terminate the
+    PASSWORD literal and inject arbitrary role DDL.
+    """
+    return value.replace("'", "''")
+
+
 def _role_attributes(*, login: bool, bypassrls: bool) -> str:
     """Build the LOGIN/BYPASSRLS attribute clause shared by CREATE/ALTER ROLE.
 
@@ -119,10 +131,10 @@ async def _create_role(conn: asyncpg.Connection, name: str, *, login: bool, pass
     _validate_identifier(name)
     attrs = _role_attributes(login=login, bypassrls=bypassrls)
     if login:
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f"CREATE ROLE \"{name}\" {attrs} PASSWORD '{password}'")
+        # nosemgrep: raw-sql-fstring (id validated; password escaped via _escape_pg_string_literal)
+        await conn.execute(f"CREATE ROLE \"{name}\" {attrs} PASSWORD '{_escape_pg_string_literal(password)}'")
     else:
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+        # nosemgrep: raw-sql-fstring (identifiers validated via _validate_identifier / module constants)
         await conn.execute(f'CREATE ROLE "{name}" {attrs}')
     _log.info("Created role: %s (bypassrls=%s)", name, bypassrls)
 
@@ -131,10 +143,10 @@ async def _alter_role(conn: asyncpg.Connection, name: str, *, login: bool, passw
     _validate_identifier(name)
     attrs = _role_attributes(login=login, bypassrls=bypassrls)
     if login:
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f"ALTER ROLE \"{name}\" WITH {attrs} PASSWORD '{password}'")
+        # nosemgrep: raw-sql-fstring (id validated; password escaped via _escape_pg_string_literal)
+        await conn.execute(f"ALTER ROLE \"{name}\" WITH {attrs} PASSWORD '{_escape_pg_string_literal(password)}'")
     else:
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+        # nosemgrep: raw-sql-fstring (identifiers validated via _validate_identifier / module constants)
         await conn.execute(f'ALTER ROLE "{name}" WITH {attrs}')
     _log.info("Updated role: %s (bypassrls=%s)", name, bypassrls)
 
@@ -148,12 +160,11 @@ async def _create_or_update_role(
     isolation. Only ``modulo_breakglass`` and ``modulo_migrate`` (cross-org
     system roles) receive BYPASSRLS.
     """
-    quoted_pass = (password or "").replace("'", "''")
     exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", name)
     if exists:
-        await _alter_role(conn, name, login=login, password=quoted_pass, bypassrls=bypassrls)
+        await _alter_role(conn, name, login=login, password=password or "", bypassrls=bypassrls)
     else:
-        await _create_role(conn, name, login=login, password=quoted_pass, bypassrls=bypassrls)
+        await _create_role(conn, name, login=login, password=password or "", bypassrls=bypassrls)
 
 
 async def _table_exists(conn: asyncpg.Connection, table: str) -> bool:

@@ -265,6 +265,55 @@ class TestCreateOrUpdateRole:
         assert escaped
         assert "p''word" in escaped[0]
 
+    async def test_create_role_escapes_hostile_url_decoded_password(self) -> None:
+        """FAR-918 Major: _create_role itself must escape the PASSWORD literal.
+
+        _parse_password URL-decodes the DB URL, so a value like
+        %27%3BCREATE%20ROLE%20pwned... arrives as raw SQL metacharacters.
+        asyncpg execute() runs multi-statement SQL on this SUPERUSER
+        connection, so an unescaped quote terminates the PASSWORD literal and
+        injects role DDL.
+        """
+        hostile = "';CREATE ROLE pwned SUPERUSER;--"
+        conn = _FakeConn()
+        await _create_role(conn, "modulo_app", login=True, password=hostile, bypassrls=False)
+        assert len(conn.executed) == 1
+        sql = conn.executed[0]
+        assert "'';CREATE ROLE pwned SUPERUSER;--" in sql  # doubled quote — inert literal
+        # Exactly 4 single quotes: PASSWORD literal opener + doubled pair + closer.
+        # A raw breakout (';CREATE ...) would leave a different quote count and
+        # terminate the literal before the injection text.
+        assert sql.count("'") == 4
+
+    async def test_alter_role_escapes_hostile_url_decoded_password(self) -> None:
+        """FAR-918 Major: _alter_role must escape the PASSWORD literal too."""
+        hostile = "';CREATE ROLE pwned SUPERUSER;--"
+        conn = _FakeConn()
+        await _alter_role(conn, "modulo_app", login=True, password=hostile, bypassrls=False)
+        assert len(conn.executed) == 1
+        sql = conn.executed[0]
+        assert "'';CREATE ROLE pwned SUPERUSER;--" in sql
+        assert sql.count("'") == 4
+
+    async def test_password_with_quote_not_double_escaped(self, conn: _FakeConn) -> None:
+        """Escape exactly once: the caller no longer escapes, the DDL helpers
+        do. A pre-escaped value passed straight through would become ''''.
+        """
+        await _create_or_update_role(conn, "modulo_app", login=True, password="p'word")
+        create = next(q for q in conn.executed if "CREATE ROLE" in q)
+        assert "PASSWORD 'p''word'" in create  # exactly one escape
+        assert "PASSWORD 'p''''word'" not in create  # not double-escaped
+
+        await _create_or_update_role(conn, "modulo_app", login=True, password="p''''word")
+        # The fake conn does not record created roles — mark it existing so the
+        # second call exercises the ALTER path.
+        conn.roles["modulo_app"] = True
+        await _create_or_update_role(conn, "modulo_app", login=True, password="p''''word")
+        alter = next(q for q in conn.executed if "ALTER ROLE" in q)
+        # 4 raw quotes -> 8 escaped quote chars, exactly once.
+        assert "PASSWORD 'p''''''''word'" in alter
+        assert "PASSWORD 'p''''''''''''''''word'" not in alter  # not double-escaped
+
     async def test_alter_of_app_role_states_nobypassrls_explicitly(self, conn: _FakeConn) -> None:
         """Regression: prod 2026-09-03.
 

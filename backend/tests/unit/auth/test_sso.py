@@ -1191,14 +1191,25 @@ class TestSamlRoutesExtended:
             modulo_saml_enabled=False,
         )
 
-        db_provider = SimpleNamespace(entity_id="urn:x<y>&z>")
+        db_provider = SimpleNamespace(entity_id='urn:x<y>&z>" onload="')
         with patch("modulo.api.routes.sso._get_enabled_saml_global", new_callable=AsyncMock) as m:
             m.return_value = db_provider
             resp = client.get("/api/v1/auth/saml/metadata", follow_redirects=False)
 
         assert resp.status_code == 200
-        assert "urn:x&lt;y&gt;&amp;z&gt;" in resp.text
+        assert "urn:x&lt;y&gt;&amp;z&gt;&quot; onload=&quot;" in resp.text
         assert "urn:x<" not in resp.text
+        # A raw double quote would terminate the entityID attribute early and
+        # let the injected text become new attributes on EntityDescriptor.
+        assert '" onload="' not in resp.text
+        assert resp.text.count('entityID="') == 1
+        # Parse the document: it must be well-formed and the entityID attr
+        # must round-trip to exactly the configured value (no injection text
+        # became attribute markup).
+        root = ElementTree.fromstring(resp.text)
+        assert root.tag.endswith("EntityDescriptor")
+        assert root.get("entityID") == 'urn:x<y>&z>" onload="'
+        assert root.get("onload") is None
 
     def test_saml_metadata_rejected_when_no_db_provider_and_env_flag_off(self, client: TestClient) -> None:
         """Preserves the pure-env-var contract: no DB provider AND flag off -> 400."""
