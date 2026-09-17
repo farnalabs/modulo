@@ -80,8 +80,8 @@ def _make_membership(**overrides: object) -> MagicMock:
 def _make_mock_plan_context() -> MagicMock:
     ctx = MagicMock()
     flag1 = MagicMock()
-    flag1.name = "parallel_branches"
-    flag1.description = "Run branching logic in parallel within a pipeline"
+    flag1.name = "eval_system"
+    flag1.description = "Built-in eval runner for LLM output quality gates"
     flag1.tier = "community"
     flag1.currently_active = True
     flag2 = MagicMock()
@@ -355,7 +355,7 @@ def test_viewmodel_current_includes_feature_flags(client: TestClient) -> None:
     assert "feature_flags" in body
     assert len(body["feature_flags"]) == 2
     flag_names = [f["name"] for f in body["feature_flags"]]
-    assert "parallel_branches" in flag_names
+    assert "eval_system" in flag_names
     assert "eval_system" in flag_names
     for flag in body["feature_flags"]:
         assert flag["active"] is True

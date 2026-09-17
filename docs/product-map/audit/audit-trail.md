@@ -18,9 +18,11 @@ unit-tests:
   - backend/tests/integration/test_audit_immutability.py
 bdd:
   - backend/tests/bdd/features/audit/event_recording.feature
+  - backend/tests/bdd/features/audit/append_only.feature
   - backend/tests/bdd/features/audit/audit_viewer.feature
   - backend/tests/bdd/features/admin/audit_export.feature
   - backend/tests/bdd/steps/test_audit.py
+  - backend/tests/bdd/steps/test_audit_append_only.py
   - backend/tests/bdd/features/admin/test_audit_export_steps.py
 depends-on: []
 status: covered
@@ -46,8 +48,10 @@ guarded against tampering at both the ORM and the database layer.
       chain and reports the first break (`verify_chain`)
 - [x] Append-only enforcement is defense-in-depth: an application-layer ORM
       guard raises `AppendOnlyViolationError` on any UPDATE/DELETE, backed by
-      database-level append-only triggers (`append_only.py`; integration suites
-      `test_audit_append_only` / `test_audit_immutability`)
+      database-level append-only triggers (`append_only.py`; executing BDD
+      `append_only.feature` drives the real guard's UPDATE/DELETE/INSERT paths,
+      and integration suites `test_audit_append_only` / `test_audit_immutability`
+      pin the storage layer)
 - [x] `GET /api/v1/admin/audit` lists events with cursor pagination
       (`next_cursor` + `total`) and filters by event_type, date range, actor
       user, and resource
@@ -70,11 +74,19 @@ guarded against tampering at both the ORM and the database layer.
 - **Chain is per-organisation** — the hash chain, verification, and export are
   scoped to one org (multi-tenant RLS); there is no system-wide cross-org
   chain.
-- **No BDD scenario for append-only tampering** — UPDATE/DELETE blocking is
-  pinned by unit + integration suites only; the BDD covers recording and the
-  viewer surface.
 
 ## QA History
+- 2026-09-17: **improve-architecture (product-map walk)** — closed "No BDD
+  scenario for append-only tampering". New executing `audit/append_only.feature`
+  (`steps/test_audit_append_only.py`) drives the REAL application-layer guard:
+  `register_append_only_guard()` + the SQLAlchemy `before_update` /
+  `before_delete` listeners are exercised against persisted `AuditEvent` /
+  `ErrorEvent` rows in an in-memory engine — UPDATE and DELETE are rejected on
+  both models with an `AppendOnlyViolationError` that names the event id and
+  the mutation, while a plain INSERT is not blocked. The placeholder
+  "Audit events are immutable" scenario (which merely asserted a generic 4xx
+  from a nonexistent PATCH route) was removed along with its dummy steps.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)

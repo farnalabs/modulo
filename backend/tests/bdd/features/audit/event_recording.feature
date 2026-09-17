@@ -40,11 +40,6 @@ Feature: Audit Event Recording
     Then the response contains 10 audit events
     And the response has a next_cursor field
 
-  Scenario: Audit events are immutable
-    Given an audit event exists
-    When I attempt to modify the audit event
-    Then the modification is rejected
-
   Scenario: Audit events have cryptographic chaining
     Given 3 audit events exist
     When I verify the audit chain
