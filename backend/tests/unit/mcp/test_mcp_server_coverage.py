@@ -61,9 +61,10 @@ from modulo.api.mcp_server import (
     _validate_trigger_numbers,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
-from tests.unit.mcp.helpers import API_KEY, ORG_ID, USER_ID, make_session_context
+from tests.unit.mcp.helpers import API_KEY, ORG_ID, USER_ID, AuthContext, make_session_context
 
 _TEAM = uuid.UUID("00000000-0000-0000-0000-000000000009")
+_KEY_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 
 def _mock_session() -> AsyncMock:
@@ -75,30 +76,19 @@ def _mock_session() -> AsyncMock:
     return session
 
 
-class _Ctx:
-    """Set up and tear down MCP context vars for a test."""
+class _Ctx(AuthContext):
+    """Auth context from the shared helper plus team/scope context vars."""
 
     def setup_method(self) -> None:
-        ms._ctx_org_id.set(ORG_ID)
-        ms._ctx_role.set("operator")
-        ms._ctx_user_id.set(USER_ID)
-        ms._ctx_key_id.set(USER_ID)
-        ms._ctx_auth_token.set(API_KEY)
-        ms._ctx_auth_type.set("api_key")
+        super().setup_method()
+        ms._ctx_key_id.set(_KEY_ID)
         ms._ctx_team_id.set(None)
         ms._ctx_node_allowed_tools.set(None)
 
     def teardown_method(self) -> None:
-        for var in (
-            ms._ctx_org_id,
-            ms._ctx_role,
-            ms._ctx_user_id,
-            ms._ctx_key_id,
-            ms._ctx_auth_token,
-            ms._ctx_auth_type,
-            ms._ctx_team_id,
-        ):
-            var.set(None)
+        super().teardown_method()
+        ms._ctx_key_id.set(None)
+        ms._ctx_team_id.set(None)
         ms._ctx_node_allowed_tools.set(None)
 
 
@@ -771,7 +761,6 @@ class TestCheckAgentToolScope(_Ctx):
 
 
 class TestToolDbShell:
-    @pytest.mark.asyncio
     async def test_mcp_auth_error(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")
         async def handler() -> dict[str, Any]:
@@ -780,7 +769,6 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "insufficient_scope"
 
-    @pytest.mark.asyncio
     async def test_starlette_http_with_handle(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail", handle_http_exception=True)
         async def handler() -> dict[str, Any]:
@@ -790,7 +778,6 @@ class TestToolDbShell:
         assert result["error"] == "validation_failed"
         assert "bad input" in result["detail"]
 
-    @pytest.mark.asyncio
     async def test_starlette_http_without_handle(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")
         async def handler() -> dict[str, Any]:
@@ -799,7 +786,6 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "internal_error"
 
-    @pytest.mark.asyncio
     async def test_integrity_error_with_detail(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail="constraint violated: {orig}", fallback="fail")
         async def handler() -> dict[str, Any]:
@@ -808,7 +794,6 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "conflict"
 
-    @pytest.mark.asyncio
     async def test_integrity_error_no_detail(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")
         async def handler() -> dict[str, Any]:
@@ -817,7 +802,6 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "database_unavailable"
 
-    @pytest.mark.asyncio
     async def test_programming_error(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")
         async def handler() -> dict[str, Any]:
@@ -826,7 +810,6 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "migration_required"
 
-    @pytest.mark.asyncio
     async def test_sqlalchemy_error(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")
         async def handler() -> dict[str, Any]:
@@ -835,7 +818,6 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "database_unavailable"
 
-    @pytest.mark.asyncio
     async def test_generic_exception(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")
         async def handler() -> dict[str, Any]:
@@ -844,7 +826,6 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "internal_error"
 
-    @pytest.mark.asyncio
     async def test_integrity_error_db_errors_to_fallback(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail", db_errors_to_fallback=True)
         async def handler() -> dict[str, Any]:
@@ -853,7 +834,6 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "internal_error"
 
-    @pytest.mark.asyncio
     async def test_sqlalchemy_error_db_errors_to_fallback(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail", db_errors_to_fallback=True)
         async def handler() -> dict[str, Any]:
