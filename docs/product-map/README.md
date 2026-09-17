@@ -254,6 +254,14 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `human_only` denial verdict (API-key principal on a human_only gate → 403),
 > and the real `get_overdue_claims` aggregation (warning vs escalated).
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-17):** closed `feat-auth`'s "No dedicated BDD for
+> `/me` password-change forced flow" gap. `auth/change_password.feature` gained
+> the "Forced password change clears the admin-reset flag in the same
+> transaction" scenario (driven by `steps/test_change_password.py`), asserting
+> the real `PUT /api/v1/me/password` route clears the `must_change_password`
+> flag — the flag App.vue's forced-change gate arms on — in the same transaction
+> as the hash swap (`auth/auth.md`).
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

@@ -6,7 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pytest_bdd import parsers, scenarios, then, when
+from pytest_bdd import given, parsers, scenarios, then, when
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/change_password.feature")
@@ -54,6 +54,7 @@ def step_change_password(
     ):
         mock_user = MagicMock()
         mock_user.password_hash = hash_password("correct-horse-battery")
+        mock_user.must_change_password = bool(ctx.get("_change_pending", False))
         mock_get_user.return_value = mock_user
 
         mock_family = MagicMock()
@@ -69,6 +70,7 @@ def step_change_password(
             },
         )
         _store_response(request, ctx, resp)
+        ctx["_mock_user"] = mock_user
         ctx["_mock_blacklist"] = mock_blacklist
         ctx["_mock_rls"] = mock_rls
         ctx["_mock_audit"] = mock_audit
@@ -123,3 +125,23 @@ def step_password_change_audited(ctx: dict[str, Any]) -> None:
     _, kwargs = mock_audit.call_args
     assert kwargs["event_type"] == "password_changed"
     assert kwargs["resource_type"] == "account"
+
+
+@given("a forced password change is pending for my account")
+def step_forced_change_pending(ctx: dict[str, Any]) -> None:
+    """Arms the admin-reset ``must_change_password`` flag (FAR-460).
+
+    The flag is what App.vue gates on to render the forced change-password
+    view: the admin reset set it, and the forced flow ends with the same
+    ``PUT /api/v1/me/password`` that clears it.
+    """
+    ctx["_change_pending"] = True
+
+
+@then("the admin-reset must_change_password flag is cleared for my account")
+def step_forced_change_flag_cleared(ctx: dict[str, Any]) -> None:
+    mock_user = ctx.get("_mock_user")
+    assert mock_user is not None, "No account mock found — was the When step run?"
+    assert mock_user.must_change_password is False, (
+        "the password change did not clear must_change_password — the post-login forced-change gate would stay armed"
+    )

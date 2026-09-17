@@ -41,3 +41,10 @@ Feature: Password Change
     Given I am authenticated in org "acme"
     When I change my password from "correct-horse-battery" to "new-strong-password-42"
     Then the password change is recorded in the audit trail
+
+  Scenario: Forced password change clears the admin-reset flag in the same transaction
+    Given I am authenticated in org "acme"
+    And a forced password change is pending for my account
+    When I change my password from "correct-horse-battery" to "new-strong-password-42"
+    Then the response status is 200
+    And the admin-reset must_change_password flag is cleared for my account

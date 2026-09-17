@@ -77,6 +77,11 @@ clients.
       account with password reports existing_account=true
 - [x] Password change clears `must_change_password`, invalidates refresh-token
       families, and records an audit event
+- [x] The forced (admin-reset) change flow is BDD-covered: the same
+      `PUT /api/v1/me/password` clears the `must_change_password` admin-reset
+      flag in the same transaction as the hash swap, so App.vue's forced
+      change-password gate un-arms on the change (`backend/tests/bdd/features/auth/change_password.feature`
+      "Forced password change clears the admin-reset flag" scenario)
 - [x] OAuth consent screen authorizes third-party MCP applications via PKCE flow
 - [x] All auth endpoints are org-RLS scoped; tenant isolation prevents cross-org
       pipeline access (`backend/tests/bdd/features/auth/tenant_isolation.feature`)
@@ -84,12 +89,16 @@ clients.
       membership management, and feature gating by role
       (`backend/tests/bdd/features/auth/rbac.feature`)
 
-## Known Gaps
-
-- No dedicated BDD for `/me` password-change forced flow; coverage is via unit
-  tests and the `change_password.feature` BDD.
-
 ## QA History
+- 2026-09-17: **improve-architecture (product-map walk)** — closed the "No
+  dedicated BDD for `/me` password-change forced flow" gap. `auth/change_password.feature`
+  gained the "Forced password change clears the admin-reset flag in the same
+  transaction" scenario (driven by `steps/test_change_password.py`), asserting the
+  `must_change_password` flag App.vue's forced-change gate arms on is cleared by the
+  real `PUT /api/v1/me/password` route in the same transaction as the hash swap —
+  the flagship forced-flow behaviour that was previously unit-tested only
+  (`tests/unit/api/test_me_password.py::test_successful_password_change_clears_must_change_flag`).
+
 - 2026-09-13: **improve-architecture (product-map walk)** — removed the phantom
   `force-change-password-sign-out` element from the `/admin/my-profile` manifest
   `elements:` inventory: its only render site is the app-level forced-password-gate
