@@ -112,8 +112,14 @@ register_conformance_connector("rest", "rest_connector")
 # These connectors can be instantiated without credentials but do NOT support
 # the standard conformance resources ("directory" read / "file" write) — they
 # have their own resource model (package, search, etc.).  They are tested in
-# dedicated contract tests (test_npm_contract.py, test_pypi_contract.py) and
-# are NOT registered for the shared conformance suite.
+# dedicated VCR-backed contract tests (test_npm_contract.py,
+# test_pypi_contract.py) and are NOT registered for the shared conformance
+# suite.
+#
+# NOTE — trivy and codeclimate are REST API clients that require a running
+# remote service (Trivy server, Code Climate API).  trivy accepts an optional
+# token; codeclimate requires an API token.  Neither is a local scanner.
+# Both are excluded from conformance because they need live network access.
 
 
 @pytest.fixture
