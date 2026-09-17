@@ -268,44 +268,139 @@
       </span>
     </div>
 
-    <!-- Auto-provision toggle -->
+    <!-- Provisioning mode -->
     <div>
-      <span class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.auto_provision') }}</span>
-      <div class="flex items-center gap-2">
-        <span
-          class="relative inline-flex cursor-pointer items-center"
-          role="switch"
-          :aria-checked="data.auto_provision"
-          :aria-label="$t('components.SsoProviderForm.auto_provision')"
-          tabindex="0"
-          @keydown.enter.prevent="emitUpdate({ ...data, auto_provision: !data.auto_provision })"
-          @keydown.space.prevent="emitUpdate({ ...data, auto_provision: !data.auto_provision })"
-          @click.prevent="
-            emitUpdate({ ...data, auto_provision: !data.auto_provision })
-          "
+      <span class="mb-1 block text-sm font-medium" id="sso-provisioning-mode-label">{{ $t('components.SsoProviderForm.provisioning_mode') }}</span>
+      <div role="radiogroup" aria-labelledby="sso-provisioning-mode-label" data-testid="sso-provisioning-mode">
+        <!-- The unrestricted option is plan-gated off while the provider is
+             already in unrestricted mode: surface it so the state is not
+             silently re-committed on save. -->
+        <div
+          v-if="unrestrictedOptionHidden"
+          class="mb-2 rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-xs text-destructive"
+          role="alert"
+          data-testid="sso-unrestricted-locked-notice"
         >
-          <div
-            class="h-6 w-11 rounded-full transition-colors"
-            :class="data.auto_provision ? 'bg-primary' : 'bg-input'"
-          >
-            <div
-              class="h-5 w-5 rounded-full bg-white shadow-sm transition-transform"
-              :class="
-                data.auto_provision
-                  ? 'translate-x-[1.375rem]'
-                  : 'translate-x-0.5'
-              "
-              style="margin-top: 2px"
-            />
+          {{ $t('components.SsoProviderForm.mode_unrestricted_locked') }}
+        </div>
+
+        <!-- Mode 1: Invitation only -->
+        <label
+          class="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors mb-2"
+          :class="provisioningMode === 'invitation'
+            ? 'border-primary bg-primary/10'
+            : 'border-input hover:bg-accent/50'"
+        >
+          <input
+            type="radio"
+            name="sso-provisioning-mode"
+            value="invitation"
+            :checked="provisioningMode === 'invitation'"
+            class="mt-0.5"
+            data-testid="sso-mode-invitation"
+            @change="onModeChange('invitation')"
+          />
+          <div class="min-w-0">
+            <span class="text-sm font-medium">{{ $t('components.SsoProviderForm.mode_invitation') }}</span>
+            <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('components.SsoProviderForm.mode_invitation_help') }}</p>
           </div>
+        </label>
+
+        <!-- Mode 2: Email domain allowlist -->
+        <label
+          class="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors mb-2"
+          :class="provisioningMode === 'domains'
+            ? 'border-primary bg-primary/10'
+            : 'border-input hover:bg-accent/50'"
+        >
+          <input
+            type="radio"
+            name="sso-provisioning-mode"
+            value="domains"
+            :checked="provisioningMode === 'domains'"
+            class="mt-0.5"
+            data-testid="sso-mode-domains"
+            @change="onModeChange('domains')"
+          />
+          <div class="min-w-0">
+            <span class="text-sm font-medium">{{ $t('components.SsoProviderForm.mode_domains') }}</span>
+            <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('components.SsoProviderForm.mode_domains_help') }}</p>
+          </div>
+        </label>
+
+        <!-- Mode 3: Anyone (dangerous — flag-gated) -->
+        <label
+          v-if="unrestrictedProvisioningAvailable"
+          class="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors mb-2"
+          :class="provisioningMode === 'unrestricted'
+            ? 'border-destructive bg-destructive/10'
+            : 'border-input hover:bg-accent/50'"
+        >
+          <input
+            type="radio"
+            name="sso-provisioning-mode"
+            value="unrestricted"
+            :checked="provisioningMode === 'unrestricted'"
+            class="mt-0.5"
+            data-testid="sso-mode-unrestricted"
+            @change="onModeChange('unrestricted')"
+          />
+          <div class="min-w-0">
+            <span class="text-sm font-medium text-destructive">{{ $t('components.SsoProviderForm.mode_unrestricted') }}</span>
+            <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('components.SsoProviderForm.mode_unrestricted_help') }}</p>
+            <div
+              v-if="provisioningMode === 'unrestricted'"
+              class="mt-2 rounded border border-destructive/50 bg-destructive/5 p-2 text-xs text-destructive"
+              role="alert"
+              data-testid="sso-unrestricted-warning"
+            >
+              {{ $t('components.SsoProviderForm.mode_unrestricted_warning') }}
+            </div>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <!-- Allowed domains (mode 2 only) -->
+    <div v-if="provisioningMode === 'domains'">
+      <label class="mb-1 block text-sm font-medium" for="sso-domain-input">{{ $t('components.SsoProviderForm.allowed_domains') }}</label>
+      <p class="mb-2 text-xs text-muted-foreground">{{ $t('components.SsoProviderForm.allowed_domains_help') }}</p>
+      <div
+        class="flex flex-wrap items-center gap-1.5 rounded-lg border border-input bg-background px-2 py-1.5 focus-within:ring-2 focus-within:ring-ring"
+        data-testid="sso-domain-list"
+      >
+        <span
+          v-for="(domain, idx) in data.allowed_domains"
+          :key="domain"
+          class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+        >
+          {{ domain }}
+          <button
+            type="button"
+            class="ml-0.5 rounded-full p-0.5 hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+            :aria-label="$t('components.SsoProviderForm.domain_remove', { domain })"
+            :data-testid="`sso-domain-remove-${idx}`"
+            @click="removeDomain(idx)"
+          >
+            <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
         </span>
-        <span class="text-sm text-muted-foreground">
-          {{
-            data.auto_provision
-              ? $t('components.SsoProviderForm.auto_provision_enabled')
-              : $t('components.SsoProviderForm.auto_provision_disabled')
-          }}
-        </span>
+        <input
+          id="sso-domain-input"
+          v-model="domainInput"
+          type="text"
+          class="min-w-[120px] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          :placeholder="$t('components.SsoProviderForm.domain_placeholder')"
+          data-testid="sso-domain-input"
+          :aria-describedby="domainError ? 'sso-domain-error' : undefined"
+          @keydown.enter.prevent="addDomain"
+          @keydown.tab="addDomain"
+        />
+      </div>
+      <div v-if="domainError" id="sso-domain-error" class="mt-1 text-xs text-destructive" role="alert" aria-live="polite" data-testid="sso-domain-error">
+        {{ domainError }}
       </div>
     </div>
 
@@ -345,7 +440,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import Select from './shared/AppSelect.vue'
 import SsoBrandMark from './SsoBrandMark.vue'
@@ -357,7 +453,7 @@ export interface SsoPresetInfo {
   tenant_label: string
 }
 
-interface SsoFormState {
+export interface SsoFormState {
   provider_type: string;
   name: string;
   client_id: string;
@@ -371,6 +467,25 @@ interface SsoFormState {
   default_role: string;
   preset: string;
   tenant_domain: string;
+  allowed_domains: string[];
+}
+
+type DomainErrorKey =
+  | 'components.SsoProviderForm.domain_invalid'
+  | 'components.SsoProviderForm.domain_invalid_no_dot'
+
+/** Client-side domain validation mirroring backend rules in validate_allowed_domains.
+ *  Returns the locale key of the validation error, or null when the domain is valid. */
+function validateDomain(raw: string): DomainErrorKey | null {
+  const domain = raw.trim().toLowerCase().replace(/\.$/, '')
+  if (!domain) return null
+  if (/[ @/*]/.test(domain)) {
+    return 'components.SsoProviderForm.domain_invalid'
+  }
+  if (!domain.includes('.')) {
+    return 'components.SsoProviderForm.domain_invalid_no_dot'
+  }
+  return null
 }
 
 const props = defineProps<{
@@ -381,6 +496,7 @@ const props = defineProps<{
   error: string | null;
   presets: SsoPresetInfo[];
   callbackUrl?: string | null;
+  unrestrictedProvisioningAvailable?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -392,6 +508,80 @@ const emit = defineEmits<{
 function emitUpdate(updated: SsoFormState) {
   emit("update:data", updated);
 }
+
+const { t } = useI18n()
+
+// ── Provisioning mode ──────────────────────────────────────────────
+type ProvisioningMode = 'invitation' | 'domains' | 'unrestricted'
+
+function deriveMode(data: SsoFormState): ProvisioningMode {
+  if (!data.auto_provision) return 'invitation'
+  if (data.allowed_domains.length > 0) return 'domains'
+  return 'unrestricted'
+}
+
+// The payload is ambiguous between domains-mode-with-an-empty-allowlist and
+// unrestricted mode (both are auto_provision=true, allowed_domains=[]), so the
+// selection cannot be re-derived from it: choosing "Email domain allowlist"
+// before adding the first domain would otherwise snap back to unrestricted and
+// the domain input would never appear. Latch the user's explicit choice and
+// fall back to the derived mode only until they choose one.
+const chosenMode = ref<ProvisioningMode | null>(null)
+const provisioningMode = computed<ProvisioningMode>(() => chosenMode.value ?? deriveMode(props.data))
+
+function onModeChange(mode: ProvisioningMode) {
+  chosenMode.value = mode
+  if (mode === 'invitation') {
+    emitUpdate({ ...props.data, auto_provision: false, allowed_domains: [] })
+  } else if (mode === 'domains') {
+    emitUpdate({ ...props.data, auto_provision: true, allowed_domains: props.data.allowed_domains.length > 0 ? [...props.data.allowed_domains] : [] })
+  } else {
+    emitUpdate({ ...props.data, auto_provision: true, allowed_domains: [] })
+  }
+}
+
+// A provider already in unrestricted mode renders no radio when the plan gates
+// the option off, so the current (dangerous) state would otherwise be invisible
+// and saving would silently re-commit unrestricted provisioning.
+const unrestrictedOptionHidden = computed(
+  () => provisioningMode.value === 'unrestricted' && !props.unrestrictedProvisioningAvailable
+)
+
+// ── Domain tag/list input ──────────────────────────────────────────
+const domainInput = ref('')
+const domainError = ref<string | null>(null)
+
+function addDomain() {
+  const raw = domainInput.value.trim()
+  if (!raw) return
+  const err = validateDomain(raw)
+  if (err) {
+    domainError.value = t(err)
+    return
+  }
+  domainError.value = null
+  const normalised = raw.trim().toLowerCase().replace(/\.$/, '')
+  if (props.data.allowed_domains.includes(normalised)) {
+    domainInput.value = ''
+    return
+  }
+  emitUpdate({
+    ...props.data,
+    allowed_domains: [...props.data.allowed_domains, normalised],
+  })
+  domainInput.value = ''
+}
+
+function removeDomain(idx: number) {
+  const updated = [...props.data.allowed_domains]
+  updated.splice(idx, 1)
+  emitUpdate({ ...props.data, allowed_domains: updated })
+}
+
+// Clear domain error when the user starts typing again
+watch(domainInput, () => {
+  if (domainError.value) domainError.value = null
+})
 
 const activePreset = computed(() =>
   props.presets.find(p => p.id === props.data.preset) ?? null

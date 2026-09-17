@@ -40,7 +40,6 @@ _REGISTRY_FILES: set[Path] = {
 # without a gate, add it here.
 KNOWN_DEFERRED_FLAGS: set[str] = {
     "eval_maturity",
-    "sso_unrestricted_provisioning",
 }
 
 # Patterns for backend gate references (production code only).

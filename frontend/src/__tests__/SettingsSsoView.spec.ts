@@ -16,6 +16,14 @@ vi.mock('../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
+vi.mock('../stores/planStore', () => ({
+  usePlanStore: vi.fn(() => ({
+    featureEnabled: vi.fn((name: string) => name === 'sso_unrestricted_provisioning' ? false : true),
+    loaded: true,
+    fetchPlan: vi.fn(),
+  })),
+}))
+
 import SettingsSsoView from '../views/SettingsSsoView.vue'
 import { api } from '../lib/api/client'
 
@@ -29,9 +37,10 @@ const provider = (over: Record<string, unknown> = {}) => ({
   metadata_xml: null,
   entity_id: null,
   scopes: ['openid', 'email'],
-  auto_provision: true,
+  auto_provision: false,
   default_role: 'runner',
   enabled: true,
+  allowed_domains: [],
   ...over,
 })
 
@@ -166,7 +175,7 @@ describe('SettingsSsoView — create provider', () => {
     expect(opts.body).toEqual({
       provider_type: 'oidc',
       name: 'New SSO',
-      auto_provision: true,
+      auto_provision: false,
       default_role: 'runner',
       enabled: true,
       client_id: 'cid-new',
@@ -174,6 +183,7 @@ describe('SettingsSsoView — create provider', () => {
       discovery_url: 'https://idp.new/.well-known',
       scopes: ['openid', 'email'],
       preset: 'custom',
+      allowed_domains: undefined,
     })
     // The form closes and the list refetches (FAR-608): the created provider
     // appears once the GET mock reflects the server state after the POST.
@@ -509,5 +519,129 @@ describe('SettingsSsoView — test connection', () => {
     await nextTick()
     expect(wrapper.text()).toContain('Connection failed')
     expect(wrapper.text()).toContain('timeout')
+  })
+})
+
+describe('SettingsSsoView — provisioning modes and allowed_domains', () => {
+  it('create payload defaults to auto_provision=false (invitation mode) when no domains', async () => {
+    ;(api.POST as Mock).mockResolvedValue({ data: provider({ id: 'sso-new', name: 'New SSO' }), error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-sso-add-provider"]').trigger('click')
+    await nextTick()
+
+    await wrapper.find('#ssoproviderform-field-9').setValue('New SSO')
+    await wrapper.findAll('button').find((b) => b.text() === 'Create')!.trigger('click')
+    await nextTick()
+
+    const body = (api.POST as Mock).mock.calls[0][1].body
+    expect(body.auto_provision).toBe(false)
+    expect(body.allowed_domains).toBeUndefined()
+  })
+
+  it('create payload includes allowed_domains when domains mode is selected', async () => {
+    ;(api.POST as Mock).mockResolvedValue({ data: provider({ id: 'sso-new', name: 'New SSO' }), error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+
+    // Open the add form
+    await wrapper.find('[data-testid="settings-sso-add-provider"]').trigger('click')
+    await nextTick()
+
+    await wrapper.find('#ssoproviderform-field-9').setValue('New SSO')
+
+    // The new form starts in invitation mode (auto_provision=false, allowed_domains=[]).
+    // The domain input is not visible in invitation mode, so we verify that the
+    // create payload for invitation mode omits allowed_domains entirely.
+    await wrapper.findAll('button').find((b) => b.text() === 'Create')!.trigger('click')
+    await nextTick()
+
+    const body = (api.POST as Mock).mock.calls[0][1].body
+    expect(body.auto_provision).toBe(false)
+    expect(body.allowed_domains).toBeUndefined()
+  })
+
+  it('edit form preloads allowed_domains from the provider', async () => {
+    ;(api.GET as Mock).mockResolvedValue({
+      data: [provider({ auto_provision: true, allowed_domains: ['corp.example.com', 'work.org'] })],
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-sso-edit"]').trigger('click')
+    await nextTick()
+
+    // The domains should be rendered as tags in the domain list
+    expect(wrapper.text()).toContain('corp.example.com')
+    expect(wrapper.text()).toContain('work.org')
+  })
+
+  it('edit form saves allowed_domains in the update payload', async () => {
+    ;(api.GET as Mock).mockResolvedValue({
+      data: [provider({ allowed_domains: ['example.com'] })],
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-sso-edit"]').trigger('click')
+    await nextTick()
+
+    await wrapper.findAll('button').find((b) => b.text() === 'Save')!.trigger('click')
+    await nextTick()
+
+    const body = (api.PUT as Mock).mock.calls[0][1].body
+    expect(body.allowed_domains).toEqual(['example.com'])
+    expect(body.auto_provision).toBe(false)
+  })
+
+  it('unrestricted mode is hidden when planStore flag is off', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-sso-add-provider"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="sso-mode-unrestricted"]').exists()).toBe(false)
+  })
+
+  it('adds the first allowed domain through the real view round-trip (review finding 1)', async () => {
+    // The view round-trips the form payload through Object.assign, which re-derived
+    // domains-mode-with-empty-list back to unrestricted and hid the input. Choosing
+    // domains must keep the input visible so the first domain can be entered.
+    ;(api.POST as Mock).mockResolvedValue({ data: provider({ id: 'sso-new', name: 'New SSO' }), error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-sso-add-provider"]').trigger('click')
+    await nextTick()
+
+    await wrapper.find('#ssoproviderform-field-9').setValue('New SSO')
+    await wrapper.find('[data-testid="sso-mode-domains"]').setValue(true)
+    await nextTick()
+
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    expect(input.exists()).toBe(true)
+    await input.setValue('example.com')
+    await input.trigger('keydown.enter')
+    await nextTick()
+
+    await wrapper.findAll('button').find((b) => b.text() === 'Create')!.trigger('click')
+    await nextTick()
+
+    const body = (api.POST as Mock).mock.calls[0][1].body
+    expect(body.auto_provision).toBe(true)
+    expect(body.allowed_domains).toEqual(['example.com'])
+  })
+
+  it('warns when editing an unrestricted provider while the option is plan-gated off (review finding 2)', async () => {
+    ;(api.GET as Mock).mockResolvedValue({
+      data: [provider({ auto_provision: true, allowed_domains: [] })],
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-sso-edit"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="sso-mode-unrestricted"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sso-unrestricted-locked-notice"]').exists()).toBe(true)
   })
 })

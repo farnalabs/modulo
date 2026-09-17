@@ -4250,6 +4250,33 @@ elements:
       - testid: sso-tenant-domain
         type: input
         dynamic_testid: false
+      - testid: sso-provisioning-mode
+        type: element
+        dynamic_testid: false
+      - testid: sso-mode-invitation
+        type: input
+        dynamic_testid: false
+      - testid: sso-mode-domains
+        type: input
+        dynamic_testid: false
+      - testid: sso-mode-unrestricted
+        type: input
+        dynamic_testid: false
+      - testid: sso-unrestricted-warning
+        type: element
+        dynamic_testid: false
+      - testid: sso-unrestricted-locked-notice
+        type: element
+        dynamic_testid: false
+      - testid: sso-domain-list
+        type: element
+        dynamic_testid: false
+      - testid: sso-domain-input
+        type: input
+        dynamic_testid: false
+      - testid: sso-domain-error
+        type: element
+        dynamic_testid: false
       - testid: json-viewer
         type: element
         dynamic_testid: false
