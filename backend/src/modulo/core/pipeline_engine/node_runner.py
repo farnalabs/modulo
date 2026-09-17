@@ -122,6 +122,7 @@ from modulo.core.run_context.autonomy import (
     should_skip_hitl_gate,
 )
 from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
+from modulo.core.schema_registry.rendering import SchemaProfile, render_for_profile
 from modulo.db.crud.hitl_gate_config import human_only_effective
 from modulo.db.lifecycle_refs import (
     _SOURCE_RANK,
@@ -3293,11 +3294,68 @@ def _is_safe_schema(schema: dict[str, Any]) -> tuple[bool, str]:
     return True, ""
 
 
+# ---------------------------------------------------------------------------
+# FAR-900: schema profile resolution + provider extraction
+# ---------------------------------------------------------------------------
+
+_VALID_SCHEMA_PROFILES = frozenset({"verbatim", "provider-strict", "runtime-sdk"})
+
+
+def _extract_provider_id(backend: Any) -> str | None:
+    """Extract the provider identifier from a backend's ``backend_id``.
+
+    Backend IDs follow the pattern ``"<provider>/<model_id>"`` (e.g.
+    ``"openai/gpt-4"``, ``"anthropic/claude-sonnet-4-6"``).  Returns the
+    lowercased provider prefix, or ``None`` when the ID does not match
+    the expected pattern.
+    """
+    backend_id = getattr(backend, "backend_id", None)
+    if not isinstance(backend_id, str) or "/" not in backend_id:
+        return None
+    return backend_id.split("/", 1)[0].lower()
+
+
+def _resolve_schema_profile(node_def: dict[str, Any]) -> "SchemaProfile | None":
+    """Resolve the effective ``schema_profile`` for a node.
+
+    Resolution order (FAR-900):
+    1. **Node-level** ``schema_profile`` — embedded in the snapshot
+       ``graph_json`` node dict (e.g. set by composite-engine expansion or
+       a per-node override).
+    2. **Agent-level default** — ``Agent.schema_profile`` (the DB column).
+       ``_apply_agent_fields`` in ``pipeline_snapshot.py`` does NOT embed
+       this field into the node dict, so it is unreachable at node-execution
+       time without an async DB query.  Until that embedding is added, the
+       agent-level default cannot be resolved here — falls through to
+       ``None`` (verbatim).
+    3. ``None`` → the caller treats it as ``"verbatim"`` (identity).
+
+    Returns ``None`` when no override is set (caller defaults to verbatim).
+    """
+    profile = node_def.get("schema_profile")
+    if profile in _VALID_SCHEMA_PROFILES:
+        return profile  # type: ignore[no-any-return]  # validated against _VALID_SCHEMA_PROFILES
+    # TODO(FAR-900): Agent-level schema_profile default.
+    # _apply_agent_fields() (pipeline_snapshot.py:77) embeds token_budget,
+    # prompt_template, model_backend_id, agent_commands, parameter_schema_id
+    # — but NOT schema_profile.  The Agent model has a schema_profile column
+    # (String(30), nullable, default=None) added by migration 0248, yet the
+    # snapshot node dict never carries it.  Resolving the agent-level default
+    # here would require an async DB lookup (the Agent row is not available in
+    # the synchronous make_node_fn closure), which would add latency to every
+    # node invocation.  The correct fix is to extend _apply_agent_fields to
+    # embed schema_profile into the snapshot graph_json node dict, so the
+    # resolution above captures it without a runtime query.  Until then, the
+    # agent-level default is unreachable at this call site.
+    return None
+
+
 async def _invoke_node_model(
     rendered_prompt: str,
     model_backend_id_str: str,
     node_id: str,
     output_schema_json: dict[str, Any] | None = None,
+    schema_profile: SchemaProfile | None = None,
 ) -> Any:
     """Invoke the configured model backend and return its parsed output.
 
@@ -3306,11 +3364,16 @@ async def _invoke_node_model(
     string response. Raises when the hub is unavailable.
 
     When *output_schema_json* is truthy and the backend declares
-    ``supports_native_structured_output``, the schema is forwarded to the
-    provider's native structured-output decoding path.  An empty dict
-    ``{}`` is treated as "no schema" (truthiness guard).  Before dispatch,
-    FIX 6 bounds-checks the schema (size, depth, external ``$ref``) and
-    falls back to no native structured output when the check fails.
+    ``supports_native_structured_output``, the schema is rendered for the
+    target profile (FAR-900) and forwarded to the provider's native
+    structured-output decoding path.  An empty dict ``{}`` is treated as
+    "no schema" (truthiness guard).  Before dispatch, FIX 6 bounds-checks
+    the RENDERED schema (size, depth, external ``$ref``) and falls back to
+    no native structured output when the check fails.
+
+    Best-effort: if rendering fails or returns nothing, falls back to
+    ``verbatim`` (the raw schema) and continues — the node must never fail
+    because of translation.
     """
     from modulo.core.pipeline_engine.decorator import get_model_backend_hub
 
@@ -3326,11 +3389,36 @@ async def _invoke_node_model(
     # FIX 2 (FAR-898): truthiness guard — an empty dict {} is treated as "no
     # schema", matching the prior None guard behaviour while also catching
     # the degenerate empty-schema case.
-    # FIX 6 (FAR-898): bounds-check the schema before dispatching.
+    # FAR-900: render the schema for the target provider before dispatch.
+    # The effective profile defaults to "verbatim" when None (no override).
     if output_schema_json and backend.supports_native_structured_output:
-        ok, reason = _is_safe_schema(output_schema_json)
+        effective_profile: SchemaProfile = schema_profile or "verbatim"
+        provider_id = _extract_provider_id(backend)
+        try:
+            rendered = render_for_profile(output_schema_json, effective_profile, provider_id)
+            schema_to_check = rendered.schema
+            if rendered.skipped:
+                _log.info(
+                    "node_model.schema_render_skipped",
+                    extra={
+                        "node_id": node_id,
+                        "profile": effective_profile,
+                        "reason": rendered.skip_reason,
+                    },
+                )
+        except Exception:
+            # Best-effort: rendering failure must never block the node.
+            _log.warning(
+                "node_model.schema_render_failed; falling back to verbatim",
+                extra={"node_id": node_id, "profile": effective_profile},
+                exc_info=True,
+            )
+            schema_to_check = output_schema_json
+        # FIX 6 (FAR-898): bounds-check the schema (AFTER rendering — the
+        # rendered output is what reaches the provider).
+        ok, reason = _is_safe_schema(schema_to_check)
         if ok:
-            invoke_kwargs["output_schema"] = output_schema_json
+            invoke_kwargs["output_schema"] = schema_to_check
         else:
             _log.warning(
                 "node_model.schema_bounds_rejected",
@@ -3533,11 +3621,14 @@ def make_node_fn(
             work_item_refs=node_work_item_refs,
         )
 
+        # FAR-900: resolve the schema_profile for rendering before dispatch.
+        _node_schema_profile = _resolve_schema_profile(node_def)
         output_data = await _invoke_node_model(
             rendered_prompt,
             model_backend_id_str,
             node_id,
             output_schema_json=output_schema_json,
+            schema_profile=_node_schema_profile,
         )
 
         # FAR-899: schema validator mode — resolved from the effective-setting
