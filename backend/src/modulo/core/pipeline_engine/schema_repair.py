@@ -3,10 +3,14 @@
 This module provides:
 - ``SchemaValidationOutcome`` enum for structured validation result tracking
 - ``SchemaRepairLoop`` for attempting model re-prompting on validation failure
-- ``_query_recent_lenient_failures`` for the flip-guard threshold check
+- ``run_repair_loop`` — the repair orchestration extracted from node_runner
+- ``format_error_summary`` — single error-summary formatter (DRY helper)
 
 The repair loop operates in STRICT mode only. In lenient mode, validation
 failures are recorded as warnings but the node does not fail.
+
+# TODO(FAR-902): flip guard hooks in here (needs the runs.schema_validator_mode
+# / schema_validation_outcome columns)
 """
 
 from __future__ import annotations
@@ -14,15 +18,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import uuid
 from enum import StrEnum
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from jsonschema import Draft202012Validator
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
+from jsonschema.exceptions import _Error as JsonschemaError
 
 _log = logging.getLogger(__name__)
 
@@ -83,11 +84,8 @@ def _clear_validator_cache() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Core validation function
+# FIX G: Malformed-schema guard — wraps compile + validate
 # ---------------------------------------------------------------------------
-
-# Maximum chars for the repair prompt error message (injection hardening).
-_REPAIR_PROMPT_MAX_CHARS = 2048
 
 
 def validate_against_schema(
@@ -102,42 +100,82 @@ def validate_against_schema(
       - ``constraint``: the schema keyword that failed
       - ``expected``: expected type/value (if applicable)
       - ``actual``: actual type/value (if applicable)
-      - ``allowed``: allowed enum values (if applicable)
+      - ``allowed``: allowed enum values (if applicable, capped to 10 values
+        of 50 chars each for injection hardening)
 
-    Unlike the old ``_validate_against_schema``, this works on ANY JSON value
-    (dict, list, scalar) — there is no ``isinstance(dict)`` guard.
+    FIX G: Malformed schemas (``UnknownType``, ``SchemaError``, etc.) are
+    caught and returned as a single ``schema_error`` validation failure
+    with pointer ``$`` rather than propagating and crashing the node.
 
     ``format`` keywords are advisory (no format_checker passed).
     Vendor ``x-*`` keywords are tolerated (default validator).
     External ``$ref`` rejection is handled by ``_is_safe_schema`` upstream.
     """
-    validator = _compile_validator(schema)
+    try:
+        validator = _compile_validator(schema)
+    except JsonschemaError as exc:
+        # FIX G: malformed schema → single validation failure, not a crash
+        _log.warning(
+            "schema_repair.malformed_schema",
+            extra={"error": str(exc)[:200]},
+        )
+        return False, [{"pointer": "$", "constraint": "schema_error", "message": str(exc)[:200]}]
+
     errors: list[dict[str, Any]] = []
 
-    for error in validator.iter_errors(data):
-        pointer = error.json_path or "$"
-        # Convert json_path notation to JSON Pointer format
-        if pointer.startswith("$."):
-            pointer = "/" + pointer[2:].replace(".", "/")
-        elif pointer == "$":
-            pointer = ""
+    try:
+        for error in validator.iter_errors(data):
+            pointer = error.json_path or "$"
+            # Convert json_path notation to JSON Pointer format
+            if pointer.startswith("$."):
+                pointer = "/" + pointer[2:].replace(".", "/")
+            elif pointer == "$":
+                pointer = ""
 
-        err_info: dict[str, Any] = {
-            "pointer": pointer,
-            "constraint": error.validator,
-        }
-        if error.message:
-            err_info["message"] = error.message[:200]
-        if error.validator_value is not None:
-            err_info["validator_value"] = str(error.validator_value)[:100]
-        if error.instance is not None:
-            err_info["actual"] = str(error.instance)[:100]
-        if error.validator == "enum" and error.validator_value is not None:
-            err_info["allowed"] = error.validator_value
+            err_info: dict[str, Any] = {
+                "pointer": pointer,
+                "constraint": error.validator,
+            }
+            if error.message:
+                err_info["message"] = error.message[:200]
+            if error.validator_value is not None:
+                err_info["validator_value"] = str(error.validator_value)[:100]
+            if error.instance is not None:
+                err_info["actual"] = str(error.instance)[:100]
+            if error.validator == "enum" and error.validator_value is not None:
+                # FIX F: cap allowed values to prevent prompt injection
+                raw_allowed = error.validator_value
+                capped = [str(v)[:50] for v in raw_allowed[:10]]
+                err_info["allowed"] = capped
 
-        errors.append(err_info)
+            errors.append(err_info)
+    except JsonschemaError as exc:
+        # FIX G: runtime validation failure on a schema that compiled OK
+        # but raises during iteration (e.g. recursive schema blow-up)
+        _log.warning(
+            "schema_repair.schema_runtime_error",
+            extra={"error": str(exc)[:200]},
+        )
+        return False, [{"pointer": "$", "constraint": "schema_error", "message": str(exc)[:200]}]
 
     return len(errors) == 0, errors
+
+
+# ---------------------------------------------------------------------------
+# FIX I: Error summary helper (DRY - 4x duplicated in node_runner)
+# ---------------------------------------------------------------------------
+
+
+def format_error_summary(
+    errors: list[dict[str, Any]],
+    *,
+    limit: int = 3,
+) -> str:
+    """Format a short semicolon-delimited error summary for messages/logs.
+
+    This is the SINGLE source of truth for error-summary formatting.
+    """
+    return "; ".join(f"{e.get('pointer', '$')}: {e.get('constraint', 'unknown')}" for e in errors[:limit])
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +206,9 @@ def _build_repair_prompt(
     allowed) is interpolated. Raw schema free-text (description, title,
     examples, default) is NEVER included. The message is capped at
     ``_REPAIR_PROMPT_MAX_CHARS``.
+
+    FIX F: ``allowed`` values are capped to at most 10 values, each at most
+    50 chars, before interpolation into the prompt.
     """
     error_lines: list[str] = []
     for i, err in enumerate(errors, 1):
@@ -181,7 +222,12 @@ def _build_repair_prompt(
         if err.get("actual"):
             parts.append(f"  Actual: {err['actual']}")
         if err.get("allowed"):
-            parts.append(f"  Allowed values: {err['allowed']}")
+            allowed = err["allowed"]
+            if isinstance(allowed, list):
+                capped = [str(v)[:50] for v in allowed[:10]]
+                parts.append(f"  Allowed values: {capped}")
+            else:
+                parts.append(f"  Allowed values: {str(allowed)[:50]}")
         error_lines.append("\n".join(parts))
 
     errors_text = "\n".join(error_lines)
@@ -198,6 +244,10 @@ def _build_repair_prompt(
         prompt = prompt[: _REPAIR_PROMPT_MAX_CHARS - 50] + "\n... [truncated]"
 
     return prompt
+
+
+# Maximum chars for the repair prompt error message (injection hardening).
+_REPAIR_PROMPT_MAX_CHARS = 2048
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +291,11 @@ class SchemaRepairLoop:
 
     Strict mode only. On validation failure, re-prompts the SAME backend
     with the validation error + schema. Budget defaults to 1, hard cap 3.
+
+    FIX D: budget=N must yield exactly N repair invocations. The loop checks
+    ``is_exhausted`` BEFORE each iteration, and ``record_attempt`` only
+    increments and checks untranslatable — the budget gate is in the loop,
+    not in record_attempt.
     """
 
     def __init__(
@@ -271,10 +326,13 @@ class SchemaRepairLoop:
     ) -> SchemaValidationOutcome:
         """Record a validation attempt and return the outcome.
 
+        FIX D: No longer checks the budget cap — the loop's ``is_exhausted``
+        handles that. This method only handles untranslatable detection.
+
         Returns:
             - ``REPAIR_ATTEMPTED`` if more attempts remain
             - ``PASSED_AFTER_REPAIR`` if validation now passes (caller sets this)
-            - ``REPAIR_EXHAUSTED`` if budget exhausted or untranslatable
+            - ``REPAIR_EXHAUSTED`` if untranslatable
         """
         self._attempt += 1
 
@@ -284,7 +342,7 @@ class SchemaRepairLoop:
         else:
             self._consecutive_same_errors = 0
 
-        self._last_errors = errors
+        self._last_errors = list(errors)
 
         if self._consecutive_same_errors >= 1:
             # Same errors on 2 consecutive attempts = untranslatable
@@ -299,9 +357,6 @@ class SchemaRepairLoop:
             )
             return SchemaValidationOutcome.REPAIR_EXHAUSTED
 
-        if self._attempt >= self.budget:
-            return SchemaValidationOutcome.REPAIR_EXHAUSTED
-
         return SchemaValidationOutcome.REPAIR_ATTEMPTED
 
     def build_repair_prompt(self, errors: list[dict[str, Any]]) -> str:
@@ -309,103 +364,125 @@ class SchemaRepairLoop:
         return _build_repair_prompt(
             errors=errors,
             schema_id=self.schema_id,
-            attempt=self._attempt + 1,
+            attempt=self._attempt,
             max_attempts=self.budget,
         )
 
 
 # ---------------------------------------------------------------------------
-# Flip guard: _query_recent_lenient_failures
+# FIX I: Repair orchestration (extracted from _validate_against_schema)
 # ---------------------------------------------------------------------------
 
-# Threshold: ≤0.1% of trailing-72h lenient runs triggers the flip guard
-_FLIP_GUARD_THRESHOLD = 0.001  # 0.1%
-_FLIP_GUARD_WINDOW_HOURS = 72
-_FLIP_GUARD_MAX_RUNS = 200
 
-
-async def _query_recent_lenient_failures(
-    session: AsyncSession,
-    org_id: uuid.UUID | None,
+def run_repair_loop(
+    data: Any,
+    schema: dict[str, Any],
     *,
-    window_hours: int = _FLIP_GUARD_WINDOW_HOURS,
-    max_runs: int = _FLIP_GUARD_MAX_RUNS,
-) -> float:
-    """Query the fraction of recent lenient-mode runs that had validation failures.
+    budget: int,
+    schema_id: str = "unknown",
+    schema_version: int = 0,
+    daily_spend_limit: float | None = None,
+    current_spend: float = 0.0,
+    repair_invoke_fn: Any | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Run the repair loop for a failed schema validation in strict mode.
 
-    Returns a float in [0.0, 1.0] representing the failure rate. Used by the
-    flip guard to prevent switching to strict mode when too many recent runs
-    would fail.
+    Called from ``_validate_against_schema`` after the initial validation
+    fails. Builds repair prompts, invokes the backend, re-validates, and
+    returns the final ``(outcome, errors)``.
 
-    The query covers trailing ``window_hours`` OR the last ``max_runs``
-    lenient runs, whichever is smaller.
+    Returns:
+        ``(outcome_value, errors)`` — the outcome is a SchemaValidationOutcome
+        string value. The caller raises OutputSchemaValidationError when the
+        outcome is terminal-failure.
 
-    Named ``_query_recent_lenient_failures`` so it is unit-testable in
-    isolation.
-
-    NOTE: This function queries the database for run statistics. In unit
-    tests, mock this function to control the threshold check.
+    Raises:
+        Nothing — all failures are encoded in the outcome value.
     """
-    if org_id is None:
-        return 0.0
+    from json import JSONDecodeError
 
-    try:
-        from datetime import UTC, datetime, timedelta
+    from modulo.core.pipeline_engine.schema_repair import (
+        SchemaRepairLoop,
+        SchemaValidationOutcome,
+    )
 
-        from sqlalchemy import func, select
+    if budget <= 0 or repair_invoke_fn is None:
+        # No repair budget or no invoke function → terminal failure
+        is_valid, errors = validate_against_schema(data, schema)
+        if is_valid:
+            return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, []
+        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors
 
-        from modulo.db.models.run import Run
-
-        cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
-
-        # Count total lenient runs in window
-        total_q = (
-            select(func.count())
-            .select_from(Run)
-            .where(
-                Run.organisation_id == org_id,
-                Run.created_at >= cutoff,
-                Run.schema_validator_mode == "lenient",
-            )
-        )
-        total_result = await session.execute(total_q)
-        total_count = total_result.scalar() or 0
-
-        if total_count == 0:
-            return 0.0
-
-        # Limit to max_runs window
-        effective_count = min(total_count, max_runs)
-
-        # Count failures among lenient runs in window
-        failure_q = (
-            select(func.count())
-            .select_from(Run)
-            .where(
-                Run.organisation_id == org_id,
-                Run.created_at >= cutoff,
-                Run.schema_validator_mode == "lenient",
-                Run.schema_validation_outcome.in_(
-                    [
-                        SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED.value,
-                        SchemaValidationOutcome.REPAIR_EXHAUSTED.value,
-                    ]
-                ),
-            )
-        )
-        failure_result = await session.execute(failure_q)
-        failure_count = failure_result.scalar() or 0
-
-        return min(failure_count / effective_count, 1.0)
-
-    except Exception:
+    # Check daily spend limit before attempting repair
+    if daily_spend_limit is not None and current_spend >= daily_spend_limit:
         _log.warning(
-            "schema_repair.flip_guard_query_failed",
-            extra={"org_id": str(org_id)},
-            exc_info=True,
+            "schema_repair.skip_spend_limit",
+            extra={"schema_id": schema_id, "spend": current_spend, "limit": daily_spend_limit},
         )
-        # Fail-open: return threshold + 1 to BLOCK the flip on query failure
-        return _FLIP_GUARD_THRESHOLD + 1.0
+        is_valid, errors = validate_against_schema(data, schema)
+        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors
+
+    # Initial validation to get the errors
+    is_valid, current_errors = validate_against_schema(data, schema)
+    if is_valid:
+        return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, []
+
+    repair = SchemaRepairLoop(
+        budget=budget,
+        schema_id=schema_id,
+        schema_version=schema_version,
+    )
+
+    last_outcome = SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED
+
+    # FIX D: loop checks is_exhausted BEFORE attempting, so budget=N yields
+    # exactly N invocations (is_exhausted is False until _attempt >= budget).
+    while not repair.is_exhausted:
+        outcome = repair.record_attempt(current_errors)
+        if outcome == SchemaValidationOutcome.REPAIR_EXHAUSTED:
+            last_outcome = SchemaValidationOutcome.REPAIR_EXHAUSTED
+            break
+
+        # Build repair prompt and invoke
+        prompt = repair.build_repair_prompt(current_errors)
+        try:
+            raw_output = repair_invoke_fn(prompt)
+        except Exception:
+            _log.exception(
+                "schema_repair.invoke_failed",
+                extra={"schema_id": schema_id, "attempt": repair.attempts_used},
+            )
+            last_outcome = SchemaValidationOutcome.REPAIR_EXHAUSTED
+            break
+
+        # Parse the raw output
+        try:
+            repaired_data = json.loads(raw_output)
+        except (JSONDecodeError, ValueError):
+            # Raw output is not valid JSON → terminal, no more repair
+            last_outcome = SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON
+            break
+
+        # Validate the repaired output
+        is_valid, current_errors = validate_against_schema(repaired_data, schema)
+        if is_valid:
+            return SchemaValidationOutcome.PASSED_AFTER_REPAIR.value, []
+
+        last_outcome = SchemaValidationOutcome.REPAIR_ATTEMPTED
+
+    # Check terminal outcomes from break (invoke failure, bad JSON)
+    if last_outcome in (
+        SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON,
+        SchemaValidationOutcome.REPAIR_EXHAUSTED,
+    ):
+        return last_outcome.value, current_errors
+
+    # Budget exhaustion: the loop exited because is_exhausted is True
+    if repair.is_exhausted:
+        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, current_errors
+
+    # Should not reach here, but defensive
+    return last_outcome.value, current_errors
 
 
 # ---------------------------------------------------------------------------
