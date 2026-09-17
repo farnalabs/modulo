@@ -7,16 +7,25 @@ integration test exercises the REAL dependency chain against a real Postgres
 (testcontainers) — team membership rows, RLS policies, and the full HTTP path.
 
 Coverage:
-  - non-member org runner -> 403 on a team-private pipeline
+  - non-member org runner -> denied on a team-private pipeline (404): the
+    ``rls_team_isolation`` policy hides the row from a non-member, so the
+    team-scope resolver SELECT returns no row and the dependency raises 404
+    before the membership check.  The membership gate itself is proven at the
+    wiring level (see ``TestTriggerRunTeamGateWiring``) because the 403 branch
+    is unreachable end-to-end under RLS — this mirrors the established
+    RLS-parity behaviour asserted in ``test_pipeline_team_visibility.py``.
   - team member -> 202
   - org-admin -> 202 for any pipeline
   - org-visible pipeline -> 202 for any org member with the role floor
-  - 403 body does NOT leak pipeline details (team name, visibility, etc.)
+  - denial body does NOT leak pipeline details (team name, visibility, etc.)
 """
 
+import inspect
+import json
 import os
 import uuid
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -35,6 +44,17 @@ os.environ.setdefault("REDIS_URL", "")
 pytestmark = pytest.mark.integration
 
 _VALID_32 = "a" * 32
+
+# A single flat ``manual`` node (no agent_id) — enough for
+# ``create_snapshot_from_live_graph`` to produce a runnable snapshot and for
+# the ``POST /api/v1/runs`` basic graph validation (entry node exists) to pass.
+_MINIMAL_GRAPH_NODES = [
+    {
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "node_type": "manual",
+        "position": {"x": 0, "y": 0},
+    }
+]
 
 
 # ---------------------------------------------------------------------------
@@ -160,15 +180,17 @@ async def _seed_pipeline(
             text(
                 "INSERT INTO pipelines (id, organisation_id, name, account_id, "
                 "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json, visibility, owner_team_id) "
+                "run_context_defaults, graph_nodes_json, default_autonomy_level, "
+                "visibility, owner_team_id) "
                 "VALUES (:id, :oid, :name, :uid, 10, 30, 300, "
-                "'{}'::json, '[]'::json, :vis, :tid)"
+                "'{}'::json, (:graph)::json, 'manual_approval', :vis, :tid)"
             ),
             {
                 "id": str(pipeline_id),
                 "oid": str(org_id),
                 "name": name,
                 "uid": str(user_id),
+                "graph": json.dumps(_MINIMAL_GRAPH_NODES),
                 "vis": visibility,
                 "tid": str(owner_team_id) if owner_team_id else None,
             },
@@ -300,6 +322,19 @@ async def team_gate_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerat
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _stub_run_dispatch() -> AsyncGenerator[None, None]:
+    """Stub the background dispatch so a 202 does not require Redis/SAQ.
+
+    ``trigger_run`` awaits ``dispatch_run`` after the run row is committed; with
+    ``redis_url=""`` in the test settings the real dispatch has no queue and
+    would fail. The route returns 202 once the run exists, so the dispatch side
+    effect is irrelevant to these gate assertions.
+    """
+    with patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -313,50 +348,57 @@ class TestTriggerRunTeamGate:
       -> require_team_membership_or_admin_any_credential (with
       resolve_trigger_run_team_scope) -> real DB membership check.
 
-    A removal of the ``require_team_membership_or_admin_any_credential(...)``
-    line from ``trigger_run`` would cause every 403 test below to pass as 202.
+    Under Postgres RLS a non-member never sees a team-private pipeline row, so
+    the end-to-end denial is a 404 raised by the team-scope resolver before the
+    membership check. The membership gate's own 403 branch is covered by the
+    unit tests (``test_runs_team_scope.py``) and asserted at the wiring level
+    below.
     """
 
     @pytest.mark.asyncio
-    async def test_non_member_denied_403(
+    async def test_non_member_denied_on_team_private(
         self,
         team_gate_client: AsyncClient,
         org: uuid.UUID,
         non_member_user: uuid.UUID,
         team_private_pipeline: uuid.UUID,
     ) -> None:
-        """Non-member org runner -> 403 on a team-private pipeline."""
+        """Non-member org runner -> denied on a team-private pipeline.
+
+        ``rls_team_isolation`` hides the pipeline from a non-member, so the
+        team-scope resolver SELECT returns no row and the dependency 404s
+        (RLS-parity behaviour — see ``test_pipeline_team_visibility.py``).
+        """
         token = _token(org, non_member_user, "runner")
         resp = await team_gate_client.post(
             "/api/v1/runs",
             json={"pipeline_id": str(team_private_pipeline)},
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
 
     @pytest.mark.asyncio
-    async def test_non_member_403_body_no_leak(
+    async def test_non_member_denial_body_no_leak(
         self,
         team_gate_client: AsyncClient,
         org: uuid.UUID,
         non_member_user: uuid.UUID,
         team_private_pipeline: uuid.UUID,
     ) -> None:
-        """403 body must NOT leak pipeline details (name, team, visibility)."""
+        """The denial body must NOT leak pipeline details (name, team, visibility)."""
         token = _token(org, non_member_user, "runner")
         resp = await team_gate_client.post(
             "/api/v1/runs",
             json={"pipeline_id": str(team_private_pipeline)},
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 403
-        body = resp.json()
-        detail = body.get("detail", "")
-        # The detail should be a generic team-membership denial, not include
-        # the pipeline name, team name, or visibility value.
+        assert resp.status_code == 404
+        detail = resp.json().get("detail", "")
+        # The detail must be the generic not-found message — never the pipeline
+        # name, the owning team name, or the visibility value.
         assert "ci-pipeline-team" not in detail.lower()
         assert "ci-team" not in detail.lower()
-        assert "team" not in detail.lower().replace("team", "") or "not a member" in detail.lower()
+        assert "team" not in detail.lower()
 
     @pytest.mark.asyncio
     async def test_member_can_trigger_team_private(
@@ -430,67 +472,28 @@ class TestTriggerRunTeamGate:
         assert resp.status_code == 202, f"Expected 202, got {resp.status_code}: {resp.text}"
 
 
-class TestTriggerRunTeamGateProvesWiring:
-    """Proves the gate wiring is load-bearing by temporarily removing it.
+class TestTriggerRunTeamGateWiring:
+    """Wiring-level proof that the team gate is attached to ``trigger_run``.
 
-    The ``test_gate_removal_causes_403_to_become_202`` test splices the team
-    gate out of the route's resolved dependency tree, sends a request that
-    would previously 403, and asserts it now succeeds — proving the gate is
-    what enforces the denial.  The modification is scoped to this test only
-    and restored in a ``finally`` block; it is never committed.
+    Under Postgres RLS the 403 branch of
+    ``require_team_membership_or_admin_any_credential`` is unreachable
+    end-to-end — the team-scope resolver's SELECT is filtered by
+    ``rls_team_isolation``, so a non-member gets 404 before the membership
+    check. A splice-and-observe test therefore cannot exercise the gate.
+
+    Instead assert the route function declares the gate dependency tagged
+    ``permission='team.membership_or_admin'`` (the tag ``_tagged_dep`` attaches
+    and the ADR 017 route-introspection sweep reads). Removing the
+    ``require_team_membership_or_admin_any_credential(...)`` line from
+    ``trigger_run`` makes this test fail.
     """
 
-    @pytest.mark.asyncio
-    async def test_gate_removal_causes_403_to_become_202(
-        self,
-        team_gate_client: AsyncClient,
-        org: uuid.UUID,
-        non_member_user: uuid.UUID,
-        team_private_pipeline: uuid.UUID,
-    ) -> None:
-        """Temporarily remove the team gate and verify denial becomes 202.
-
-        This proves the gate dependency is what enforces the 403 — without it,
-        the non-member request would succeed.  We splice the gate out of the
-        route's resolved ``dependant.dependencies`` list, which is the most
-        reliable way to remove a single FastAPI dependency without affecting
-        other routes or the broader dependency tree.
-        """
+    def test_team_gate_dependency_declared(self) -> None:
         from modulo.api.routes.runs import trigger_run
 
-        # Locate the trigger_run route and its team-gate dependency.
-        # The team gate is the dependency whose Depends object is tagged with
-        # permission="team.membership_or_admin" (via _tagged_dep).
-        team_gate_dep = None
-        team_gate_idx = None
-        for i, dep in enumerate(trigger_run.dependant.dependencies):
-            call = getattr(dep, "call", None)
-            if call is not None and getattr(call, "permission", None) == "team.membership_or_admin":
-                team_gate_dep = dep
-                team_gate_idx = i
-                break
-
-        if team_gate_dep is None or team_gate_idx is None:
-            pytest.skip(
-                "Could not locate the team-gate dependency in trigger_run's "
-                "dependency tree — the route structure may have changed."
-            )
-
-        # Splice out the team gate and restore after the test.
-        try:
-            trigger_run.dependant.dependencies.pop(team_gate_idx)
-            token = _token(org, non_member_user, "runner")
-            resp = await team_gate_client.post(
-                "/api/v1/runs",
-                json={"pipeline_id": str(team_private_pipeline)},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            # Without the gate, the non-member gets through (202 or later
-            # processing — the point is it's NOT 403).
-            assert resp.status_code != 403, (
-                f"Gate removal did not bypass the 403 — got {resp.status_code}. "
-                "The team gate dependency is NOT what enforces the denial."
-            )
-        finally:
-            # Restore the gate so other tests are unaffected.
-            trigger_run.dependant.dependencies.insert(team_gate_idx, team_gate_dep)
+        tagged = [
+            getattr(param.default, "permission", None) for param in inspect.signature(trigger_run).parameters.values()
+        ]
+        assert "team.membership_or_admin" in tagged, (
+            "trigger_run is missing the team.membership_or_admin gate dependency"
+        )
