@@ -1,5 +1,13 @@
 name: "Merge: Queue"
 
+# --- PR conventions consumed by this workflow ---
+# 1. Linear tickets: include FAR-<number> in the PR title to auto-close on merge.
+# 2. GitHub issues: include a closing keyword (Closes #N, Fixes #N, Resolves #N)
+#    in the PR title OR body to auto-close on merge. Keywords are case-insensitive
+#    and may be followed by a colon (e.g. "Closes: #123"). The [partial] marker
+#    in the title suppresses auto-close; a comment is posted instead.
+# 3. Partial sweeps: add [partial] to the PR title to comment instead of close.
+
 on:
   schedule:
     # Off-boundary minutes dodge the scheduler sampling that drops round-boundary crons on high-activity repos (FAR-492).
@@ -188,6 +196,12 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
+      # The "Close GitHub issues referenced by merged PRs" step runs
+      # `gh issue comment` / `gh issue close`, which need issues:write on
+      # GITHUB_TOKEN; without it every call 403s and the step silently
+      # fail-opens. Least privilege holds: this step only touches issues
+      # in this repo.
+      issues: write
     runs-on: ubicloud-standard-2
     steps:
       - name: Cancel stale stuck runs (self-healing)
@@ -1089,6 +1103,107 @@ jobs:
                 echo "  $TICKET -> $RESULT"
               else
                 echo "::warning::Failed to close $TICKET (fail-open)"
+              fi
+            done
+          done
+
+      - name: Close GitHub issues referenced by merged PRs
+        if: success() && steps.merge.outputs.merged_count != '0' && steps.toctou.outputs.aborted != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Reuse the same candidate-PR list as the Linear close step (FAR-530):
+          # PRs that ACTUALLY merged to main this run (gh pr merge succeeded),
+          # plus a fallback sweep of PRs merged after this run started.
+          GH_MERGED_PRS: ${{ steps.ghmerge.outputs.gh_merged_pr_nums }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          # Rebuild the candidate PR list (same two-source pattern as the Linear
+          # close step above): primary source is ghmerge output; fallback sweep
+          # catches any merge that produced no output.
+          RUN_STARTED_AT=$(gh run view "${{ github.run_id }}" --repo "$REPO" --json createdAt --jq '.createdAt' 2>/dev/null || echo "")
+          gh pr list --repo "$REPO" --state merged --limit 20 --json number,title,mergedAt 2>/dev/null \
+            | jq -r --arg start "$RUN_STARTED_AT" \
+                '.[] | select(.mergedAt != null) | select($start == "" or .mergedAt >= $start) | .number' \
+            > /tmp/gh_close_sweep_nums.txt || true
+
+          : > /tmp/gh_close_candidates.txt
+          for NUM in $GH_MERGED_PRS; do echo "$NUM" >> /tmp/gh_close_candidates.txt; done
+          cat /tmp/gh_close_sweep_nums.txt >> /tmp/gh_close_candidates.txt
+          sort -u /tmp/gh_close_candidates.txt -o /tmp/gh_close_candidates.txt
+          CANDIDATES=$(tr '\n' ' ' < /tmp/gh_close_candidates.txt | xargs)
+          [ -z "$CANDIDATES" ] && { echo "No PRs merged this cycle - nothing to close for GitHub issues."; exit 0; }
+          echo "Candidate PRs for GitHub issue close: $CANDIDATES"
+
+          # Closing-keyword regex: matches case-insensitive fixes/closes/resolves
+          # followed by optional whitespace and #<number>. Requiring start-of-line
+          # OR preceding whitespace before the keyword prevents matching inside
+          # words (e.g. "closesourced") while still matching the most natural
+          # placement - a title like "Closes #42" or a body line starting with
+          # "Fixes #94". grep -E is line-based, so ^ anchors per line.
+          CLOSING_REGEX='(^|[[:space:]]+)(fixes|closes|resolves):?[[:space:]]+#[0-9]+'
+
+          for NUM in $CANDIDATES; do
+            TITLE=$(gh pr view "$NUM" --json title --jq '.title' 2>/dev/null || echo "")
+            BODY=$(gh pr view "$NUM" --json body --jq '.body // ""' 2>/dev/null || echo "")
+
+            # [partial] detection: a PR that is one slice of a multi-PR sweep
+            # must comment instead of close, exactly like the Linear step.
+            PARTIAL=$(echo "$TITLE" | grep -qi '\[partial\]' && echo "yes" || echo "no")
+
+            # Extract closing references from BOTH title and body. The grep
+            # produces lines like "  Closes #42" or "  Fixes #94"; we pull the
+            # issue number from each match, deduplicated.
+            ISSUES=$(echo "$TITLE"$'\n'"$BODY" \
+              | grep -ioE "$CLOSING_REGEX" \
+              | grep -oE '#[0-9]+' \
+              | sed 's/^#//' \
+              | sort -un || true)
+
+            if [ -z "$ISSUES" ]; then
+              echo "PR #$NUM has no closing-keyword issue references - skipping"
+              continue
+            fi
+
+            for ISSUE_NUM in $ISSUES; do
+              # Safety: only close issues in THIS repo (never cross-repo).
+              # gh issue view defaults to the current repo via GH_REPO/GITHUB_REPOSITORY.
+              if [ "$PARTIAL" = "yes" ]; then
+                echo "PR #$NUM carries [partial] - commenting on issue #$ISSUE_NUM instead of closing"
+                COMMENT_BODY="PR #$NUM merged (partial slice): \"$TITLE\". Issue left open - close it manually when the sweep completes."
+                if ! gh issue comment "$ISSUE_NUM" --body "$COMMENT_BODY" > /dev/null 2>&1; then
+                  echo "::warning::Failed to comment on issue #$ISSUE_NUM for PR #$NUM (fail-open)"
+                else
+                  echo "  issue #$ISSUE_NUM <- partial-slice comment posted (issue left open)"
+                fi
+                continue
+              fi
+
+              # Check current state: skip if already closed (idempotent).
+              ISSUE_STATE=$(gh issue view "$ISSUE_NUM" --json state --jq '.state' 2>/dev/null || echo "")
+              if [ "$ISSUE_STATE" = "CLOSED" ]; then
+                echo "Issue #$ISSUE_NUM is already closed - skipping"
+                continue
+              fi
+              if [ -z "$ISSUE_STATE" ]; then
+                echo "::warning::Could not fetch state for issue #$ISSUE_NUM (API error or not found) - skipping (fail-open)"
+                continue
+              fi
+
+              echo "Closing GitHub issue #$ISSUE_NUM for PR #$NUM"
+              RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              CLOSE_REASON="Auto-closed by the merge queue: PR #$NUM merged and referenced this issue. See run $RUN_URL for details."
+
+              # Post the closure comment FIRST (the comment IS the audit trail,
+              # per the bot-PR-closures lesson in AGENTS.md). If the comment
+              # fails, still close but emit a visible warning.
+              if ! gh issue comment "$ISSUE_NUM" --body "$CLOSE_REASON" > /dev/null 2>&1; then
+                echo "::warning::closure comment failed for issue #$ISSUE_NUM - closing without audit-trail comment. Reason NOT posted: $CLOSE_REASON"
+              fi
+              if gh issue close "$ISSUE_NUM" > /dev/null 2>&1; then
+                echo "  issue #$ISSUE_NUM -> CLOSED"
+              else
+                echo "::warning::Failed to close issue #$ISSUE_NUM (fail-open)"
               fi
             done
           done
