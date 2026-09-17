@@ -206,7 +206,7 @@ describe('RemySessionDrawer', () => {
 
   it('formatTime shows minutes ago for timestamps within the hour', async () => {
     const store = useRemyStore()
-    const fiveMinAgo = new Date(Date.now() - 5 * 60000).toISOString()
+    const fiveMinAgo = new Date(Date.now() - 5 * 60000).toISOString() // nosemgrep: new-date-without-guard
     store.sessions = [makeSession('s-1', { updated_at: fiveMinAgo })]
 
     const wrapper = mountDrawer()
@@ -215,7 +215,7 @@ describe('RemySessionDrawer', () => {
 
   it('formatTime shows hours ago for timestamps within the day', async () => {
     const store = useRemyStore()
-    const threeHrAgo = new Date(Date.now() - 3 * 3600000).toISOString()
+    const threeHrAgo = new Date(Date.now() - 3 * 3600000).toISOString() // nosemgrep: new-date-without-guard
     store.sessions = [makeSession('s-1', { updated_at: threeHrAgo })]
 
     const wrapper = mountDrawer()
@@ -224,7 +224,7 @@ describe('RemySessionDrawer', () => {
 
   it('formatTime shows days ago for timestamps within the week', async () => {
     const store = useRemyStore()
-    const twoDaysAgo = new Date(Date.now() - 2 * 86400000).toISOString()
+    const twoDaysAgo = new Date(Date.now() - 2 * 86400000).toISOString() // nosemgrep: new-date-without-guard
     store.sessions = [makeSession('s-1', { updated_at: twoDaysAgo })]
 
     const wrapper = mountDrawer()
@@ -233,7 +233,7 @@ describe('RemySessionDrawer', () => {
 
   it('formatTime falls back to formatted date for old timestamps', async () => {
     const store = useRemyStore()
-    const tenDaysAgo = new Date(Date.now() - 10 * 86400000).toISOString()
+    const tenDaysAgo = new Date(Date.now() - 10 * 86400000).toISOString() // nosemgrep: new-date-without-guard
     store.sessions = [makeSession('s-1', { updated_at: tenDaysAgo })]
 
     const wrapper = mountDrawer()
