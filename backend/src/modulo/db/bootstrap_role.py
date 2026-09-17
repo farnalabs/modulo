@@ -160,6 +160,11 @@ async def _create_or_update_role(
     isolation. Only ``modulo_breakglass`` and ``modulo_migrate`` (cross-org
     system roles) receive BYPASSRLS.
     """
+    # Fail closed before the existence probe (FAR-915/FAR-918 merge): the
+    # callers below interpolate *name* into role DDL, and ``_create_role`` /
+    # ``_alter_role`` also validate, but rejecting here keeps a hostile name
+    # from ever reaching the database session.
+    _validate_identifier(name)
     exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", name)
     if exists:
         await _alter_role(conn, name, login=login, password=password or "", bypassrls=bypassrls)

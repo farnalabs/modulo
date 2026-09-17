@@ -423,13 +423,14 @@ async def saml_metadata(
             public_url = settings.modulo_public_url.rstrip("/")
             acs_url = f"{public_url}/api/v1/auth/saml/acs"
 
-            # xml.sax.saxutils.escape only covers &, <, > by default — a
-            # double quote would close the entityID attribute early and
-            # allow attribute injection on EntityDescriptor (pre-auth
-            # XML consumed by SAML IdPs). Add the quote maps explicitly.
-            # (No single-quoted attribute exists in this document; the
-            # single-quote map is defence-in-depth.)
-            safe_entity_id = escape(entity_id, {'"': "&quot;", "'": "&apos;"})
+            # XML-escape before embedding (FAR-915/FAR-918 / GitHub #281):
+            # entity_id is org-configurable (DB-backed) and acs_url derives from
+            # the public URL, so neither must be able to inject XML or break out
+            # of the double-quoted attributes they are embedded in. escape()
+            # covers & < >; the explicit map covers quotes.
+            xml_entities = {'"': "&quot;", "'": "&apos;"}
+            safe_entity_id = escape(entity_id, xml_entities)
+            safe_acs_url = escape(acs_url, xml_entities)
 
             return (
                 '<?xml version="1.0"?>'
@@ -440,7 +441,7 @@ async def saml_metadata(
                 '   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">'
                 f"    <md:AssertionConsumerService"
                 f'     Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"'
-                f'     Location="{acs_url}"'
+                f'     Location="{safe_acs_url}"'
                 f'     index="1"/>'
                 "  </md:SPSSODescriptor>"
                 "</md:EntityDescriptor>"

@@ -1182,7 +1182,7 @@ class TestSamlRoutesExtended:
         assert resp.status_code == 200
         assert "urn:db-saml" in resp.text
 
-    def test_saml_metadata_escapes_xml_metacharacters_in_entity_id(self, client: TestClient) -> None:
+    def test_saml_metadata_escapes_entity_id_with_db_provider_and_env_flag_off(self, client: TestClient) -> None:
         """A DB-configured entityID containing XML metacharacters must be escaped
         so the SP-metadata document stays well-formed (issue #282..#281: XML
         injection through the org-configurable entity_id)."""
@@ -1223,6 +1223,57 @@ class TestSamlRoutesExtended:
             resp = client.get("/api/v1/auth/saml/metadata", follow_redirects=False)
 
         assert resp.status_code == 400
+
+    def test_saml_metadata_escapes_xml_metacharacters_in_entity_id(self, client: TestClient) -> None:
+        """FAR-915 / GitHub #281: entity_id is org-configurable (DB-backed), so a
+        malicious value must be XML-escaped — no breakout of the entityID
+        attribute, no injected elements, and the output must stay well-formed.
+        """
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+            modulo_public_url="https://app.example.com",
+        )
+
+        injected = 'evil"><md:EntitiesDescriptor>&"\''
+        db_provider = SimpleNamespace(entity_id=injected)
+        with patch("modulo.api.routes.sso._get_enabled_saml_global", new_callable=AsyncMock) as m:
+            m.return_value = db_provider
+            resp = client.get("/api/v1/auth/saml/metadata", follow_redirects=False)
+
+        assert resp.status_code == 200
+        body = resp.text
+        # The raw metacharacters must never appear unescaped.
+        assert 'entityID="evil"' not in body
+        assert "<md:EntitiesDescriptor>" not in body
+
+        # The escaped forms are present and the metadata still parses as XML.
+        assert "&lt;md:EntitiesDescriptor&gt;" in body
+        assert "&amp;" in body
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(body.replace('<?xml version="1.0"?>', ""))  # noqa: S314 - well-formedness check only
+        assert root.tag == "{urn:oasis:names:tc:SAML:2.0:metadata}EntityDescriptor"
+        entity_id = root.attrib["entityID"]
+        assert entity_id == injected
+
+    def test_saml_metadata_escapes_metacharacters_in_acs_url(self, client: TestClient) -> None:
+        """FAR-915 defence-in-depth: the Location attribute interpolates the
+        public URL too and must be escaped alongside entity_id."""
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+            modulo_public_url='https://app.example.com" onload="x',
+        )
+
+        with patch("modulo.api.routes.sso._get_enabled_saml_global", new_callable=AsyncMock) as m:
+            m.return_value = SimpleNamespace(entity_id="urn:ok")
+            resp = client.get("/api/v1/auth/saml/metadata", follow_redirects=False)
+
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'onload="x"' not in body
+        assert "&quot;" in body
 
 
 # ---------------------------------------------------------------------------

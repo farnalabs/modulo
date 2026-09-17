@@ -9,7 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.rls import register_rls_reset_hook, set_rls_org, set_rls_user_context
+from modulo.db.rls import (
+    _RLS_CONFIG_NAMES,
+    _set_config_statement,
+    register_rls_reset_hook,
+    set_rls_org,
+    set_rls_user_context,
+)
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -96,6 +102,38 @@ class TestRegisterRlsResetHook:
             register_rls_reset_hook(engine)
 
         mock_listens.assert_called_once_with(engine.sync_engine, "checkout")
+
+
+class TestSetConfigStatement:
+    """FAR-915 / GitHub #126 hygiene: the checkout hook interpolates the GUC
+    name into the DBAPI2 statement (no portable parameter binding), so the
+    builder must fail closed on any name outside the known constant."""
+
+    def test_known_names_round_trip(self) -> None:
+        for config_name in _RLS_CONFIG_NAMES:
+            assert _set_config_statement(config_name) == f"SELECT set_config('{config_name}', '', false)"
+
+    def test_rejects_name_outside_known_set(self) -> None:
+        with pytest.raises(ValueError, match="Unknown RLS config name"):
+            _set_config_statement("app.execution_context') ; SELECT 1 --")
+
+    def test_checkout_hook_uses_known_config_names(self) -> None:
+        """The listener body must interpolate only validated member names."""
+        engine = MagicMock()
+        engine.dialect.name = "postgresql"
+        engine.sync_engine = MagicMock()
+        listener = _capture_checkout_listener(engine)
+
+        cursor = MagicMock()
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+        listener(connection, MagicMock(), MagicMock())
+
+        assert cursor.execute.call_count == len(_RLS_CONFIG_NAMES)
+        for call in cursor.execute.call_args_list:
+            sql = call[0][0]
+            assert sql.startswith("SELECT set_config('")
+            assert sql.endswith("', '', false)")
 
 
 def _capture_checkout_listener(engine: MagicMock) -> Any:

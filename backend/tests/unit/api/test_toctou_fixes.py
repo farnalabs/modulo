@@ -374,6 +374,277 @@ def test_rotate_key_conflict_writes_no_started_audit_event() -> None:
         admin_rotation._rotation_owner = None
 
 
+class _FakeRedisStore:
+    """In-memory emulation of the SET NX + Lua compare-and-delete semantics."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def set(self, key: str, value: str, nx: bool = False, ex: int | None = None) -> bool | None:
+        if nx and key in self.store:
+            return None
+        self.store[key] = value
+        return True
+
+    async def set_raw(self, key: str, value: str) -> None:
+        """Simulate a successor taking over (TTL already expired)."""
+        self.store[key] = value
+
+    async def eval(self, script: str, numkeys: int, key: str, token: str) -> int:
+        if self.store.get(key) == token:
+            del self.store[key]
+            return 1
+        return 0
+
+    async def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _no_redis_settings() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+        modulo_system_database_url="postgresql+asyncpg://localhost/system",
+        redis_url="",
+    )
+
+
+class TestRotationLockOwnership:
+    """Major-1 fix: lock ownership via per-acquisition unique tokens.
+
+    A rotation that outlived its TTL (lock taken over by a successor) must
+    NOT be able to delete the successor's lock.
+    """
+
+    @pytest.mark.asyncio
+    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    async def test_stale_owner_cannot_release_successors_lock(
+        self,
+        mock_redis_cls: MagicMock,
+    ) -> None:
+        """Rotation A's stale release must not delete rotation B's lock."""
+        from modulo.api.routes.admin_rotation import (
+            _ROTATION_LOCK_KEY,
+            _acquire_rotation_lock,
+            _release_rotation_lock,
+        )
+
+        fake_store = _FakeRedisStore()
+        mock_r = AsyncMock()
+        mock_r.set = AsyncMock(side_effect=fake_store.set)
+        mock_r.eval = AsyncMock(side_effect=fake_store.eval)
+        mock_r.aclose = AsyncMock()
+        mock_redis_cls.from_url.return_value = mock_r
+
+        settings = _make_settings()
+        token_a = await _acquire_rotation_lock(settings)
+        assert token_a is not None
+        assert await fake_store.get(_ROTATION_LOCK_KEY) == token_a
+
+        # Rotation A exceeds the TTL: the key expires and rotation B
+        # re-acquires the lock with its own fresh token.
+        token_b = uuid.uuid4().hex
+        await fake_store.set_raw(_ROTATION_LOCK_KEY, token_b)
+
+        # Stale owner A releases — must NOT delete B's lock.
+        await _release_rotation_lock(settings, token_a)
+        assert await fake_store.get(_ROTATION_LOCK_KEY) == token_b, "stale owner deleted the successor's lock"
+
+        # The real owner B releases its own lock — succeeds.
+        await _release_rotation_lock(settings, token_b)
+        assert _ROTATION_LOCK_KEY not in fake_store.store
+
+    @pytest.mark.asyncio
+    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    async def test_tokens_are_unique_per_acquisition(
+        self,
+        mock_redis_cls: MagicMock,
+    ) -> None:
+        """Successive acquisitions must produce distinct ownership tokens."""
+        from modulo.api.routes.admin_rotation import (
+            _acquire_rotation_lock,
+            _release_rotation_lock,
+        )
+
+        fake_store = _FakeRedisStore()
+        mock_r = AsyncMock()
+        mock_r.set = AsyncMock(side_effect=fake_store.set)
+        mock_r.eval = AsyncMock(side_effect=fake_store.eval)
+        mock_r.aclose = AsyncMock()
+        mock_redis_cls.from_url.return_value = mock_r
+
+        settings = _make_settings()
+        token_1 = await _acquire_rotation_lock(settings)
+        assert token_1 is not None
+        await _release_rotation_lock(settings, token_1)
+
+        token_2 = await _acquire_rotation_lock(settings)
+        assert token_2 is not None
+        assert token_2 != token_1
+
+    @pytest.mark.asyncio
+    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    async def test_background_task_releases_with_acquired_token(
+        self,
+        mock_redis_cls: MagicMock,
+    ) -> None:
+        """Wiring proof: rotate_key's token reaches the background task and is
+        used for release — the lock key is gone after the background completes."""
+        from modulo.api.routes import admin_rotation
+        from modulo.api.routes.admin_rotation import (
+            _ROTATION_LOCK_KEY,
+            _acquire_rotation_lock,
+        )
+
+        fake_store = _FakeRedisStore()
+        mock_r = AsyncMock()
+        mock_r.set = AsyncMock(side_effect=fake_store.set)
+        mock_r.eval = AsyncMock(side_effect=fake_store.eval)
+        mock_r.aclose = AsyncMock()
+        mock_redis_cls.from_url.return_value = mock_r
+
+        token = await _acquire_rotation_lock(_make_settings())
+        assert token is not None
+
+        fake_session = AsyncMock()
+        fake_session.__aenter__ = AsyncMock(return_value=fake_session)
+        fake_session.__aexit__ = AsyncMock(return_value=False)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        fake_session.begin = MagicMock(return_value=begin_cm)
+
+        rotation_result = MagicMock()
+        rotation_result.tables_processed = ["secrets"]
+        rotation_result.total_rows_reencrypted = 1
+        rotation_result.details = {}
+        settings = _make_settings()
+
+        with (
+            patch.object(
+                admin_rotation,
+                "_make_system_session_factory",
+                side_effect=lambda: lambda: fake_session,
+            ),
+            patch.object(
+                admin_rotation,
+                "rotate_all_encrypted_data",
+                new=AsyncMock(return_value=rotation_result),
+            ),
+            patch.object(admin_rotation, "append_audit_event", new=AsyncMock()),
+            patch.object(admin_rotation, "get_settings", return_value=settings),
+        ):
+            await admin_rotation._run_rotation_background(
+                new_key=_VALID_32,
+                old_key="",
+                org_id=_ORG_ID,
+                actor_user_id=_USER_ID,
+                lock_owner=token,
+            )
+
+        assert _ROTATION_LOCK_KEY not in fake_store.store, "background task did not release the lock with its own token"
+
+
+class TestNoRedisInProcessGuard:
+    """Major-2 fix: without Redis, a module-level in-process guard set BEFORE
+    create_task and cleared in the background task's finally must stop a
+    second concurrent rotate_key from starting a parallel rotation."""
+
+    def _install_no_redis_settings(self, test_client: TestClient) -> None:
+        test_client.app.dependency_overrides[get_settings] = _no_redis_settings
+        # rotate_key requires system.config.manage → is_system_admin.
+        test_client.app.dependency_overrides[get_current_user] = lambda: _principal(is_system_admin=True)
+
+    def test_second_concurrent_rotate_key_without_redis_409(self, client: TestClient) -> None:
+        from modulo.api.routes import admin_rotation
+
+        self._install_no_redis_settings(client)
+
+        try:
+            with (
+                patch("modulo.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
+                patch(
+                    "modulo.api.routes.admin_rotation._run_rotation_background",
+                    new=AsyncMock(),
+                ),
+            ):
+                resp1 = client.post("/api/v1/admin/rotation/rotate-key", json={"new_fernet_key": _VALID_32})
+                assert resp1.status_code == 202, resp1.text
+                # The guard is set synchronously, before the background task.
+                assert admin_rotation._rotation_owner is not None
+
+                resp2 = client.post("/api/v1/admin/rotation/rotate-key", json={"new_fernet_key": _VALID_32})
+                assert resp2.status_code == 409, (
+                    f"second concurrent rotate must be rejected, got {resp2.status_code}: {resp2.text}"
+                )
+                admin_rotation._run_rotation_background.assert_called_once()
+
+                # The status endpoint consults the same guard.
+                status_resp = client.get("/api/v1/admin/rotation/status")
+                assert status_resp.status_code == 200, status_resp.text
+                assert status_resp.json()["rotation_in_progress"] is True
+        finally:
+            admin_rotation._rotation_owner = None
+
+    @pytest.mark.asyncio
+    async def test_guard_cleared_after_background_rotation_completes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The guard's scope covers the ENTIRE background rotation: it is only
+        cleared by _run_rotation_background's finally, alongside the lock
+        release."""
+        from modulo.api.routes import admin_rotation
+
+        monkeypatch.setattr(admin_rotation, "_rotation_owner", None)
+        token = await admin_rotation._acquire_rotation_lock(_no_redis_settings())
+        assert token is not None
+        assert admin_rotation._rotation_owner is not None
+
+        fake_session = AsyncMock()
+        fake_session.__aenter__ = AsyncMock(return_value=fake_session)
+        fake_session.__aexit__ = AsyncMock(return_value=False)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        fake_session.begin = MagicMock(return_value=begin_cm)
+
+        rotation_result = MagicMock()
+        rotation_result.tables_processed = ["secrets"]
+        rotation_result.total_rows_reencrypted = 1
+        rotation_result.details = {}
+
+        try:
+            with (
+                patch.object(
+                    admin_rotation,
+                    "_make_system_session_factory",
+                    side_effect=lambda: lambda: fake_session,
+                ),
+                patch.object(
+                    admin_rotation,
+                    "rotate_all_encrypted_data",
+                    new=AsyncMock(return_value=rotation_result),
+                ),
+                patch.object(admin_rotation, "append_audit_event", new=AsyncMock()),
+                patch.object(admin_rotation, "get_settings", return_value=_no_redis_settings()),
+            ):
+                assert admin_rotation._rotation_owner is not None
+                await admin_rotation._run_rotation_background(
+                    new_key=_VALID_32,
+                    old_key="",
+                    org_id=_ORG_ID,
+                    actor_user_id=_USER_ID,
+                    lock_owner=token,
+                )
+        finally:
+            admin_rotation._rotation_owner = None
+
+        assert admin_rotation._rotation_owner is None, "guard must be cleared by the background task's finally"
+
+
 # ---------------------------------------------------------------------------
 # #328: create_pipeline_from_template reads primitive inside transaction
 # ---------------------------------------------------------------------------

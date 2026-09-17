@@ -224,6 +224,26 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `pipelines/pipeline_config_validation.feature`, closing `feat-pipelines`'s
 > graph/config-validation BDD gap (`pipelines/pipelines.md`).
 > `_ORPHANED_BDD_FEATURES` is now empty — no orphaned feature files remain.
+>
+> **Closed this walk (2026-09-17):** added DELETE coverage to the executing
+> system-admin BDD suite. `system_admin_config.feature` gained successful-delete,
+> unknown-key-404 and regular-admin-403 scenarios, closing `feat-system-config`'s
+> "No BDD for DELETE system config" gap (`system/system-config.md`).
+> `system_admin_orgs.feature` gained the same three DELETE scenarios, closing the
+> "No BDD for DELETE org" half of `feat-system-orgs`'s gap
+> (`system/system-orgs.md`); the narrower org-license-management BDD gap remains
+> tracked in that entry.
+>
+> **Closed this walk (2026-09-17):** closed the org-license-management half of
+> `feat-system-orgs`'s BDD gap too. `system_admin_orgs.feature` gained 10
+> license-management scenarios (GET org-key resolution / system fallback /
+> invalid-stored-key fallback / missing-org 404; PUT valid-200 / invalid-422 /
+> missing-org 404 before verification; DELETE clears the key / missing-org 404;
+> and regular-org-admin 403 across GET/PUT/DELETE), driving the real
+> `admin_orgs.py` license surface (`require_target_org_role` gating,
+> `_resolve_org_license`, `_verify_license_key`, and the FOR-UPDATE locked
+> read-modify-write). Removed the tracked known gap — `feat-system-orgs` is now
+> fully BDD-covered (`system/system-orgs.md`).
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
