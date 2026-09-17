@@ -47,14 +47,30 @@ jobs:
           # if the repo ever exceeds 200 open PRs this silently truncates and
           # conflicted PRs beyond the cap would go undetected for a cycle. Raise
           # the limit (or page) if modulo's open-PR count approaches this bound.
-          gh pr list --state open --limit 200 \
+          #
+          # --repo is required on any gh call that infers the repository: this
+          # job has no actions/checkout step, so there is no git remote for `gh`
+          # to infer from and such calls die with `failed to run git: fatal: not
+          # a git repository` (all 31 scheduled runs red since the workflow
+          # landed). The explicit /repos/farnalabs/modulo/... REST paths are
+          # unaffected, but `gh pr list` here and `gh pr view` / `gh pr comment`
+          # below must all pass --repo — without it on the latter two the marker
+          # dedup reads "0" and every cycle re-posts the manual-delivery note.
+          #
+          # The `|| GH_RC=$?` is a second safeguard: under `set -e` a bare
+          # non-zero `gh pr list` aborts the step before the fail-open guard
+          # below can run, so a transient API/token failure would be a hard red
+          # instead of the documented FAR-528 graceful skip. Capture the exit
+          # code instead of letting `set -e` fire.
+          GH_RC=0
+          gh pr list --repo farnalabs/modulo --state open --limit 200 \
             --json number,headRefName,mergeable,isDraft,labels \
-            > /tmp/open_prs.json 2>/tmp/gh_pr_list_stderr.txt
+            > /tmp/open_prs.json 2>/tmp/gh_pr_list_stderr.txt || GH_RC=$?
 
           # Validate the API call succeeded (fail open loudly, FAR-528)
-          if [ ! -s /tmp/open_prs.json ]; then
+          if [ "$GH_RC" -ne 0 ] || [ ! -s /tmp/open_prs.json ]; then
             ERR=$(cat /tmp/gh_pr_list_stderr.txt 2>/dev/null | head -c 500)
-            echo "::warning::Failed to fetch open PRs from GitHub API (empty response). Reconciler cannot run this cycle.${ERR:+$'\n'}gh pr list stderr: $ERR"
+            echo "::warning::Failed to fetch open PRs from GitHub API (rc=$GH_RC). Reconciler cannot run this cycle.${ERR:+$'\n'}gh pr list stderr: $ERR"
             echo "api_failed=true" >> "${GITHUB_OUTPUT:-/dev/null}"
             exit 0
           fi
@@ -218,7 +234,7 @@ jobs:
             BRANCH=$(jq -r ".[$i].headRefName" /tmp/notify_prs.json)
 
             # Check for existing marker comment (idempotent)
-            EXISTING=$(gh pr view "$PR_NUM" --json comments --jq "[.comments[] | select(.body | contains(\"$MARKER\"))] | length" 2>/dev/null || echo "0")
+            EXISTING=$(gh pr view "$PR_NUM" --repo farnalabs/modulo --json comments --jq "[.comments[] | select(.body | contains(\"$MARKER\"))] | length" 2>/dev/null || echo "0")
             if [ "$EXISTING" != "0" ]; then
               echo "PR #$PR_NUM already has a manual-delivery conflict note — skipping."
               continue
@@ -236,7 +252,7 @@ jobs:
             or force-push a shared/reviewed branch), resolve conflicts, and push. This re-arms the
             \`pull_request\` pipeline (CI + sonarcloud-scan)."
 
-            gh pr comment "$PR_NUM" --body "$COMMENT_BODY" 2>/dev/null || {
+            gh pr comment "$PR_NUM" --repo farnalabs/modulo --body "$COMMENT_BODY" 2>/dev/null || {
               echo "::warning::Failed to post manual-delivery conflict comment on PR #$PR_NUM"
             }
 
