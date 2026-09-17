@@ -80,7 +80,7 @@ class DispatchPhaseTracker:
     """
 
     phase: str = PHASE_NOT_STARTED
-    phase_entered_at: float = 0.0
+    phase_entered_at: float | None = None
     run_id: str = ""
     org_id: str = ""
 
@@ -91,7 +91,7 @@ class DispatchPhaseTracker:
 
     def elapsed_in_phase(self) -> float:
         """Seconds since the current phase was entered."""
-        if self.phase_entered_at == 0.0:
+        if self.phase_entered_at is None:
             return 0.0
         return time.monotonic() - self.phase_entered_at
 
