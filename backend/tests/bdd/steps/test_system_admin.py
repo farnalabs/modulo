@@ -3,6 +3,7 @@
 import contextlib
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -56,6 +57,16 @@ def _org_exists(slug: str, request):
     org_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, slug)
     request.node._org_uuid = org_uuid
     request.node._org_slug = slug
+
+
+@given("the organisation holds its own license key")
+def _org_holds_license(request):
+    request.node._org_has_key = True
+
+
+@given("the organisation holds an invalid license key")
+def _org_holds_invalid_license(request):
+    request.node._org_has_invalid_key = True
 
 
 # ===========================================================================
@@ -181,6 +192,184 @@ def _delete_missing_org(request, client):
 def _attempt_delete_org(request, client):
     org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
     resp = client.delete(f"/api/v1/admin/orgs/{org_id}")
+    request.node._resp = resp
+
+
+# ===========================================================================
+# When steps — Org license management
+# ===========================================================================
+
+
+def _system_license():
+    return SimpleNamespace(tier="team", features=["sso"], expires_at=None, org_id=None)
+
+
+@when("I view the organisation's license")
+def _view_org_license(request, client):
+    _set_auth_override(True)
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    org = _make_mock_org(id=org_id, slug=getattr(request.node, "_org_slug", "test-org"))
+
+    if getattr(request.node, "_org_has_invalid_key", False):
+        org.settings_json = {"license_key": "expired.key"}
+        validation = SimpleNamespace(valid=False, error="Invalid license key", license_data=None)
+        with (
+            patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
+            patch("modulo.core.license.parse_and_verify", return_value=validation),
+            patch("modulo.core.license.get_license", return_value=_system_license()),
+        ):
+            resp = client.get(f"/api/v1/admin/orgs/{org_id}/license")
+    elif getattr(request.node, "_org_has_key", False):
+        org.settings_json = {"license_key": "org.license.key"}
+        validation = SimpleNamespace(
+            valid=True,
+            error=None,
+            license_data=SimpleNamespace(
+                tier="enterprise", features=["sso", "audit"], expires_at=None, org_id=str(org_id)
+            ),
+        )
+        with (
+            patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
+            patch("modulo.core.license.parse_and_verify", return_value=validation),
+            patch("modulo.core.license.get_license", return_value=None),
+        ):
+            resp = client.get(f"/api/v1/admin/orgs/{org_id}/license")
+    else:
+        org.settings_json = {}
+        with (
+            patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
+            patch("modulo.core.license.get_license", return_value=_system_license()),
+        ):
+            resp = client.get(f"/api/v1/admin/orgs/{org_id}/license")
+    request.node._resp = resp
+
+
+@when("I view a missing organisation's license")
+def _view_license_missing_org(request, client):
+    _set_auth_override(True)
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    with (
+        patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None),
+        patch("modulo.core.license.get_license", return_value=None),
+    ):
+        resp = client.get(f"/api/v1/admin/orgs/{org_id}/license")
+    request.node._resp = resp
+
+
+@when(parsers.parse('I set a valid license key "{key}" on the organisation'))
+def _set_valid_org_license(key: str, request, client):
+    _set_auth_override(True)
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    org = _make_mock_org(id=org_id, slug=getattr(request.node, "_org_slug", "test-org"))
+    org.settings_json = {"existing": True}
+    validation = SimpleNamespace(
+        valid=True,
+        error=None,
+        license_data=SimpleNamespace(tier="team", features=["sso"], expires_at=None, org_id="test-org"),
+    )
+    with (
+        patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
+        patch(
+            "modulo.api.routes.admin_orgs.update_organisation", new_callable=AsyncMock, return_value=org
+        ) as mock_update,
+        patch("modulo.core.license.parse_and_verify", return_value=validation),
+    ):
+        resp = client.put(f"/api/v1/admin/orgs/{org_id}/license", json={"license_key": key})
+    request.node._resp = resp
+    request.node._update_org = mock_update
+
+
+@when(parsers.parse('I set an invalid license key "{key}" on the organisation'))
+def _set_invalid_org_license(key: str, request, client):
+    _set_auth_override(True)
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    org = _make_mock_org(id=org_id, slug=getattr(request.node, "_org_slug", "test-org"))
+    org.settings_json = {}
+    validation = SimpleNamespace(valid=False, error="Invalid license key", license_data=None)
+    with (
+        patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
+        patch(
+            "modulo.api.routes.admin_orgs.update_organisation", new_callable=AsyncMock, return_value=org
+        ) as mock_update,
+        patch("modulo.core.license.parse_and_verify", return_value=validation),
+    ):
+        resp = client.put(f"/api/v1/admin/orgs/{org_id}/license", json={"license_key": key})
+    request.node._resp = resp
+    request.node._update_org = mock_update
+
+
+@when(parsers.parse('I set a valid license key "{key}" on a missing organisation'))
+def _set_license_missing_org(key: str, request, client):
+    _set_auth_override(True)
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    with (
+        patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None),
+        patch(
+            "modulo.api.routes.admin_orgs.update_organisation", new_callable=AsyncMock, return_value=None
+        ) as mock_update,
+        patch("modulo.core.license.parse_and_verify"),
+    ):
+        resp = client.put(f"/api/v1/admin/orgs/{org_id}/license", json={"license_key": key})
+    request.node._resp = resp
+    request.node._update_org = mock_update
+
+
+@when("I remove the organisation's license")
+def _remove_org_license(request, client):
+    _set_auth_override(True)
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    org = _make_mock_org(id=org_id, slug=getattr(request.node, "_org_slug", "test-org"))
+    org.settings_json = {"license_key": "old.key"} if getattr(request.node, "_org_has_key", False) else {"other": 1}
+    with (
+        patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
+        patch(
+            "modulo.api.routes.admin_orgs.update_organisation", new_callable=AsyncMock, return_value=org
+        ) as mock_update,
+    ):
+        resp = client.delete(f"/api/v1/admin/orgs/{org_id}/license")
+    request.node._resp = resp
+    request.node._update_org = mock_update
+
+
+@when("I remove a missing organisation's license")
+def _remove_license_missing_org(request, client):
+    _set_auth_override(True)
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    with (
+        patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None),
+        patch(
+            "modulo.api.routes.admin_orgs.update_organisation", new_callable=AsyncMock, return_value=None
+        ) as mock_update,
+    ):
+        resp = client.delete(f"/api/v1/admin/orgs/{org_id}/license")
+    request.node._resp = resp
+    request.node._update_org = mock_update
+
+
+@when("I attempt to view the organisation's license")
+def _attempt_view_org_license(request, client):
+    _set_auth_override(False)
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    with patch("modulo.api.dependencies._resolve_live_org_role", new_callable=AsyncMock, return_value=None):
+        resp = client.get(f"/api/v1/admin/orgs/{org_id}/license")
+    request.node._resp = resp
+
+
+@when(parsers.parse('I attempt to set a license "{key}" on the organisation'))
+def _attempt_set_org_license(key: str, request, client):
+    _set_auth_override(False)
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    with patch("modulo.api.dependencies._resolve_live_org_role", new_callable=AsyncMock, return_value=None):
+        resp = client.put(f"/api/v1/admin/orgs/{org_id}/license", json={"license_key": key})
+    request.node._resp = resp
+
+
+@when("I attempt to remove the organisation's license")
+def _attempt_remove_org_license(request, client):
+    _set_auth_override(False)
+    org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
+    with patch("modulo.api.dependencies._resolve_live_org_role", new_callable=AsyncMock, return_value=None):
+        resp = client.delete(f"/api/v1/admin/orgs/{org_id}/license")
     request.node._resp = resp
 
 
@@ -326,6 +515,56 @@ def _org_deleted(request):
 def _check_org_status(expected_status: str, request):
     body = request.node._resp.json()
     assert body.get("status") == expected_status, f"Expected status {expected_status!r}, got {body.get('status')!r}"
+
+
+@then("the organisation license falls back to the system license")
+def _license_system_fallback(request):
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
+    body = resp.json()
+    assert body.get("has_license") is True, f"expected has_license, got {body}"
+    assert body.get("tier") == "team", f"expected system tier 'team', got {body.get('tier')!r}"
+    assert "sso" in body.get("features", []), f"expected sso feature, got {body.get('features')!r}"
+
+
+@then("the organisation license is resolved from its own key")
+def _license_resolved_from_org_key(request):
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
+    body = resp.json()
+    assert body.get("has_license") is True, f"expected has_license, got {body}"
+    assert body.get("tier") == "enterprise", f"expected org-key tier 'enterprise', got {body.get('tier')!r}"
+    assert "sso" in body.get("features", []), f"expected sso feature, got {body.get('features')!r}"
+    assert "audit" in body.get("features", []), f"expected audit feature, got {body.get('features')!r}"
+    assert body.get("org_id") == str(request.node._org_uuid), f"expected org-scoped key, got {body}"
+
+
+@then(parsers.parse('the organisation license is set to "{key}"'))
+def _license_set(key: str, request):
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
+    body = resp.json()
+    assert body.get("has_license") is True, f"expected has_license, got {body}"
+    assert body.get("tier") == "team", f"expected tier 'team', got {body.get('tier')!r}"
+    update_mock = getattr(request.node, "_update_org", None)
+    assert update_mock is not None, "update_organisation was not called"
+    assert update_mock.call_count == 1, f"expected one write, got {update_mock.call_count}"
+    settings = update_mock.call_args.args[2]["settings_json"]
+    assert settings.get("license_key") == key, f"expected license_key {key!r}, got {settings!r}"
+    assert settings.get("existing") is True, "pre-existing settings keys must be preserved alongside the key"
+
+
+@then("the organisation license is removed")
+def _license_removed(request):
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
+    body = resp.json()
+    assert body.get("has_license") is False, f"expected has_license False, got {body}"
+    update_mock = getattr(request.node, "_update_org", None)
+    assert update_mock is not None, "update_organisation was not called"
+    assert update_mock.call_count == 1, f"expected one write, got {update_mock.call_count}"
+    settings = update_mock.call_args.args[2]["settings_json"]
+    assert "license_key" not in settings, f"expected license_key to be cleared, got {settings!r}"
 
 
 @then(parsers.parse("I receive a {status:d} {error_type} error"))
