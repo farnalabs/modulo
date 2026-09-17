@@ -636,8 +636,25 @@ class FeatureFlagRegistry:
     def has_license_key(self) -> bool:
         return self._has_license_key
 
+    def _effective_tier_ranks(self) -> dict[str, int]:
+        """The tier -> rank map this registry ranks flags against.
+
+        Prefers the DB-backed catalog ranks loaded by ``_load_catalog`` and
+        falls back to the hardcoded ``TIER_RANK`` before/without a DB load, so
+        every rank comparison uses the same map that produced
+        ``currently_active``.
+        """
+        return getattr(self, "_tier_rank", TIER_RANK)
+
+    def tier_rank(self, tier: str) -> int:
+        """Rank of ``tier`` using this registry's effective rank map.
+
+        Unknown tiers rank 0 (community-equivalent), matching ``_refresh``.
+        """
+        return self._effective_tier_ranks().get(tier, 0)
+
     def _refresh(self) -> None:
-        tier_rank: dict[str, int] = getattr(self, "_tier_rank", TIER_RANK)
+        tier_rank = self._effective_tier_ranks()
         current_rank = tier_rank.get(self._current_tier, 0)
         # Flags seeded ``is_active=false`` in the DB catalog (experiments that
         # must ship default-OFF everywhere). ``__init__`` runs ``_refresh()``
@@ -687,7 +704,7 @@ class FeatureFlagRegistry:
         """Return flags whose tier is above community but inactive because license is community."""
         if self._current_tier != "community":
             return []
-        tier_rank: dict[str, int] = getattr(self, "_tier_rank", TIER_RANK)
+        tier_rank = self._effective_tier_ranks()
         community_rank = tier_rank.get("community", 0)
         return [f for f in self._flags if tier_rank.get(f.tier, 0) > community_rank and not f.currently_active]
 
