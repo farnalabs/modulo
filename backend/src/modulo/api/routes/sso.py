@@ -1,8 +1,8 @@
 """SSO routes: OIDC and SAML 2.0 login flows."""
 
 import logging
+import xml.sax.saxutils
 from typing import Any
-from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import PlainTextResponse, RedirectResponse
@@ -423,14 +423,14 @@ async def saml_metadata(
             public_url = settings.modulo_public_url.rstrip("/")
             acs_url = f"{public_url}/api/v1/auth/saml/acs"
 
-            # XML-escape before embedding (FAR-915/FAR-918 / GitHub #281):
-            # entity_id is org-configurable (DB-backed) and acs_url derives from
-            # the public URL, so neither must be able to inject XML or break out
-            # of the double-quoted attributes they are embedded in. escape()
-            # covers & < >; the explicit map covers quotes.
+            # XML-escape before embedding (FAR-915 / GitHub #281): entity_id is
+            # org-configurable (DB-backed), so a malicious value must not be
+            # able to inject XML or break out of the entityID attribute.
+            # escape() covers & < >; the additional map covers quotes since the
+            # values are interpolated inside double-quoted attributes.
             xml_entities = {'"': "&quot;", "'": "&apos;"}
-            safe_entity_id = escape(entity_id, xml_entities)
-            safe_acs_url = escape(acs_url, xml_entities)
+            safe_entity_id = xml.sax.saxutils.escape(entity_id, xml_entities)
+            safe_acs_url = xml.sax.saxutils.escape(acs_url, xml_entities)
 
             return (
                 '<?xml version="1.0"?>'
