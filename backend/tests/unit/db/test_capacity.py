@@ -245,8 +245,8 @@ async def test_create_run_propagates_storage_exhausted() -> None:
     from modulo.db.crud import run as run_crud
 
     session = AsyncMock()
-    run_crud._ensure_org_not_deleted = AsyncMock()  # type: ignore[attr-defined]
     with (
+        patch.object(run_crud, "_ensure_org_not_deleted", new=AsyncMock()),
         patch(
             "modulo.db.capacity.enforce_capacity_gate",
             new=AsyncMock(side_effect=StorageExhaustedError("full")),
