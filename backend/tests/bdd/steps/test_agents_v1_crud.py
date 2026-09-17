@@ -51,6 +51,7 @@ def _make_mock_agent(name: str = "test") -> MagicMock:
     a.prompt_always_visible = False
     a.account_id = uuid.uuid4()
     a.prompt_version_history = []
+    a.schema_profile = None
     a.created_at = datetime.now(UTC)
     a.updated_at = datetime.now(UTC)
     return a

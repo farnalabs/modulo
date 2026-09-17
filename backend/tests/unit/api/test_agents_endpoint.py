@@ -63,6 +63,7 @@ def _make_agent() -> MagicMock:
     a.account_id = uuid.uuid4()
     a.required_environment_capabilities = []
     a.template_id = None
+    a.schema_profile = None
     a.created_at = _NOW
     a.updated_at = _NOW
     return a
