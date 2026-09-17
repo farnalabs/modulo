@@ -177,9 +177,7 @@ def overdue_claims_queried(ctx: dict[str, Any]) -> None:
     session = MagicMock()
     session.execute = AsyncMock(return_value=result)
 
-    ctx["overdue_entries"] = asyncio.run(
-        get_overdue_claims(session, ORG_ID, warning_hours=4, escalation_hours=24)
-    )
+    ctx["overdue_entries"] = asyncio.run(get_overdue_claims(session, ORG_ID, warning_hours=4, escalation_hours=24))
 
 
 @then(parsers.parse('the claim is reported as "{status}" about {hours:d} hours old'))
@@ -195,6 +193,4 @@ def overdue_reported_with_age(ctx: dict[str, Any], status: str, hours: int) -> N
 def overdue_reported(ctx: dict[str, Any], status: str) -> None:
     entries = ctx["overdue_entries"]
     assert entries, "no overdue claims were reported"
-    assert entries[0]["status"] == status, (
-        f"Expected status {status!r}, got {entries[0]['status']!r}"
-    )
+    assert entries[0]["status"] == status, f"Expected status {status!r}, got {entries[0]['status']!r}"
