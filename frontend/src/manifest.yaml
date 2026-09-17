@@ -3954,7 +3954,7 @@ elements:
       - testid: hitl-review-bulk-reject-confirm
         type: button
         dynamic_testid: false
-      - testid: hitl-review-bulk-dismiss-outcomes
+      - testid: hitl-review-bulk-outcomes-dismiss
         type: button
         dynamic_testid: false
       - testid: hitl-gate-card
