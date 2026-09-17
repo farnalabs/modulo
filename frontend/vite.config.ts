@@ -70,6 +70,16 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'lcov'],
       reportsDirectory: 'coverage',
+      // FAR-923: enforce coverage thresholds to catch regressions.
+      // Baseline (2026-09-17, threads/maxWorkers=2):
+      //   statements 84.37%  branches 76.90%  functions 77.49%  lines 86.44%
+      // Thresholds set ~2-3 pts below baseline for headroom on new code.
+      thresholds: {
+        statements: 82,
+        branches: 74,
+        functions: 75,
+        lines: 84,
+      },
     },
   },
   css: {
