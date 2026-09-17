@@ -558,6 +558,26 @@ surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
 
 All tenant isolation is at the database layer via `SET LOCAL app.organisation_id` inside transactions. Every query runs within the org scope. This prevents cross-tenant leaks even if application-level scoping is bypassed. Team-visibility resources return 404 (not 403) for non-members – no existence enumeration.
 
+### Run-Execution Service Identity (ADR 038)
+
+When a pipeline runs, the run executes with the **pipeline owner's authority** — not the triggering user's grants. This is a service identity scoped to the pipeline's `owner_team_id` (or the org when `owner_team_id` is NULL).
+
+**Key properties:**
+
+- The only user-facing access check is "can you trigger this pipeline?" (the `trigger_run` team gate). Once triggered, the run inherits the pipeline owner's identity.
+- Referenced resources (schema, connector, model backend, agent) are usable by the run **regardless of the triggerer's direct access**. The engine resolves the pipeline's team membership to determine which resources the run may access.
+- **Secrets are brokered**: injected into the run environment by the engine, never readable by the user. A user gaining pipeline access must never gain secret read access.
+- A run may only use secrets scoped to the **pipeline's owner team**; cross-team secret use requires moving the secret to an org-visible scope.
+- `runs.owner_team_id` is **metadata** (for dashboard aggregation), not a security control. Run access is derived from pipeline access; runs do not need their own team gate.
+
+See ADR 038 (`Repos/devtools/adr/038-rbac-security-boundary.md`) for the full decision.
+
+### Folder Security Model (ADR 038)
+
+`PipelineFolder` is **organisation-scoped only** — it has no `owner_team_id`, no `visibility`, and no security cascade. Pipeline ownership is explicit on the pipeline itself (`Pipeline.owner_team_id`), not inherited from a folder. Folders are a UI organisation concept, not a security boundary.
+
+This is an explicit decision: any future proposal to add folder-level security (inherited ownership, visibility cascading, team-scoped folder access) must address ADR 038's rationale for rejecting folders-as-security. See ADR 038 for the full reasoning.
+
 ### MCP Scope Enforcement – Dual Layer
 
 1. **Token middleware** – validates required scope on every request
@@ -675,6 +695,7 @@ ADRs live in the private `farnalabs/devtools` repo at `Repos/devtools/adr/` (mig
 | 020 | Analytics: run_daily_facts + typed-params query surface | Accepted |
 | 025 | Generic REST Integration Connector | Accepted |
 | 029 | Agent Execution Tiers + the Bundled Runner | Accepted |
+| 038 | RBAC as a Security Boundary — One Rule, One Principal | Accepted |
 
 Note: ADR numbers 003/004/005 are shared by two distinct ADR files each (the numbering mirrors the filesystem). ADR 017/018 – Centralized Authorization – exists as both `017-centralized-authorization.md` and `018-centralized-authorization.md` (a duplicated file), so it is listed once here under the combined number.
 
