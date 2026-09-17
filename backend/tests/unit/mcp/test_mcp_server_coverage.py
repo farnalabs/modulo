@@ -125,7 +125,7 @@ class TestSerializeEdges:
         assert result[0]["edge_type"] == "normal"
 
     def test_empty_list(self) -> None:
-        assert _serialize_edges([]) == []
+        assert not _serialize_edges([])
 
 
 class TestSerializeRunEvals:
@@ -159,7 +159,7 @@ class TestSerializeRunEvals:
         assert result[0]["evaluated_at"] is None
 
     def test_empty_list(self) -> None:
-        assert _serialize_run_evals([]) == []
+        assert not _serialize_run_evals([])
 
 
 class TestIsoOrNone:
@@ -316,7 +316,7 @@ class TestRunStatusDetail:
         run = SimpleNamespace(node_token_usage={}, cost_breakdown=None)
         blobs = SimpleNamespace(outputs={}, telemetry="not-a-dict")
         result = _run_status_detail(run, blobs)
-        assert result["nodes"] == []
+        assert not result["nodes"]
 
 
 # ─── Run item formatting ────────────────────────────────────────────
@@ -428,10 +428,10 @@ class TestDetectMaskedFields:
         assert "name" not in result
 
     def test_non_dict(self) -> None:
-        assert _detect_masked_fields("not-a-dict") == []
+        assert not _detect_masked_fields("not-a-dict")
 
     def test_empty_dict(self) -> None:
-        assert _detect_masked_fields({}) == []
+        assert not _detect_masked_fields({})
 
 
 # ─── Validate trigger numbers ──────────────────────────────────────
