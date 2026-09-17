@@ -275,6 +275,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > immutable" scenario in `event_recording.feature` (which only asserted a
 > generic 4xx from a nonexistent PATCH route) was removed with its dummy steps.
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-17):** closed `feat-triggers`'s "Slack app-mention
+> triggering is unit-tested only" gap (`triggers/trigger-engine.md`).
+> Registered the new `triggers/slack_app_mention.feature` into the executing
+> BDD suite (`steps/test_slack_app_mention_triggers.py`), driving the real
+> `slack_app_mention.py` seams — Slack signed-request verification
+> (HMAC-SHA256 `X-Slack-Signature` + ±300s `X-Slack-Request-Timestamp` replay
+> window, wrong-secret and expired-timestamp refusals), the `url_verification`
+> challenge echo, envelope parsing / payload mapping, Slack `event_id`
+> deduplication, concurrency-queuing, pipeline rate limiting, and the
+> advisory-lock busy refusal — with every delivery audited to a TriggerEvent
+> (`accepted` / `hmac_failed` / `deduplicated` / `event_type_not_accepted` /
+> `parse_failed` / `concurrency_limit_reached` / `rate_limited`).
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

@@ -39,6 +39,7 @@ bdd:
   - backend/tests/bdd/features/triggers/agent_signal.feature
   - backend/tests/bdd/features/triggers/pause.feature
   - backend/tests/bdd/features/triggers/trigger_event_log.feature
+  - backend/tests/bdd/features/triggers/slack_app_mention.feature
   - backend/tests/bdd/steps/test_cron_triggers.py
   - backend/tests/bdd/steps/test_polling_triggers.py
   - backend/tests/bdd/steps/test_ongoing_triggers.py
@@ -93,15 +94,25 @@ rate-limited by the `TriggerEngine`.
 
 ## Known Gaps
 
-- **Slack app-mention triggering is unit-tested only** — no dedicated BDD
-  `.feature` for `slack_app_mention.py`; unit suites
-  (`test_slack_app_mention.py`, `test_slack_trigger_endpoint.py`) pin the
-  behaviour.
 - **Trigger config secrets use a single fernet key** — at-rest encryption
   depends on the environment `FERNET_KEY`; key rotation is handled as a domain
   operation (audited), not per-trigger.
 
 ## QA History
+- 2026-09-17: **improve-architecture (product-map walk)** — closed the
+  "Slack app-mention triggering is unit-tested only" gap: registered
+  ``triggers/slack_app_mention.feature`` into the executing BDD suite from the
+  new ``steps/test_slack_app_mention_triggers.py``, driving the real
+  ``slack_app_mention.py`` seams — signed-request verification
+  (``X-Slack-Signature`` HMAC-SHA256 + ±300s ``X-Slack-Request-Timestamp``
+  replay window, wrong-secret and expired-timestamp refusals), the
+  ``url_verification`` challenge echo, envelope parsing / payload mapping,
+  Slack ``event_id`` deduplication, concurrency-queuing, pipeline rate
+  limiting, and the advisory-lock busy refusal — each delivery audited to a
+  TriggerEvent result (``accepted`` / ``hmac_failed`` / ``deduplicated`` /
+  ``event_type_not_accepted`` / ``parse_failed`` /
+  ``concurrency_limit_reached`` / ``rate_limited``).
+  ``_ORPHANED_BDD_FEATURES`` stays empty.
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/triggers`
