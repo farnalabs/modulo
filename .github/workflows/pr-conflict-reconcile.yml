@@ -47,12 +47,17 @@ jobs:
           # if the repo ever exceeds 200 open PRs this silently truncates and
           # conflicted PRs beyond the cap would go undetected for a cycle. Raise
           # the limit (or page) if modulo's open-PR count approaches this bound.
+          # Capture the exit code instead of letting `set -e` abort the step:
+          # a transient `gh` failure must reach the fail-open path below, not
+          # silently kill the step before that path runs (seen on cron runs
+          # 35262765462, 35238807866 — exit 1 with no output).
+          GH_EXIT=0
           gh pr list --state open --limit 200 \
             --json number,headRefName,mergeable,isDraft,labels \
-            > /tmp/open_prs.json 2>/tmp/gh_pr_list_stderr.txt
+            > /tmp/open_prs.json 2>/tmp/gh_pr_list_stderr.txt || GH_EXIT=$?
 
           # Validate the API call succeeded (fail open loudly, FAR-528)
-          if [ ! -s /tmp/open_prs.json ]; then
+          if [ ! -s /tmp/open_prs.json ] || [ "$GH_EXIT" -ne 0 ]; then
             ERR=$(cat /tmp/gh_pr_list_stderr.txt 2>/dev/null | head -c 500)
             echo "::warning::Failed to fetch open PRs from GitHub API (empty response). Reconciler cannot run this cycle.${ERR:+$'\n'}gh pr list stderr: $ERR"
             echo "api_failed=true" >> "${GITHUB_OUTPUT:-/dev/null}"
