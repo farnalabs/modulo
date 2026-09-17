@@ -18,6 +18,7 @@ import base64
 import json
 from typing import Any
 
+import httpx
 import pytest
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
@@ -210,8 +211,12 @@ class TestRestRecordsPath:
         assert result.records[0]["a"] == 1
         await connector.close()
 
-    async def test_records_path_total(self, rest_test_server: Any) -> None:
-        """Total count is extracted when a total_path is declared."""
+    async def test_records_total_reflects_record_count(self, rest_test_server: Any) -> None:
+        """``total`` reflects the number of extracted records.
+
+        The REST connector has no ``total_path`` config — a server-reported total
+        (``total_count``) is ignored; ``total`` is always ``len(records)``.
+        """
         rest_test_server.set_default_response(body={"items": [{"id": 1}], "total_count": 42})
 
         connector = RestConnector(
@@ -229,7 +234,7 @@ class TestRestRecordsPath:
 
         result = await connector.query(ConnectorQuery(resource="directory"))
         assert len(result.records) == 1
-        assert result.total is None or result.total >= 0
+        assert result.total == 1
         await connector.close()
 
     async def test_records_limit_truncation(self, rest_test_server: Any) -> None:
@@ -357,10 +362,61 @@ class TestRestAllowedHosts:
         assert len(result.records) == 1
         await connector.close()
 
-    async def test_allowed_hosts_subdomain_match(self, rest_test_server: Any) -> None:
-        """Subdomain of an allowed host is also permitted."""
-        rest_test_server.set_default_response(body={"items": [{"id": 1}]})
+    async def test_allowed_hosts_subdomain_match(self) -> None:
+        """A true subdomain of an allowlisted parent is permitted; a suffix-sibling is not.
 
+        The allowlist rule is ``host == entry or host.endswith("." + entry)``
+        (``rest/__init__.py::_validate_target_url``). A loopback test server
+        cannot serve a real subdomain, so the rule is driven through ``query``
+        over a ``MockTransport`` (the no-op SSRF seam keeps it offline).
+        """
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"items": [{"id": 1}]})
+
+        def _connector(base_url: str) -> RestConnector:
+            return RestConnector(
+                {
+                    "base_url": base_url,
+                    "path": "/health",
+                    "records_path": "items",
+                    "allowed_hosts": ["example.com"],
+                    "operations": {"directory": {"path": "/api/data"}},
+                },
+                {"auth_mode": "bearer", "token": "tok"},
+                transport=httpx.MockTransport(handler),
+                ssrf_validator=_noop_ssrf,
+                security_guard=make_noop_security_guard(),
+                verify_tls=False,
+            )
+
+        # A subdomain of the allowlisted parent passes the allowlist check.
+        allowed = _connector("https://api.example.com")
+        try:
+            result = await allowed.query(ConnectorQuery(resource="directory"))
+            assert len(result.records) == 1
+        finally:
+            await allowed.close()
+
+        # A sibling domain that merely shares the suffix is NOT a subdomain match.
+        blocked = _connector("https://notexample.com")
+        try:
+            with pytest.raises(ValueError, match="not in allowed_hosts"):
+                await blocked.query(ConnectorQuery(resource="directory"))
+        finally:
+            await blocked.close()
+
+    async def test_loopback_allowed_through_real_ssrf_guard(self, rest_test_server: Any) -> None:
+        """Loopback is reachable through the real pinned transport when allowlisted.
+
+        Exercises the ``SSRF_ALLOW_PRIVATE_RANGES`` exemption set by the
+        ``rest_test_server`` fixture end-to-end — no ``ssrf_validator`` seam, so
+        the real ``modulo.core`` guard runs and the request goes over a real
+        socket.
+        """
+        from modulo.core.connector_hub import _core_security_guard
+
+        cap = _RequestCapture(rest_test_server)
         connector = RestConnector(
             {
                 "base_url": rest_test_server.url(),
@@ -370,13 +426,13 @@ class TestRestAllowedHosts:
                 "operations": {"directory": {"path": "/api/data"}},
             },
             {"auth_mode": "bearer", "token": "tok"},
-            ssrf_validator=_noop_ssrf,
-            security_guard=make_noop_security_guard(),
+            security_guard=_core_security_guard(),
             verify_tls=False,
         )
 
         result = await connector.query(ConnectorQuery(resource="directory"))
         assert len(result.records) == 1
+        assert cap.last["path"] == "/api/data"
         await connector.close()
 
 
