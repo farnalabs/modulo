@@ -540,11 +540,6 @@ describe('SettingsSsoView — provisioning modes and allowed_domains', () => {
   })
 
   it('create payload includes allowed_domains when domains mode is selected', async () => {
-    // Mock a provider that's already in domains mode so the form preloads with allowed_domains
-    const providerWithDomains = provider({
-      auto_provision: true,
-      allowed_domains: ['existing.com'],
-    })
     ;(api.POST as Mock).mockResolvedValue({ data: provider({ id: 'sso-new', name: 'New SSO' }), error: undefined })
     const wrapper = mountView()
     await nextTick()

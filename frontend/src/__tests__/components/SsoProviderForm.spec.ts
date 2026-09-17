@@ -66,22 +66,7 @@ function mountForm(data: SsoFormState = makeData(), overrides: Record<string, un
   })
 }
 
-/** Simulate selecting a provisioning mode radio by directly triggering the form's internal handler. */
-async function selectMode(wrapper: ReturnType<typeof mountForm>, mode: 'invitation' | 'domains' | 'unrestricted') {
-  const radio = wrapper.find(`[data-testid="sso-mode-${mode}"]`)
-  // Trigger the native change event that Vue binds to
-  const input = radio.element as HTMLInputElement
-  input.checked = true
-  input.dispatchEvent(new Event('change', { bubbles: true }))
-  await nextTick()
-  // Feed emitted data back into props
-  const emitted = wrapper.emitted('update:data')
-  if (emitted && emitted.length > 0) {
-    const updatedData = emitted[emitted.length - 1][0] as SsoFormState
-    await wrapper.setProps({ data: updatedData })
-    await nextTick()
-  }
-}
+
 
 describe('SsoProviderForm', () => {
   beforeEach(() => {
