@@ -647,9 +647,6 @@ class TestNoRedisInProcessGuard:
 
 # ---------------------------------------------------------------------------
 # #328: create_pipeline_from_template reads primitive inside transaction
-
-# ---------------------------------------------------------------------------
-# #328: create_pipeline_from_template reads primitive inside transaction
 # ---------------------------------------------------------------------------
 
 
