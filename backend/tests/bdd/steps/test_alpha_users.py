@@ -10,9 +10,9 @@ import contextlib
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -301,17 +301,76 @@ def create_user(email: str, role: str, request):
 @when(parsers.parse("the runner triggers a run for pipeline {name}"))
 def runner_triggers_run(name, request):
     c = _get_client(request)
-    pipeline = _pipeline_mock(name=str(name))
-    run = make_mock_run(status="pending")
-    with (
-        patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-        patch("modulo.api.routes.runs.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
-        patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
-        patch("modulo.api.routes.runs.dispatch_run"),
-        patch("modulo.api.routes.runs.set_rls_org"),
-    ):
-        snap.return_value = make_mock_snapshot()
-        resp = c.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id)})
+    runner_team = getattr(request.node, "_runner_team", None)
+
+    if runner_team:
+        # Team-private pipeline: set up pipeline with team ownership and mock
+        # the team gate's session queries so the gate can pass or deny.
+        pipeline = _pipeline_mock(
+            name=str(name),
+            visibility="team",
+            owner_team_id=uuid.uuid4(),
+        )
+        run = make_mock_run(status="pending")
+
+        def _team_gate_side_effect(stmt: Any, *args: Any, **kwargs: Any) -> MagicMock:
+            stmt_str = str(stmt).lower()
+            result = MagicMock()
+            if "team_memberships" in stmt_str:
+                row = MagicMock() if runner_team else None
+                result.first.return_value = row
+            elif "pipelines" in stmt_str:
+                row = MagicMock()
+                row.visibility = "team"
+                row.owner_team_id = pipeline.owner_team_id
+                row.deleted_at = None
+                result.scalar_one_or_none.return_value = row
+                result.first.return_value = row
+            elif "set_config" in stmt_str:
+                result.scalar.return_value = None
+            elif "authz_enforce" in stmt_str:
+                result.scalar_one_or_none.return_value = None
+            else:
+                result.first.return_value = None
+                result.all.return_value = []
+                result.scalar_one_or_none.return_value = None
+            return result
+
+        from tests.bdd.conftest import make_mock_session
+
+        session = make_mock_session()
+        session.execute = AsyncMock(side_effect=_team_gate_side_effect)
+
+        async def _override_session():
+            yield session
+
+        from modulo.api.dependencies import get_db_session
+
+        c.app.dependency_overrides[get_db_session] = _override_session
+
+        with (
+            patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("modulo.api.routes.runs.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+            patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
+            patch("modulo.api.routes.runs.dispatch_run"),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            snap.return_value = make_mock_snapshot()
+            resp = c.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id)})
+    else:
+        # Org-visible pipeline: standard flow (no team gate involvement).
+        pipeline = _pipeline_mock(name=str(name))
+        run = make_mock_run(status="pending")
+        with (
+            patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("modulo.api.routes.runs.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+            patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
+            patch("modulo.api.routes.runs.dispatch_run"),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            snap.return_value = make_mock_snapshot()
+            resp = c.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id)})
+
     request.node._resp = resp
     request.node._pipeline_name = str(name)
 
@@ -388,23 +447,23 @@ def check_run_created(request):
 
 
 # ---------------------------------------------------------------------------
-# Deferred-to-Phase-3 team-scope steps (scenario is @skip tagged)
+# Team-scope enforcement for run triggering (FAR-946)
 # ---------------------------------------------------------------------------
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}" owned by team "{team}"'))
 def pipeline_owned_by_team(org: str, name: str, team: str, request):
+    """Store the pipeline and team names so the trigger step can set up mocks."""
     request.node._pipeline_name = name
     request.node._pipeline_team = team
 
 
 @given(parsers.parse('a runner with team scope "{team}" exists'))
 def runner_with_team_scope(team: str, request):
+    """Flag that this runner is a member of the named team.
+
+    The mock session's execute side_effect uses this flag to decide whether
+    to return a membership row (member) or None (non-member) for the team
+    gate's ``team_membership_exists`` query.
+    """
     request.node._runner_team = team
-
-
-@then(parsers.parse("the runner cannot trigger runs for pipelines outside their scope"))
-def runner_cannot_trigger_outside_scope(request):
-    # Phase 3: team-scope enforcement for run triggering. Deferred per ADR 017 —
-    # the scenario carrying this step is @skip tagged and never runs.
-    pytest.skip("team-scope run-trigger enforcement deferred per ADR 017 (Phase 3)")

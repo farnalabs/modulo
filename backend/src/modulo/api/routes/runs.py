@@ -35,11 +35,13 @@ from modulo.api.dependencies import (
     get_db_session,
     require_permission,
     require_permission_any_credential,
+    require_team_membership_or_admin_any_credential,
 )
 from modulo.api.middleware.sensitive_mask import (
     is_sensitive_key,
     mask_sensitive_value,
 )
+from modulo.api.team_scope import resolve_trigger_run_team_scope
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cost_controller.breakdown.params import compute_run_warnings, compute_run_warnings_count
@@ -1129,11 +1131,16 @@ async def trigger_run(
     session: AsyncSession = Depends(get_db_session),
     _engine: AsyncEngine = Depends(_get_engine),
     principal: TenantPrincipal = require_permission_any_credential("run.trigger"),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_trigger_run_team_scope),
 ) -> RunResponse:
     """Manually trigger a pipeline run.
 
     Returns 202 immediately; execution happens in a background task.
     The run status can be polled via GET /api/v1/runs/{run_id}.
+
+    Team-private pipelines (visibility='team') are gated: only members of the
+    owning team (or org admins) may trigger them.  Org-visible pipelines remain
+    open to any org member with the ``run.trigger`` role floor.
     """
     org_id = principal.organisation_id
 

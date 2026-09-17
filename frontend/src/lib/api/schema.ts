@@ -3940,6 +3940,10 @@ export interface paths {
          *
          *     Returns 202 immediately; execution happens in a background task.
          *     The run status can be polled via GET /api/v1/runs/{run_id}.
+         *
+         *     Team-private pipelines (visibility='team') are gated: only members of the
+         *     owning team (or org admins) may trigger them.  Org-visible pipelines remain
+         *     open to any org member with the ``run.trigger`` role floor.
          */
         post: operations["trigger_run_api_v1_runs_post"];
         delete?: never;
