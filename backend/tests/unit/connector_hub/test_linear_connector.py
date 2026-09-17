@@ -98,6 +98,12 @@ def test_init_requires_token():
     with pytest.raises(ValueError, match="token"):
         LinearConnector(token="")
 
+    with pytest.raises(ValueError, match="token"):
+        LinearConnector()
+
+    with pytest.raises(ValueError, match="token"):
+        LinearConnector(token=None)
+
 
 def test_init_requires_token_not_none():
     with pytest.raises(ValueError, match="token"):

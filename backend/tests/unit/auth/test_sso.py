@@ -1182,6 +1182,35 @@ class TestSamlRoutesExtended:
         assert resp.status_code == 200
         assert "urn:db-saml" in resp.text
 
+    def test_saml_metadata_escapes_entity_id_with_db_provider_and_env_flag_off(self, client: TestClient) -> None:
+        """A DB-configured entityID containing XML metacharacters must be escaped
+        so the SP-metadata document stays well-formed (issue #282..#281: XML
+        injection through the org-configurable entity_id)."""
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=False,
+        )
+
+        db_provider = SimpleNamespace(entity_id='urn:x<y>&z>" onload="')
+        with patch("modulo.api.routes.sso._get_enabled_saml_global", new_callable=AsyncMock) as m:
+            m.return_value = db_provider
+            resp = client.get("/api/v1/auth/saml/metadata", follow_redirects=False)
+
+        assert resp.status_code == 200
+        assert "urn:x&lt;y&gt;&amp;z&gt;&quot; onload=&quot;" in resp.text
+        assert "urn:x<" not in resp.text
+        # A raw double quote would terminate the entityID attribute early and
+        # let the injected text become new attributes on EntityDescriptor.
+        assert '" onload="' not in resp.text
+        assert resp.text.count('entityID="') == 1
+        # Parse the document: it must be well-formed and the entityID attr
+        # must round-trip to exactly the configured value (no injection text
+        # became attribute markup).
+        root = ElementTree.fromstring(resp.text)
+        assert root.tag.endswith("EntityDescriptor")
+        assert root.get("entityID") == 'urn:x<y>&z>" onload="'
+        assert root.get("onload") is None
+
     def test_saml_metadata_rejected_when_no_db_provider_and_env_flag_off(self, client: TestClient) -> None:
         """Preserves the pure-env-var contract: no DB provider AND flag off -> 400."""
         _override_settings(
