@@ -31,11 +31,6 @@ class FeatureFlag:
 _KNOWN_FLAGS: list[FeatureFlag] = [
     # ── Community tier ─────────────────────────────────────────────────
     FeatureFlag(
-        name="parallel_branches",
-        description="Run branching logic in parallel within a pipeline",
-        tier="community",
-    ),
-    FeatureFlag(
         name="eval_system",
         description="Built-in eval runner for LLM output quality gates",
         tier="community",
@@ -55,18 +50,8 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
-        name="cron_trigger",
-        description="Schedule pipeline runs on a cron expression",
-        tier="community",
-    ),
-    FeatureFlag(
         name="mcp_server",
         description="Expose pipelines as MCP tools",
-        tier="community",
-    ),
-    FeatureFlag(
-        name="community_library",
-        description="Browse and import community-contributed pipeline primitives",
         tier="community",
     ),
     FeatureFlag(
@@ -77,16 +62,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="dashboard_charts",
         description="Dashboard trend charts (run activity sparklines)",
-        tier="community",
-    ),
-    FeatureFlag(
-        name="polling_trigger",
-        description="Trigger pipelines by polling external endpoints",
-        tier="community",
-    ),
-    FeatureFlag(
-        name="ongoing_trigger",
-        description="Keep a pipeline topped up to a target number of in-flight runs",
         tier="community",
     ),
     FeatureFlag(
@@ -168,11 +143,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="team",
     ),
     FeatureFlag(
-        name="community_registry",
-        description="Publish and discover community pipeline primitives",
-        tier="team",
-    ),
-    FeatureFlag(
         name="pipeline_diff_rollback",
         description="Diff-based pipeline version comparison and rollback",
         tier="team",
@@ -217,12 +187,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Allow hard-deleting pipelines from the UI",
         tier="team",
     ),
-    # ── In-Dev / community-visible but hidden from sidebar ──────────────
-    FeatureFlag(
-        name="notification_log",
-        description="In-app notification delivery log",
-        tier="community",
-    ),
     # ── Team tier (runtime / system config) ─────────────────────────────
     FeatureFlag(
         name="rate_limits",
@@ -241,33 +205,18 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     # ── Community tier — mobile icon-rail experiment (default OFF) ──────────
-    # Registered in ``DEFAULT_OFF_FLAGS`` so it stays listed-but-inactive on
-    # every tier (community-tier flags otherwise activate everywhere via the
-    # tier-rank comparison). Org admins can enable it per-org through the
-    # Feature Flags UI (sets an org ``feature_overrides`` entry, which wins in
-    # ``_refresh``).
     FeatureFlag(
         name="mobile_sidebar_rail",
         description="Mobile icon-rail sidebar (experimental)",
         tier="community",
     ),
     # ── Community tier — user-scoped MCP keys (default OFF, FAR-620) ────────
-    # Registered in ``DEFAULT_OFF_FLAGS`` (the ``mobile_sidebar_rail``
-    # two-mechanism precedent): default-OFF everywhere until an org
-    # ``feature_overrides`` entry enables it.
     FeatureFlag(
         name="user_scoped_mcp_keys",
         description="Per-user MCP API keys (keys operate as their creator's identity)",
         tier="community",
     ),
-    # �� Community tier - SSO unrestricted JIT provisioning (default OFF, FAR-855)
-    # ��
-    # Registered in ``DEFAULT_OFF_FLAGS`` (the ``mobile_sidebar_rail``
-    # two-mechanism precedent): only an explicit operator-level override (system
-    # ``set_override`` or an org ``feature_overrides`` entry) can enable it.
-    # When OFF, an SSO provider saved with ``auto_provision=true`` and an EMPTY
-    # ``allowed_domains`` list is (a) rejected by the admin API at save time and
-    # (b) FAILS CLOSED at sign-in - unknown identities are denied.
+    # ── Community tier - SSO unrestricted JIT provisioning (default OFF, FAR-855) ──
     FeatureFlag(
         name="sso_unrestricted_provisioning",
         description=(
@@ -278,31 +227,18 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     # ── Community tier — lifecycle map journeys display (default OFF, FAR-654) ──
-    # Registered in ``DEFAULT_OFF_FLAGS`` (the ``mobile_sidebar_rail``
-    # two-mechanism precedent): journey attribution display ships default-OFF
-    # for MVP until an org ``feature_overrides`` entry enables it. The
-    # frontend LifecycleMapView gates the journeys fetch and all journey UI on
-    # this flag.
     FeatureFlag(
         name="lifecycle_map_journeys",
         description="Journey cards and journey detail on the Lifecycle Map view (attribution display)",
         tier="community",
     ),
     # ── Community tier — webhook notification delivery log (default OFF, FAR-656) ──
-    # Registered in ``DEFAULT_OFF_FLAGS`` (the ``mobile_sidebar_rail``
-    # two-mechanism precedent): the webhook delivery-log UI ships default-OFF
-    # on every tier until an org ``feature_overrides`` entry enables it. The
-    # manifest route /admin/notification-delivery declares this flag so the
-    # router guard redirects while it is off and the sidebar item stays hidden.
     FeatureFlag(
         name="webhook_notification_log",
         description="Webhook notification delivery log (admin delivery-log UI)",
         tier="community",
     ),
     # ── Community tier — library collections (FAR-760, default OFF) ───────
-    # Ships default-OFF on every tier until an org ``feature_overrides``
-    # entry enables it.  Gates create/update/publish on the collection
-    # authoring lifecycle endpoints.
     FeatureFlag(
         name="library_collection",
         description="Library collections — pin multiple primitives into a browsable bundle",

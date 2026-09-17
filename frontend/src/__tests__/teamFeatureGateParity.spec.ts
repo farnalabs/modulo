@@ -108,10 +108,13 @@ describe('team feature backend <-> frontend parity', () => {
   it('frontend-only exceptions are tracked as gaps or frontend-enforced', () => {
     const backendTestPath = join(REPO_ROOT, 'backend', 'tests', 'unit', 'test_team_feature_parity.py')
     const text = readFileSync(backendTestPath, 'utf-8')
-    const match = text.match(/KNOWN_UNENFORCED_TEAM_FLAGS[^=]*=\s*\{([^}]*)\}/)
+    // The backend declaration is either a populated set literal
+    // (``= {"flag_a", "flag_b"}``) or the empty-set call (``= set()``); the
+    // latter has no ``{...}`` body to capture, so treat it as an empty gap set.
+    const match = text.match(/KNOWN_UNENFORCED_TEAM_FLAGS[^=]*=\s*(?:\{([^}]*)\}|set\(\))/)
     expect(match).not.toBeNull()
     const backendKnown = new Set(
-      (match![1].match(/"([a-z_]+)"/g) ?? []).map((s) => s.replaceAll('"', '')),
+      ((match?.[1] ?? '').match(/"([a-z_]+)"/g) ?? []).map((s) => s.replaceAll('"', '')),
     )
     for (const f of FRONTEND_ONLY_EXCEPTIONS) {
       // A frontend-only exception must either be tracked in the backend's
