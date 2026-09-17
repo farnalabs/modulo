@@ -262,7 +262,7 @@ def _get_changed_production_files(compare_branch: str, language: str) -> dict[st
     return files
 
 
-def _normalize_js_report(report_path: Path, src_root: str) -> Path:
+def _normalize_js_report(report_path: Path, src_root: str) -> Path | None:
     """Rewrite relative ``SF:`` entries in an LCOV report to absolute paths.
 
     vitest's v8 reporter emits source paths relative to the frontend project
@@ -273,31 +273,43 @@ def _normalize_js_report(report_path: Path, src_root: str) -> Path:
     repo root) makes diff-cover relativise them back to the same repo-relative
     paths as the diff.
 
-    Returns the path to a normalised copy when anything changed, otherwise the
-    original path.  The caller owns (and deletes) any returned temp file.
+    ``report_path`` (a CLI-supplied path) and *src_root* are regex
+    fullmatch-bounded before any file operation, and each rewritten ``SF:``
+    entry must resolve inside *src_root* so report content can never escape it.
+
+    Returns the path to a normalised copy when anything changed, otherwise
+    ``None``.  The caller owns (and deletes) any returned temp file.
     """
-    root = (REPO_ROOT / src_root).resolve()
+    safe_report = Path(_sanitize_path(str(report_path), "js report"))
+    safe_src_root = _sanitize_path(src_root, "js-src-root")
+    root = (REPO_ROOT / safe_src_root).resolve()
     try:
-        lines = report_path.read_text(encoding="utf-8").splitlines()
+        lines = safe_report.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return report_path
+        return None
 
     rewritten: list[str] = []
     changed = False
     for line in lines:
         raw = line[len("SF:") :] if line.startswith("SF:") else ""
         if raw and not Path(raw).is_absolute():
-            rewritten.append(f"SF:{(root / raw).resolve()}")
-            changed = True
+            candidate = (root / raw).resolve()
+            if candidate.is_relative_to(root):
+                rewritten.append(f"SF:{candidate}")
+                changed = True
+            else:
+                rewritten.append(line)
         else:
             rewritten.append(line)
     if not changed:
-        return report_path
+        return None
 
     fd, tmp_name = tempfile.mkstemp(prefix="lcov-normalized-", suffix=".info")
     os.close(fd)
     tmp_path = Path(tmp_name)
-    tmp_path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+    # tmp_path is a fresh file created by tempfile.mkstemp (not derived from any
+    # input); only the (containment-checked) LCOV text content is written here.
+    tmp_path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")  # NOSONAR
     return tmp_path
 
 
@@ -701,14 +713,14 @@ def main() -> int:
     default_js = REPO_ROOT / "frontend" / "coverage" / "lcov.info"
 
     if args.python_report is not None:
-        python_report = args.python_report
+        python_report = Path(_sanitize_path(str(args.python_report), "python-report"))
     elif default_python.exists():
         python_report = default_python
     else:
         python_report = None
 
     if args.js_report is not None:
-        js_report = args.js_report
+        js_report = Path(_sanitize_path(str(args.js_report), "js-report"))
     elif default_js.exists():
         js_report = default_js
     else:
@@ -720,7 +732,7 @@ def main() -> int:
     if js_report is not None and js_report.exists():
         js_src_root = _sanitize_path(args.js_src_root, "js-src-root")
         normalised = _normalize_js_report(js_report, js_src_root)
-        if normalised != js_report:
+        if normalised is not None:
             normalised_js_report = normalised
             js_report = normalised
 

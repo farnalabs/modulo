@@ -607,4 +607,11 @@ def test_normalize_js_report_is_noop_for_absolute_paths(tmp_path):
     report = tmp_path / "lcov.info"
     report.write_text("SF:/abs/App.vue\n")
 
-    assert mod._normalize_js_report(report, "frontend") == report
+    assert mod._normalize_js_report(report, "frontend") is None
+
+
+def test_normalize_js_report_does_not_escape_src_root(tmp_path):
+    report = tmp_path / "lcov.info"
+    report.write_text("SF:../../../etc/passwd\n")
+
+    assert mod._normalize_js_report(report, "frontend") is None
