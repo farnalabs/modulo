@@ -68,7 +68,6 @@ const EvalEditorView = () => import('../views/EvalEditorView.vue')
 const EvalProposalsQueueView = () => import('../views/EvalProposalsQueueView.vue')
 const VariantCompareView = () => import('../views/VariantCompareView.vue')
 const VariantBatchCompareView = () => import('../views/VariantBatchCompareView.vue')
-const ABTestModelsView = () => import('../views/ABTestModelsView.vue')
 const RunsListView = () => import('../views/RunsListView.vue')
 const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
@@ -347,11 +346,6 @@ const router = createRouter({
       component: VariantBatchCompareView,
       props: true,
       meta: { breadcrumb: 'Variant Batch Compare', parent: 'variant-compare', testid: 'variant-batch-compare' },
-    },
-    {
-      path: '/variants/ab-test',
-      name: 'ab-test-models',
-      component: ABTestModelsView,
     },
     {
       path: '/runs',
@@ -729,8 +723,6 @@ export async function enforceRoleTierVisibility(
 }
 
 // Note: the phantom `variant_batch_compare` feature flag was removed in FAR-926.
-// The legacy AB Test Models route (/variants/ab-test) remains reachable — retiring
-// it is a separate product decision.
 
 router.beforeEach(async (to) => {
   try {
