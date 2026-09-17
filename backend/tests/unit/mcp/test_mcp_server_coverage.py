@@ -499,7 +499,7 @@ class TestTeamScopedKeyMismatch(_Ctx):
         assert _team_scoped_key_mismatch(None) is False
 
 
-class TestTeamScopeError:
+class TestTeamScopeError(_Ctx):
     def test_error_shape(self) -> None:
         ms._ctx_team_id.set(_TEAM)
         err = _team_scope_error("pipeline", "p-123")
