@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -13,6 +14,10 @@ _log = logging.getLogger(__name__)
 # fire path (cron/polling/webhook/agent_signal) and the create_run gate so a
 # paused delivery is reported identically everywhere.
 PAUSE_SKIP_REASON = "triggers_paused"
+
+# FAR-899: schema validator mode constants.
+SCHEMA_VALIDATOR_MODE_KEY = "schema_validator_mode"
+_VALID_SCHEMA_VALIDATOR_MODES = frozenset({"lenient", "strict"})
 
 
 async def get_effective_setting(
@@ -38,6 +43,36 @@ async def get_effective_setting(
         _log.warning("Failed to resolve system config for key=%s", key, exc_info=True)
 
     return default
+
+
+async def resolve_schema_validator_mode(
+    session: AsyncSession,
+    org_id: uuid.UUID | None,
+) -> str:
+    """Resolve the schema validator mode from the effective setting store.
+
+    Resolution order (FAR-899):
+      1. ``organisations.settings_json["schema_validator_mode"]`` (per-org)
+      2. ``system_config`` row with key ``"schema_validator_mode"`` (instance-wide)
+      3. ``MODULO_SCHEMA_VALIDATOR_MODE`` env var (first-boot seed only)
+      4. ``"lenient"`` (hard default)
+
+    The env var acts as a first-boot/default seed only: once a runtime value
+    exists in the DB it wins over the env var.  Invalid or ``None`` values
+    resolve to ``"lenient"``.
+    """
+    raw = await get_effective_setting(
+        session,
+        org_id,
+        SCHEMA_VALIDATOR_MODE_KEY,
+        None,
+    )
+    if raw is None:
+        # First-boot seed: env var.
+        raw = os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+    if not isinstance(raw, str) or raw not in _VALID_SCHEMA_VALIDATOR_MODES:
+        return "lenient"
+    return raw
 
 
 async def resolve_authz_enforce(

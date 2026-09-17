@@ -3476,11 +3476,24 @@ def make_node_fn(
             output_schema_json=output_schema_json,
         )
 
-        # FAR-899: schema validator mode — read at RUNTIME from env var (first-boot seed)
-        # or system_config (runtime override). Default: "lenient".
-        _schema_validator_mode = os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
-        if _schema_validator_mode not in ("lenient", "strict"):
-            _schema_validator_mode = "lenient"
+        # FAR-899: schema validator mode — resolved from the effective-setting
+        # store (org.settings_json → system_config → env var → "lenient").
+        # Env var is first-boot seed only; DB runtime value wins.
+        _schema_validator_mode = "lenient"  # hard default
+        _ctx = get_conformance_ctx()
+        if _ctx is not None:
+            _sf = _ctx[0]
+            _org_raw = state.get("_org_id")
+            _org_uuid = _parse_uuid_opt(_org_raw)
+            if _sf is not None and _org_uuid is not None:
+                from modulo.db.settings_resolver import resolve_schema_validator_mode
+
+                try:
+                    async with _sf() as _sess, _sess.begin():
+                        _schema_validator_mode = await resolve_schema_validator_mode(_sess, _org_uuid)
+                except Exception:
+                    _log.warning("node.resolve_schema_validator_mode_failed", exc_info=True)
+                    _schema_validator_mode = os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
 
         return _finalize_node_result(
             node_id,
@@ -4472,11 +4485,24 @@ def make_manual_node_fn(
         decision = state.get("_hitl_decision")
         stamped_gate = decision.get("gate_id") if isinstance(decision, dict) else None
         if isinstance(decision, dict) and stamped_gate == node_id:
-            # FAR-899: schema validator mode — read at RUNTIME from env var (first-boot seed)
-            # or system_config (runtime override). Default: "lenient".
-            _schema_validator_mode = os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
-            if _schema_validator_mode not in ("lenient", "strict"):
-                _schema_validator_mode = "lenient"
+            # FAR-899: schema validator mode — resolved from the effective-
+            # setting store (org.settings_json → system_config → env var →
+            # "lenient").  Env var is first-boot seed only; DB value wins.
+            _schema_validator_mode = "lenient"  # hard default
+            _mctx = get_conformance_ctx()
+            if _mctx is not None:
+                _msf = _mctx[0]
+                _morg_raw = state.get("_org_id")
+                _morg_uuid = _parse_uuid_opt(_morg_raw)
+                if _msf is not None and _morg_uuid is not None:
+                    from modulo.db.settings_resolver import resolve_schema_validator_mode
+
+                    try:
+                        async with _msf() as _msess, _msess.begin():
+                            _schema_validator_mode = await resolve_schema_validator_mode(_msess, _morg_uuid)
+                    except Exception:
+                        _log.warning("manual_node.resolve_schema_validator_mode_failed", exc_info=True)
+                        _schema_validator_mode = os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
 
             manual_output = _manual_resume_output(
                 decision,
@@ -6286,8 +6312,9 @@ class _SandboxNodeConfig:
     # before sandbox creation, provisioned inside the sandbox.
     workspace_inputs: list[dict[str, Any]]
     # FAR-899: schema validator mode for output validation.
-    # Read at RUNTIME from env var MODULO_SCHEMA_VALIDATOR_MODE (first-boot seed)
-    # or system_config (runtime override). Default: "lenient".
+    # Resolved at runtime from the effective-setting store via
+    # resolve_schema_validator_mode(); the env var MODULO_SCHEMA_VALIDATOR_MODE
+    # is a first-boot seed only.  Default: "lenient".
     schema_validator_mode: str = "lenient"
     # FAR-899: schema identifier and version for logging/repair.
     schema_id: str = "unknown"
@@ -6837,9 +6864,30 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     session_factory = config.session_factory
     single_sandbox_node = config.single_sandbox_node
     workspace_inputs = config.workspace_inputs
-    schema_validator_mode = config.schema_validator_mode
     schema_id = config.schema_id
     schema_version = config.schema_version
+
+    # FAR-899: resolve schema_validator_mode from the effective-setting store
+    # (org.settings_json → system_config → env var → "lenient") instead of
+    # reading the env var directly.  The config's pre-seeded value is the
+    # env-var / "lenient" fallback; the DB-resolved value always wins when a
+    # runtime setting exists.
+    schema_validator_mode = config.schema_validator_mode  # env-var / default seed
+    if session_factory is not None:
+        from modulo.db.settings_resolver import resolve_schema_validator_mode
+
+        _org_id_raw = state.get("_org_id")
+        _org_uuid = _parse_uuid_opt(_org_id_raw)
+        if _org_uuid is not None:
+            try:
+                async with session_factory() as _sess, _sess.begin():
+                    schema_validator_mode = await resolve_schema_validator_mode(_sess, _org_uuid)
+            except Exception:
+                _log.warning(
+                    "sandbox_agent.schema_validator_mode_resolve_failed",
+                    extra={"node_id": node_id, "fallback": schema_validator_mode},
+                    exc_info=True,
+                )
 
     # FAR-582: the sandbox watchdog + artifact writer are created during
     # provisioning (after the sandbox is created). Bind them up-front so the
@@ -9242,14 +9290,13 @@ def _build_sandbox_node_config(
         except LoopInterceptConfigError as exc:
             raise ValueError(f"sandbox_agent node '{node_id}' has malformed loop_intercept config: {exc}") from exc
 
-    # FAR-899: schema validator mode — read at RUNTIME from env var (first-boot seed)
-    # or system_config (runtime override). Default: "lenient".
+    # FAR-899: schema validator mode — resolved at RUNTIME from the effective-
+    # setting store (org.settings_json → system_config → env var → "lenient").
+    # The sync config builder seeds with the env var / "lenient" default; the
+    # async caller (_sandbox_agent_impl) resolves the authoritative value via
+    # resolve_schema_validator_mode() so a DB-stored runtime value always wins.
     _schema_validator_mode = os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
     if _schema_validator_mode not in ("lenient", "strict"):
-        _log.warning(
-            "sandbox_agent.invalid_schema_validator_mode",
-            extra={"node_id": node_id, "mode": _schema_validator_mode},
-        )
         _schema_validator_mode = "lenient"
 
     # Schema identifier and version for logging/repair
