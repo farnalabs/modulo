@@ -244,6 +244,16 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `_resolve_org_license`, `_verify_license_key`, and the FOR-UPDATE locked
 > read-modify-write). Removed the tracked known gap — `feat-system-orgs` is now
 > fully BDD-covered (`system/system-orgs.md`).
+>
+> **Closed this walk (2026-09-17):** closed `feat-hitl`'s "No executing BDD
+> surface for modify-then-approve, `human_only` refusal, or overdue warnings"
+> gap (`hitl/hitl-gates.md`). Registered the new `gate_policies.feature` into
+> the executing BDD suite (`steps/test_hitl_gate_policies.py`), driving the
+> real `/approve-with-modification` route (200 + modified output in the resume
+> payload, 422 without a claim token, 410 with an expired one), the real REST
+> `human_only` denial verdict (API-key principal on a human_only gate → 403),
+> and the real `get_overdue_claims` aggregation (warning vs escalated).
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
