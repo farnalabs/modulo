@@ -125,7 +125,7 @@ def test_denied_break_glass_cannot_rotate_key(client: TestClient) -> None:
 def test_normal_admin_can_rotate_key(client: TestClient) -> None:
     from modulo.api.routes import admin_rotation
 
-    admin_rotation._rotation_in_progress = False
+    admin_rotation._rotation_owner = None
     _configure_auth(
         app,
         session=_make_session(_make_account(is_break_glass=False)),
@@ -137,7 +137,7 @@ def test_normal_admin_can_rotate_key(client: TestClient) -> None:
     ):
         resp = client.post(_ROTATE_KEY_URL, json={"new_fernet_key": _VALID_32})
     assert resp.status_code == 202
-    admin_rotation._rotation_in_progress = False
+    admin_rotation._rotation_owner = None
 
 
 def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -> None:
@@ -150,7 +150,7 @@ def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -
     """
     from modulo.api.routes import admin_rotation
 
-    admin_rotation._rotation_in_progress = False
+    admin_rotation._rotation_owner = None
 
     def _unprovisioned_settings() -> Settings:
         return Settings(
@@ -174,7 +174,7 @@ def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -
         app.dependency_overrides.pop(get_settings, None)
     assert resp.status_code == 503
     assert "MODULO_SYSTEM_DATABASE_URL" in resp.json()["detail"]
-    admin_rotation._rotation_in_progress = False
+    admin_rotation._rotation_owner = None
 
 
 async def test_run_rotation_background_uses_system_factory() -> None:
@@ -190,7 +190,7 @@ async def test_run_rotation_background_uses_system_factory() -> None:
     from modulo.api.routes import admin_rotation
     from modulo.core.fernet_rotation import RotationResult
 
-    admin_rotation._rotation_in_progress = False
+    admin_rotation._rotation_owner = None
 
     factory_calls: list[int] = []
     captured_session: dict[str, object] = {}
@@ -239,6 +239,7 @@ async def test_run_rotation_background_uses_system_factory() -> None:
             old_key="",
             org_id=_ORG_ID,
             actor_user_id=_USER_ID,
+            lock_owner="test-owner-token",
         )
 
     assert factory_calls, "rotation did not open a session via _make_system_session_factory"
@@ -246,7 +247,7 @@ async def test_run_rotation_background_uses_system_factory() -> None:
         "rotate_all_encrypted_data did not run on the modulo_system factory session"
     )
     assert admin_rotation._last_rotation_result["status"] == "completed"
-    admin_rotation._rotation_in_progress = False
+    admin_rotation._rotation_owner = None
 
 
 # ---------------------------------------------------------------------------

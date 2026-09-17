@@ -394,6 +394,15 @@ _OPENAI_COMPATIBLE_BACKENDS: dict[str, str | None] = {
     "vllm": "http://localhost:8000/v1",
 }
 
+# FIX 3 (FAR-898): providers routed through OpenAICompatibleBackend that do
+# NOT support OpenAI-style ``response_format`` json_schema.  These providers
+# either 400 or silently strip the ``response_format`` field, so their
+# ``supports_native_structured_output`` flag must be overridden to False at
+# build time.  The default stays True for the rest (OpenAI, DeepSeek, etc.).
+_NO_NATIVE_STRUCTURED_OUTPUT_PROVIDERS: frozenset[str] = frozenset(
+    {"ollama", "llamacpp", "localai", "tgi", "vllm"},
+)
+
 
 def _backend_class(provider: str, class_name: str) -> Callable[..., ModelBackendBase]:
     """Import a provider adapter only when that provider is configured."""
@@ -437,17 +446,27 @@ def _build_custom_stub_backend(fixture_map: dict[str, str]) -> ModelBackendBase:
     from modulo.model_backends.stub.backend import StubModelBackend
 
     class _CustomStubBackend(ModelBackendBase):
+        # NOTE: invoke()/stream() accept output_schema only to satisfy the
+        # ModelBackendBase contract; they intentionally discard it. The stub
+        # declares supports_native_structured_output = False, so node_runner
+        # (_invoke_node_model) never forwards a schema here anyway.
         def __init__(self, fixture_map: Mapping[str, str] | None = None, **kwargs: Any) -> None:
             del kwargs
             self._stub = StubModelBackend(fixture_map)
 
-        async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+        async def invoke(
+            self,
+            messages: list[BaseMessage],
+            output_schema: dict[str, Any] | None = None,
+            **kwargs: Any,
+        ) -> BaseMessage:
             return await self._stub.ainvoke(messages, **kwargs)
 
         def stream(
             self,
             messages: list[BaseMessage],
             tools: list[dict[str, Any]] | None = None,
+            output_schema: dict[str, Any] | None = None,
             **kwargs: Any,
         ) -> Any:
             return self._stub.astream(messages, tools=tools, **kwargs)
@@ -503,13 +522,18 @@ def _build_backend(
         base_url = creds.get("base_url", default_base_url) if default_base_url is not None else None
         from modulo.model_backends.module import OpenAICompatibleBackend
 
-        return OpenAICompatibleBackend(
+        backend = OpenAICompatibleBackend(
             api_key=creds.get("api_key"),
             model_id=model_id,
             base_url=base_url,
             provider=provider,
             **default_params,
         )
+        # FIX 3 (FAR-898): disable native structured output for providers
+        # that do not support OpenAI-style response_format json_schema.
+        if provider in _NO_NATIVE_STRUCTURED_OUTPUT_PROVIDERS:
+            backend.supports_native_structured_output = False
+        return backend
 
     if provider == "azure_openai":
         azure_endpoint = creds.get("azure_endpoint", "")

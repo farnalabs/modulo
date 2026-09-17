@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -112,6 +112,15 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+def _set_tenant_principal(role: str) -> None:
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="tenantuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role=role,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +346,24 @@ def test_create_from_template_with_hitl_gate(client: TestClient) -> None:
     data = resp.json()
     assert data["agent_count"] == 2
     assert data["edge_count"] == 2
+
+
+def test_create_from_template_below_operator_denied(client: TestClient) -> None:
+    _set_tenant_principal("viewer")
+    resp = client.post(f"/api/v1/pipelines/from-template/{uuid.uuid4()}")
+    assert resp.status_code == 403
+    assert "Permission 'pipeline.create'" in resp.json()["detail"]
+
+
+def test_from_template_endpoint_carries_pipeline_create_tag() -> None:
+    import inspect
+
+    from modulo.api.routes.templates import create_pipeline_from_template_endpoint
+
+    params = inspect.signature(create_pipeline_from_template_endpoint).parameters
+    dep = params["principal"].default
+    assert getattr(dep, "permission", None) == "pipeline.create"
+    assert getattr(dep, "permission_kind", None) == "tenant"
 
 
 # ---------------------------------------------------------------------------

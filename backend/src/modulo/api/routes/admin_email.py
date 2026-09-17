@@ -294,7 +294,10 @@ async def admin_test_email_settings(
             )
     except Exception:
         logger.exception("admin_email.test_send_smtp_password_decrypt_failed")
-        temp_settings.smtp_password = email_cfg.get("smtp_password", "")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SMTP password decryption failed.",
+        ) from None
     temp_settings.email_from = email_cfg.get("email_from", "")
     temp_settings.smtp_timeout = email_cfg.get("smtp_timeout", 30)
 

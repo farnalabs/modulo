@@ -88,8 +88,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ): "product analytics self-service consent (get_current_tenant_user)",
     # Model backend setup flow.
     ("POST", "/api/v1/model-backends/{backend_id}/complete-setup"): "setup flow",
-    # Pipeline from template: creation-only.
-    ("POST", "/api/v1/pipelines/from-template/{template_id}"): "creation-only (ADR 3.4)",
     # auth: no principal yet at these endpoints.
     ("POST", "/api/v1/auth/login"): "auth (no principal)",
     ("POST", "/api/v1/auth/refresh"): "auth (no principal)",
@@ -104,7 +102,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/auth/demo"): "demo auto-login (mints the principal)",
     # Composite templates: creation/update/delete/publish routes are now
     # permission-tagged (pipeline.*); only stateless detect-params remains exempt.
-    ("POST", "/api/v1/pipelines/{pipeline_id}/save-as-composite"): "composite creation-only (ADR 3.6)",
     ("POST", "/api/v1/composite-templates/detect-params"): "composite creation-only (ADR 3.6)",
     # Runs: node observe/recover carry inline admin/operator checks in the handler.
     ("POST", "/api/v1/runs/{run_id}/nodes/{node_id}/observe"): "inline admin/operator check in handler",
@@ -145,11 +142,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/admin/purge"): "admin.py inline _require_admin",
     ("POST", "/api/v1/admin/runs/purge"): "admin.py inline org_role==admin",
     ("PUT", "/api/v1/admin/runs/retention"): "admin.py inline org_role==admin",
-    # Team member management: inline admin-OR-team-operator check in handler
-    # (a team operator may manage their own team's members).
-    ("POST", "/api/v1/teams/{team_id}/members"): "inline admin-or-team-operator check",
-    ("DELETE", "/api/v1/teams/{team_id}/members/{membership_id}"): "inline admin-or-team-operator check",
-    ("PATCH", "/api/v1/teams/{team_id}/members/{membership_id}"): "inline admin-or-team-operator check",
     ("PUT", "/api/v1/admin/org"): "admin.py inline _require_org_admin",
     ("PUT", "/api/v1/admin/org/sandbox-concurrency"): "admin.py inline _require_org_admin",
     ("PUT", "/api/v1/admin/org/run-concurrency"): "admin.py inline _require_org_admin",

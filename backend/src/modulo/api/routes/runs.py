@@ -2016,9 +2016,19 @@ async def get_run_workspace_events(
             await set_rls_org(session, principal.organisation_id)
             from modulo.db.models.audit_event import AuditEvent
 
+            # Defence-in-depth org scoping (FAR-897 / #92): load the run through
+            # the org-scoped CRUD helper first so a foreign-org run id 404s
+            # instead of answering with an (empty) event list, and pin the
+            # audit-event query to the caller's organisation explicitly rather
+            # than relying on RLS alone.
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+
             result = await session.execute(
                 select(AuditEvent)
                 .where(
+                    AuditEvent.organisation_id == principal.organisation_id,
                     AuditEvent.resource_type == "workspace",
                     AuditEvent.resource_id == run_id,
                 )

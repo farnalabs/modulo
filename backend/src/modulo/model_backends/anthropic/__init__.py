@@ -1,10 +1,22 @@
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, ClassVar
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import BaseMessage
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
+from modulo.model_backends.base import (
+    HealthResult,
+    ModelBackendBase,
+    openai_compatible_health_check,
+    serialize_structured_output,
+)
+
+try:
+    from anthropic import APIConnectionError as AnthropicConnectionError
+    from anthropic import APIStatusError as AnthropicStatusError
+except ImportError:  # pragma: no cover — langchain-anthropic always brings anthropic
+    AnthropicStatusError = type("AnthropicStatusError", (Exception,), {})  # type: ignore[assignment,misc]
+    AnthropicConnectionError = type("AnthropicConnectionError", (Exception,), {})  # type: ignore[assignment,misc]
 
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 
@@ -13,6 +25,8 @@ class AnthropicBackend(ModelBackendBase):
     """Thin adapter over ChatAnthropic."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = True
+    _status_error_types: ClassVar[tuple[type[Exception], ...]] = (AnthropicStatusError,)
 
     def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
         self._model = ChatAnthropic(model=model_id, api_key=api_key, **default_params)
@@ -33,13 +47,36 @@ class AnthropicBackend(ModelBackendBase):
             extra_headers={"x-api-key": self._api_key, "anthropic-version": "2023-06-01"},
         )
 
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
-        return await self._model.ainvoke(messages, **kwargs)
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
+        try:
+            if output_schema is not None:
+                structured = self._model.with_structured_output(schema=output_schema)
+                result = await structured.ainvoke(messages, **kwargs)
+                # FIX 5 + FIX 7 (FAR-898): wrap structured output in the same
+                # error classification the normal path uses, and serialise via
+                # the shared helper so both backends return the same shape.
+                return serialize_structured_output(result)
+            return await self._model.ainvoke(messages, **kwargs)
+        except (AnthropicStatusError, AnthropicConnectionError) as exc:
+            classified = self._classify_gateway_error(exc)
+            if classified is exc:
+                raise
+            raise classified from exc
 
     def stream(
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
+        # FIX 4 (FAR-898): streaming structured output is not yet supported —
+        # with_structured_output in stream mode yields non-BaseMessage chunks
+        # and conflicts with tool-calling.  output_schema is intentionally
+        # ignored here; the non-streaming invoke() path handles structured output.
         return self._model.astream(messages, tools=tools, **kwargs)

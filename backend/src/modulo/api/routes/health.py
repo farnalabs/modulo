@@ -228,13 +228,13 @@ async def _check_database() -> CheckResult:
     except TimeoutError:
         _log.warning("health._check_database", exc_info=True)
         return _timeout_result("unavailable", "database", timeout, start)
-    except Exception as exc:
+    except Exception:
         _log.warning("health._check_database", exc_info=True)
         latency_ms = (time.monotonic() - start) * 1000
         return CheckResult(
             status="unavailable",
             latency_ms=round(latency_ms, 1),
-            detail=str(exc),
+            detail="database unreachable",
         )
 
 
@@ -255,13 +255,13 @@ async def _check_redis() -> CheckResult:
     except TimeoutError:
         _log.warning("health._check_redis", exc_info=True)
         return _timeout_result("degraded", "redis", timeout, start)
-    except Exception as exc:
+    except Exception:
         _log.warning("health._check_redis", exc_info=True)
         latency_ms = (time.monotonic() - start) * 1000
         return CheckResult(
             status="degraded",
             latency_ms=round(latency_ms, 1),
-            detail=str(exc),
+            detail="redis unreachable",
         )
     finally:
         if r is not None:
@@ -279,9 +279,9 @@ async def _check_checkpointer() -> CheckResult:
         conn = await asyncpg.connect(conn_string, timeout=timeout)
         try:
             await conn.fetchrow("SELECT 1 FROM checkpoint_migrations LIMIT 1")
-        except Exception as exc:
+        except Exception:
             _log.warning(_CODE_HEALTH_CHECK_CHECKPOINTER, exc_info=True)
-            return "degraded", f"checkpoint_migrations table not accessible: {exc}"
+            return "degraded", "checkpoint_migrations table not accessible"
         finally:
             with contextlib.suppress(Exception):
                 await conn.close()
@@ -294,12 +294,12 @@ async def _check_checkpointer() -> CheckResult:
     except TimeoutError:
         _log.warning(_CODE_HEALTH_CHECK_CHECKPOINTER, exc_info=True)
         return _timeout_result("degraded", "checkpointer", timeout, start)
-    except Exception as exc:
+    except Exception:
         _log.warning(_CODE_HEALTH_CHECK_CHECKPOINTER, exc_info=True)
         return CheckResult(
             status="degraded",
             latency_ms=round((time.monotonic() - start) * 1000, 1),
-            detail=str(exc) or "checkpointer check failed",
+            detail="checkpointer check failed",
         )
 
 
@@ -370,12 +370,12 @@ async def _check_migrations() -> CheckResult:
     except TimeoutError:
         _log.warning("health._check_migrations", exc_info=True)
         return _timeout_result("degraded", "migrations", timeout, start)
-    except Exception as exc:
+    except Exception:
         _log.warning("health._check_migrations", exc_info=True)
         return CheckResult(
             status="degraded",
             latency_ms=round((time.monotonic() - start) * 1000, 1),
-            detail=f"migration check failed: {exc}",
+            detail="migration check failed",
         )
 
 

@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, StrictBool
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_THIS_FEATURE_NOT_AVAILABLE
@@ -259,16 +259,16 @@ async def change_password(
             for family in families:
                 try:
                     await blacklist_family(session, family.family_id, current_user.account_id)
-                except HTTPException:
+                except (HTTPException, asyncio.CancelledError):
                     raise
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    logger.exception("me.change_password")
+                except SQLAlchemyError:
+                    logger.exception("me.change_password.blacklist_failed")
                     logger.warning(
-                        "Failed to blacklist previous token family during password change for account %s",
+                        "Failed to blacklist token family %s for account %s — aborting password change",
+                        family.family_id,
                         current_user.account_id,
                     )
+                    raise
 
             # Audit is fail-open-with-alert: the password change ALWAYS commits;
             # a failed audit write is loudly logged and never rolls back the change.

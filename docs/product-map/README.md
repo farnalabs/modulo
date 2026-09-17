@@ -209,9 +209,21 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `steps/test_discord_connector.py`, `steps/test_microsoft_teams_connector.py`,
 > `steps/test_sharepoint_connector.py`), shrunk `_ORPHANED_BDD_FEATURES` by
 > four, and closed `feat-connectors`'s Azure Repos / Discord / Microsoft Teams /
-> SharePoint per-connector BDD gaps (`configure/connectors.md`). The only
-> remaining orphans are `connectors/swappable_binding.feature` and the two
-> pipeline-validation features.
+> SharePoint per-connector BDD gaps (`configure/connectors.md`).
+>
+> **Closed this walk (2026-09-16):** wired the last connector orphan
+> `connectors/swappable_binding.feature` into the executing BDD suite from the
+> new `steps/test_pipeline_connector_binding.py` (driving the real
+> `extract_connector_bindings` + `GraphValidator.validate_definition`
+> connector-binding surface) and closed `feat-connectors`'s swappable-binding
+> BDD gap (`configure/connectors.md`). Wired the last pipeline-validation
+> orphan `pipelines/validation.feature` into the executing BDD suite from the
+> new `steps/test_pipeline_graph_validation.py` (driving the real
+> `GraphValidator.validate_definition` save-time topology/connector binding
+> checks) and deleted the redundant duplicate
+> `pipelines/pipeline_config_validation.feature`, closing `feat-pipelines`'s
+> graph/config-validation BDD gap (`pipelines/pipelines.md`).
+> `_ORPHANED_BDD_FEATURES` is now empty — no orphaned feature files remain.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

@@ -2,8 +2,12 @@
 
 ADR 017: the ingest route is swept with ``metrics.ingest`` (``viewer``
 minimum) so telemetry keeps working for every tenant role.
+
+FAR-880: the summary/timeseries read endpoints now carry the same
+``metrics.ingest`` dependency (viewer minimum — tenant read role).
 """
 
+import inspect
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,6 +26,9 @@ _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
+# Shared mock session reference for tests that need per-test execute results.
+_mock_session: AsyncMock | None = None
+
 
 def _make_settings() -> Settings:
     return Settings(
@@ -34,7 +41,9 @@ def _make_settings() -> Settings:
 
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
-    mock_session = configure_mock_session(AsyncMock())
+    global _mock_session
+    _mock_session = configure_mock_session(AsyncMock())
+    mock_session = _mock_session
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -55,6 +64,7 @@ def client() -> Generator[TestClient, None, None]:
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
+    _mock_session = None
 
 
 def _set_principal(role: str) -> None:
@@ -97,6 +107,78 @@ def test_web_vitals_unauthenticated_returns_4xx(client: TestClient) -> None:
             "/api/v1/metrics/web-vitals",
             json={"events": [{"metric_name": "LCP", "metric_value": 1200.0}]},
         )
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+        )
+    assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# FAR-880: read endpoints (summary / timeseries) carry metrics.ingest
+# ---------------------------------------------------------------------------
+
+
+def _empty_summary_result() -> MagicMock:
+    result = MagicMock()
+    result.all.return_value = []
+    result.scalar_one_or_none.return_value = True
+    return result
+
+
+def test_read_endpoints_carry_metrics_ingest_permission() -> None:
+    from modulo.api.routes import metrics
+
+    for name in ("get_web_vitals_summary", "get_web_vitals_timeseries"):
+        params = inspect.signature(getattr(metrics, name)).parameters
+        dep = params["current_user"].default
+        assert getattr(dep, "permission", None) == "metrics.ingest"
+        assert getattr(dep, "permission_kind", None) == "tenant"
+
+
+def test_web_vitals_summary_viewer_allowed(client: TestClient) -> None:
+    _set_principal("viewer")
+    assert _mock_session is not None
+    _mock_session.execute = AsyncMock(return_value=_empty_summary_result())
+    with (
+        patch("modulo.api.routes.metrics.set_rls_org"),
+        patch("modulo.api.routes.metrics.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/metrics/web-vitals/summary?days=7")
+    assert resp.status_code == 200
+    assert not resp.json()
+
+
+def test_web_vitals_summary_unauthenticated_returns_4xx(client: TestClient) -> None:
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_tenant_user, None)
+    try:
+        resp = client.get("/api/v1/metrics/web-vitals/summary?days=7")
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+        )
+    assert resp.status_code in (401, 403)
+
+
+def test_web_vitals_timeseries_viewer_allowed(client: TestClient) -> None:
+    _set_principal("viewer")
+    assert _mock_session is not None
+    _mock_session.execute = AsyncMock(return_value=_empty_summary_result())
+    with (
+        patch("modulo.api.routes.metrics.set_rls_org"),
+        patch("modulo.api.routes.metrics.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/metrics/web-vitals/timeseries?metric_name=LCP&days=7")
+    assert resp.status_code == 200
+    assert not resp.json()
+
+
+def test_web_vitals_timeseries_unauthenticated_returns_4xx(client: TestClient) -> None:
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_tenant_user, None)
+    try:
+        resp = client.get("/api/v1/metrics/web-vitals/timeseries?metric_name=LCP&days=7")
     finally:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"

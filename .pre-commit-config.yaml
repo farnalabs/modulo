@@ -199,9 +199,9 @@
         files: ^backend/(src|tests)/.*\.py$
         pass_filenames: false
         stages: [pre-push]
-      - id: prepush-rebase-check
-        name: prepush rebase-before-first-push check
-        entry: uv run --project backend --no-sync python scripts/run_check_rebase_before_push.py
+      - id: prepush-merge-conflict-check
+        name: prepush merge-conflict-with-main check
+        entry: uv run --project backend --no-sync python scripts/run_check_merge_conflict.py
         language: system
         pass_filenames: false
         stages: [pre-push]

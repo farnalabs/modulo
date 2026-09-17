@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from langchain_core.messages import BaseMessage
@@ -7,19 +7,12 @@ from langchain_openai import ChatOpenAI
 from openai import APIConnectionError, APIStatusError
 
 from modulo.core.ssrf import pinned_async_client_sync
-from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
-
-
-class ProviderUnavailableError(RuntimeError):
-    """The provider gateway is unavailable or returned an upstream HTTP 5xx.
-
-    Raised instead of the raw ``openai`` error (``InternalServerError`` /
-    ``APIConnectionError`` / a gateway's misleading ``AuthenticationError``)
-    when the provider's model endpoint is down. The run error mapper derives
-    the run's ``error_code`` from the exception type name, so this type
-    distinguishes a gateway outage from a genuinely bad API key — which still
-    surfaces as ``openai.AuthenticationError``.
-    """
+from modulo.model_backends.base import (
+    HealthResult,
+    ModelBackendBase,
+    openai_compatible_health_check,
+    serialize_structured_output,
+)
 
 
 class OpenAICompatibleBackend(ModelBackendBase):
@@ -28,6 +21,8 @@ class OpenAICompatibleBackend(ModelBackendBase):
     """
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = True
+    _status_error_types: ClassVar[tuple[type[Exception], ...]] = (APIStatusError,)
 
     def __init__(
         self,
@@ -94,27 +89,29 @@ class OpenAICompatibleBackend(ModelBackendBase):
             api_key=self._api_key,
         )
 
-    def _classify_gateway_error(self, exc: Exception) -> Exception:
-        """Return the exception to raise for an OpenAI-compatible call failure.
-
-        HTTP 4xx (including ``AuthenticationError``) and 429 pass through
-        unchanged — those are actionable as-is. HTTP 5xx and connection
-        failures mean the provider gateway/completions path is down, not that
-        the key is wrong, so they are re-raised as ``ProviderUnavailableError``.
-        """
-        if isinstance(exc, APIStatusError) and exc.status_code < 500:
-            return exc
-        status = getattr(exc, "status_code", None)
-        detail = getattr(exc, "message", None) or str(exc)
-        status_desc = f"HTTP {status}" if status else "connection failure"
+    def _gateway_error_context(self) -> str:
         base_url = self._base_url or "https://api.openai.com/v1"
-        return ProviderUnavailableError(
-            f"{self._backend_id} provider gateway ({base_url}) returned {status_desc} "
-            f"on the model endpoint — upstream outage, not an auth failure. Detail: {detail}"
-        )
+        return f" ({base_url})"
 
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
         try:
+            if output_schema is not None:
+                # FIX 1 (FAR-898): use LangChain's with_structured_output to get the
+                # correct response_format wrapping — OpenAI requires the schema
+                # nested inside {"name": ..., "schema": ...}, which the raw
+                # bind(response_format={"type": "json_schema", "json_schema": ...})
+                # does not provide and 400s on.
+                structured = self._model.with_structured_output(
+                    schema=output_schema,
+                    method="json_schema",
+                )
+                result = await structured.ainvoke(messages, **kwargs)
+                return serialize_structured_output(result)
             return await self._model.ainvoke(messages, **kwargs)
         except (APIStatusError, APIConnectionError) as exc:
             classified = self._classify_gateway_error(exc)
@@ -126,8 +123,13 @@ class OpenAICompatibleBackend(ModelBackendBase):
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
+        # FIX 4 (FAR-898): streaming structured output is not yet supported —
+        # with_structured_output in stream mode yields non-BaseMessage chunks
+        # and conflicts with tool-calling.  output_schema is intentionally
+        # ignored here; the non-streaming invoke() path handles structured output.
         async def _iter() -> AsyncIterator[BaseMessage]:
             try:
                 async for chunk in self._model.astream(messages, tools=tools, **kwargs):

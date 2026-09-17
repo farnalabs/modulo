@@ -22,6 +22,7 @@
             :submit-label="$t('views.SettingsSsoView.create')"
             :saving-label="$t('views.SettingsSsoView.creating')"
             :error="formError"
+            :presets="presets"
             @update:data="onFormUpdate($event)"
             @submit="createProvider"
             @cancel="closeForm"
@@ -112,6 +113,8 @@
                 :submit-label="$t('views.SettingsSsoView.save')"
                 :saving-label="$t('views.SettingsSsoView.saving')"
                 :error="formError"
+                :presets="presets"
+                :callback-url="editProviderCallbackUrl"
                 @update:data="onFormUpdate($event)"
                 @submit="updateProvider"
                 @cancel="closeEditForm"
@@ -160,13 +163,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import Button from 'primevue/button'
 import TableActions from '../components/shared/TableActions.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'
+import type { SsoPresetInfo } from '../components/SsoProviderForm.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -192,6 +196,8 @@ interface SsoFormState {
   scopes: string
   auto_provision: boolean
   default_role: string
+  preset: string
+  tenant_domain: string
 }
 
 function emptyForm(): SsoFormState {
@@ -207,6 +213,8 @@ function emptyForm(): SsoFormState {
     scopes: '',
     auto_provision: true,
     default_role: 'runner',
+    preset: 'custom',
+    tenant_domain: '',
   }
 }
 
@@ -219,9 +227,30 @@ const { loading, error, data: providers, load: loadProviders } = useDataFetch<Ss
   { initialValue: [] as SsoProviderResponse[] }
 )
 
+// Fetch SSO presets — graceful fallback to empty on failure
+const presets = ref<SsoPresetInfo[]>([])
+async function loadPresets() {
+  try {
+    const resp = await api.GET('/api/v1/admin/sso/presets')
+    if (!resp.error && Array.isArray(resp.data)) {
+      presets.value = resp.data as unknown as SsoPresetInfo[]
+    }
+  } catch {
+    // Fallback: no presets available, Custom-only mode
+  }
+}
+loadPresets()
+
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<SsoFormState>(emptyForm())
 const editProviderId = ref<string | null>(null)
+
+// Callback URL for the currently-edited provider (read-only, from server response)
+const editProviderCallbackUrl = computed(() => {
+  if (!editProviderId.value) return null
+  const provider = providers.value.find(p => p.id === editProviderId.value)
+  return provider?.callback_url ?? null
+})
 
 const saving = ref(false)
 const formError = ref<string | null>(null)
@@ -267,6 +296,8 @@ function openEditForm(provider: SsoProviderResponse) {
     scopes: (provider.scopes ?? []).join(', '),
     auto_provision: provider.auto_provision,
     default_role: provider.default_role,
+    preset: provider.preset ?? 'custom',
+    tenant_domain: provider.tenant_domain ?? '',
   })
 }
 
@@ -293,14 +324,20 @@ function buildCreateBody(): SsoProviderCreate {
     auto_provision: formData.auto_provision,
     default_role: formData.default_role,
     enabled: true,
-    preset: 'custom',
+    preset: formData.preset || 'custom',
   }
 
   if (formData.provider_type === 'oidc') {
     base.client_id = formData.client_id.trim() || null
     base.client_secret = formData.client_secret.trim() || null
-    base.discovery_url = formData.discovery_url.trim() || null
-    if (scopes.length > 0) base.scopes = scopes
+    // Only send discovery_url and scopes for custom preset (server derives for native)
+    if (formData.preset === 'custom') {
+      base.discovery_url = formData.discovery_url.trim() || null
+      if (scopes.length > 0) base.scopes = scopes
+    }
+    if (formData.tenant_domain?.trim()) {
+      base.tenant_domain = formData.tenant_domain.trim()
+    }
   } else {
     base.metadata_url = formData.metadata_url.trim() || null
     base.metadata_xml = formData.metadata_xml.trim() || null
@@ -319,13 +356,18 @@ function buildUpdateBody(): SsoProviderUpdate {
     name: formData.name.trim() || null,
     auto_provision: formData.auto_provision ?? null,
     default_role: formData.default_role || null,
+    preset: formData.preset || null,
   }
 
   if (formData.provider_type === 'oidc') {
     body.client_id = formData.client_id.trim() || null
     if (formData.client_secret.trim()) body.client_secret = formData.client_secret.trim()
-    body.discovery_url = formData.discovery_url.trim() || null
-    body.scopes = scopes.length > 0 ? scopes : null
+    // Only send discovery_url and scopes for custom preset
+    if (formData.preset === 'custom') {
+      body.discovery_url = formData.discovery_url.trim() || null
+      body.scopes = scopes.length > 0 ? scopes : null
+    }
+    body.tenant_domain = formData.tenant_domain?.trim() || null
   } else {
     body.metadata_url = formData.metadata_url.trim() || null
     body.metadata_xml = formData.metadata_xml.trim() || null

@@ -1,16 +1,27 @@
-from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
+from modulo.model_backends.base import (
+    HealthResult,
+    LangChainChatForwardingMixin,
+    ModelBackendBase,
+    openai_compatible_health_check,
+)
 
 
-class AzureOpenAIBackend(ModelBackendBase):
+class AzureOpenAIBackend(LangChainChatForwardingMixin, ModelBackendBase):
     """Thin adapter over ChatOpenAI configured for Azure OpenAI."""
 
     supports_tools: bool = True
+    # Deliberately False: recent Azure OpenAI API versions *do* accept
+    # ``response_format`` json_schema, but this adapter's invoke() has no
+    # structured-output path (it forwards straight to ChatOpenAI).  Setting
+    # the flag True would make _invoke_node_model forward output_schema to an
+    # adapter that ignores it, silently skipping native decoding.  Revisit
+    # only when invoke() gains a with_structured_output branch like
+    # OpenAICompatibleBackend.
+    supports_native_structured_output: bool = False
 
     def __init__(
         self,
@@ -54,14 +65,3 @@ class AzureOpenAIBackend(ModelBackendBase):
             api_key=None,
             extra_headers={"api-key": self._api_key},
         )
-
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
-        return await self._model.ainvoke(messages, **kwargs)
-
-    def stream(
-        self,
-        messages: list[BaseMessage],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, tools=tools, **kwargs)

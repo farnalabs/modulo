@@ -473,13 +473,14 @@ def test_bdd_citations_are_registered_coverage():
 #: so the set can only SHRINK: the way to remove an entry is to either wire the
 #: feature file up from a step module (rooting it in the real coverage) or
 #: delete the file. New orphans fail ``test_no_unregistered_bdd_feature_files``.
-_ORPHANED_BDD_FEATURES = frozenset(
-    {
-        "backend/tests/bdd/features/connectors/swappable_binding.feature",
-        "backend/tests/bdd/features/pipelines/pipeline_config_validation.feature",
-        "backend/tests/bdd/features/pipelines/validation.feature",
-    }
-)
+#:
+#: Cleared by the 2026-09-16 product-map walk: ``swappable_binding.feature`` is
+#: wired from ``steps/test_pipeline_connector_binding.py``,
+#: ``validation.feature`` from ``steps/test_pipeline_graph_validation.py``, and
+#: ``pipeline_config_validation.feature`` (a redundant duplicate of
+#: ``validation.feature``) was deleted. No orphaned feature files remain — the
+#: debt list is empty.
+_ORPHANED_BDD_FEATURES: frozenset[str] = frozenset()
 
 
 def test_no_unregistered_bdd_feature_files():

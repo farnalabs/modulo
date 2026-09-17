@@ -1,20 +1,24 @@
 """MistralBackend — wraps ChatMistralAI as a Modulo ModelBackendBase."""
 
-from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import BaseMessage
 from langchain_mistralai import ChatMistralAI
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
+from modulo.model_backends.base import (
+    HealthResult,
+    LangChainChatForwardingMixin,
+    ModelBackendBase,
+    openai_compatible_health_check,
+)
 
 MISTRAL_BASE_URL = "https://api.mistral.ai/v1"
 
 
-class MistralBackend(ModelBackendBase):
+class MistralBackend(LangChainChatForwardingMixin, ModelBackendBase):
     """Thin adapter over ChatMistralAI for Mistral's API."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
         self._model = ChatMistralAI(
@@ -38,14 +42,3 @@ class MistralBackend(ModelBackendBase):
             base_url=MISTRAL_BASE_URL,
             api_key=self._api_key,
         )
-
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
-        return await self._model.ainvoke(messages, **kwargs)
-
-    def stream(
-        self,
-        messages: list[BaseMessage],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, tools=tools, **kwargs)

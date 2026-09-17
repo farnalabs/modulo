@@ -1,22 +1,22 @@
 """WatsonXBackend — wraps ChatWatsonx as a Modulo ModelBackendBase."""
 
-from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import BaseMessage
 from langchain_ibm import ChatWatsonx
 
 from modulo.model_backends.base import (
+    LangChainChatForwardingMixin,
     ModelBackendBase,
 )
 
 WATSONX_BASE_URL = "https://us-south.ml.cloud.ibm.com"
 
 
-class WatsonXBackend(ModelBackendBase):
+class WatsonXBackend(LangChainChatForwardingMixin, ModelBackendBase):
     """Thin adapter over ChatWatsonx for IBM watsonx.ai models."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(
         self,
@@ -41,14 +41,3 @@ class WatsonXBackend(ModelBackendBase):
 
     def __repr__(self) -> str:
         return f"WatsonXBackend(model_id={self._backend_id!r})"
-
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
-        return await self._model.ainvoke(messages, **kwargs)
-
-    def stream(
-        self,
-        messages: list[BaseMessage],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, tools=tools, **kwargs)

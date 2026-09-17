@@ -361,6 +361,31 @@ class TestSaveAsComposite:
         )
         assert resp.status_code in (401, 403)
 
+    def test_save_as_composite_below_operator_denied(self, client: TestClient) -> None:
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+            username="viewer",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="viewer",
+        )
+        resp = client.post(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/save-as-composite",
+            json={"name": "Test", "selected_node_ids": [str(uuid.uuid4())]},
+        )
+        assert resp.status_code == 403
+        assert "Permission 'pipeline.create'" in resp.json()["detail"]
+
+    def test_save_as_composite_carries_team_scope_gate(self) -> None:
+        from tests.unit.api.route_introspection import get_mutating_routes, get_permission_tag
+
+        route = next(
+            r for r in get_mutating_routes(app) if r.path == "/api/v1/pipelines/{pipeline_id}/save-as-composite"
+        )
+        tag = get_permission_tag(route)
+        assert tag is not None, "save-as-composite lost its permission tags"
+        assert any(t["permission"] == "pipeline.create" for t in tag["tags"])
+        assert any(t["permission_kind"] == "team_scope" for t in tag["tags"])
+
 
 class TestCompositeDetectParams:
     """POST /api/v1/composite-templates/detect-params"""

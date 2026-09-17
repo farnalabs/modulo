@@ -789,6 +789,15 @@ async def admin_create_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Database migration incomplete. Please run database migrations.",
         ) from None
+    except IntegrityError:
+        # Race condition: a concurrent request inserted the same email
+        # between _existing_account_or_conflict and _create_or_adopt_account.
+        # The DB unique constraint fires IntegrityError — map to 409, not 503.
+        logger.warning(
+            "admin_create_user: IntegrityError — concurrent duplicate email",
+            exc_info=True,
+        )
+        _raise_conflict()
     except SQLAlchemyError:
         logger.exception("admin_create_user: DB error")
         _raise_db_unavailable("Database error occurred. Please try again later.")
@@ -2277,7 +2286,7 @@ async def admin_queue_metrics(
                 val = await r.execute_command("LLEN", f"saq:{qname}:queued")  # type: ignore[no-untyped-call]
                 queues[qname] = int(val or 0)
             except Exception:
-                logger.warning("admin.queue_metrics.llen_failed queue=%s", qname)
+                logger.warning("admin.queue_metrics.llen_failed queue=%s", qname, exc_info=True)
     except Exception as exc:
         logger.warning("admin.queue_metrics.redis_failed: %s", exc)
         err = HTTPException(

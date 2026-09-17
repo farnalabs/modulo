@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 from openai import InternalServerError
 
-from modulo.model_backends.module import ProviderUnavailableError
+from modulo.model_backends.base import ProviderUnavailableError
 from modulo.model_backends.openai import OpenAIBackend
 
 

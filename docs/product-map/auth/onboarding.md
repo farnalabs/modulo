@@ -49,14 +49,23 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
 
 ## Known Gaps
 
-- **BDD drift** — `sdlc_onboarding.feature` describes a 5-step SDLC wizard
-  (`connect_tools` → `run_inference` → `review_schemas` → …) with a
-  `GET /api/v1/onboarding/step/connect_tools` endpoint that does not exist; the shipped
-  API is the 6-action checklist above. The feature file is red-herring coverage.
 - **No PRD section reference** — onboarding has no single PRD section mapped in code
   or ADRs.
 
 ## QA History
+
+- 2026-09-16: **improve-architecture (product-map walk)** — closed the "BDD drift"
+  gap: `sdlc_onboarding.feature` and its step module described a fictional 5-step
+  SDLC wizard (`connect_tools` → `run_inference` → `review_schemas` → …) with a
+  `GET /api/v1/onboarding/step/connect_tools` endpoint that does not exist — none of
+  its steps touched the app, so it was red-herring coverage. The feature now
+  describes the shipped product (a persisted 6-action checklist) and every scenario
+  drives the real routes through the shared `client` fixture with only the DB layer
+  patched: first-run status + action ordering, auto-completion from real org state,
+  manual complete (incl. idempotency), skip, unknown-action 422, dismissal, the
+  seed-examples success/refusal paths, and starter-pipeline creation. Ten scenarios
+  now execute against `GET /status`, `POST /actions/{id}/complete|skip`, `POST
+  /dismiss`, `POST /seed-examples` and `POST /starter-pipeline`.
 
 - 2026-09-13: **improve-architecture (product-map walk)** — closed the "seed
   truncation" gap in `POST /seed-examples`: the endpoint previously created the

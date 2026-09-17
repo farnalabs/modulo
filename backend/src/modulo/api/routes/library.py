@@ -1687,34 +1687,32 @@ async def create_pipeline_from_template_endpoint(
     principal: TenantPrincipal = require_permission("pipeline.create"),
 ) -> PipelineFromTemplateResponse:
     try:
-        primitive = await get_primitive(session, principal.organisation_id, primitive_id)
-    except IntegrityError:
-        _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
-        raise _conflict_error() from None
-    except ProgrammingError:
-        _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
-        raise _not_implemented_error() from None
-    if primitive is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Primitive {primitive_id} not found",
-        )
-
-    if primitive.primitive_type != "pipeline_template":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Primitive type '{primitive.primitive_type}' is not a pipeline_template",
-        )
-
-    name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(
-        primitive,
-        req.name,
-        req.description,
-    )
-
-    try:
+        # TOCTOU fix (#328): the primitive read MUST happen inside the same
+        # transaction as the pipeline create.  Previously the read was outside
+        # the transaction, so a concurrent delete/modify could create a pipeline
+        # from a stale or deleted source.
         async with session.begin():
             await _set_rls_context(session, principal)
+
+            primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+            if primitive is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Primitive {primitive_id} not found",
+                )
+
+            if primitive.primitive_type != "pipeline_template":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Primitive type '{primitive.primitive_type}' is not a pipeline_template",
+                )
+
+            name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(
+                primitive,
+                req.name,
+                req.description,
+            )
+
             pipeline = await create_pipeline(
                 session,
                 org_id=principal.organisation_id,
@@ -1726,6 +1724,8 @@ async def create_pipeline_from_template_endpoint(
             pipeline.graph_nodes_json = graph_nodes
             _add_pipeline_edges(session, principal.organisation_id, pipeline, edges)
             await session.flush()
+    except HTTPException:
+        raise
     except IntegrityError:
         _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
         raise _conflict_error() from None

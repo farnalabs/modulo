@@ -358,18 +358,28 @@ def _parse_optional_iso(value: str | None, field: str) -> datetime | None:
         ) from None
 
 
-async def _build_node_name_map(session: AsyncSession, items: list[Any]) -> dict[str, str]:
+async def _build_node_name_map(session: AsyncSession, items: list[Any], org_id: uuid.UUID) -> dict[str, str]:
     """Build a graph node id -> display-name map for a set of feedback records."""
     node_name_map: dict[str, str] = {}
     run_ids = [r.run_id for r in items if r.run_id]
     if not run_ids:
         return node_name_map
-    run_rows = await session.execute(select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids)))
+    # Defence-in-depth org scoping (FAR-897 / #330): every query below carries
+    # an explicit organisation_id predicate instead of relying on RLS alone.
+    run_rows = await session.execute(
+        select(Run.id, Run.snapshot_id).where(
+            Run.id.in_(run_ids),
+            Run.organisation_id == org_id,
+        )
+    )
     snapshot_ids = [r.snapshot_id for r in run_rows.all() if r.snapshot_id]
     if not snapshot_ids:
         return node_name_map
     snap_rows = await session.execute(
-        select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(PipelineSnapshot.id.in_(snapshot_ids))
+        select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(
+            PipelineSnapshot.id.in_(snapshot_ids),
+            PipelineSnapshot.organisation_id == org_id,
+        )
     )
     for _, graph_json in snap_rows.all():
         if graph_json:
@@ -392,7 +402,7 @@ async def list_eval_proposals(
             mgr = FeedbackManager(session, principal.organisation_id)
             result = await mgr.get_eval_proposals(page=page, page_size=page_size)
             items = result["items"]
-            node_name_map = await _build_node_name_map(session, items)
+            node_name_map = await _build_node_name_map(session, items, principal.organisation_id)
     except IntegrityError as exc:
         logger.exception(_CODE_FEEDBACK_LIST_EVAL_PROPOSALS)
         raise HTTPException(
@@ -447,8 +457,15 @@ async def _resolve_producing_node_uuid(
         pass
     if run.snapshot_id is None:
         return None
+    # Defence-in-depth org scoping (FAR-897 / #330): explicit organisation_id
+    # predicate instead of relying on RLS alone.
     snap = (
-        await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id))
+        await session.execute(
+            select(PipelineSnapshot).where(
+                PipelineSnapshot.id == run.snapshot_id,
+                PipelineSnapshot.organisation_id == run.organisation_id,
+            )
+        )
     ).scalar_one_or_none()
     if snap is None or not snap.graph_json:
         return None
@@ -468,6 +485,7 @@ async def _resolve_publish_context(
     session: AsyncSession,
     record_id: uuid.UUID,
     node_id: uuid.UUID | None,
+    org_id: uuid.UUID,
 ) -> tuple[Run, uuid.UUID]:
     """Validate that ``record_id`` can be published and resolve its target node."""
     record = await mgr.get_feedback_record(record_id)
@@ -488,7 +506,16 @@ async def _resolve_publish_context(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Feedback record has no associated run — cannot resolve the pipeline",
         )
-    run = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
+    # Defence-in-depth org scoping (FAR-897 / #330): explicit organisation_id
+    # predicate instead of relying on RLS alone.
+    run = (
+        await session.execute(
+            select(Run).where(
+                Run.id == record.run_id,
+                Run.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     if node_id is None:
@@ -526,7 +553,9 @@ async def publish_eval_proposal(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mgr = FeedbackManager(session, principal.organisation_id)
-            run, node_id = await _resolve_publish_context(mgr, session, record_id, req.node_id)
+            run, node_id = await _resolve_publish_context(
+                mgr, session, record_id, req.node_id, principal.organisation_id
+            )
 
             eval_def = EvalDefinition(
                 organisation_id=principal.organisation_id,
@@ -750,7 +779,16 @@ async def _load_eval_suite(session: AsyncSession, record: Any, org_id: uuid.UUID
     """Load the eval definitions for the pipeline associated with a run."""
     if not record.run_id:
         return []
-    run = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
+    # Defence-in-depth org scoping (FAR-897 / #330): explicit organisation_id
+    # predicate instead of relying on RLS alone.
+    run = (
+        await session.execute(
+            select(Run).where(
+                Run.id == record.run_id,
+                Run.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
     if run is None:
         return []
     eval_rows = (
@@ -813,11 +851,20 @@ async def detect_eval_gap(
     }
 
 
-async def _resolve_pipeline_name(session: AsyncSession, record: Any) -> str | None:
+async def _resolve_pipeline_name(session: AsyncSession, record: Any, org_id: uuid.UUID) -> str | None:
     """Resolve the display name of the pipeline a feedback record's run belongs to."""
     if record is None or not record.run_id:
         return None
-    run_row = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
+    # Defence-in-depth org scoping (FAR-897 / #330): explicit organisation_id
+    # predicate instead of relying on RLS alone.
+    run_row = (
+        await session.execute(
+            select(Run).where(
+                Run.id == record.run_id,
+                Run.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
     if run_row is None:
         return None
     pipeline = await session.get(Pipeline, run_row.pipeline_id)
@@ -837,7 +884,7 @@ async def get_inbox_item(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.get_feedback_record(record_id)
-            pipeline_name = await _resolve_pipeline_name(session, record)
+            pipeline_name = await _resolve_pipeline_name(session, record, principal.organisation_id)
     except IntegrityError as exc:
         logger.exception(_CODE_FEEDBACK_GET_INBOX_ITEM)
         raise HTTPException(

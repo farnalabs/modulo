@@ -32,6 +32,8 @@ bdd:
   - backend/tests/bdd/features/pipelines/checkpoint_resume.feature
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
   - backend/tests/bdd/features/pipelines/run_sequential.feature
+  - backend/tests/bdd/features/pipelines/validation.feature
+  - backend/tests/bdd/steps/test_pipeline_graph_validation.py
   - backend/tests/bdd/features/admin/node-categories.feature
   - backend/tests/bdd/steps/test_pipelines.py
   - backend/tests/bdd/steps/test_alpha_pipelines.py
@@ -95,6 +97,14 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       operator semantics (reject, never clamp — same precedent as FAR-511); a
       scalar `agent_command` is unaffected because there is no join
       (FAR-664, `backend/tests/unit/graph_validator/test_edges_and_sandbox_validation.py`)
+- [x] Save-time graph validation is BDD-exercised against the real
+      `GraphValidator.validate_definition` surface (mocked session — the same
+      DB-free pattern as `tests/unit/graph_validator`): a graph with no nodes or
+      an omitted `nodes` field is rejected (`TOPOLOGY_NO_NODES`), a circular
+      dependency is rejected (`TOPOLOGY_CYCLE`), an edge referencing an unknown
+      node is rejected (`TOPOLOGY_UNKNOWN_TARGET`), and a minimal single-node
+      graph is accepted (`validation.feature`,
+      `steps/test_pipeline_graph_validation.py`)
 
 ## Known Gaps
 
@@ -105,18 +115,28 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   directory but describe run-time behaviour and are registered for execution — by
   `steps/test_run_context.py` and `steps/test_pipelines.py` respectively — so they are
   not re-listed here to keep the run surfaces owned by `feat-runs` / `feat-variants`.
-- **No executing BDD surface for graph validation / pipeline-config validation** —
-  `pipelines/validation.feature` and
-  `pipelines/pipeline_config_validation.feature` ship under `tests/bdd/features/pipelines/`
-  but `steps/test_pipelines.py` does not register them via `scenarios(...)`, so they
-  never execute and are no longer cited as coverage here. The behaviours are
-  unit-covered (`tests/unit/graph_validator`, `tests/unit/pipeline_engine`,
-  `test_pipelines_endpoint.py`); the existing validation steps are awaiting a dedicated
-  graph-validation endpoint — POST /api/v1/pipelines uses `PipelineCreate` (no graph
-  body), so graph assertions would pass/fail for the wrong reason today. Wiring the
-  feature files up needs a real graph-validation create/edit surface first.
+- **No BDD for authoring the graph through a real create/edit endpoint** — the graph
+  save path is DB-backed (the graph PATCH route), so the `validation.feature`
+  scenarios exercise the real `GraphValidator.validate_definition` save-time
+  surface directly against a mocked session (topology + connector binding
+  checks) rather than through the HTTP endpoint; the endpoint layer stays
+  unit-covered (`test_pipelines_endpoint.py`) and the `graph_validator` suite
+  covers the DB-backed pre-run checks.
 
 ## QA History
+- 2026-09-16: **improve-architecture (product-map walk)** — closed the last BDD
+  graph/config-validation gap. `pipelines/validation.feature` (a stale
+  placeholder draft asserting graph semantics against the create endpoint,
+  which only accepts `PipelineCreate`) was rewritten into an accurate save-time
+  graph-validation spec and wired into the executing suite from the new
+  `steps/test_pipeline_graph_validation.py`, which drives the REAL
+  `GraphValidator.validate_definition` with a mocked session (the DB-free
+  pattern of `tests/unit/graph_validator`): 5 scenarios — no-nodes /
+  omitted-`nodes` → `TOPOLOGY_NO_NODES`, circular dependency →
+  `TOPOLOGY_CYCLE`, dangling edge → `TOPOLOGY_UNKNOWN_TARGET`, minimal graph →
+  valid — all collect and pass. The redundant duplicate
+  `pipelines/pipeline_config_validation.feature` (the same four scenarios only
+  reworded) was deleted. `_ORPHANED_BDD_FEATURES` shrinks to zero.
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for `/pipelines`, which

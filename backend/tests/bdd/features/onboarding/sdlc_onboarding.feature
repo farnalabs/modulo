@@ -1,61 +1,78 @@
-Feature: SDLC Onboarding Path
-  As a new Modulo user with existing SDLC tooling
-  I want to complete a guided 5-step onboarding wizard
-  So that I can connect my tools, infer schemas, and wire my first pipeline
+Feature: Onboarding action checklist
+  As a new Modulo user with a freshly created organisation
+  I want a persisted 6-action onboarding checklist driven by real org state
+  So that I can complete or skip first-run setup and seed a starter example
 
   Background:
-    Given the SDLC onboarding steps are configured
-    And no steps have been completed yet
+    Given the onboarding progress is fully empty
+    And I am authenticated as an admin in org "default"
 
-  Scenario: Full SDLC onboarding flow
-    When I GET /api/v1/onboarding/status
-    Then the response indicates it is the first run
-    And the current step is step 1
-    And the total steps is 5
-
-  Scenario: Connect tools step shows available connectors
-    When I GET /api/v1/onboarding/step/connect_tools
-    Then the response contains connector options for "github", "jira", and "linear"
-    And marking "connect_tools" as completed advances to step 2
-
-  Scenario: Run inference on connected connector
-    Given I have completed the connect_tools step
-    And I have a connector instance with sample data
-    When I POST /api/v1/schemas/infer with the connector instance
+  Scenario: First-run status exposes the six-action checklist
+    Given the org state auto-completes only the "login" action
+    When I GET the onboarding status
     Then the response status is 200
-    And the response contains a definition_json
-    And I mark "run_inference" as completed
+    And the response indicates this is the first run
+    And the response exposes 6 onboarding actions in order starting with "login"
+    And the response reports the "login" action as completed
 
-  Scenario: Review and publish inferred schemas
-    Given I have completed the run_inference step
-    And I have an inferred draft schema
-    When I publish the schema via POST /api/v1/schemas with version "1.0"
+  Scenario: Auto-completion reflects real organisation state
+    Given the stored organisation already has every onboarding primitive
+    When I GET the onboarding status
+    Then the response status is 200
+    And the response reports all 6 onboarding actions as completed
+    And the response reports 100% progress
+
+  Scenario: Auto-completion detects a bare organisation from real state
+    Given the stored organisation has no onboarding primitives
+    When I GET the onboarding status
+    Then the response status is 200
+    And the response reports the "login" action as completed
+    And the response reports 1 onboarding action as completed
+
+  Scenario: Completing an action updates the persisted progress
+    Given the org state auto-completes only the "login" action
+    When I complete the onboarding action "create_first_schema"
+    Then the response status is 200
+    And the response reports action "create_first_schema" as completed
+    And a subsequent status read reports 2 completed actions at 33% progress
+
+  Scenario: Repeating the same completion is idempotent
+    Given the onboarding progress has the "login" action completed
+    When I complete the onboarding action "login"
+    Then the response status is 200
+    And a subsequent status read still reports exactly 1 completed action
+
+  Scenario: Skipping an action records it without completing it
+    Given the org state auto-completes only the "login" action
+    When I skip the onboarding action "create_first_agent"
+    Then the response status is 200
+    And the response reports action "create_first_agent" as skipped
+    And a subsequent status read reports "create_first_agent" as skipped
+
+  Scenario: An unknown action id is rejected with 422
+    When I complete the onboarding action "nonexistent"
+    Then the response status is 422
+
+  Scenario: Dismissing the wizard ends the first-run state
+    When I dismiss the onboarding wizard
+    Then the response status is 200
+    And a subsequent status read no longer reports a first run
+
+  Scenario: Seeding examples with a model backend creates the primitives
+    Given the org has a model backend configured
+    When I seed the onboarding examples
     Then the response status is 201
-    And the schema version is published
-    And I mark "review_schemas" as completed
+    And the seed response carries an agent, a schema, and a pipeline
+    And the seed marks the schema, agent, and pipeline actions completed
 
-  Scenario: Browse library filtered by inferred abstract name
-    Given I have completed the review_schemas step
-    And a published schema with abstract_name "issue-tracker"
-    When I GET /api/v1/library/browse?q=issue-tracker
-    Then the response contains relevant library primitives
-    And I mark "search_library" as completed
+  Scenario: Seeding examples without a model backend is refused before any write
+    Given the org has no model backend configured
+    When I seed the onboarding examples
+    Then the response status is 409
+    And the refusal says a model backend is required
+    And no schema, agent, or pipeline was created
 
-  Scenario: Wire pipeline completes onboarding
-    Given I have completed the search_library step
-    When I select a pipeline template and mark "wire_pipeline" as completed
-    Then all 5 SDLC onboarding steps are completed
-    And is_first_run becomes false
-
-  Scenario: Re-run inference after connector data changes
-    Given I have completed the connect_tools step
-    And an inference result already exists
-    When I POST /api/v1/schemas/infer again with updated sample data
-    Then a new definition_json is returned
-    And the existing inference is replaced
-
-  Scenario: Onboarding state is persisted across sessions
-    Given I have completed "connect_tools" and "run_inference"
-    When I make a new GET /api/v1/onboarding/status request
-    Then the response shows 2 completed steps
-    And the current step is step 3
+  Scenario: A starter pipeline is created for a fresh org
+    When I create the onboarding starter pipeline
+    Then the response status is 201
+    And the starter pipeline response carries a pipeline id and the starter name

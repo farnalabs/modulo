@@ -1,18 +1,22 @@
-from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import BaseMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
+from modulo.model_backends.base import (
+    HealthResult,
+    LangChainChatForwardingMixin,
+    ModelBackendBase,
+    openai_compatible_health_check,
+)
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 
-class GeminiBackend(ModelBackendBase):
+class GeminiBackend(LangChainChatForwardingMixin, ModelBackendBase):
     """Thin adapter over ChatGoogleGenerativeAI targeting Gemini API."""
 
     supports_tools: bool = True
+    supports_native_structured_output: bool = False
 
     def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
         self._model = ChatGoogleGenerativeAI(
@@ -36,14 +40,3 @@ class GeminiBackend(ModelBackendBase):
             api_key=None,
             extra_headers={"x-goog-api-key": self._api_key},
         )
-
-    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
-        return await self._model.ainvoke(messages, **kwargs)
-
-    def stream(
-        self,
-        messages: list[BaseMessage],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, tools=tools, **kwargs)
