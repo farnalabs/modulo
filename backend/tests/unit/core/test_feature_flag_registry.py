@@ -111,7 +111,7 @@ class TestRefresh:
 
     def test_community_tier_flags_active(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")
-        flag = registry.get_flag("parallel_branches")
+        flag = registry.get_flag("eval_system")
         assert flag is not None
         assert flag.currently_active is True
 
@@ -123,7 +123,7 @@ class TestRefresh:
 
     def test_team_tier_keeps_community_active(self) -> None:
         registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
-        flag = registry.get_flag("parallel_branches")
+        flag = registry.get_flag("eval_system")
         assert flag is not None
         assert flag.currently_active is True
 
@@ -182,9 +182,9 @@ class TestOverrides:
         FeatureFlagRegistry._overrides.clear()
         r1 = FeatureFlagRegistry()
         r2 = FeatureFlagRegistry()
-        r1.set_override("parallel_branches", True)
+        r1.set_override("eval_system", True)
         # r2 sees the same override
-        assert r2.get_override("parallel_branches") is True
+        assert r2.get_override("eval_system") is True
 
 
 class TestFromDb:
@@ -225,7 +225,7 @@ class TestKnownFlags:
     def test_core_product_flags_are_registered(self) -> None:
         registry = FeatureFlagRegistry()
         names = {flag.name for flag in registry.list_flags()}
-        assert {"eval_system", "parallel_branches", "sso", "team_rbac"} <= names
+        assert {"eval_system", "sso", "team_rbac"} <= names
 
     def test_remy_ui_driving_is_community(self) -> None:
         registry = FeatureFlagRegistry()
@@ -322,8 +322,8 @@ class TestInactiveCatalogFlags:
                 "is_active": False,
             },
             {
-                "name": "parallel_branches",
-                "description": "Run branching logic in parallel within a pipeline",
+                "name": "eval_system",
+                "description": "Built-in eval runner for LLM output quality gates",
                 "tier_id": "community",
                 "depends_on": None,
                 "is_active": True,
@@ -349,8 +349,8 @@ class TestInactiveCatalogFlags:
         assert flag is not None, "inactive catalog flags must still be listed"
         assert flag.currently_active is False
         # A community-tier flag seeded active still activates normally.
-        assert registry.get_flag("parallel_branches") is not None
-        assert registry.get_flag("parallel_branches").currently_active is True  # type: ignore[union-attr]
+        assert registry.get_flag("eval_system") is not None
+        assert registry.get_flag("eval_system").currently_active is True  # type: ignore[union-attr]
 
     async def test_inactive_flag_stays_inactive_on_community_tier(self) -> None:
         session = _make_session()

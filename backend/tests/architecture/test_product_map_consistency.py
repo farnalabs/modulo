@@ -706,7 +706,6 @@ OWNED_PAGES = {
         "frontend/src/views/VariantBatchCompareView.vue",
         "frontend/src/components/shared/JsonViewer.vue",
     ),
-    "/variants/ab-test": "frontend/src/views/ABTestModelsView.vue",
 }
 
 

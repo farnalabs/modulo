@@ -189,22 +189,6 @@ def check_next_cursor(request):
     assert "next_cursor" in data, "next_cursor missing from response"
 
 
-@given("an audit event exists")
-def audit_event_exists(request):
-    pass
-
-
-@when("I attempt to modify the audit event")
-def modify_audit_event(client, request):
-    resp = client.patch("/api/v1/admin/audit/event-id", json={"event_type": "modified"})
-    request.node._resp = resp
-
-
-@then("the modification is rejected")
-def modification_rejected(request):
-    assert request.node._resp.status_code in (403, 405, 400, 404)
-
-
 @when("I verify the audit chain")
 def verify_audit_chain(client, request):
     with (

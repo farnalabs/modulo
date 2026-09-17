@@ -99,7 +99,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 
 ### Improve
 - **feat-evals** - Evaluation editor and proposal queue - routes: `/evals/editor`, `/evals/proposals`
-- **feat-variants** - Variant comparison and AB test models - routes: `/variants/compare`, `/variants/compare/:batchId`, `/variants/ab-test`
+- **feat-variants** - Variant comparison and batch runs - routes: `/variants/compare`, `/variants/compare/:batchId`
 
 ### Configure
 - **feat-schemas** - Typed JSON schemas, schema editor, inference, and parameter schemas - routes: `/schemas`, `/schemas/editor/:id`, `/schemas/infer`, `/admin/parameter-schemas`
@@ -262,6 +262,19 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > the real `PUT /api/v1/me/password` route clears the `must_change_password`
 > flag — the flag App.vue's forced-change gate arms on — in the same transaction
 > as the hash swap (`auth/auth.md`).
+>
+> **Closed this walk (2026-09-17):** closed `feat-audit`'s "No BDD scenario for
+> append-only tampering" gap (`audit/audit-trail.md`). Registered the new
+> `audit/append_only.feature` into the executing BDD suite
+> (`steps/test_audit_append_only.py`), driving the real application-layer
+> append-only guard — `register_append_only_guard()` plus its SQLAlchemy
+> `before_update` / `before_delete` listeners — against persisted `AuditEvent`
+> and `ErrorEvent` rows in an in-memory engine: UPDATE and DELETE are rejected
+> on both models (`AppendOnlyViolationError` naming the event id and mutation)
+> while a plain INSERT is not blocked. The placeholder "Audit events are
+> immutable" scenario in `event_recording.feature` (which only asserted a
+> generic 4xx from a nonexistent PATCH route) was removed with its dummy steps.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

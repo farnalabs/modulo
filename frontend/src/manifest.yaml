@@ -269,17 +269,6 @@ routes:
         <<: *community
         deprecated: false
 
-    /variants/ab-test:
-        name: ab-test-models
-        breadcrumb: AB Test Models
-        parent: /
-        product_map: [feat-variants]
-        sidebar_group: improve
-        sidebar_order: 4
-        type: page
-        <<: *community
-        deprecated: false
-
     /schemas:
         name: schemas
         breadcrumb: Schemas
@@ -4506,12 +4495,39 @@ elements:
       - testid: settings-triggers-outcomes-toggle
         type: element
         dynamic_testid: false
-    /variants/ab-test:
+    /variants/compare:
+      - testid: variant-compare-group-select
+        type: select
+        dynamic_testid: false
+      - testid: variant-compare-diff-node
+        type: select
+        dynamic_testid: false
+      - testid: variant-compare-diff-variant-a
+        type: select
+        dynamic_testid: false
+      - testid: variant-compare-diff-variant-b
+        type: select
+        dynamic_testid: false
+      - testid: variant-compare-run-variants
+        type: button
+        dynamic_testid: false
+      - testid: variant-compare-new-group
+        type: button
+        dynamic_testid: false
+      - testid: variant-compare-empty-create
+        type: button
+        dynamic_testid: false
+      - testid: variant-group-builder
+        type: element
+        dynamic_testid: false
       - testid: variant-builder-pipeline-select
         type: select
         dynamic_testid: false
       - testid: variant-builder-name
         type: input
+        dynamic_testid: false
+      - testid: variant-builder-cancel-build
+        type: button
         dynamic_testid: false
       - testid: variant-builder-headroom
         type: element
@@ -4538,22 +4554,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: variant-builder-create-snapshot
-        type: button
-        dynamic_testid: false
-    /variants/compare:
-      - testid: variant-compare-group-select
-        type: select
-        dynamic_testid: false
-      - testid: variant-compare-diff-node
-        type: select
-        dynamic_testid: false
-      - testid: variant-compare-diff-variant-a
-        type: select
-        dynamic_testid: false
-      - testid: variant-compare-diff-variant-b
-        type: select
-        dynamic_testid: false
-      - testid: variant-compare-run-variants
         type: button
         dynamic_testid: false
       - testid: json-viewer

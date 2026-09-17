@@ -45,10 +45,8 @@ _EXPECTED_FLAGS: set[str] = {
     "email_config",
     "scim",
     "external_secrets",
-    "community_registry",
     "pipeline_diff_rollback",
     "pipeline_delete",
-    "notification_log",
     "web_vitals_analytics",
 }
 

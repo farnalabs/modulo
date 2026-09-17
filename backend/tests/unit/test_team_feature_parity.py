@@ -35,9 +35,7 @@ _FRONTEND_SRC = _REPO_ROOT / "frontend" / "src"
 # views) ARE enforced — scim/external_secrets at the SERVICE level,
 # pipeline_delete in the FRONTEND — so the detector correctly classifies them
 # as enforced and they do NOT belong in this gap set.
-KNOWN_UNENFORCED_TEAM_FLAGS: set[str] = {
-    "community_registry",
-}
+KNOWN_UNENFORCED_TEAM_FLAGS: set[str] = set()
 
 
 def _team_flag_names() -> set[str]:

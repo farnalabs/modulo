@@ -298,7 +298,7 @@ describe('PipelineListView', () => {
     expect(wrapper2.find('[data-testid="pipeline-tree-row-p1"]').exists()).toBe(true)
   })
 
-  it('offers a "Run as variant" action that deep-links to the ab-test creator with the pipeline id', async () => {
+  it('offers a "Run as variant" action that deep-links to the variant compare page with the pipeline id', async () => {
     mockResponses['/api/v1/pipelines?page_size=100'] = {
       items: [
         { id: 'p1', organisation_id: 'org1', name: 'Deep Link Pipe', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' },
@@ -336,7 +336,7 @@ describe('PipelineListView', () => {
     const runAsVariant = vm.actionMenuItems.find(i => i.label === 'Run as variant')
     expect(runAsVariant).toBeDefined()
     runAsVariant!.command()
-    expect(router.push).toHaveBeenCalledWith({ path: '/variants/ab-test', query: { pipeline_id: 'p1' } })
+    expect(router.push).toHaveBeenCalledWith({ path: '/variants/compare', query: { pipeline_id: 'p1' } })
   })
 
   it('auto-expands the selected folder and reflects expanded state in the toggle', async () => {

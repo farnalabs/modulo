@@ -65,8 +65,8 @@ def _make_user(**overrides: object) -> MagicMock:
 def _make_mock_plan_context() -> MagicMock:
     ctx = MagicMock()
     flag = MagicMock()
-    flag.name = "parallel_branches"
-    flag.description = "Run branching logic in parallel within a pipeline"
+    flag.name = "eval_system"
+    flag.description = "Built-in eval runner for LLM output quality gates"
     flag.tier = "community"
     flag.currently_active = True
     ctx.list_enabled_features = MagicMock(return_value=[flag])

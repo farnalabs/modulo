@@ -120,7 +120,6 @@ def _make_feature(name: str, description: str) -> MagicMock:
 
 def _feature_name_for(flag: str) -> str:
     descriptions = {
-        "parallel_branches": "Run branching logic in parallel within a pipeline",
         "eval_system": "Built-in eval runner for LLM output quality gates",
     }
     return descriptions.get(flag, flag)
@@ -137,7 +136,7 @@ def _get_viewmodel(client: Any, ctx: dict[str, Any], params: dict[str, str] | No
     current_view = ctx.get("current_view")
     org_side_effect: Exception | None = ctx.get("org_exc")
 
-    feature_flags = ctx.get("feature_flags") or ["parallel_branches", "eval_system"]
+    feature_flags = ctx.get("feature_flags") or ["eval_system"]
     plan_flags = [_make_feature(name, _feature_name_for(name)) for name in feature_flags]
 
     mock_session = ctx.get("_session")
@@ -211,6 +210,11 @@ def _given_account_preferences(preferences_json: str, ctx) -> None:
 @given(parsers.parse('I hold a workspace membership with role "{role}"'))
 def _given_membership_role(role: str, ctx) -> None:
     ctx["memberships"] = [_default_membership(team_id=uuid.uuid4(), role=role)]
+
+
+@given(parsers.parse('the plan enables the feature "{name}"'))
+def _given_plan_feature(name: str, ctx) -> None:
+    ctx["feature_flags"] = [name]
 
 
 @given(parsers.parse('the plan enables the features "{first}" and "{second}"'))
@@ -360,7 +364,6 @@ def _then_feature_flags(request) -> None:
     body = request.node._resp.json()
     flags = body["feature_flags"]
     names = [f["name"] for f in flags]
-    assert "parallel_branches" in names, f"Expected parallel_branches flag, got {names}"
     assert "eval_system" in names, f"Expected eval_system flag, got {names}"
     for flag in flags:
         assert flag["active"] is True

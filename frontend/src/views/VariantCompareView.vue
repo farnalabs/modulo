@@ -4,13 +4,19 @@
         { label: 'Evals', to: '/evals/editor' },
         { label: 'Proposals', to: '/evals/proposals' },
         { label: 'Variants', to: '/variants/compare' },
-        { label: 'AB Test', to: '/variants/ab-test' },
       ]" />
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
       <PageHeader :title="$t('views.variantCompare.title')" :subtitle="$t('views.variantCompare.subtitle')" />
 
+      <VariantGroupBuilder
+        v-if="showBuilder"
+        :initial-pipeline-id="deepLinkedPipelineId"
+        @cancel="showBuilder = false"
+      />
+
+      <template v-else>
       <div class="flex flex-wrap items-center gap-4">
         <Select
   aria-label="Compare group"
@@ -30,6 +36,15 @@
         <Button :disabled="!selectedGroupId || runningVariants.size > 0" data-testid="variant-compare-run-variants" @click="runVariants">
           <span v-if="runningVariants.size > 0" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
           {{ runningVariants.size > 0 ? $t('views.variantCompare.running') : $t('views.variantCompare.runVariants') }}
+        </Button>
+
+        <Button
+          severity="secondary"
+          outlined
+          data-testid="variant-compare-new-group"
+          @click="showBuilder = true"
+        >
+          {{ $t('views.variantCompare.newComparison') }}
         </Button>
 
         <span v-if="selectedGroup" class="text-xs text-muted-foreground">
@@ -229,9 +244,13 @@
 
       <EmptyState
         v-else-if="!loading && groups.length === 0"
-        title="Variant Groups"
-        description="No variant groups found. Create a variant group from the AB Test Models page to compare model outputs side by side."
-      />
+        :title="$t('views.variantCompare.emptyGroupsTitle')"
+        :description="$t('views.variantCompare.emptyGroupsDescription')"
+      >
+        <Button data-testid="variant-compare-empty-create" @click="showBuilder = true">
+          {{ $t('views.variantCompare.newComparison') }}
+        </Button>
+      </EmptyState>
 
       <div
         v-else
@@ -239,6 +258,7 @@
       >
         Select a variant group from the dropdown above to compare model outputs.
       </div>
+      </template>
     </template>
   </div>
 </template>
@@ -259,6 +279,7 @@ import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import EmptyState from '../components/shared/EmptyState.vue'
 import Select from '../components/shared/AppSelect.vue'
+import VariantGroupBuilder from '../components/variants/VariantGroupBuilder.vue'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 import { TERMINAL_STATUSES } from '../constants/runStatuses'
@@ -308,6 +329,14 @@ const groups = computed(() => {
 const selectedGroupId = ref<string | null>(null)
 const selectedGroup = ref<VariantGroup | null>(null)
 const isUnmounted = ref(false)
+
+// The variant-group builder lives on this page (FAR-936 retired the separate
+// AB Test Models page). It opens automatically for the `pipeline_id` deep-link
+// from PipelineListView's "Run as variant" action.
+const showBuilder = ref(false)
+const deepLinkedPipelineId = computed(() =>
+  typeof route.query.pipeline_id === 'string' && route.query.pipeline_id ? route.query.pipeline_id : null,
+)
 
 const runEntries = ref<Map<string, RunEntry>>(new Map())
 const runningVariants = ref<Set<string>>(new Set())
@@ -458,8 +487,12 @@ onBeforeUnmount(() => {
 watch(groups, (list) => {
   if (list.length === 0) return
   const paramId = typeof route.params.batchId === 'string' ? route.params.batchId : null
+  const pipelineId = typeof route.query.pipeline_id === 'string' ? route.query.pipeline_id : null
+  const pipelineGroup = pipelineId ? list.find(g => g.pipeline_id === pipelineId) : undefined
   if (paramId && list.some(g => g.id === paramId)) {
     selectedGroupId.value = paramId
+  } else if (pipelineGroup) {
+    selectedGroupId.value = pipelineGroup.id
   } else if (!selectedGroupId.value) {
     selectedGroupId.value = list[0].id
   }
@@ -494,6 +527,11 @@ function seedFiredRuns() {
 
 onMounted(() => {
   seedFiredRuns()
+  if (deepLinkedPipelineId.value) showBuilder.value = true
+})
+
+watch(deepLinkedPipelineId, (id) => {
+  if (id) showBuilder.value = true
 })
 
 async function fetchGroupDetail(id: string) {

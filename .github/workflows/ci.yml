@@ -486,7 +486,13 @@ jobs:
         # frontend/coverage/lcov.info for sonar.javascript.lcov.reportPaths.
         run: pnpm exec vitest run src --pool=threads --maxWorkers=2 --coverage --coverage.provider=v8 --coverage.reporter=lcov
       - name: SonarCloud scan
-        uses: SonarSource/sonarqube-scan-action@2f77a1ec69fb1d595b06f35ab27e97605bdef703
+        # Pinned to v8.2.2 (latest). v5.3.2 is EOL: the action warns it
+        # carries a command-injection vulnerability, and its bundled
+        # SonarScanner CLI 7.2.0.5079 now fails against SonarCloud with
+        # "Error 500 on .../batch/project.protobuf" (all earlier API calls in
+        # the scan succeed), taking the required check red on every branch.
+        # v8.2.2 ships SonarScanner CLI 8.1.0.6389, which SonarCloud accepts.
+        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io

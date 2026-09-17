@@ -19,10 +19,8 @@ _SYNCED_FLAGS: set[str] = {
     "email_config",
     "scim",
     "external_secrets",
-    "community_registry",
     "pipeline_diff_rollback",
     "pipeline_delete",
-    "notification_log",
     "web_vitals_analytics",
 }
 
@@ -66,7 +64,6 @@ class TestFar114SyncedFlags:
             "email_config",
             "scim",
             "external_secrets",
-            "community_registry",
             "pipeline_diff_rollback",
             "pipeline_delete",
         }

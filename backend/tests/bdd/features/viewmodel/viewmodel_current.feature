@@ -22,7 +22,7 @@ Feature: ViewModel Current
     And the response includes the account preferences
 
   Scenario: Returns feature flags with active status
-    Given the plan enables the features "parallel_branches" and "eval_system"
+    Given the plan enables the feature "eval_system"
     When I GET /api/v1/viewmodel/current
     Then the response status is 200
     And the response includes the enabled feature flags
