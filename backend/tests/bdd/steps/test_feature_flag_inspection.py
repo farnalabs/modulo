@@ -13,8 +13,10 @@ CRUD reads patched (the licensing hermetic-mock pattern from
 reads return no rows, so the ``FeatureFlagRegistry`` falls back to its
 hardcoded catalogue), so the scenarios assert the actual API contract: status
 codes, the ``license`` / ``flags`` response shapes, per-flag field presence,
-the unknown-flag 404, the toggle override write-back (``overridden: true``),
-and the public ``/api/v1/license`` surface.
+the unknown-flag 404, the toggle override write-back (``overridden: true``) for
+a community-tier flag, the 403 team-tier gate that refuses to enable a
+team-tier flag without a team licence, and the public ``/api/v1/license``
+surface.
 """
 
 from __future__ import annotations
@@ -181,8 +183,26 @@ def get_unknown_flag(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _store_response(request, ctx, resp)
 
 
+@when('I PUT "/api/v1/admin/feature-flags/webhook_trigger" with body {"enabled": true}')
+def toggle_webhook_trigger_flag(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    """Toggle a community-tier flag: the happy path for org override write-back.
+
+    The mock session resolves the org to the community tier (no licence), so a
+    team-tier flag such as ``sso`` would be rejected by the team-tier gate —
+    ``webhook_trigger`` is community-tier and always enablable at org level.
+    """
+    _setup_client(ctx)
+    resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
+    _store_response(request, ctx, resp)
+
+
 @when('I PUT "/api/v1/admin/feature-flags/sso" with body {"enabled": true}')
 def toggle_sso_flag(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    """Toggle a team-tier flag as an unlicensed (community) org.
+
+    Drives the team-tier gate: the org has no team licence, so enabling ``sso``
+    must be refused with 403.
+    """
     _setup_client(ctx)
     resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
     _store_response(request, ctx, resp)

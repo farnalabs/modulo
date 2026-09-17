@@ -26,9 +26,14 @@ Feature: Feature Flag Inspection
 
   Scenario: Toggle a flag override
     Given I have a valid session
-    When I PUT "/api/v1/admin/feature-flags/sso" with body {"enabled": true}
+    When I PUT "/api/v1/admin/feature-flags/webhook_trigger" with body {"enabled": true}
     Then the response status is 200
     And the response contains an "overridden" field
+
+  Scenario: Enabling a team-tier flag without a team licence is forbidden
+    Given I have a valid session
+    When I PUT "/api/v1/admin/feature-flags/sso" with body {"enabled": true}
+    Then the response status is 403
 
   Scenario: Public license endpoint
     When I GET "/api/v1/license"
