@@ -13,6 +13,23 @@ from modulo.connectors.rest import RestConnector
 from tests.connectors._conformance import get_registered_fixture, get_registered_types, register_conformance_connector
 from tests.connectors._noop_guard import make_noop_security_guard
 
+# ── VCR config for pytest-recording ────────────────────────────────────────
+
+
+@pytest.fixture
+def vcr_config() -> dict[str, Any]:
+    """Wire the VCR config from the shared helpers module.
+
+    ``pytest-recording`` picks up this fixture automatically when a test is
+    marked ``@pytest.mark.vcr``.  ``record_mode`` defaults to ``"none"``
+    (replay-only) so the committed suite runs offline; set
+    ``VCR_RECORD_MODE=once`` to record new cassettes.
+    """
+    from tests.helpers.vcr import vcr_config as _vcr_config
+
+    return _vcr_config()
+
+
 # ── Connector fixture definitions ──────────────────────────────────────────
 
 
@@ -89,6 +106,28 @@ def rest_connector():
 
 
 register_conformance_connector("rest", "rest_connector")
+
+
+# ── npm / pypi (VCR-backed, no live credential needed) ────────────────────
+# These connectors can be instantiated without credentials but do NOT support
+# the standard conformance resources ("directory" read / "file" write) — they
+# have their own resource model (package, search, etc.).  They are tested in
+# dedicated contract tests (test_npm_contract.py, test_pypi_contract.py) and
+# are NOT registered for the shared conformance suite.
+
+
+@pytest.fixture
+def npm_connector():
+    from modulo.connectors.npm import NpmConnector
+
+    return NpmConnector(token="")
+
+
+@pytest.fixture
+def pypi_connector():
+    from modulo.connectors.pypi import PyPIConnector
+
+    return PyPIConnector(token="")
 
 
 # ── Auto-parametrisation hook ──────────────────────────────────────────────

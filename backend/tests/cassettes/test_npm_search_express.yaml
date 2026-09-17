@@ -1,0 +1,20 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Content-Type:
+      - application/json
+    method: GET
+    uri: https://registry.npmjs.org/-/v1/search?text=express&size=5
+  response:
+    body:
+      string: '{"objects":[{"package":{"name":"express","version":"4.21.0","description":"Fast,
+        unopinionated, minimalist web framework","keywords":["express","framework","web","rest","restful"],"author":{"name":"TJ
+        Holowaychuk"},"license":"MIT","repository":{"type":"git","url":"git://github.com/expressjs/express.git"},"links":{"npm":"https://www.npmjs.com/package/express","homepage":"https://expressjs.com/","repository":"https://github.com/expressjs/express","bugs":"https://github.com/expressjs/express/issues"}},"score":{"final":0.987654321,"detail":{"quality":0.95,"popularity":1,"maintenance":0.99}},"searchScore":100000.1}],"total":2500,"time":"2024-01-15T12:00:00.000Z"}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

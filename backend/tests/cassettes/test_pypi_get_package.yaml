@@ -1,0 +1,20 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Content-Type:
+      - application/json
+    method: GET
+    uri: https://pypi.org/pypi/requests/json
+  response:
+    body:
+      string: '{"info":{"name":"requests","version":"2.31.0","summary":"Python HTTP
+        for Humans.","author":"Kenneth Reitz","author_email":"me@kennethreitz.org","license":"Apache
+        2.0","home_page":"https://requests.readthedocs.io","project_urls":{"Documentation":"https://requests.readthedocs.io","Source":"https://github.com/psf/requests","Tracker":"https://github.com/psf/requests/issues"},"requires_python":">=3.7"},"urls":[{"filename":"requests-2.31.0-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/...","digests":{"sha256":"abc123"}}],"releases":{"2.31.0":[{"filename":"requests-2.31.0.tar.gz","url":"https://files.pythonhosted.org/packages/..."}]}}'
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

@@ -1,9 +1,13 @@
 """Connector contract conformance suite.
 
-Every ConnectorType implementation must pass these scenarios.  When a new
-connector is added, register it in its test module via
-``register_conformance_connector()`` and the tests below are parametrised
-automatically.
+Every registered connector type must pass these scenarios.  Types are
+registered in ``conftest.py`` via ``register_conformance_connector()`` —
+only connectors that can be instantiated without live vendor credentials
+are included (currently: filesystem, shell, rest, npm, pypi).
+
+Connectors that require a live vendor credential (github, linear, jira,
+slack, etc.) or that are abstract bases (ci-runner, ticket-tracker) are
+excluded; see ``conftest.py`` for the authoritative list.
 
 Run with::
 
