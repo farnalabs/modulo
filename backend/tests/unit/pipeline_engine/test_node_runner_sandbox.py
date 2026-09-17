@@ -2635,7 +2635,7 @@ async def test_schema_validation_failure_still_kills_sandbox(monkeypatch: pytest
         await fn(_run_state())
 
     assert "schema validation" in str(excinfo.value)
-    assert "required" in str(excinfo.value)
+    assert "'status'" in str(excinfo.value)
     sandbox.kill.assert_awaited()
 
 
@@ -2815,7 +2815,7 @@ async def test_schema_validation_summary_names_missing_field(monkeypatch: pytest
 
     message = str(excinfo.value)
     assert "schema validation" in message
-    assert "required" in message
+    assert "'status'" in message
 
 
 async def test_schema_validation_missing_pr_url_raises_retryable(monkeypatch: pytest.MonkeyPatch):
@@ -2839,7 +2839,7 @@ async def test_schema_validation_missing_pr_url_raises_retryable(monkeypatch: py
     ):
         await fn(_run_state())
 
-    assert "required" in str(excinfo.value)
+    assert "pr_url" in str(excinfo.value)
     assert runtime_retry.failure_event(excinfo.value) == "error"
     sandbox.kill.assert_awaited()
 

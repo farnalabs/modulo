@@ -3353,24 +3353,24 @@ def _finalize_node_result(
     routing_mode: str | None,
     *,
     mode: str = "lenient",
-    org_id: Any | None = None,
-    session: Any | None = None,
     schema_id: str = "unknown",
     schema_version: int = 0,
     _repair_invoke_fn: Any | None = None,
 ) -> dict[str, Any]:
     """Validate schema, build the node artifact result, and surface a routed hop."""
     if isinstance(output_schema_json, dict) and output_schema_json:
-        outcome, errors = _validate_against_schema(
+        outcome, errors, effective_output = _validate_against_schema(
             output_data,
             output_schema_json,
             mode=mode,
-            org_id=org_id,
-            session=session,
             schema_id=schema_id,
             schema_version=schema_version,
             _repair_invoke_fn=_repair_invoke_fn,
         )
+        # A successful strict-mode repair replaces the schema-invalid payload;
+        # otherwise effective_output IS output_data. Never emit a payload that
+        # failed the declared contract after repair reported success.
+        output_data = effective_output
         # Log outcome for observability
         # TODO(FAR-902): persist the outcome
         if errors:
@@ -3553,21 +3553,24 @@ def make_node_fn(
 
         # FIX B: create a repair invoke callable so the repair loop is reachable.
         # The standard agent path has access to the ModelBackendHub and can
-        # re-invoke the same backend with the repair prompt.
-        _hub = _invoke_node_model.__wrapped__ if hasattr(_invoke_node_model, "__wrapped__") else None
+        # re-invoke the same backend with the repair prompt. ``run_repair_loop``
+        # calls this SYNCHRONOUSLY while the node coroutine is already on the
+        # event loop, so bridge to the async backend with ``_run_coroutine_sync``
+        # (the same worker-loop bridge the LLM-judge callable uses). An async
+        # repair fn here would hand ``json.loads`` an un-awaited coroutine and
+        # crash the node instead of repairing it.
         from modulo.core.pipeline_engine.decorator import get_model_backend_hub
 
         _repair_hub = get_model_backend_hub()
-        _repair_backend_id_str = model_backend_id_str
-        _repair_node_id = node_id
+        _repair_backend_id = uuid.UUID(model_backend_id_str)
 
-        async def _std_repair_invoke(prompt: str) -> str:
+        def _std_repair_invoke(prompt: str) -> str:
             """Re-invoke the same model backend with the repair prompt."""
             if _repair_hub is None:
                 raise RuntimeError("ModelBackendHub not available for repair invoke")
-            _backend = await _repair_hub.get(uuid.UUID(_repair_backend_id_str))
-            _msgs = [HumanMessage(content=prompt)]
-            _resp = await _backend.invoke(_msgs)
+            _resp = _run_coroutine_sync(
+                _invoke_backend(_repair_hub, _repair_backend_id, [HumanMessage(content=prompt)])
+            )
             return _resp.content if hasattr(_resp, "content") else str(_resp)
 
         _repair_fn: Any = _std_repair_invoke
@@ -3578,7 +3581,6 @@ def make_node_fn(
             output_schema_json,
             routing_mode,
             mode=_schema_validator_mode,
-            org_id=state.get("_org_id"),  # FIX H: propagate org_id
             schema_id=node_def.get("output_schema_id", "unknown"),
             schema_version=node_def.get("output_schema_version", 0),
             _repair_invoke_fn=_repair_fn,
@@ -4499,8 +4501,6 @@ def _manual_resume_output(
     output_schema_json: dict[str, Any] | None,
     *,
     mode: str = "lenient",
-    org_id: Any | None = None,
-    session: Any | None = None,
     schema_id: str = "unknown",
     schema_version: int = 0,
     _repair_invoke_fn: Any | None = None,
@@ -4519,8 +4519,6 @@ def _manual_resume_output(
             manual_output,
             output_schema_json,
             mode=mode,
-            org_id=org_id,
-            session=session,
             schema_id=schema_id,
             schema_version=schema_version,
             _repair_invoke_fn=_repair_invoke_fn,
@@ -4584,7 +4582,6 @@ def make_manual_node_fn(
                 decision,
                 output_schema_json,
                 mode=_schema_validator_mode,
-                org_id=state.get("_org_id"),  # FIX H: propagate org_id
                 schema_id=node_def.get("output_schema_id", "unknown"),
                 schema_version=node_def.get("output_schema_version", 0),
                 _repair_invoke_fn=None,  # FIX B: no model backend for manual nodes
@@ -8526,13 +8523,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
 
             try:
                 # FAR-899: use real JSON Schema validation with mode support
-                # FIX H: capture the returned (outcome, errors) tuple
-                _val_outcome, _val_errors = _validate_against_schema(
+                # FIX H: capture the returned (outcome, errors, data) tuple —
+                # the sandbox path passes no repair fn, so the third element is
+                # always the original output_json (no repair to apply).
+                _val_outcome, _val_errors, _ = _validate_against_schema(
                     output_json,
                     output_schema_json,
                     mode=schema_validator_mode,
-                    org_id=org_id,
-                    session=session_factory,  # FIX H: propagate session_factory
                     schema_id=schema_id,
                     schema_version=schema_version,
                     _repair_invoke_fn=_sandbox_repair_invoke_fn,
@@ -9521,15 +9518,11 @@ def _validate_against_schema(
     schema: dict[str, Any],
     *,
     mode: str = "lenient",
-    org_id: Any | None = None,
-    session: Any | None = None,
     schema_id: str = "unknown",
     schema_version: int = 0,
-    daily_spend_limit: float | None = None,
-    current_spend: float = 0.0,
     repair_budget_config: Any = None,
     _repair_invoke_fn: Any | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]], Any]:
     """Validate *data* against *schema* using Draft202012Validator.
 
     FAR-899: thin mode-switching dispatcher. Repair orchestration lives in
@@ -9537,8 +9530,12 @@ def _validate_against_schema(
     ``schema_repair.format_error_summary``.
 
     Returns:
-        ``(outcome, errors)`` where outcome is a SchemaValidationOutcome value
-        and errors is a list of structured error dicts.
+        ``(outcome, errors, effective_data)`` where outcome is a
+        SchemaValidationOutcome value, errors is a list of structured error
+        dicts, and ``effective_data`` is the REPAIRED payload when strict-mode
+        repair succeeds (PASSED_AFTER_REPAIR) and the ORIGINAL *data*
+        otherwise — so a caller never emits a schema-invalid payload after a
+        successful repair.
 
     Raises:
         OutputSchemaValidationError: In strict mode when validation fails
@@ -9554,13 +9551,13 @@ def _validate_against_schema(
 
     # No schema → nothing to validate
     if not isinstance(schema, dict) or not schema:
-        return SchemaValidationOutcome.NO_SCHEMA.value, []
+        return SchemaValidationOutcome.NO_SCHEMA.value, [], data
 
     # Run validation
     is_valid, errors = validate_against_schema(data, schema)
 
     if is_valid:
-        return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, []
+        return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, [], data
 
     # Validation failed — handle based on mode
     if mode == "lenient":
@@ -9573,18 +9570,16 @@ def _validate_against_schema(
                 "first_error": errors[0] if errors else None,
             },
         )
-        return SchemaValidationOutcome.LENIENT_VALIDATION_BYPASSED.value, errors
+        return SchemaValidationOutcome.LENIENT_VALIDATION_BYPASSED.value, errors, data
 
     # Strict mode: delegate repair orchestration to schema_repair.run_repair_loop
     budget = get_repair_budget(repair_budget_config)
-    outcome_val, final_errors = run_repair_loop(
+    outcome_val, final_errors, effective_data = run_repair_loop(
         data,
         schema,
         budget=budget,
         schema_id=schema_id,
         schema_version=schema_version,
-        daily_spend_limit=daily_spend_limit,
-        current_spend=current_spend,
         repair_invoke_fn=_repair_invoke_fn,
     )
 
@@ -9601,4 +9596,4 @@ def _validate_against_schema(
         )
 
     # PASSED_AFTER_REPAIR or other success
-    return outcome_val, final_errors
+    return outcome_val, final_errors, effective_data

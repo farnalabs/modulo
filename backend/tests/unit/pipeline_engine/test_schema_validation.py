@@ -221,13 +221,13 @@ class TestNodeRunnerValidateAgainstSchema:
     """Integration of validate_against_schema into _validate_against_schema."""
 
     def test_no_schema_returns_no_schema(self) -> None:
-        outcome, errors = nr._validate_against_schema({"name": "test"}, {})
+        outcome, errors, _ = nr._validate_against_schema({"name": "test"}, {})
         assert outcome == SchemaValidationOutcome.NO_SCHEMA.value
         assert errors == []
 
     def test_valid_data_lenient_mode(self) -> None:
         schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
-        outcome, errors = nr._validate_against_schema(
+        outcome, errors, _ = nr._validate_against_schema(
             {"name": "test"},
             schema,
             mode="lenient",
@@ -237,7 +237,7 @@ class TestNodeRunnerValidateAgainstSchema:
 
     def test_invalid_data_lenient_mode_succeeds_with_warning(self, caplog: Any) -> None:
         schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
-        outcome, errors = nr._validate_against_schema(
+        outcome, errors, _ = nr._validate_against_schema(
             {"age": 30},
             schema,
             mode="lenient",
@@ -279,7 +279,7 @@ class TestNodeRunnerValidateAgainstSchema:
         def fake_invoke(prompt: str) -> str:
             return corrected
 
-        outcome, errors = nr._validate_against_schema(
+        outcome, errors, _ = nr._validate_against_schema(
             {"age": 30},  # invalid
             schema,
             mode="strict",
@@ -393,7 +393,7 @@ class TestRunRepairLoop:
 
     def test_zero_budget_no_invoke(self) -> None:
         schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
-        outcome, _errors = run_repair_loop(
+        outcome, _errors, _data = run_repair_loop(
             {"age": 30},
             schema,
             budget=0,
@@ -403,7 +403,7 @@ class TestRunRepairLoop:
 
     def test_no_invoke_fn_no_invoke(self) -> None:
         schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
-        outcome, _errors = run_repair_loop(
+        outcome, _errors, _data = run_repair_loop(
             {"age": 30},
             schema,
             budget=1,
@@ -418,7 +418,7 @@ class TestRunRepairLoop:
         def fake_invoke(prompt: str) -> str:
             return '{"name": "Alice"}'
 
-        outcome, errors = run_repair_loop(
+        outcome, errors, repaired = run_repair_loop(
             {"age": 30},
             schema,
             budget=1,
@@ -427,6 +427,7 @@ class TestRunRepairLoop:
         )
         assert outcome == SchemaValidationOutcome.PASSED_AFTER_REPAIR.value
         assert errors == []
+        assert repaired == {"name": "Alice"}
 
     def test_invoke_fn_returns_invalid_json(self) -> None:
         schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
@@ -434,7 +435,7 @@ class TestRunRepairLoop:
         def fake_invoke(prompt: str) -> str:
             return "not json"
 
-        outcome, _errors = run_repair_loop(
+        outcome, _errors, _data = run_repair_loop(
             {"age": 30},
             schema,
             budget=1,
@@ -449,7 +450,7 @@ class TestRunRepairLoop:
         def fake_invoke(prompt: str) -> str:
             raise RuntimeError("backend down")
 
-        outcome, _errors = run_repair_loop(
+        outcome, _errors, _data = run_repair_loop(
             {"age": 30},
             schema,
             budget=1,
@@ -491,7 +492,7 @@ class TestRunRepairLoop:
             # → 1 type error (different from 1 required error)
             return '{"name": "ok", "count": "x"}'
 
-        outcome, _errors = run_repair_loop(
+        outcome, _errors, _data = run_repair_loop(
             {"x": 1},  # missing both required fields → 2 required errors
             schema,
             budget=3,
@@ -507,7 +508,7 @@ class TestRunRepairLoop:
         def fake_invoke(prompt: str) -> str:
             return '{"name": "Alice"}'
 
-        outcome, _errors = run_repair_loop(
+        outcome, _errors, _data = run_repair_loop(
             {"age": 30},
             schema,
             budget=1,

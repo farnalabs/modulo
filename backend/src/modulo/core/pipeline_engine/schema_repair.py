@@ -175,8 +175,20 @@ def format_error_summary(
     """Format a short semicolon-delimited error summary for messages/logs.
 
     This is the SINGLE source of truth for error-summary formatting.
+
+    The jsonschema ``message`` (e.g. ``"'status' is a required property"``)
+    is preferred over the bare constraint keyword so the summary NAMES the
+    offending field — the operator-observability guarantee (FAR-487). A
+    root-required violation has an empty JSON Pointer, so a bare
+    ``pointer: constraint`` rendering collapses to ``": required"`` and drops
+    the field name entirely; the message restores it.
     """
-    return "; ".join(f"{e.get('pointer', '$')}: {e.get('constraint', 'unknown')}" for e in errors[:limit])
+    parts: list[str] = []
+    for err in errors[:limit]:
+        location = err.get("pointer") or "$"
+        detail = err.get("message") or err.get("constraint", "unknown")
+        parts.append(f"{location}: {detail}")
+    return "; ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -385,17 +397,20 @@ def run_repair_loop(
     daily_spend_limit: float | None = None,
     current_spend: float = 0.0,
     repair_invoke_fn: Any | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]], Any]:
     """Run the repair loop for a failed schema validation in strict mode.
 
     Called from ``_validate_against_schema`` after the initial validation
     fails. Builds repair prompts, invokes the backend, re-validates, and
-    returns the final ``(outcome, errors)``.
+    returns the final ``(outcome, errors, effective_data)``.
 
     Returns:
-        ``(outcome_value, errors)`` — the outcome is a SchemaValidationOutcome
-        string value. The caller raises OutputSchemaValidationError when the
-        outcome is terminal-failure.
+        ``(outcome_value, errors, effective_data)`` — the outcome is a
+        SchemaValidationOutcome string value. ``effective_data`` is the
+        REPAIRED payload when the loop succeeds (``PASSED_AFTER_REPAIR``) and
+        the ORIGINAL *data* otherwise, so the caller can emit the corrected
+        output instead of discarding the repair. The caller raises
+        OutputSchemaValidationError when the outcome is terminal-failure.
 
     Raises:
         Nothing — all failures are encoded in the outcome value.
@@ -411,8 +426,8 @@ def run_repair_loop(
         # No repair budget or no invoke function → terminal failure
         is_valid, errors = validate_against_schema(data, schema)
         if is_valid:
-            return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, []
-        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors
+            return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, [], data
+        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors, data
 
     # Check daily spend limit before attempting repair
     if daily_spend_limit is not None and current_spend >= daily_spend_limit:
@@ -421,12 +436,12 @@ def run_repair_loop(
             extra={"schema_id": schema_id, "spend": current_spend, "limit": daily_spend_limit},
         )
         is_valid, errors = validate_against_schema(data, schema)
-        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors
+        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, errors, data
 
     # Initial validation to get the errors
     is_valid, current_errors = validate_against_schema(data, schema)
     if is_valid:
-        return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, []
+        return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, [], data
 
     repair = SchemaRepairLoop(
         budget=budget,
@@ -467,7 +482,7 @@ def run_repair_loop(
         # Validate the repaired output
         is_valid, current_errors = validate_against_schema(repaired_data, schema)
         if is_valid:
-            return SchemaValidationOutcome.PASSED_AFTER_REPAIR.value, []
+            return SchemaValidationOutcome.PASSED_AFTER_REPAIR.value, [], repaired_data
 
         last_outcome = SchemaValidationOutcome.REPAIR_ATTEMPTED
 
@@ -476,14 +491,14 @@ def run_repair_loop(
         SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON,
         SchemaValidationOutcome.REPAIR_EXHAUSTED,
     ):
-        return last_outcome.value, current_errors
+        return last_outcome.value, current_errors, data
 
     # Budget exhaustion: the loop exited because is_exhausted is True
     if repair.is_exhausted:
-        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, current_errors
+        return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, current_errors, data
 
     # Should not reach here, but defensive
-    return last_outcome.value, current_errors
+    return last_outcome.value, current_errors, data
 
 
 # ---------------------------------------------------------------------------
