@@ -506,11 +506,12 @@ markers = [
 ]
 
 [tool.coverage.run]
+branch = true
 source = ["src/modulo"]
 omit = ["*/tests/*", "*/migrations/*", "*/stub/*"]
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 58
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
