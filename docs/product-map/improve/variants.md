@@ -18,9 +18,10 @@ status: covered
 
 Variant groups — batch comparison on `/variants/compare`. A variant group bundles
 weighted variants (optional `run_context_overrides`) and fires one run per
-variant; comparison surfaces eval scores per node, prompt diffs and eval
-coverage gaps, and a batch-compare flow (`/variants/compare/:batchId`) is
-activated by the `variant_batch_compare` feature flag.
+variant; the page hosts an inline variant-group builder (create + batch-fire),
+and comparison surfaces eval scores per node, prompt diffs and eval
+coverage gaps. A batch-compare flow (`/variants/compare/:batchId`) is activated
+by the `variant_batch_compare` feature flag.
 
 ## Behaviours
 
@@ -35,6 +36,9 @@ activated by the `variant_batch_compare` feature flag.
       (`prompt_diffs`, `coverage_gaps`, `batch_compare` endpoints)
 - [x] The variant batch-compare UI is gated by the `variant_batch_compare` feature flag
       and hard-replaces the legacy AB-test view when enabled (frontend router guard)
+- [x] Variant groups are created and batch-fired from the inline builder on
+      `/variants/compare` (`components/variants/VariantGroupBuilder.vue`), which
+      honours the `pipeline_id` deep-link from a pipeline's "Run as variant" action
 
 ## Known Gaps
 
@@ -62,9 +66,13 @@ activated by the `variant_batch_compare` feature flag.
   `/api/v1/manifest`.
 
 - 2026-09-17: **FAR-936** — retired the AB Test Models page (`/variants/ab-test`).
-  The A/B comparison use case is achievable via the variant group + batch-run
-  surface on `/variants/compare`. Removed route, view, i18n, manifest entry,
-  elements inventory, tests, and sidebar nav entry.
+  Removed route, view, i18n (`views.ABTestModelsView`), manifest entry, elements
+  inventory, tests, and sidebar nav entry. The page's variant-builder capability
+  moved onto the `/variants/compare` page as an inline builder
+  (`components/variants/VariantGroupBuilder.vue`, i18n `views.variantCreator`), so
+  the A/B comparison use case stays reachable: the page's "New Comparison" button
+  opens the builder, the `pipeline_id` deep-link from PipelineListView pre-selects
+  the pipeline, and firing a batch navigates to the batch-compare detail route.
 
 - 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-variants`, which previously had no

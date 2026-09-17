@@ -41,6 +41,7 @@ vi.mock('../lib/api/client', () => ({
 
 import { api } from '../lib/api/client'
 import VariantCompareView from '../views/VariantCompareView.vue'
+import VariantGroupBuilder from '../components/variants/VariantGroupBuilder.vue'
 
 const groupWithVariants = {
   id: 'g1',
@@ -59,6 +60,8 @@ describe('VariantCompareView', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     window.history.replaceState(null, '')
+    hoisted.route.params = {}
+    hoisted.route.query = {}
   })
 
   it('renders without crashing', async () => {
@@ -419,5 +422,42 @@ describe('VariantCompareView', () => {
       hoisted.route.params.batchId = ''
       hoisted.route.query.pipeline_id = ''
     }
+  })
+
+  it('opens the variant-group builder for the pipeline_id deep-link', async () => {
+    hoisted.route.query = { pipeline_id: 'p-deep' }
+
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    await new Promise(r => setTimeout(r, 0))
+    await nextTick()
+
+    const builder = wrapper.findComponent(VariantGroupBuilder)
+    expect(wrapper.find('[data-testid="variant-group-builder"]').exists()).toBe(true)
+    expect(builder.props('initialPipelineId')).toBe('p-deep')
+  })
+
+  it('opens the variant-group builder from the New Comparison button', async () => {
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    await new Promise(r => setTimeout(r, 0))
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="variant-group-builder"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="variant-compare-new-group"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="variant-group-builder"]').exists()).toBe(true)
   })
 })

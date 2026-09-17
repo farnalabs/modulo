@@ -4511,6 +4511,51 @@ elements:
       - testid: variant-compare-run-variants
         type: button
         dynamic_testid: false
+      - testid: variant-compare-new-group
+        type: button
+        dynamic_testid: false
+      - testid: variant-compare-empty-create
+        type: button
+        dynamic_testid: false
+      - testid: variant-group-builder
+        type: element
+        dynamic_testid: false
+      - testid: variant-builder-pipeline-select
+        type: select
+        dynamic_testid: false
+      - testid: variant-builder-name
+        type: input
+        dynamic_testid: false
+      - testid: variant-builder-cancel-build
+        type: button
+        dynamic_testid: false
+      - testid: variant-builder-headroom
+        type: element
+        dynamic_testid: false
+      - testid: variant-builder-min-two
+        type: element
+        dynamic_testid: false
+      - testid: variant-builder-fire-error
+        type: element
+        dynamic_testid: false
+      - testid: variant-builder-fire
+        type: button
+        dynamic_testid: false
+      - testid: variant-builder-confirm
+        type: element
+        dynamic_testid: false
+      - testid: variant-builder-cancel
+        type: button
+        dynamic_testid: false
+      - testid: variant-builder-confirm-fire
+        type: button
+        dynamic_testid: false
+      - testid: variant-builder-add
+        type: button
+        dynamic_testid: false
+      - testid: variant-builder-create-snapshot
+        type: button
+        dynamic_testid: false
       - testid: json-viewer
         type: element
         dynamic_testid: false
