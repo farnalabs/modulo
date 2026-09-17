@@ -25,6 +25,29 @@ _log = logging.getLogger(__name__)
 _TENANT_KEY = "org_id"
 _TENANT_COLUMN = "organisation_id"
 
+# The RLS GUC names the pool-checkout reset hook clears. Module-level constant
+# so any consumer of the hook is validated against one authoritative set.
+_RLS_CONFIG_NAMES: tuple[str, ...] = (
+    "app.organisation_id",
+    "app.user_id",
+    "app.org_role",
+    "app.execution_context",
+)
+
+
+def _set_config_statement(config_name: str) -> str:
+    """Build the pool-level ``SELECT set_config(...)`` statement for a GUC reset.
+
+    The DBAPI2 sync cursor API used by the checkout listener has no portable
+    parameter binding, so the statement is interpolated — but the value is a
+    GUC NAME that must come from ``_RLS_CONFIG_NAMES`` (fail closed rather
+    than interpolate an unvalidated name). FAR-915 / GitHub #126 hygiene:
+    callers pass only known constants today; the guard keeps it that way.
+    """
+    if config_name not in _RLS_CONFIG_NAMES:
+        raise ValueError(f"Unknown RLS config name: {config_name!r} — must be one of {_RLS_CONFIG_NAMES}")
+    return f"SELECT set_config('{config_name}', '', false)"
+
 
 class OutputsRlsMismatch(RuntimeError):  # noqa: N818  # name mandated by the reviewed FAR-583 design
     """The session's RLS org context disagrees with the run_node_outputs org.
@@ -195,8 +218,6 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
         _log.info("Skipping pool-level RLS reset hook — %s backend", dialect)
         return
 
-    _rls_config_names = ["app.organisation_id", "app.user_id", "app.org_role", "app.execution_context"]
-
     @event.listens_for(engine.sync_engine, "checkout")
     def _reset_org_on_checkout(
         dbapi_connection: object,
@@ -206,8 +227,8 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
         try:
             cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
             try:
-                for config_name in _rls_config_names:
-                    cursor.execute(f"SELECT set_config('{config_name}', '', false)")
+                for config_name in _RLS_CONFIG_NAMES:
+                    cursor.execute(_set_config_statement(config_name))
             finally:
                 cursor.close()
         except AttributeError:

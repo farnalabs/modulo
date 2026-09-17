@@ -1,6 +1,7 @@
 """SSO routes: OIDC and SAML 2.0 login flows."""
 
 import logging
+import xml.sax.saxutils
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -422,16 +423,25 @@ async def saml_metadata(
             public_url = settings.modulo_public_url.rstrip("/")
             acs_url = f"{public_url}/api/v1/auth/saml/acs"
 
+            # XML-escape before embedding (FAR-915 / GitHub #281): entity_id is
+            # org-configurable (DB-backed), so a malicious value must not be
+            # able to inject XML or break out of the entityID attribute.
+            # escape() covers & < >; the additional map covers quotes since the
+            # values are interpolated inside double-quoted attributes.
+            xml_entities = {'"': "&quot;", "'": "&apos;"}
+            safe_entity_id = xml.sax.saxutils.escape(entity_id, xml_entities)
+            safe_acs_url = xml.sax.saxutils.escape(acs_url, xml_entities)
+
             return (
                 '<?xml version="1.0"?>'
                 "<md:EntityDescriptor"
                 ' xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"'
-                f' entityID="{entity_id}">'
+                f' entityID="{safe_entity_id}">'
                 "  <md:SPSSODescriptor"
                 '   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">'
                 f"    <md:AssertionConsumerService"
                 f'     Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"'
-                f'     Location="{acs_url}"'
+                f'     Location="{safe_acs_url}"'
                 f'     index="1"/>'
                 "  </md:SPSSODescriptor>"
                 "</md:EntityDescriptor>"
