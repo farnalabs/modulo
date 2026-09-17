@@ -48,12 +48,14 @@ jobs:
           # conflicted PRs beyond the cap would go undetected for a cycle. Raise
           # the limit (or page) if modulo's open-PR count approaches this bound.
           #
-          # --repo is load-bearing: this job has no actions/checkout step, so
-          # there is no git remote for `gh` to infer the repository from and
-          # every run died with `failed to run git: fatal: not a git repository`
-          # (all 31 scheduled runs red since the workflow landed). The other gh
-          # calls here are unaffected because they hit explicit
-          # /repos/farnalabs/modulo/... REST paths.
+          # --repo is required on any gh call that infers the repository: this
+          # job has no actions/checkout step, so there is no git remote for `gh`
+          # to infer from and such calls die with `failed to run git: fatal: not
+          # a git repository` (all 31 scheduled runs red since the workflow
+          # landed). The explicit /repos/farnalabs/modulo/... REST paths are
+          # unaffected, but `gh pr list` here and `gh pr view` / `gh pr comment`
+          # below must all pass --repo — without it on the latter two the marker
+          # dedup reads "0" and every cycle re-posts the manual-delivery note.
           #
           # The `|| GH_RC=$?` is a second safeguard: under `set -e` a bare
           # non-zero `gh pr list` aborts the step before the fail-open guard
@@ -232,7 +234,7 @@ jobs:
             BRANCH=$(jq -r ".[$i].headRefName" /tmp/notify_prs.json)
 
             # Check for existing marker comment (idempotent)
-            EXISTING=$(gh pr view "$PR_NUM" --json comments --jq "[.comments[] | select(.body | contains(\"$MARKER\"))] | length" 2>/dev/null || echo "0")
+            EXISTING=$(gh pr view "$PR_NUM" --repo farnalabs/modulo --json comments --jq "[.comments[] | select(.body | contains(\"$MARKER\"))] | length" 2>/dev/null || echo "0")
             if [ "$EXISTING" != "0" ]; then
               echo "PR #$PR_NUM already has a manual-delivery conflict note — skipping."
               continue
@@ -250,7 +252,7 @@ jobs:
             or force-push a shared/reviewed branch), resolve conflicts, and push. This re-arms the
             \`pull_request\` pipeline (CI + sonarcloud-scan)."
 
-            gh pr comment "$PR_NUM" --body "$COMMENT_BODY" 2>/dev/null || {
+            gh pr comment "$PR_NUM" --repo farnalabs/modulo --body "$COMMENT_BODY" 2>/dev/null || {
               echo "::warning::Failed to post manual-delivery conflict comment on PR #$PR_NUM"
             }
 
