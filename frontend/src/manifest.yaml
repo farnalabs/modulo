@@ -1337,9 +1337,6 @@ elements:
       - testid: filter-bar-search-wrapper
         type: element
         dynamic_testid: false
-      - testid: lock-icon
-        type: element
-        dynamic_testid: false
     /admin/errors:
       - testid: feature-gate
         type: element
@@ -1480,9 +1477,6 @@ elements:
         dynamic_testid: false
       - testid: db-capacity-housekeeping-link
         type: link
-        dynamic_testid: false
-      - testid: lock-icon
-        type: element
         dynamic_testid: false
     /admin/model-backends:
       - testid: admin-model-backends-add
@@ -1808,9 +1802,6 @@ elements:
         type: element
         dynamic_testid: false
       - testid: enforcement-enabled
-        type: element
-        dynamic_testid: false
-      - testid: lock-icon
         type: element
         dynamic_testid: false
       - testid: product-analytics-consent-prompt
@@ -3743,9 +3734,6 @@ elements:
         type: button
         dynamic_testid: false
     /settings/guardrails:
-      - testid: lock-icon
-        type: element
-        dynamic_testid: false
       - testid: settings-guardrails-create
         type: button
         dynamic_testid: false
