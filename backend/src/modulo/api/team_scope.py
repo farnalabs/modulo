@@ -1,4 +1,4 @@
-"""Team-scope resolvers for the RLS-parity authorization floor (ADR 017 DECISION 2).
+"""Team-scope resolvers for the RLS-parity authorization floor (ADR 038).
 
 Each resolver loads a target row's ``owner_team_id`` and ``visibility`` so the
 ``require_team_membership_or_admin`` dependency can mirror the DB team-visibility
@@ -16,10 +16,12 @@ visibility CHECK constraint but only strict org RLS at the DB layer — the
 membership gate here is its only team enforcement.
 
 ``runs`` has ``owner_team_id`` but no ``visibility`` column and strict org RLS.
-For ``trigger_run`` (POST /runs), the pipeline_id arrives in the **request body**
+Run access is derived from pipeline access (ADR 038): a run executes with the
+pipeline owner's authority, so runs stay on the org-role floor only — the
+``owner_team_id`` on runs is metadata, not a security control.  For
+``trigger_run`` (POST /runs), the pipeline_id arrives in the **request body**
 (not the path), so a body-based resolver reads it and returns the pipeline's
-team scope.  For all other run endpoints, runs stay on the org-role floor only
-(RLS parity — iteration-7 pinned special case).
+team scope.
 
 The matrix mapping each team-scoped route to its ``owner_team_id`` source is the
 PR B deliverable; this module builds the MECHANISM and the pipeline resolver.
@@ -156,10 +158,11 @@ async def resolve_trigger_run_team_scope(
     return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
 
 
-# The team-scoped resource set (ADR 017 DECISION 2). ``runs`` is deliberately
-# absent from the path-param resolvers: it has ``owner_team_id`` but no
-# ``visibility`` column and strict org RLS, so it stays on the org-role floor
-# only (RLS parity). The trigger_run body resolver is wired separately via
+# The team-scoped resource set (ADR 038). ``runs`` is deliberately absent from
+# the path-param resolvers: it has ``owner_team_id`` but no ``visibility`` column
+# and strict org RLS, so it stays on the org-role floor only — run access is
+# derived from pipeline access, and the ``owner_team_id`` is metadata, not a
+# security control.  The trigger_run body resolver is wired separately via
 # ``require_team_membership_or_admin_any_credential``.
 TEAM_SCOPED_RESOLVERS: dict[str, TeamScopeProvider] = {
     "pipelines": resolve_pipeline_team_scope,

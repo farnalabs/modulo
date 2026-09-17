@@ -66,6 +66,14 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
       `require_team_membership_or_admin_any_credential` gate with a body-based
       resolver that reads `pipeline_id` from the JSON request (`test_runs_team_scope.py`,
       `runner_role.feature`)
+- [x] Run-execution service identity (ADR 038): a run executes with the
+      pipeline owner's authority (service identity scoped to `owner_team_id`),
+      not the triggering user's grants. Referenced resources (schema, connector,
+      model backend, agent) are usable by the run regardless of the triggerer's
+      direct access; the only user-facing check is "can you trigger this
+      pipeline?" (`trigger_run` team gate). Secrets are brokered — injected by
+      the engine, never readable by the user. `runs.owner_team_id` is metadata
+      (dashboard aggregation), not a security control.
 - [x] Error-state handling: failed states, retries and recovery flows are covered by
       `backend/tests/bdd/features/errors/{failed_state,retry,recovery}.feature`
 - [x] Run lifecycle is BDD-exercised end to end: a manual trigger creates a pending run
