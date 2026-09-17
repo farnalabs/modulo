@@ -401,10 +401,14 @@ async def test_run_schema_validation_failure_llm_retryable_real_schema(patch_nod
         "_read_file_via_exec",
         AsyncMock(return_value='{"summary": "done"}'),
     )
-    cfg = _config(sandbox_mode="llm", output_schema_json={"type": "object", "required": ["pr_url"]})
+    cfg = _config(
+        sandbox_mode="llm",
+        output_schema_json={"type": "object", "required": ["pr_url"]},
+        schema_validator_mode="strict",
+    )
     with pytest.raises(_RealSandboxNodeFailedError) as excinfo:
         await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
-    assert "pr_url" in str(excinfo.value)
+    assert "required" in str(excinfo.value)
     assert runtime_retry.failure_event(excinfo.value) == "error"
 
 

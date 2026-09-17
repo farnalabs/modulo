@@ -210,16 +210,18 @@ class TestOutputSchemaValidation:
     """Manual/agent node output validation raises a domain-specific error."""
 
     def test_missing_required_field_raises_domain_error(self) -> None:
-        with pytest.raises(OutputSchemaValidationError, match="missing required field 'name'"):
-            _validate_against_schema({"id": "1"}, {"required": ["name"]})
+        with pytest.raises(OutputSchemaValidationError, match="Strict schema validation failed"):
+            _validate_against_schema({"id": "1"}, {"required": ["name"]}, mode="strict")
 
     def test_valid_output_passes(self) -> None:
         schema = {"required": ["name", "status"]}
-        assert _validate_against_schema({"name": "x", "status": "done"}, schema) is None
+        outcome, errors = _validate_against_schema({"name": "x", "status": "done"}, schema)
+        assert outcome == "native_decoded_and_validated"
+        assert errors == []
 
     def test_error_is_a_value_error_subclass(self) -> None:
-        with pytest.raises(ValueError, match="missing required field 'x'"):
-            _validate_against_schema({}, {"required": ["x"]})
+        with pytest.raises(ValueError, match="Strict schema validation failed"):
+            _validate_against_schema({}, {"required": ["x"]}, mode="strict")
 
     def test_schema_validation_failure_maps_to_contract_schema(self) -> None:
         from modulo.core.pipeline_engine.error_codes import map_legacy_code

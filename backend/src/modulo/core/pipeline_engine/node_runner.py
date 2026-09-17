@@ -59,6 +59,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
+from dataclasses import replace as _dc_replace
 from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard
@@ -2802,6 +2803,9 @@ def _parse_uuid_opt(value: Any) -> uuid.UUID | None:
 
 # FIX E: mode-resolution helper — single source of truth, replaces 3 copy-pasted blocks
 _SCHEMA_MODE_CACHE: dict[str, str] = {}  # last-known-good cache per org
+# FAR-899: bound the mode-resolution DB read (3s — a hung DB must fail open to
+# the last-known-good cache / env / default, never hang the node hot path).
+_SCHEMA_MODE_RESOLVE_TIMEOUT = 3.0
 
 
 async def _resolve_schema_validator_mode(
@@ -2832,7 +2836,10 @@ async def _resolve_schema_validator_mode(
 
     try:
         async with session_factory() as _sess, _sess.begin():
-            mode = await resolve_schema_validator_mode(_sess, _org_uuid)
+            mode = await asyncio.wait_for(
+                resolve_schema_validator_mode(_sess, _org_uuid),
+                timeout=_SCHEMA_MODE_RESOLVE_TIMEOUT,
+            )
     except Exception:
         _org_key = str(_org_uuid)
         cached = _SCHEMA_MODE_CACHE.get(_org_key)
@@ -7033,7 +7040,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         if _route.provider_type == "runner_docker":
             from modulo.core.bundled_runner.runner_dispatch import run_bundled_runner_node
 
-            return await run_bundled_runner_node(state, config, _route)
+            # FAR-899: thread the resolved mode into the Bundled Runner path so
+            # its output-schema gate honours the operator toggle (the config is
+            # frozen, so replace rather than mutate).
+            return await run_bundled_runner_node(
+                state,
+                _dc_replace(config, schema_validator_mode=schema_validator_mode),
+                _route,
+            )
         _resolved_provider = RUNNER_PROVIDER_E2B
         if _route.provider_type == "e2b":
             validate_e2b_dispatch_timeout(sandbox_timeout)
