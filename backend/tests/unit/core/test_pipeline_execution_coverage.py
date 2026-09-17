@@ -559,7 +559,9 @@ class TestKillSandboxBestEffort:
             def connect(self) -> _Conn:
                 return _Conn()
 
-        await pe._kill_sandbox_best_effort(_Engine(), "run-1", "org-1")  # type: ignore[arg-type]
+        with patch("e2b.AsyncSandbox.connect", new_callable=AsyncMock) as connect:
+            await pe._kill_sandbox_best_effort(_Engine(), "run-1", "org-1")  # type: ignore[arg-type]
+        connect.assert_not_awaited()
 
     async def test_cancelled_error_propagates(self) -> None:
         """CancelledError must not be swallowed."""
@@ -1099,24 +1101,29 @@ class TestAwaitWatchdogBounded:
         done_task = asyncio.create_task(asyncio.sleep(0))
         await done_task  # ensure it's done
 
-        await pe._await_watchdog_bounded(
-            done_task,
-            stall_requested=asyncio.Event(),
-            health_failed=asyncio.Event(),
-            superseded=asyncio.Event(),
-            label="test",
-            rid=uuid.uuid4(),
-        )
-        # No error, no hang — returned immediately.
+        with patch.object(pe.asyncio, "wait", new_callable=AsyncMock) as wait_mock:
+            await pe._await_watchdog_bounded(
+                done_task,
+                stall_requested=asyncio.Event(),
+                health_failed=asyncio.Event(),
+                superseded=asyncio.Event(),
+                label="test",
+                rid=uuid.uuid4(),
+            )
+        # A done task short-circuits before the bounded wait is ever entered.
+        wait_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_none_task_returns_immediately(self) -> None:
         """When the watchdog task is None, returns immediately."""
-        await pe._await_watchdog_bounded(
-            None,
-            stall_requested=asyncio.Event(),
-            health_failed=asyncio.Event(),
-            superseded=asyncio.Event(),
-            label="test",
-            rid=uuid.uuid4(),
-        )
+        with patch.object(pe.asyncio, "wait", new_callable=AsyncMock) as wait_mock:
+            await pe._await_watchdog_bounded(
+                None,
+                stall_requested=asyncio.Event(),
+                health_failed=asyncio.Event(),
+                superseded=asyncio.Event(),
+                label="test",
+                rid=uuid.uuid4(),
+            )
+        # A None task short-circuits before the bounded wait is ever entered.
+        wait_mock.assert_not_awaited()
