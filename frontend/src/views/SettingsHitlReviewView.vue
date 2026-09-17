@@ -238,16 +238,14 @@
           :class="{ 'border-b': expandedKey === expandKey(gate) }"
           @click="toggleExpand(gate)"
         >
-          <label
-            class="h-4 w-4 flex-shrink-0"
-            @click.stop
-          >
+          <label class="h-4 w-4 flex-shrink-0">
             <input
               type="checkbox"
               :checked="isSelected(gate)"
               :aria-label="$t('views.SettingsHitlReviewView.bulk_select_gate', { id: shortId(gate.gate_id) })"
               data-testid="hitl-review-row-checkbox"
               class="h-4 w-4 rounded border-input accent-primary"
+              @click.stop
               @change="toggleSelect(gate)"
             />
           </label>
