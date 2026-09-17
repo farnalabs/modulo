@@ -29,6 +29,7 @@ interface SsoFormState {
   default_role: string
   preset: string
   tenant_domain: string
+  allowed_domains: string[]
 }
 
 const PRESETS: SsoPresetInfo[] = [
@@ -55,6 +56,7 @@ function makeData(overrides: Partial<SsoFormState> = {}): SsoFormState {
     default_role: 'runner',
     preset: 'custom',
     tenant_domain: '',
+    allowed_domains: [],
     ...overrides,
   }
 }

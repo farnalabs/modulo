@@ -23,6 +23,7 @@
             :saving-label="$t('views.SettingsSsoView.creating')"
             :error="formError"
             :presets="presets"
+            :unrestricted-provisioning-available="unrestrictedProvisioningAvailable"
             @update:data="onFormUpdate($event)"
             @submit="createProvider"
             @cancel="closeForm"
@@ -115,6 +116,7 @@
                 :error="formError"
                 :presets="presets"
                 :callback-url="editProviderCallbackUrl"
+                :unrestricted-provisioning-available="unrestrictedProvisioningAvailable"
                 @update:data="onFormUpdate($event)"
                 @submit="updateProvider"
                 @cancel="closeEditForm"
@@ -171,6 +173,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'
 import type { SsoPresetInfo } from '../components/SsoProviderForm.vue'
+import type { SsoFormState } from '../components/SsoProviderForm.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -178,27 +181,12 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatError } from '../lib/utils'
 import { formatApiError } from '../lib/api/formatError'
+import { usePlanStore } from '../stores/planStore'
 
 type SsoProviderResponse = components['schemas']['SsoProviderResponse']
 type SsoProviderCreate = components['schemas']['SsoProviderCreate']
 type SsoProviderUpdate = components['schemas']['SsoProviderUpdate']
 type SsoProviderTestResult = components['schemas']['SsoProviderTestResult']
-
-interface SsoFormState {
-  provider_type: string
-  name: string
-  client_id: string
-  client_secret: string
-  discovery_url: string
-  metadata_url: string
-  metadata_xml: string
-  entity_id: string
-  scopes: string
-  auto_provision: boolean
-  default_role: string
-  preset: string
-  tenant_domain: string
-}
 
 function emptyForm(): SsoFormState {
   return {
@@ -211,12 +199,16 @@ function emptyForm(): SsoFormState {
     metadata_xml: '',
     entity_id: '',
     scopes: '',
-    auto_provision: true,
+    auto_provision: false,
     default_role: 'runner',
     preset: 'custom',
     tenant_domain: '',
+    allowed_domains: [],
   }
 }
+
+const planStore = usePlanStore()
+const unrestrictedProvisioningAvailable = computed(() => planStore.featureEnabled('sso_unrestricted_provisioning'))
 
 const { loading, error, data: providers, load: loadProviders } = useDataFetch<SsoProviderResponse[]>(
   async () => {
@@ -298,6 +290,7 @@ function openEditForm(provider: SsoProviderResponse) {
     default_role: provider.default_role,
     preset: provider.preset ?? 'custom',
     tenant_domain: provider.tenant_domain ?? '',
+    allowed_domains: [...(provider.allowed_domains ?? [])],
   })
 }
 
@@ -325,6 +318,7 @@ function buildCreateBody(): SsoProviderCreate {
     default_role: formData.default_role,
     enabled: true,
     preset: formData.preset || 'custom',
+    allowed_domains: formData.allowed_domains.length > 0 ? [...formData.allowed_domains] : undefined,
   }
 
   if (formData.provider_type === 'oidc') {
@@ -357,6 +351,7 @@ function buildUpdateBody(): SsoProviderUpdate {
     auto_provision: formData.auto_provision ?? null,
     default_role: formData.default_role || null,
     preset: formData.preset || null,
+    allowed_domains: [...formData.allowed_domains],
   }
 
   if (formData.provider_type === 'oidc') {
