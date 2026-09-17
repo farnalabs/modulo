@@ -171,6 +171,38 @@ async def _enforce_team_tier_gate(
         )
 
 
+async def _apply_org_flag_override(
+    settings: Settings,
+    session: AsyncSession,
+    current_user: AuthenticatedPrincipal,
+    flag_name: str,
+    enabled: bool,
+) -> Any:
+    """Validate and persist an org-level flag override, returning the flag.
+
+    Shared by the toggle (``PUT /{flag_name}``) and org-override
+    (``PUT /{flag_name}/org-override``) endpoints so both apply the same
+    org-id check, flag-existence check, team-tier gate, durable write and
+    cache invalidation.
+    """
+    if current_user.organisation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_MSG_ORG_ID_REQUIRED,
+        )
+    registry = await _build_registry(settings, session, current_user)
+    flag = registry.get_flag(flag_name)
+    if flag is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown feature flag: {flag_name}",
+        )
+    await _enforce_team_tier_gate(flag, flag_name, registry, enabled)
+    await _write_org_override(session, current_user.organisation_id, flag_name, enabled)
+    await _invalidate_cache(settings, current_user.organisation_id)
+    return flag
+
+
 @router.get("", response_model=None)
 @handle_db_errors("admin.feature_flags.list_feature_flags")
 async def list_feature_flags(
@@ -384,22 +416,8 @@ async def toggle_feature_flag(
     endpoints write the same truth. ``overridden: true`` is only returned
     after the durable write has committed.
     """
-    if current_user.organisation_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=_MSG_ORG_ID_REQUIRED,
-        )
     try:
-        registry = await _build_registry(settings, session, current_user)
-        flag = registry.get_flag(flag_name)
-        if flag is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Unknown feature flag: {flag_name}",
-            )
-        await _enforce_team_tier_gate(flag, flag_name, registry, req.enabled)
-        await _write_org_override(session, current_user.organisation_id, flag_name, req.enabled)
-        await _invalidate_cache(settings, current_user.organisation_id)
+        flag = await _apply_org_flag_override(settings, session, current_user, flag_name, req.enabled)
         return {
             "name": flag.name,
             "description": flag.description,
@@ -510,22 +528,8 @@ async def set_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    if current_user.organisation_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=_MSG_ORG_ID_REQUIRED,
-        )
     try:
-        registry = await _build_registry(settings, session, current_user)
-        flag = registry.get_flag(flag_name)
-        if flag is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Unknown feature flag: {flag_name}",
-            )
-        await _enforce_team_tier_gate(flag, flag_name, registry, req.enabled)
-        await _write_org_override(session, current_user.organisation_id, flag_name, req.enabled)
-        await _invalidate_cache(settings, current_user.organisation_id)
+        await _apply_org_flag_override(settings, session, current_user, flag_name, req.enabled)
         return {"override": req.enabled}
     except HTTPException:
         raise
