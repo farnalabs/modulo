@@ -1136,12 +1136,13 @@ jobs:
           echo "Candidate PRs for GitHub issue close: $CANDIDATES"
 
           # Closing-keyword regex: matches case-insensitive fixes/closes/resolves
-          # followed by optional whitespace and #<number>. Handles comma-separated
-          # (Closes #12, #34) and "and"-separated (Closes #12 and #34) lists as a
-          # single match so the downstream #N extraction picks up every reference.
-          # The leading (^|[[:space:]]+) prevents matching inside words (e.g.
-          # "closesourced") while allowing a match at the start of a line.
-          CLOSING_REGEX='(^|[[:space:]]+)(fixes|closes|resolves):?[[:space:]]+#[0-9]+([[:space:]]*,[[:space:]]*#[0-9]+)*([[:space:]]+and[[:space:]]+#[0-9]+)?'
+          # followed by optional whitespace and #<number>. The separator group
+          # accepts any mix of comma and "and" separators as one match, so
+          # (Closes #12, #34 and #56) and (Closes #12 and #34, #56) both yield
+          # every reference for the downstream #N extraction. The leading
+          # (^|[[:space:]]+) prevents matching inside words (e.g. "closesourced")
+          # while allowing a match at the start of a line.
+          CLOSING_REGEX='(^|[[:space:]]+)(fixes|closes|resolves):?[[:space:]]+#[0-9]+(([[:space:]]*,[[:space:]]*|[[:space:]]+and[[:space:]]+)#[0-9]+)*'
 
           for NUM in $CANDIDATES; do
             TITLE=$(gh pr view "$NUM" --json title --jq '.title' 2>/dev/null || echo "")
@@ -1152,12 +1153,24 @@ jobs:
             PARTIAL=$(echo "$TITLE" | grep -qi '\[partial\]' && echo "yes" || echo "no")
 
             # Extract closing references from BOTH title and body. First strip
-            # fenced code blocks (``` ... ```) so a Fixes #1 inside a code fence
-            # is not treated as a real closing reference (GitHub's renderer skips
-            # code fences). The grep produces lines like "  Closes #42" or
-            # "  Fixes #94"; we pull the issue number from each match, deduplicated.
+            # fenced code blocks so a Fixes #1 inside a code fence is not treated
+            # as a real closing reference (GitHub's renderer skips code fences).
+            # Handles ``` and ~~~ fences, indented or flush-left, and only closes
+            # on a matching delimiter character. The grep produces lines like
+            # "  Closes #42" or "  Fixes #94"; we pull the issue number from each
+            # match, deduplicated.
             ISSUES=$(echo "$TITLE"$'\n'"$BODY" \
-              | sed '/^```/,/^```/d' \
+              | awk '
+                  {
+                    stripped = $0
+                    sub(/^[[:space:]]*/, "", stripped)
+                    if (in_fence) {
+                      if (stripped ~ ("^" fence_char fence_char fence_char)) in_fence = 0
+                      next
+                    }
+                    if (stripped ~ /^```/ || stripped ~ /^~~~/ ) { fence_char = substr(stripped, 1, 1); in_fence = 1; next }
+                    print
+                  }' \
               | grep -ioE "$CLOSING_REGEX" \
               | grep -oE '#[0-9]+' \
               | sed 's/^#//' \
