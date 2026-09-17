@@ -61,11 +61,9 @@ from modulo.api.mcp_server import (
     _validate_trigger_numbers,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from tests.unit.mcp.helpers import API_KEY, ORG_ID, USER_ID, make_session_context
 
-_ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
-_USER = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _TEAM = uuid.UUID("00000000-0000-0000-0000-000000000009")
-_API_KEY = "mk_testprefix_testsecretkey1234567890abc"
 
 
 def _mock_session() -> AsyncMock:
@@ -77,22 +75,15 @@ def _mock_session() -> AsyncMock:
     return session
 
 
-def _make_session_ctx(session: AsyncMock) -> AsyncMock:
-    cm = AsyncMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return cm
-
-
 class _Ctx:
     """Set up and tear down MCP context vars for a test."""
 
     def setup_method(self) -> None:
-        ms._ctx_org_id.set(_ORG)
+        ms._ctx_org_id.set(ORG_ID)
         ms._ctx_role.set("operator")
-        ms._ctx_user_id.set(_USER)
-        ms._ctx_key_id.set(_USER)
-        ms._ctx_auth_token.set(_API_KEY)
+        ms._ctx_user_id.set(USER_ID)
+        ms._ctx_key_id.set(USER_ID)
+        ms._ctx_auth_token.set(API_KEY)
         ms._ctx_auth_type.set("api_key")
         ms._ctx_team_id.set(None)
         ms._ctx_node_allowed_tools.set(None)
@@ -1130,10 +1121,10 @@ class TestValidatePrincipalLiveSuccess(_Ctx):
         from modulo.api.mcp_server import _validate_principal_live
 
         principal = MagicMock()
-        principal.organisation_id = _ORG
-        principal.account_id = _USER
+        principal.organisation_id = ORG_ID
+        principal.account_id = USER_ID
         with patch.object(ms, "_revalidate_live_role", new=AsyncMock(return_value="admin")):
-            assert await _validate_principal_live(_API_KEY, principal) is True
+            assert await _validate_principal_live(API_KEY, principal) is True
         assert ms._ctx_role.get() == "admin"
 
 
@@ -1144,12 +1135,12 @@ class TestCreateManualRun(_Ctx):
     async def test_pipeline_not_found(self) -> None:
         session = _mock_session()
         with (
-            patch.object(ms, "_session", return_value=_make_session_ctx(session)),
+            patch.object(ms, "_session", return_value=make_session_context(session)),
             patch("modulo.api.mcp_server.get_pipeline", new_callable=AsyncMock, return_value=None),
         ):
             run_id, _thread_id, err = await _create_manual_run(
                 session,
-                _ORG,
+                ORG_ID,
                 uuid.uuid4(),
                 str(uuid.uuid4()),
                 {},
@@ -1163,7 +1154,7 @@ class TestCreateManualRun(_Ctx):
         pipeline = MagicMock()
         pipeline.owner_team_id = None
         with (
-            patch.object(ms, "_session", return_value=_make_session_ctx(session)),
+            patch.object(ms, "_session", return_value=make_session_context(session)),
             patch("modulo.api.mcp_server.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
             patch("modulo.api.mcp_server._team_scoped_key_mismatch", return_value=False),
             patch(
@@ -1174,7 +1165,7 @@ class TestCreateManualRun(_Ctx):
         ):
             _run_id, _thread_id, err = await _create_manual_run(
                 session,
-                _ORG,
+                ORG_ID,
                 uuid.uuid4(),
                 str(uuid.uuid4()),
                 {},
@@ -1189,7 +1180,7 @@ class TestCreateManualRun(_Ctx):
         snapshot = MagicMock()
         snapshot.graph_json = {"nodes": []}
         with (
-            patch.object(ms, "_session", return_value=_make_session_ctx(session)),
+            patch.object(ms, "_session", return_value=make_session_context(session)),
             patch("modulo.api.mcp_server.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
             patch("modulo.api.mcp_server._team_scoped_key_mismatch", return_value=False),
             patch(
@@ -1200,7 +1191,7 @@ class TestCreateManualRun(_Ctx):
         ):
             _run_id, _thread_id, err = await _create_manual_run(
                 session,
-                _ORG,
+                ORG_ID,
                 uuid.uuid4(),
                 str(uuid.uuid4()),
                 {},
@@ -1418,7 +1409,7 @@ class TestCreateManualRunTeamScope(_Ctx):
         pipeline.owner_team_id = uuid.uuid4()
         ms._ctx_team_id.set(_TEAM)
         with (
-            patch.object(ms, "_session", return_value=_make_session_ctx(session)),
+            patch.object(ms, "_session", return_value=make_session_context(session)),
             patch(
                 "modulo.api.mcp_server.get_pipeline",
                 new_callable=AsyncMock,
@@ -1431,7 +1422,7 @@ class TestCreateManualRunTeamScope(_Ctx):
         ):
             _run_id, _thread_id, err = await _create_manual_run(
                 session,
-                _ORG,
+                ORG_ID,
                 uuid.uuid4(),
                 str(uuid.uuid4()),
                 {},
