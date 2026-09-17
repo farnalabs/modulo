@@ -70,8 +70,8 @@ manage org-level licenses.
 - 2026-09-17: **improve-architecture (product-map walk)** — closed the "No BDD
   for DELETE org" half of the `feat-system-orgs` BDD gap: added DELETE coverage
   to `system_admin_orgs.feature` (successful 204 delete, 404 for a missing org,
-  and 403 for a regular org admin). The narrower license-management BDD gap
-  remains tracked below (since closed by the 2026-09-17 license walk above).
+  and 403 for a regular org admin). The narrower license-management BDD gap was
+  subsequently closed by the 2026-09-17 license walk above.
 
 - 2026-09-12: **improve-architecture (product-map walk)** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
