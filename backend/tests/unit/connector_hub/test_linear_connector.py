@@ -99,6 +99,16 @@ def test_init_requires_token():
         LinearConnector(token="")
 
 
+def test_init_requires_token_not_none():
+    with pytest.raises(ValueError, match="token"):
+        LinearConnector(token=None)
+
+
+def test_init_succeeds_with_token():
+    c = LinearConnector(token=TOKEN)
+    assert c.connector_type == ConnectorType.LINEAR
+
+
 # ---------------------------------------------------------------------------
 # T1 — resolve
 # ---------------------------------------------------------------------------
