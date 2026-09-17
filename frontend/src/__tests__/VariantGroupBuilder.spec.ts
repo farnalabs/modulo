@@ -6,11 +6,9 @@ vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }))
 
-const routeQuery: Record<string, string> = {}
 const pushMock = vi.hoisted(() => vi.fn())
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: routeQuery, path: '/variants/ab-test', name: 'ab-test-models', params: {}, fullPath: '/variants/ab-test' }),
   useRouter: () => ({ push: pushMock }),
 }))
 
@@ -24,7 +22,21 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import { api } from '../lib/api/client'
-import ABTestModelsView from '../views/ABTestModelsView.vue'
+import VariantGroupBuilder from '../components/variants/VariantGroupBuilder.vue'
+
+type BuilderVm = {
+  variants: Array<{
+    id: string
+    label: string
+    snapshotId: string | null
+    modelBackendId: string | null
+    promptVersion: string | null
+  }>
+  showFireDialog: boolean
+  fireError: string | null
+  selectedPipelineId: string
+  fireBatch: () => Promise<void>
+}
 
 const pipelines = [
   { id: 'p1', name: 'Pipe One' },
@@ -58,42 +70,42 @@ function mockGet(url: string) {
   return Promise.resolve({ data: null, error: undefined })
 }
 
-async function mountView() {
+async function mountBuilder(initialPipelineId?: string) {
   vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(mockGet)
-  const wrapper = mount(ABTestModelsView)
+  const wrapper = mount(VariantGroupBuilder, {
+    props: initialPipelineId ? { initialPipelineId } : {},
+  })
   await nextTick()
   await new Promise(r => setTimeout(r, 0))
   return wrapper
 }
 
-describe('ABTestModelsView variant comparison creator', () => {
+describe('VariantGroupBuilder', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     pushMock.mockClear()
-    delete routeQuery.pipeline_id
   })
 
   it('renders without crashing and shows the pipeline picker', async () => {
-    const wrapper = await mountView()
+    const wrapper = await mountBuilder()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.find('[data-testid="variant-builder-pipeline-select"]').exists()).toBe(true)
   })
 
   it('adds rows with stable ids and defaults the snapshot to the pipeline snapshot', async () => {
-    const wrapper = await mountView()
+    const wrapper = await mountBuilder()
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await nextTick()
 
     expect(wrapper.findAll('[data-testid^="variant-builder-label-"]')).toHaveLength(2)
-    const firstRowIds = (wrapper.vm as unknown as { variants: Array<{ id: string }> }).variants.map(v => v.id)
-    expect(new Set(firstRowIds).size).toBe(2)
-    const variants = (wrapper.vm as unknown as { variants: Array<{ snapshotId: string | null }> }).variants
+    const variants = (wrapper.vm as unknown as { variants: Array<{ id: string; snapshotId: string | null }> }).variants
+    expect(new Set(variants.map(v => v.id)).size).toBe(2)
     expect(variants.every(v => v.snapshotId === 's1')).toBe(true)
   })
 
   it('duplicate mints a fresh variant id and auto-suffixes the label with "(copy)"', async () => {
-    const wrapper = await mountView()
+    const wrapper = await mountBuilder()
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await nextTick()
     const vm = wrapper.vm as unknown as { variants: Array<{ id: string; label: string; snapshotId: string | null }> }
@@ -110,7 +122,7 @@ describe('ABTestModelsView variant comparison creator', () => {
   })
 
   it('remove row drops it and min-2 gate re-checks after a drop', async () => {
-    const wrapper = await mountView()
+    const wrapper = await mountBuilder()
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await nextTick()
@@ -124,14 +136,14 @@ describe('ABTestModelsView variant comparison creator', () => {
   })
 
   it('fire button is disabled below 2 variants', async () => {
-    const wrapper = await mountView()
+    const wrapper = await mountBuilder()
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await nextTick()
     expect(wrapper.find('[data-testid="variant-builder-fire"]').attributes('disabled')).toBeDefined()
   })
 
   it('row cap of 10 disables the add button at the headroom limit', async () => {
-    const wrapper = await mountView()
+    const wrapper = await mountBuilder()
     const vm = wrapper.vm as unknown as { variants: unknown[] }
     for (let i = 0; i < 10; i += 1) {
       await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
@@ -142,7 +154,7 @@ describe('ABTestModelsView variant comparison creator', () => {
   })
 
   it('duplicate respects the row cap of 10 and disables at the limit', async () => {
-    const wrapper = await mountView()
+    const wrapper = await mountBuilder()
     const vm = wrapper.vm as unknown as { variants: unknown[] }
     for (let i = 0; i < 10; i += 1) {
       await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
@@ -157,7 +169,7 @@ describe('ABTestModelsView variant comparison creator', () => {
   })
 
   it('first-class pickers translate into run_context_overrides keys on fire', async () => {
-    const wrapper = await mountView()
+    const wrapper = await mountBuilder()
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await nextTick()
@@ -197,7 +209,7 @@ describe('ABTestModelsView variant comparison creator', () => {
   })
 
   it('fires the batch and navigates to the compare detail route with the group id', async () => {
-    const wrapper = await mountView()
+    const wrapper = await mountBuilder()
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
     await nextTick()
@@ -226,11 +238,183 @@ describe('ABTestModelsView variant comparison creator', () => {
     })
   })
 
-  it('pre-selects the pipeline from the pipeline_id deep-link query', async () => {
-    routeQuery.pipeline_id = 'p2'
-    const wrapper = await mountView()
+  it('pre-selects the pipeline passed as the initialPipelineId prop', async () => {
+    const wrapper = await mountBuilder('p2')
     await new Promise(r => setTimeout(r, 0))
     const vm = wrapper.vm as unknown as { selectedPipelineId: string }
     expect(vm.selectedPipelineId).toBe('p2')
+  })
+
+  it('emits cancel when the builder cancel button is clicked', async () => {
+    const wrapper = await mountBuilder()
+    await wrapper.find('[data-testid="variant-builder-cancel-build"]').trigger('click')
+    expect(wrapper.emitted('cancel')).toHaveLength(1)
+  })
+
+  it('flags a duplicate label with a row error', async () => {
+    const wrapper = await mountBuilder()
+    await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
+    await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    vm.variants[1].label = vm.variants[0].label
+    await nextTick()
+
+    const alerts = wrapper.findAll('[role="alert"]')
+    expect(alerts).toHaveLength(2)
+    expect(alerts[0].text()).toBe('views.variantCreator.error_duplicate_label')
+  })
+
+  it('auto-suffixes a duplicate label past an existing copy', async () => {
+    const wrapper = await mountBuilder()
+    await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="variant-builder-duplicate-0"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="variant-builder-duplicate-0"]').trigger('click')
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    expect(vm.variants.map(v => v.label)).toEqual([
+      'views.variantCreator.variant_prefix 1',
+      'views.variantCreator.variant_prefix 1 (copy)',
+      'views.variantCreator.variant_prefix 1 (copy) (2)',
+    ])
+  })
+
+  it('closes the fire dialog when a variant is invalid at fire time', async () => {
+    const wrapper = await mountBuilder()
+    await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
+    await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    vm.showFireDialog = true
+    vm.variants[0].label = ''
+    await nextTick()
+
+    await vm.fireBatch()
+    expect(vm.showFireDialog).toBe(false)
+  })
+
+  it('refuses to fire with fewer than two variants', async () => {
+    const wrapper = await mountBuilder()
+    await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    vm.showFireDialog = true
+    await nextTick()
+
+    await vm.fireBatch()
+    expect(vm.fireError).toBe('views.variantCreator.min_two_hint')
+    expect(vm.showFireDialog).toBe(false)
+  })
+
+  async function mountTwoValidVariants() {
+    const wrapper = await mountBuilder()
+    await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
+    await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
+    await nextTick()
+    return wrapper
+  }
+
+  it('surfaces a create-group error from the API', async () => {
+    const wrapper = await mountTwoValidVariants()
+    vi.mocked(api.POST as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) =>
+      Promise.resolve(
+        url === '/api/v1/variant-groups'
+          ? { data: null, error: { detail: 'boom' } }
+          : { data: null, error: undefined }
+      )
+    )
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    await vm.fireBatch()
+    expect(vm.fireError).toContain('views.variantCreator.failed_to_create_group')
+  })
+
+  it('surfaces an unexpected error when the create-group response is empty', async () => {
+    const wrapper = await mountTwoValidVariants()
+    vi.mocked(api.POST as unknown as (url: string) => Promise<unknown>).mockImplementation(() =>
+      Promise.resolve({ data: null, error: undefined })
+    )
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    await vm.fireBatch()
+    expect(vm.fireError).toBe('views.variantCreator.error_unexpected')
+  })
+
+  it('surfaces a batch-run error from the API', async () => {
+    const wrapper = await mountTwoValidVariants()
+    vi.mocked(api.POST as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) =>
+      Promise.resolve(
+        url === '/api/v1/variant-groups'
+          ? { data: { id: 'g1' }, error: undefined }
+          : { data: null, error: { detail: 'nope' } }
+      )
+    )
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    await vm.fireBatch()
+    expect(vm.fireError).toContain('views.variantCreator.failed_to_run')
+    expect(pushMock).not.toHaveBeenCalled()
+  })
+
+  it('surfaces an unexpected error when the batch-run response is empty', async () => {
+    const wrapper = await mountTwoValidVariants()
+    vi.mocked(api.POST as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) =>
+      Promise.resolve(
+        url === '/api/v1/variant-groups'
+          ? { data: { id: 'g2' }, error: undefined }
+          : { data: null, error: undefined }
+      )
+    )
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    await vm.fireBatch()
+    expect(vm.fireError).toBe('views.variantCreator.error_unexpected')
+    expect(pushMock).not.toHaveBeenCalled()
+  })
+
+  it('catches a thrown error while firing and reports it', async () => {
+    const wrapper = await mountTwoValidVariants()
+    vi.mocked(api.POST as unknown as (url: string) => Promise<unknown>).mockImplementation(() =>
+      Promise.reject(new Error('network down'))
+    )
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    await vm.fireBatch()
+    expect(vm.fireError).toContain('views.variantCreator.failed_to_run')
+  })
+
+  it('keeps going when the snapshot fetch fails', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) =>
+      url === '/api/v1/pipelines/{pipeline_id}/snapshots'
+        ? Promise.reject(new Error('snapshots down'))
+        : mockGet(url)
+    )
+    const wrapper = mount(VariantGroupBuilder, {})
+    await nextTick()
+    await new Promise(r => setTimeout(r, 0))
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    expect(vm.selectedPipelineId).toBe('p1')
+    expect(vm.variants).toEqual([])
+  })
+
+  it('keeps going when the prompt-version fetch fails', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) =>
+      url === '/api/v1/pipelines/{pipeline_id}/graph'
+        ? Promise.reject(new Error('graph down'))
+        : mockGet(url)
+    )
+    const wrapper = mount(VariantGroupBuilder, {})
+    await nextTick()
+    await new Promise(r => setTimeout(r, 0))
+
+    const vm = wrapper.vm as unknown as BuilderVm
+    expect(vm.selectedPipelineId).toBe('p1')
   })
 })

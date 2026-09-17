@@ -41,6 +41,7 @@ vi.mock('../lib/api/client', () => ({
 
 import { api } from '../lib/api/client'
 import VariantCompareView from '../views/VariantCompareView.vue'
+import VariantGroupBuilder from '../components/variants/VariantGroupBuilder.vue'
 
 const groupWithVariants = {
   id: 'g1',
@@ -59,6 +60,8 @@ describe('VariantCompareView', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     window.history.replaceState(null, '')
+    hoisted.route.params = {}
+    hoisted.route.query = {}
   })
 
   it('renders without crashing', async () => {
@@ -382,5 +385,79 @@ describe('VariantCompareView', () => {
           ),
       )
     }
+  })
+
+  it('preselects the pipeline group carried by the pipeline_id query param on a deep link', async () => {
+    // PipelineListView's "Run as variant" sends ?pipeline_id=... — the view must
+    // consume it so the deep-linked pipeline selection is not silently dropped.
+    const otherPipeline = { ...groupWithVariants, id: 'g-other', name: 'Other', pipeline_id: 'p-other' }
+    const wantedPipeline = { ...groupWithVariants, id: 'g-wanted', name: 'Wanted', pipeline_id: 'p-wanted' }
+    hoisted.route.params.batchId = ''
+    hoisted.route.query.pipeline_id = 'p-wanted'
+
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) => {
+      if (url === '/api/v1/variant-groups') {
+        return Promise.resolve({ data: [otherPipeline, wantedPipeline], error: undefined })
+      }
+      if (url === '/api/v1/variant-groups/{group_id}') {
+        return Promise.resolve({ data: wantedPipeline, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    try {
+      const wrapper = mount(VariantCompareView, {
+        global: {
+          stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+          mocks: { $t: (key: string) => key },
+        },
+      })
+      await nextTick()
+      await nextTick()
+      await new Promise(r => setTimeout(r, 0))
+      await nextTick()
+      const vm = wrapper.vm as unknown as { selectedGroupId: string | null }
+      expect(vm.selectedGroupId).toBe('g-wanted')
+    } finally {
+      hoisted.route.params.batchId = ''
+      hoisted.route.query.pipeline_id = ''
+    }
+  })
+
+  it('opens the variant-group builder for the pipeline_id deep-link', async () => {
+    hoisted.route.query = { pipeline_id: 'p-deep' }
+
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    await new Promise(r => setTimeout(r, 0))
+    await nextTick()
+
+    const builder = wrapper.findComponent(VariantGroupBuilder)
+    expect(wrapper.find('[data-testid="variant-group-builder"]').exists()).toBe(true)
+    expect(builder.props('initialPipelineId')).toBe('p-deep')
+  })
+
+  it('opens the variant-group builder from the New Comparison button', async () => {
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    await new Promise(r => setTimeout(r, 0))
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="variant-group-builder"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="variant-compare-new-group"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="variant-group-builder"]').exists()).toBe(true)
   })
 })

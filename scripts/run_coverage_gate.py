@@ -32,10 +32,14 @@ Gate semantics (fail-closed):
 - **Tiny diff (≤10 non-blank lines)** → PASS with a note.  Trivial
   changes (typo fixes, label tweaks) should not fail the gate.
 - **Unmeasured changed file** → counts as 0% coverage.  A brand-new
-  production file with no coverage in the report is a gate failure.
-  Detected by comparing the production-only measured lines reported by
-  diff-cover against the non-blank changed production lines from
-  ``git diff`` (both scoped to the same file set).
+  production file *absent* from the coverage report is a gate failure: every
+  non-blank changed line in it counts at 0%.  A file that IS present in the
+  report is measured only against its *coverable* changed lines
+  (``covered_lines`` + ``violation_lines`` from diff-cover's ``src_stats``),
+  because v8 never instruments non-executable lines (static template markup
+  in ``.vue`` files, comments, import-only lines).  Counting those against the
+  file would fail every PR that adds a ``.vue`` component with a sizeable
+  template, even when the component's executable lines are fully covered.
 
 Usage (local)::
 
@@ -70,6 +74,14 @@ COVERAGE_THRESHOLD = 90
 # Files/patterns excluded from the gate's denominator.  These mirror the
 # ``sonar.coverage.exclusions`` in sonar-project.properties — test paths,
 # migrations, scripts, docs examples, and generated code are all out of scope.
+#
+# The generic ``tests/**`` patterns below do NOT match this repo's frontend
+# specs, which live under ``frontend/src/__tests__/**`` (vitest) and
+# ``frontend/tests/e2e/**`` (Playwright).  Those directories are excluded from
+# SonarCloud's analysis scope (see ``sonar.exclusions``), so they are never
+# instrumented and would otherwise register every changed spec line as 0%
+# production coverage.  The same applies to the generated API schema and the
+# i18n catalogs, which ``sonar.exclusions`` also removes from analysis scope.
 _EXCLUDE_PATTERNS: list[str] = [
     "migrations/**",
     "backend/scripts/**",
@@ -80,9 +92,15 @@ _EXCLUDE_PATTERNS: list[str] = [
     "tests/**",
     "test_*/**",
     "**/test_*",
+    "**/test_*.py",
     "**/conftest.py",
     "**/tests/**",
     "**/migrations/**",
+    "**/__tests__/**",
+    "**/*.spec.*",
+    "**/*.test.*",
+    "**/schema.ts",
+    "frontend/src/locales/**",
 ]
 
 # Tiny-diff exemption: if the aggregate valid line count is below this
@@ -439,6 +457,13 @@ def _production_coverage_from_json(changed_files: dict[str, int], json_data: dic
     count so a report measuring more lines than the gate counted cannot inflate
     the result.
 
+    Only files *present* in ``src_stats`` contribute: ``covered_lines`` +
+    ``violation_lines`` is exactly the set of changed lines the coverage report
+    can account for, so non-instrumentable lines (static ``.vue`` template
+    markup, comments) are not counted against the file.  Files absent from the
+    report contribute nothing here — ``evaluate`` counts every one of their
+    changed lines as unmeasured so a brand-new untested file still fails.
+
     Returns ``None`` when *json_data* carries no ``src_stats`` mapping.
     """
     if not json_data or not isinstance(json_data.get("src_stats"), dict):
@@ -574,12 +599,24 @@ def evaluate(
     measured_pct: float | None = None
     measured_lines = 0
     unmeasured_lines = 0
+    # Denominator actually scored by the gate.  For files present in the report
+    # this is their coverable changed lines; for files absent from the report it
+    # is every changed line (scored at 0%).  Reported as ``changed_lines`` in the
+    # summary so ``Measured + Unmeasured == Changed Lines`` stays coherent.
+    scored_lines = changed_lines
 
+    src_stats = json_data.get("src_stats") if isinstance(json_data, dict) else None
     production_stats = _production_coverage_from_json(changed_files, json_data)
-    if production_stats is not None:
+    if production_stats is not None and isinstance(src_stats, dict):
         covered_lines, measured_lines = production_stats
-        unmeasured_lines = max(0, changed_lines - measured_lines)
-        measured_pct = (covered_lines / changed_lines) * 100.0
+        # A file absent from the coverage report is entirely unmeasured: every
+        # changed line counts at 0% (brand-new untested file detection).  A
+        # file present in the report is measured only against its coverable
+        # changed lines, so non-instrumentable template/markup lines never
+        # dilute the denominator (see the module docstring).
+        unmeasured_lines = sum(changed for path, changed in changed_files.items() if path not in src_stats)
+        scored_lines = measured_lines + unmeasured_lines
+        measured_pct = (covered_lines / scored_lines) * 100.0 if scored_lines else None
     else:
         # Fallback: parse the text output (with the measured-line count so
         # unmeasured lines are still detected when the JSON report is absent).
@@ -590,8 +627,10 @@ def evaluate(
     # --- Determine pass/fail ---
     if measured_pct is not None:
         passed = measured_pct >= fail_under
-        if not passed:
+        if not passed and unmeasured_lines > 0:
             reason = f"coverage {measured_pct:.1f}% (with {unmeasured_lines} unmeasured lines at 0%) is below threshold {fail_under}%"
+        elif not passed:
+            reason = f"coverage {measured_pct:.1f}% is below threshold {fail_under}%"
         elif unmeasured_lines > 0:
             reason = (
                 f"coverage {measured_pct:.1f}% >= {fail_under}% (but {unmeasured_lines} unmeasured lines counted at 0%)"
@@ -616,7 +655,7 @@ def evaluate(
         passed=passed,
         actual_pct=measured_pct,
         threshold=fail_under,
-        changed_lines=changed_lines,
+        changed_lines=scored_lines,
         measured_lines=measured_lines,
         unmeasured_lines=unmeasured_lines,
     )
