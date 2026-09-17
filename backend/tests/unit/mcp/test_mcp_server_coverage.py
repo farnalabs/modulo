@@ -363,7 +363,7 @@ class TestMcpRunItem:
         )
         with patch.object(ms, "present_error", return_value=(None, None)):
             result = _mcp_run_item(r, {})
-        assert result["total_cost_usd"] == 0.123456
+        assert result["total_cost_usd"] == pytest.approx(0.123456)
         assert result["child_runs_cost_usd"] == 0.0
         assert result["child_runs_count"] == 0
 
@@ -626,7 +626,9 @@ class TestParseMcpDatetime:
         assert result.hour == 0
 
     def test_invalid(self) -> None:
-        with pytest.raises(Exception, match="invalid date"):
+        from modulo.core.analytics.service import AnalyticsValidationError
+
+        with pytest.raises(AnalyticsValidationError, match="invalid date"):
             _parse_mcp_datetime("not-a-date", "date_from")
 
 
