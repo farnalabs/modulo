@@ -2,12 +2,11 @@ rules:
   - id: raw-sql-fstring
     patterns:
       - pattern-either:
-          - pattern: text(f"$SQL")
-          - pattern: text(F"$SQL")
-      - metavariable-regex:
-          metavariable: $SQL
-          regex: '.*\{.*\}.*'
-    message: "SQL text() with f-string interpolation is SQL injection. Use parameterized queries: text(\"... :param ...\").bindparams(param=value)"
+          - pattern: text(f"...{$SQL}...")
+          - pattern: text(F"...{$SQL}...")
+          - pattern: $O.execute(f"...{$SQL}...")
+          - pattern: $O.execute(F"...{$SQL}...")
+    message: "SQL built with f-string interpolation is SQL injection. Use parameterized queries: text(\"... :param ...\").bindparams(param=value); identifiers must be validated before interpolation"
     languages: [python]
     severity: ERROR
     paths:

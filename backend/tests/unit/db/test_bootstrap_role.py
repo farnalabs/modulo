@@ -22,11 +22,13 @@ from modulo.db.bootstrap_role import (
     _SYSTEM_ROLE,
     ACCOUNTS_WRITABLE_COLUMNS,
     REQUIRED_VARS,
+    _alter_role,
     _apply_accounts_allow_list,
     _assert_role_posture,
     _asyncpg_admin_connect,
     _bootstrap,
     _create_or_update_role,
+    _create_role,
     _existing_columns,
     _find_allow_list_violations,
     _grant_break_glass,
@@ -34,6 +36,7 @@ from modulo.db.bootstrap_role import (
     _parse_password,
     _parse_role,
     _table_exists,
+    _validate_identifier,
     bootstrap_roles,
     main,
 )
@@ -283,6 +286,59 @@ class TestCreateOrUpdateRole:
         conn.roles[_NOLOGIN_ROLE] = True
         await _create_or_update_role(conn, _NOLOGIN_ROLE, login=False, password=None, bypassrls=False)
         assert any(f'ALTER ROLE "{_NOLOGIN_ROLE}" WITH NOSUPERUSER NOLOGIN NOBYPASSRLS' in q for q in conn.executed)
+
+
+# ---------------------------------------------------------------------------
+# _validate_identifier (role-name DDL guard)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateIdentifier:
+    @pytest.mark.parametrize(
+        "name",
+        ["modulo_app", "_leads", "a", "modulo_migrate9", "x_a"],
+    )
+    def test_accepts_plain_identifiers(self, name: str) -> None:
+        assert _validate_identifier(name) == name
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            'role"); DROP TABLE accounts;--',
+            'role" ; ALTER',
+            'role\\"',
+            "Role9",
+            "9role",
+            "role-app",
+            "role name",
+            "role$",
+        ],
+        ids=[
+            "statement-breakout",
+            "semicolon",
+            "escaped-quote",
+            "uppercase",
+            "leading-digit",
+            "dash",
+            "space",
+            "dollar",
+        ],
+    )
+    async def test_rejects_metacharacter_role_names(self, name: str) -> None:
+        with pytest.raises(ValueError, match="Invalid role identifier"):
+            await _create_role(_FakeConn(), name, login=True, password="pw", bypassrls=False)
+        with pytest.raises(ValueError, match="Invalid role identifier"):
+            await _alter_role(_FakeConn(), name, login=True, password="pw", bypassrls=False)
+
+    async def test_metacharacter_role_name_never_reaches_ddl(self, conn: _FakeConn) -> None:
+        hostile = 'modulo_app"); DROP TABLE accounts;--'
+        with pytest.raises(ValueError, match="Invalid role identifier"):
+            await _create_or_update_role(conn, hostile, login=True, password="pw")
+        assert not any("DROP TABLE" in q for q in conn.executed)
+
+    async def test_valid_role_name_still_creates(self, conn: _FakeConn) -> None:
+        await _create_or_update_role(conn, "modulo_app", login=True, password="pw")
+        assert any('CREATE ROLE "modulo_app"' in q for q in conn.executed)
 
 
 # ---------------------------------------------------------------------------

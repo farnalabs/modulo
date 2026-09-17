@@ -1182,6 +1182,24 @@ class TestSamlRoutesExtended:
         assert resp.status_code == 200
         assert "urn:db-saml" in resp.text
 
+    def test_saml_metadata_escapes_xml_metacharacters_in_entity_id(self, client: TestClient) -> None:
+        """A DB-configured entityID containing XML metacharacters must be escaped
+        so the SP-metadata document stays well-formed (issue #282..#281: XML
+        injection through the org-configurable entity_id)."""
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=False,
+        )
+
+        db_provider = SimpleNamespace(entity_id="urn:x<y>&z>")
+        with patch("modulo.api.routes.sso._get_enabled_saml_global", new_callable=AsyncMock) as m:
+            m.return_value = db_provider
+            resp = client.get("/api/v1/auth/saml/metadata", follow_redirects=False)
+
+        assert resp.status_code == 200
+        assert "urn:x&lt;y&gt;&amp;z&gt;" in resp.text
+        assert "urn:x<" not in resp.text
+
     def test_saml_metadata_rejected_when_no_db_provider_and_env_flag_off(self, client: TestClient) -> None:
         """Preserves the pure-env-var contract: no DB provider AND flag off -> 400."""
         _override_settings(

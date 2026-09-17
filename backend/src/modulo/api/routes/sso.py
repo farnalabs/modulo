@@ -2,6 +2,7 @@
 
 import logging
 from typing import Any
+from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import PlainTextResponse, RedirectResponse
@@ -426,7 +427,7 @@ async def saml_metadata(
                 '<?xml version="1.0"?>'
                 "<md:EntityDescriptor"
                 ' xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"'
-                f' entityID="{entity_id}">'
+                f' entityID="{escape(entity_id)}">'
                 "  <md:SPSSODescriptor"
                 '   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">'
                 f"    <md:AssertionConsumerService"

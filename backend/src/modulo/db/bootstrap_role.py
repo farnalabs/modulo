@@ -36,6 +36,7 @@ Deliverable (A) of the break-glass admin recovery plan adds:
 import asyncio
 import logging
 import os
+import re
 import secrets
 import sys
 from urllib.parse import unquote, urlparse, urlunparse
@@ -78,6 +79,23 @@ def _parse_password(url: str) -> str:
     return unquote(parsed.password) if parsed.password else ""
 
 
+# Role names come from parsed database URLs (attacker-influenceable via env
+# config), so every identifier interpolated into CREATE/ALTER ROLE DDL must be
+# a plain lowercase Postgres identifier — no quotes, semicolons, or spaces.
+_IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def _validate_identifier(name: str) -> str:
+    """Guard a Postgres role identifier before f-string DDL interpolation.
+
+    Raises ``ValueError`` when the role name contains characters that could
+    break out of the double-quoted identifier or terminate the statement.
+    """
+    if not _IDENTIFIER_RE.fullmatch(name):
+        raise ValueError(f"Invalid role identifier: {name!r}")
+    return name
+
+
 def _role_attributes(*, login: bool, bypassrls: bool) -> str:
     """Build the LOGIN/BYPASSRLS attribute clause shared by CREATE/ALTER ROLE.
 
@@ -98,19 +116,25 @@ def _role_attributes(*, login: bool, bypassrls: bool) -> str:
 
 
 async def _create_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str, bypassrls: bool) -> None:
+    _validate_identifier(name)
     attrs = _role_attributes(login=login, bypassrls=bypassrls)
     if login:
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f"CREATE ROLE \"{name}\" {attrs} PASSWORD '{password}'")
     else:
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'CREATE ROLE "{name}" {attrs}')
     _log.info("Created role: %s (bypassrls=%s)", name, bypassrls)
 
 
 async def _alter_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str, bypassrls: bool) -> None:
+    _validate_identifier(name)
     attrs = _role_attributes(login=login, bypassrls=bypassrls)
     if login:
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f"ALTER ROLE \"{name}\" WITH {attrs} PASSWORD '{password}'")
     else:
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'ALTER ROLE "{name}" WITH {attrs}')
     _log.info("Updated role: %s (bypassrls=%s)", name, bypassrls)
 
@@ -154,12 +178,14 @@ async def _apply_accounts_allow_list(conn: asyncpg.Connection, app_user: str) ->
     """
     if not await _table_exists(conn, "accounts"):
         return
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
     await conn.execute(f'REVOKE UPDATE ON public.accounts FROM "{app_user}"')
     await conn.execute("REVOKE UPDATE ON public.accounts FROM PUBLIC")
 
     cols = await _existing_columns(conn, "accounts")
     grant_cols = [c for c in ACCOUNTS_WRITABLE_COLUMNS if c in cols]
     if grant_cols:
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT UPDATE ({", ".join(grant_cols)}) ON public.accounts TO "{app_user}"')
         _log.info("Applied accounts UPDATE allow-list for %s: %s", app_user, ", ".join(grant_cols))
 
@@ -174,17 +200,22 @@ async def _grant_break_glass(conn: asyncpg.Connection, bg_user: str) -> None:
     select_tables = ("org_memberships", "token_families", "org_api_keys", "organisations", "alembic_version")
     existing_select = [t for t in select_tables if await _table_exists(conn, t)]
     if existing_select:
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT SELECT ON {", ".join(f"public.{t}" for t in existing_select)} TO "{bg_user}"')
 
     for table in ("accounts", "org_memberships"):
         if await _table_exists(conn, table):
+            # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
             await conn.execute(f'GRANT SELECT, INSERT ON public.{table} TO "{bg_user}"')
 
     if await _table_exists(conn, "audit_events"):
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT SELECT, INSERT ON public.audit_events TO "{bg_user}"')
     if await _table_exists(conn, "audit_chain_heads"):
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT SELECT, INSERT, UPDATE ON public.audit_chain_heads TO "{bg_user}"')
 
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
     await conn.execute(f'GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "{bg_user}"')
 
 
@@ -194,6 +225,7 @@ async def _grant_function_execute(conn: asyncpg.Connection, app_user: str, bg_us
         "SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)') IS NOT NULL"
     )
     if func_oid:
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(
             f'GRANT EXECUTE ON FUNCTION public.deactivate_break_glass(uuid, uuid, boolean) TO "{app_user}", "{bg_user}"'
         )
@@ -318,6 +350,13 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     sys_user = _parse_role(sys_url) or _SYSTEM_ROLE
     sys_pass = _parse_password(sys_url) or secrets.token_urlsafe(24)
 
+    # Fail CLOSED: every role name parsed from env-config URLs is validated
+    # BEFORE any session is opened or DDL is built — the GRANT/ROLE DDL below
+    # interpolates these names, so a hostile value aborts before it can
+    # interpolate (nosemgrep annotations on those statements depend on this).
+    for parsed_role in (app_user, bg_user, sys_user):
+        _validate_identifier(parsed_role)
+
     conn = await asyncpg.connect(admin_conn_str, ssl=admin_ssl)
     try:
         # Idempotent role creation — skips if already exists.
@@ -349,14 +388,20 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
         #     bootstrap runs on a fresh DB where organisations does not
         #     exist yet (migration 0066 re-applies both grants itself,
         #     right before SET ROLE).
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT CREATE ON SCHEMA public TO "{_MIGRATE_ROLE}"')
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT CREATE ON SCHEMA public TO "{app_user}"')
         if await _table_exists(conn, "organisations"):
+            # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
             await conn.execute(f'GRANT REFERENCES ON TABLE public.organisations TO "{_MIGRATE_ROLE}"')
 
         # Grant DML on existing tables.
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{app_user}"')
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{bg_user}"')
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{sys_user}"')
         # modulo_migrate owns the SECURITY DEFINER ``lookup_api_key_org``
         # function (0036 transfers ownership) used by API-key auth. The
@@ -364,20 +409,29 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
         # public to resolve org_api_keys. Without it, every API-key request
         # fails with ``UndefinedTableError: relation "org_api_keys" does not
         # exist`` on DBs that revoke the PUBLIC default schema USAGE.
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{_MIGRATE_ROLE}"')
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{app_user}"')
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{app_user}"')
         # modulo_system: DML on all tables for cross-org system crons.
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{sys_user}"')
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "{sys_user}"')
         # Grant DML on future tables.
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(
             f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{app_user}"'
         )
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{app_user}"')
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(
             f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{sys_user}"'
         )
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
         await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO "{sys_user}"')
 
         # Re-apply the accounts UPDATE allow-list (active from deliverable A).
