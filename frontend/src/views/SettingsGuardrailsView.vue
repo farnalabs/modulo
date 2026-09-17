@@ -1,5 +1,4 @@
 <template>
-  <FeatureGate feature-name="guardrails" required-tier="community" show-disabled>
     <div data-theme="agent" class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader :title="$t('views.SettingsGuardrailsView.title')" :subtitle="$t('views.SettingsGuardrailsView.subtitle')" />
@@ -205,7 +204,6 @@
         </form>
       </FormDialog>
     </div>
-  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -223,7 +221,6 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { usePlanStore } from '../stores/planStore'
-import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
 import Select from '../components/shared/AppSelect.vue'
 

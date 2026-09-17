@@ -1030,13 +1030,20 @@ async def _seed_tier_catalog() -> None:
                 tier,
             )
         for flag in FLAGS:
+            # ``depends_on`` is a JSON column. asyncpg cannot encode a raw Python
+            # list, so JSON-encode it here (``None`` stays NULL). Without this a
+            # future flag declaring ``depends_on=[...]`` would fail the boot seed.
+            params = {
+                **flag,
+                "depends_on": (json.dumps(flag["depends_on"]) if flag["depends_on"] is not None else None),
+            }
             await session.execute(
                 text("""
                         INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active)
                         VALUES (:name, :description, :tier_id, :depends_on, true)
                         ON CONFLICT (name) DO NOTHING
                     """),
-                flag,
+                params,
             )
 
 

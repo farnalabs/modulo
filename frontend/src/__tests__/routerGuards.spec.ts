@@ -15,7 +15,6 @@ vi.mock('../stores/planStore', () => ({ usePlanStore }))
 
 import {
   enforceRoleTierVisibility,
-  redirectAbTestIfBatchEnabled,
 } from '../router'
 
 function makeRoute(name: string | undefined, meta: Record<string, unknown> = {}): any {
@@ -149,24 +148,5 @@ describe('enforceRoleTierVisibility', () => {
       'tok',
     )
     expect(result).toEqual({ name: 'dashboard' })
-  })
-})
-
-describe('redirectAbTestIfBatchEnabled', () => {
-  it('returns null for a non-ab-test route', async () => {
-    const result = await redirectAbTestIfBatchEnabled(makeRoute('dashboard'))
-    expect(result).toBeNull()
-  })
-
-  it('returns null for ab-test-models when the batch-compare flag is off', async () => {
-    planStore.featureEnabled.mockReturnValue(false)
-    const result = await redirectAbTestIfBatchEnabled(makeRoute('ab-test-models'))
-    expect(result).toBeNull()
-  })
-
-  it('redirects ab-test-models to variant-compare when the batch-compare flag is on', async () => {
-    planStore.featureEnabled.mockReturnValue(true)
-    const result = await redirectAbTestIfBatchEnabled(makeRoute('ab-test-models'))
-    expect(result).toEqual({ name: 'variant-compare' })
   })
 })

@@ -255,6 +255,14 @@ Manages the local and community library of reusable primitives (agents, schemas,
 
 `modulo apply -f <config.yaml>` applies an org's schemas (+ versions), model backends, pipelines and triggers to a live deployment from one YAML file (`api_version: modulo.dev/v1`), driven by `MODULO_URL` + `MODULO_API_KEY` (bearer `mk_` org key). Planning is name-based upsert (RLS-bound to the key's org): each entity chooses created / updated / unchanged / blocked from a canonical managed-field hash, so rerun is idempotent and runtime state (`next_fire_at`, `streak_epoch`, ...) never causes drift. Keys: entities apply in dependency order with per-entity containment; secrets are refs-only (`${env:VAR}` / `secretref://<key>` -- inline literals are a validation error; the server masks stored secrets, so `--refresh-secrets` re-sends trigger configs whose secrets rotated); backend writes are health-check-verified; `--dry-run/--plan` reports without writing; `--diff` is a read-only drift report (plan-shaped, labelled `mode=drift`, with graph node/edge breakdown for drifted pipelines) used as a CI gate -- exit 0 when the org matches the config, exit 1 on drift (created/updated/blocked), and real apply exits 1 on any blocked/failed entity.
 
+## Feature Flags
+
+Feature flags are declared once in `_KNOWN_FLAGS` (`core/feature_flags.py`). The DB seed catalog (`core/seed_data/catalog.py`) derives from it automatically. Flags gate behaviour behind tier thresholds and per-org overrides.
+
+**Policy:** A feature flag is permitted only if BOTH the enabled state AND the disabled state are safe AND CI-tested in both states. If the "off" state breaks behaviour (the feature cannot function without the flag), delete the flag and hardcode the behaviour. Flags that fail-closed silently are worse than no flag at all.
+
+The reference-integrity guard test (`tests/architecture/test_feature_flag_reference_integrity.py`) enforces this: every flag name referenced by a gate must exist in `_KNOWN_FLAGS` (no phantoms), and every flag in `_KNOWN_FLAGS` must have at least one external reference (no orphans).
+
 ## Data Flow
 
 ### Pipeline run lifecycle

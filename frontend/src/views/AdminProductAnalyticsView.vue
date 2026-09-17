@@ -1,5 +1,4 @@
 <template>
-  <FeatureGate feature-name="product_analytics" required-tier="team" show-disabled>
 
     <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.AdminProductAnalyticsView.title')" :subtitle="$t('views.AdminProductAnalyticsView.subtitle')" />
@@ -63,7 +62,6 @@
       </div>
     </template>
     </div>
-  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -72,7 +70,6 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import FeatureGate from '../components/FeatureGate.vue'
 import { useProductAnalyticsStore } from '../stores/productAnalyticsStore'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { useI18n } from 'vue-i18n'

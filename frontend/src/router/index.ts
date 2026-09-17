@@ -728,25 +728,9 @@ export async function enforceRoleTierVisibility(
   return true
 }
 
-/**
- * Generalised variant comparison workflow (FAR-332): when the
- * `variant_batch_compare` feature flag is ON, the legacy model-only
- * AB Test Models view is HARD-REPLACED by the batch-scoped compare flow.
- * The legacy view stays reachable only while the flag is OFF.
- */
-export async function redirectAbTestIfBatchEnabled(
-  to: Parameters<Parameters<typeof router.beforeEach>[0]>[0],
-): Promise<{ name: string } | null> {
-  if (to.name !== 'ab-test-models') return null
-
-  const planStore = usePlanStore()
-  if (!planStore.loaded) {
-    await planStore.fetchPlan()
-  }
-  return planStore.featureEnabled('variant_batch_compare')
-    ? { name: 'variant-compare' }
-    : null
-}
+// Note: the phantom `variant_batch_compare` feature flag was removed in FAR-926.
+// The legacy AB Test Models route (/variants/ab-test) remains reachable — retiring
+// it is a separate product decision.
 
 router.beforeEach(async (to) => {
   try {
@@ -795,9 +779,6 @@ router.beforeEach(async (to) => {
       }
     }
 
-    // FAR-332: redirect legacy AB Test Models to batch compare when flag is on
-    const abRedirect = await redirectAbTestIfBatchEnabled(to)
-    if (abRedirect) return abRedirect
   } catch (err) {
     console.error('[router] navigation guard error:', err)
     return { name: 'dashboard' }
