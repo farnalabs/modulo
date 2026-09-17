@@ -124,37 +124,42 @@
           </button>
         </div>
       </div>
-      <!-- Per-gate outcome report -->
-      <div
-        v-if="bulkOutcomes"
-        data-testid="hitl-review-bulk-outcomes"
-        class="mt-3 space-y-1 text-sm"
-      >
-        <p class="font-medium">{{ $t('views.SettingsHitlReviewView.bulk_outcomes_title') }}</p>
-        <div v-for="outcome in bulkOutcomes" :key="outcome.key" class="flex items-start gap-2">
-          <span
-            class="mt-0.5 inline-block h-2 w-2 flex-shrink-0 rounded-full"
-            :class="{
-              'bg-success': outcome.status === 'succeeded',
-              'bg-muted-foreground': outcome.status.startsWith('skipped'),
-              'bg-destructive': outcome.status === 'failed',
-            }"
-          />
-          <span>
-            <span class="font-mono text-xs">{{ shortId(outcome.key.split(':')[1]) }}</span>
-            — {{ $t(`views.SettingsHitlReviewView.bulk_outcome_${outcome.status.replace(/-/g, '_')}`) }}
-            <span v-if="outcome.error" class="text-destructive">{{ outcome.error }}</span>
-          </span>
-        </div>
-        <button
-          type="button"
-          class="mt-1 text-xs text-muted-foreground hover:text-foreground"
-          data-testid="hitl-review-bulk-outcomes-dismiss"
-          @click="dismissBulkOutcomes"
-        >
-          {{ $t('views.SettingsHitlReviewView.bulk_outcomes_dismiss') }}
-        </button>
+    </div>
+    <!-- FAR-861: the per-gate outcome report is deliberately OUTSIDE the bulk
+         bar above. A successful bulk operation refetches the list and prunes
+         the selection, so the bar unmounts; nested inside it the report would
+         vanish before the operator could read it on the all-success path (the
+         most common flow — select-all -> Reject All -> every gate succeeds).
+         Keyed off bulkOutcomes alone so it survives the selection being pruned. -->
+    <div
+      v-if="bulkOutcomes"
+      data-testid="hitl-review-bulk-outcomes"
+      class="mb-4 space-y-1 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm"
+    >
+      <p class="font-medium">{{ $t('views.SettingsHitlReviewView.bulk_outcomes_title') }}</p>
+      <div v-for="outcome in bulkOutcomes" :key="outcome.key" class="flex items-start gap-2">
+        <span
+          class="mt-0.5 inline-block h-2 w-2 flex-shrink-0 rounded-full"
+          :class="{
+            'bg-success': outcome.status === 'succeeded',
+            'bg-muted-foreground': outcome.status.startsWith('skipped'),
+            'bg-destructive': outcome.status === 'failed',
+          }"
+        />
+        <span>
+          <span class="font-mono text-xs">{{ shortId(outcome.key.split(':')[1]) }}</span>
+          — {{ $t(`views.SettingsHitlReviewView.bulk_outcome_${outcome.status.replace(/-/g, '_')}`) }}
+          <span v-if="outcome.error" class="text-destructive">{{ outcome.error }}</span>
+        </span>
       </div>
+      <button
+        type="button"
+        class="mt-1 text-xs text-muted-foreground hover:text-foreground"
+        data-testid="hitl-review-bulk-outcomes-dismiss"
+        @click="dismissBulkOutcomes"
+      >
+        {{ $t('views.SettingsHitlReviewView.bulk_outcomes_dismiss') }}
+      </button>
     </div>
     <div class="flex items-center gap-1 text-xs text-muted-foreground">
       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>

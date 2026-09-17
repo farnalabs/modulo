@@ -1381,6 +1381,60 @@ describe('SettingsHitlReviewView', () => {
     expect(outcomes.text()).toContain('Failed')
   })
 
+  it('keeps the outcome report visible when every bulk reject succeeds and the gates leave the list', async () => {
+    const { api } = await import('../lib/api/client')
+    const claimed = claimedGate({ claimed_by_me: true })
+    const claimed2 = { ...claimed, gate_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
+    // First fetch lists the two claimed gates; the post-action refetch returns
+    // an empty list because the successfully-rejected gates left the queue.
+    let getCount = 0
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url !== GATES_URL) {
+        return Promise.resolve({ data: { items: [] }, error: undefined })
+      }
+      getCount++
+      return Promise.resolve(gatesResponse(getCount === 1 ? [claimed, claimed2] : []))
+    })
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+      }
+      if (url.endsWith('/reject')) {
+        return Promise.resolve({ data: { ok: true }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    // Pre-populate the gate state store with tokens so bulk reject can proceed
+    resetHitlGateState()
+    useHitlGateState(claimed.run_id, claimed.gate_id).setClaimToken('tok-bulk-1')
+    useHitlGateState(claimed2.run_id, claimed2.gate_id).setClaimToken('tok-bulk-2')
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-select-all"]').setValue(true)
+    await flushPromises()
+    await nextTick()
+
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject"]').trigger('click')
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-bulk-reject-confirm"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // The rejected gates left the list, so the selection is pruned and the
+    // action bar unmounts...
+    expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(false)
+    // ...but the per-gate outcome report must survive it (FAR-861 review).
+    const outcomes = wrapper!.find('[data-testid="hitl-review-bulk-outcomes"]')
+    expect(outcomes.exists()).toBe(true)
+    expect(outcomes.text()).toContain('Claimed / Rejected')
+  })
+
   it('clear selection resets all checkboxes and hides the bulk bar', async () => {
     const { api } = await import('../lib/api/client');
     (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
