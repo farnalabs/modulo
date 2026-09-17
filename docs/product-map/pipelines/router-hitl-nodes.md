@@ -18,7 +18,8 @@ code:
 unit-tests:
   - backend/tests/unit/pipeline_engine/test_router_hitl_nodes.py
   - backend/tests/integration/test_analytics_endpoint.py
-bdd: []
+bdd:
+  - backend/tests/bdd/features/pipelines/router_nodes.feature
 depends-on:
   - feat-pipelines
 status: covered
@@ -78,14 +79,28 @@ registry (`feat-router`).
 
 ## Known Gaps
 
-- **No BDD feature scenarios** — Router/HITL/loop behaviour is pinned by unit
-  tests (`test_router_hitl_nodes.py`) and the analytics round-trip integration
-  test only; there is no `.feature` file for authoring Router/HITL pipelines.
 - **Edge-gate HITL remains compile-supported** — the legacy edge-level
   `hitl_gate_config` is deliberately not removed; the `hitl` node lowers onto
-  it (ADR 025, backward-compatible).
+  it (ADR 025, backward-compatible). (The prior "No BDD feature scenarios"
+  gap was closed 2026-09-17 by `router_nodes.feature` — Router authoring,
+  first-match-wins/default/classifier routing semantics, and the
+  RouterNoMatchError → `router_no_match` terminalisation are now executing BDD
+  coverage.)
 
 ## QA History
+
+- 2026-09-17: **improve-architecture (product-map walk)** — closed the
+  "No BDD feature scenarios" Known Gap. Added
+  `backend/tests/bdd/features/pipelines/router_nodes.feature` (wired from
+  `steps/test_router_nodes.py`), exercising the real shipped seams: the
+  `build_graph_from_json` compile path (Router-node compile-time default-rule
+  guard + rule-target entry-point exclusion), the real `make_router_node_fn`
+  decision function (first-match-wins, default rule, classifier label mode,
+  runtime `RouterNoMatchError`), and the executor's real
+  `_stream_operational_outcome` mapping of `RouterNoMatchError` to the
+  terminal `router_no_match` status (code `router.no_match`), distinct from a
+  `failed` classification, plus the `TERMINAL_STATUSES` contract. All 9
+  scenarios executing green; `_ORPHANED_BDD_FEATURES` stays empty.
 
 - 2026-08-29: **improve-architecture (product-map walk)** — entry added to close
   the feature-graph gap behind the manifest `feat-router` registry entry (with

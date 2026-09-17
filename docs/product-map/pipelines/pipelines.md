@@ -61,6 +61,11 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       configs; duplicate names are refused (409) (`create.feature`)
 - [x] Pipeline CRUD is team/org scoped and versioned, with copy errors surfaced
       (`crud.feature`, `test_pipeline_copy_errors.py`, `test_pipeline_patch_updated_at.py`)
+- [x] Folder security model (ADR 038): `PipelineFolder` is org-scoped only — no
+      `owner_team_id`, no `visibility`, no security cascade. Pipeline ownership
+      is explicit on the pipeline; folders are a UI organisation concept. Any
+      future proposal for folder-level security must address ADR 038's rationale
+      for rejecting folders-as-security.
 - [x] Node types — standard agent, manual (pauses to `awaiting_human`), HITL gate
       (`waiting_for_approval`) — are authorable and execute per type (`node_types.feature`)
 - [x] Conditional transitions and parallel fan-out route state between nodes

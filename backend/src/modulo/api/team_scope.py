@@ -1,4 +1,4 @@
-"""Team-scope resolvers for the RLS-parity authorization floor (ADR 017 DECISION 2).
+"""Team-scope resolvers for the RLS-parity authorization floor (ADR 038).
 
 Each resolver loads a target row's ``owner_team_id`` and ``visibility`` so the
 ``require_team_membership_or_admin`` dependency can mirror the DB team-visibility
@@ -17,10 +17,10 @@ visibility CHECK constraint but only strict org RLS at the DB layer — the
 membership gate here is its only team enforcement.
 
 ``runs`` has ``owner_team_id`` but no ``visibility`` column and strict org RLS.
-For ``trigger_run`` (POST /runs), the pipeline_id arrives in the **request body**
-(not the path), so a body-based resolver reads it and returns the pipeline's
-team scope.  For all other run endpoints, runs stay on the org-role floor only
-(RLS parity — iteration-7 pinned special case).
+Run access is derived from pipeline access (ADR 038): a run executes with the
+pipeline owner's authority, so runs stay on the org-role floor and
+``owner_team_id`` is metadata, not a security control.  For ``trigger_run``
+(POST /runs), the pipeline_id in the **request body** is read by a body resolver.
 
 The matrix mapping each team-scoped route to its ``owner_team_id`` source is the
 PR B deliverable; this module builds the MECHANISM and the pipeline resolver.
