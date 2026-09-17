@@ -6618,6 +6618,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/eval-datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Eval Datasets */
+        get: operations["list_eval_datasets_api_v1_eval_datasets_get"];
+        put?: never;
+        /** Create Eval Dataset */
+        post: operations["create_eval_dataset_api_v1_eval_datasets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/eval-datasets/{dataset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Eval Dataset */
+        get: operations["get_eval_dataset_api_v1_eval_datasets__dataset_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Eval Dataset */
+        delete: operations["delete_eval_dataset_api_v1_eval_datasets__dataset_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Eval Dataset */
+        patch: operations["update_eval_dataset_api_v1_eval_datasets__dataset_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/eval-suites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Eval Suites */
+        get: operations["list_eval_suites_api_v1_eval_suites_get"];
+        put?: never;
+        /** Create Eval Suite */
+        post: operations["create_eval_suite_api_v1_eval_suites_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/eval-suites/{suite_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Eval Suite */
+        get: operations["get_eval_suite_api_v1_eval_suites__suite_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Eval Suite */
+        delete: operations["delete_eval_suite_api_v1_eval_suites__suite_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Eval Suite */
+        patch: operations["update_eval_suite_api_v1_eval_suites__suite_id__patch"];
+        trace?: never;
+    };
     "/api/v1/evals/{eval_id}": {
         parameters: {
             query?: never;
@@ -11033,6 +11107,18 @@ export interface components {
             components?: components["schemas"]["CostReportComponent"][];
             annotations?: components["schemas"]["CostReportAnnotations"];
         };
+        /** CreateEvalDatasetRequest */
+        CreateEvalDatasetRequest: {
+            /** Name */
+            name: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+        };
         /** CreateEvalFromRunRequest */
         CreateEvalFromRunRequest: {
             /**
@@ -11076,6 +11162,20 @@ export interface components {
             pass_threshold?: number | null;
             /** Suite Id */
             suite_id?: string | null;
+        };
+        /** CreateEvalSuiteRequest */
+        CreateEvalSuiteRequest: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
         };
         /** CreateFeedbackRequest */
         CreateFeedbackRequest: {
@@ -11816,6 +11916,45 @@ export interface components {
             /** Total Definitions */
             total_definitions: number;
         };
+        /** EvalDatasetListResponse */
+        EvalDatasetListResponse: {
+            /** Items */
+            items: components["schemas"]["EvalDatasetResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** EvalDatasetResponse */
+        EvalDatasetResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Version */
+            version: number;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Created At */
+            created_at?: unknown;
+            /** Updated At */
+            updated_at?: unknown;
+        };
         /** EvalDefinitionListResponse */
         EvalDefinitionListResponse: {
             /** Items */
@@ -11895,6 +12034,52 @@ export interface components {
             minimum_delta: number | null;
             /** Cooldown */
             cooldown: number | null;
+        };
+        /** EvalSuiteListResponse */
+        EvalSuiteListResponse: {
+            /** Items */
+            items: components["schemas"]["EvalSuiteResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** EvalSuiteResponse */
+        EvalSuiteResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * Version
+             * @default 1
+             */
+            version: number;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Eval Definition Ids */
+            eval_definition_ids?: string[];
+            /** Created At */
+            created_at?: unknown;
+            /** Updated At */
+            updated_at?: unknown;
         };
         /** ExportPreviewResponse */
         ExportPreviewResponse: {
@@ -17912,6 +18097,15 @@ export interface components {
             /** Billing Period */
             billing_period?: ("monthly" | "quarterly" | "annual") | null;
         };
+        /** UpdateEvalDatasetRequest */
+        UpdateEvalDatasetRequest: {
+            /** Name */
+            name?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Visibility */
+            visibility?: string | null;
+        };
         /** UpdateEvalRequest */
         UpdateEvalRequest: {
             /** Node Id */
@@ -17930,6 +18124,17 @@ export interface components {
             pass_threshold?: number | null;
             /** Suite Id */
             suite_id?: string | null;
+        };
+        /** UpdateEvalSuiteRequest */
+        UpdateEvalSuiteRequest: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Visibility */
+            visibility?: string | null;
         };
         /** UpdateOrgRequest */
         UpdateOrgRequest: {
@@ -33689,6 +33894,344 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_eval_datasets_api_v1_eval_datasets_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalDatasetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_eval_dataset_api_v1_eval_datasets_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateEvalDatasetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalDatasetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_eval_dataset_api_v1_eval_datasets__dataset_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalDatasetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_eval_dataset_api_v1_eval_datasets__dataset_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_eval_dataset_api_v1_eval_datasets__dataset_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEvalDatasetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalDatasetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_eval_suites_api_v1_eval_suites_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalSuiteListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_eval_suite_api_v1_eval_suites_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateEvalSuiteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalSuiteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_eval_suite_api_v1_eval_suites__suite_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                suite_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalSuiteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_eval_suite_api_v1_eval_suites__suite_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                suite_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_eval_suite_api_v1_eval_suites__suite_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                suite_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEvalSuiteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalSuiteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
