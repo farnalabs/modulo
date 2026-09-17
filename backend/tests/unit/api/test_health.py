@@ -448,8 +448,11 @@ class TestCheckMigrationsDivergence:
         ):
             script_cls.from_config.return_value.get_heads.return_value = {"0001"}
             result = await _check_migrations()
-        assert result.status == "ok"
-        assert result.detail == "migrations up to date"
+        # FAR-925: a crashed guard returns degraded, not ok — the check
+        # could not run, so the result must not read as "clean".
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "could not run" in result.detail.lower()
 
 
 class _FakeStatsRedis:
@@ -960,6 +963,9 @@ class TestMigrationsDivergence:
             patch("modulo.api.routes.health._log") as log,
         ):
             result = await _check_migrations()
-        assert result.status == "ok"
-        assert result.detail == "migrations up to date"
+        # FAR-925: a crashed guard returns degraded, not ok — the check
+        # could not run, so the result must not read as "clean".
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "could not run" in result.detail.lower()
         log.exception.assert_called_once()
