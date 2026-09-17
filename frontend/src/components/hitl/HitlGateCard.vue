@@ -276,6 +276,7 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
+import { claimFailureMessage } from '../../lib/hitlClaimFailure'
 import { shortId } from '../../utils/format'
 import { formatDateShortWithTime } from '../../lib/formatDate'
 import { useHitlGateState } from '../../composables/useHitlGateState'
@@ -553,30 +554,6 @@ onBeforeUnmount(() => {
   if (messageTimer !== null) clearTimeout(messageTimer)
 })
 
-function claimFailureMessage(err: unknown): string {
-  // FAR-645: discriminate the claim conflicts by the backend's machine-
-  // readable problem type (urn:problem:modulo:<type>), not by substring-
-  // matching English prose -- a backend rewording can no longer degrade the
-  // UX. (Rebased onto FAR-686: this logic moved from the review view into
-  // the shared card, and the typed switch was ported with it.) The detail
-  // text still flows into the generic fallback so an unrecognised type keeps
-  // rendering the backend's explanation.
-  const detail = formatApiError(err)
-  const problemType = typeof err === 'object' && err !== null
-    ? (err as Record<string, unknown>).type
-    : undefined
-  if (problemType === 'urn:problem:modulo:hitl_gate_already_claimed') {
-    return t('hitl.gate.claim_failed_already_claimed')
-  }
-  if (problemType === 'urn:problem:modulo:hitl_gate_already_decided') {
-    return t('hitl.gate.claim_failed_already_decided')
-  }
-  if (problemType === 'urn:problem:modulo:hitl_run_not_awaiting') {
-    return t('hitl.gate.claim_failed_run_not_awaiting', { reason: detail })
-  }
-  return `${t('hitl.gate.claim_failed')} ${detail}`
-}
-
 async function claimGate() {
   claiming.value = true
   message.value = null
@@ -589,7 +566,7 @@ async function claimGate() {
       // FAR-612: emit too — parents may drop the card on their post-failure
       // refresh (terminal-run / decided gates leave the pending list), so the
       // message must survive at view level.
-      const failure: HitlMessage = { type: 'error', text: claimFailureMessage(err) }
+      const failure: HitlMessage = { type: 'error', text: claimFailureMessage(err, t) }
       showMessage(failure, false)
       emit('claim-failed', failure)
     } else if (data) {
@@ -603,7 +580,7 @@ async function claimGate() {
   } catch (e: unknown) {
     // Network errors also emit: the claim may have landed before the
     // connection dropped, so the parent refreshes to converge on reality.
-    const failure: HitlMessage = { type: 'error', text: claimFailureMessage(e) }
+    const failure: HitlMessage = { type: 'error', text: claimFailureMessage(e, t) }
     showMessage(failure, false)
     emit('claim-failed', failure)
   } finally {

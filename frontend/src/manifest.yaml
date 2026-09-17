@@ -3882,6 +3882,39 @@ elements:
       - testid: hitl-review-column-headers
         type: element
         dynamic_testid: false
+      - testid: hitl-review-select-all
+        type: checkbox
+        dynamic_testid: false
+      - testid: hitl-review-row-checkbox
+        type: checkbox
+        dynamic_testid: false
+      - testid: hitl-review-bulk-bar
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-bulk-claim
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-reject
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-clear
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-outcomes
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-bulk-reject-reason
+        type: textarea
+        dynamic_testid: false
+      - testid: hitl-review-bulk-reject-confirm
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-reject-cancel
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-bulk-outcomes-dismiss
+        type: button
+        dynamic_testid: false
       - testid: hitl-gate-card
         type: element
         dynamic_testid: false
