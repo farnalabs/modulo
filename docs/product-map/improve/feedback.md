@@ -11,6 +11,7 @@ unit-tests:
   - backend/tests/integration/feedback_manager/test_feedback_flow.py
 bdd:
   - backend/tests/bdd/features/eval/feedback_system.feature
+  - backend/tests/bdd/features/eval/feedback_inbox.feature
 depends-on:
   - feat-evals
   - feat-runs
@@ -53,14 +54,22 @@ created per run, transition through a validated state machine
 
 ## Known Gaps
 
-- **No standalone BDD step file for the inbox/proposals endpoints** — the
-  `feedback_system.feature` BDD covers the record state machine; inbox, review,
-  detect-gap and proposals are covered only by `test_feedback_endpoint.py` +
-  `core/feedback_manager/test_feedback_manager.py`.
 - **Detection is model-assisted** — eval-gap detection depends on a configured model
   backend; there is no deterministic fallback classifier for gap detection.
 
 ## QA History
+
+- 2026-09-18: **improve-architecture (product-map walk)** — closed the "No standalone
+  BDD step file for the inbox/proposals endpoints" gap. Registered
+  `eval/feedback_inbox.feature` into the executing BDD suite from the new
+  `steps/test_feedback_inbox.py`, driving the real `/api/v1/feedback/inbox`
+  (pipeline-name enrichment + type/status filter passthrough), inbox-item detail,
+  `/inbox/{id}/review` (`mark_reviewed` → resolved, `dismiss` → dismissed,
+  `create_correction_run` → spawned correction run, invalid action → 422, missing
+  record → 404), `/{id}/detect-gap` (eval_gap=true via the real route + manager seam),
+  `/feedback/proposals` (eval-gap queue), and `/proposals/{id}/publish`
+  (201 pipeline/node-scoped EvalDefinition + resolved transition, 422 non-gap,
+  409 non-pending, 404 missing). `_ORPHANED_BDD_FEATURES` stays empty.
 
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
