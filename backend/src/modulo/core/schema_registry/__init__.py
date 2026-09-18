@@ -27,6 +27,7 @@ from modulo.core.schema_registry.migration import (
     transform_field,
 )
 from modulo.core.schema_registry.rendering import (
+    SCHEMA_PROFILE_VALUES,
     RenderResult,
     RenderWarning,
     SchemaProfile,
@@ -42,6 +43,7 @@ from modulo.core.schema_registry.validation import (
 )
 
 __all__ = [
+    "SCHEMA_PROFILE_VALUES",
     "FieldChange",
     "MigrationPlan",
     "MigrationRegistry",

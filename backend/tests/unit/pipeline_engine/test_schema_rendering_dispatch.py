@@ -59,8 +59,9 @@ class TestSchemaRenderingDispatch:
     """FAR-900: _invoke_node_model renders the output schema for the target provider."""
 
     async def test_provider_strict_renders_schema_for_openai(self) -> None:
-        """When schema_profile is provider-strict, the schema is rendered
-        (stripped of unsupported keywords) before being sent to the backend.
+        """FIX 7: When the raw schema passes bounds, the raw schema is sent
+        to the provider (the provider resolves $ref itself).  The rendered
+        schema is computed but not forwarded.
         """
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
@@ -84,14 +85,8 @@ class TestSchemaRenderingDispatch:
                 schema_profile="provider-strict",
             )
         assert len(backend.calls) == 1
-        rendered = backend.calls[0]["output_schema"]
-        # "pattern" and "default" are stripped by the OpenAI provider-strict renderer
-        name_props = rendered["properties"]["name"]
-        assert "pattern" not in name_props
-        assert "default" not in name_props
-        # Structural keywords must survive
-        assert name_props["type"] == "string"
-        assert "required" in rendered
+        # FIX 7: raw schema passes bounds → raw schema is forwarded
+        assert backend.calls[0]["output_schema"] is schema
 
     async def test_verbatim_passes_raw_schema_unchanged(self) -> None:
         """When schema_profile is verbatim (or None), the raw schema is passed through."""
@@ -268,12 +263,11 @@ class TestExtractProviderId:
 
 
 class TestBoundsAfterRendering:
-    """FAR-900: _is_safe_schema is applied AFTER rendering, not before."""
+    """FIX 7: raw schema passes bounds → raw is sent to provider."""
 
     async def test_bounds_check_applied_to_rendered_schema(self) -> None:
-        """A raw schema that's safe may produce a rendered schema that is
-        also safe; verify the rendered form reaches the backend.
-        """
+        """FIX 7: A raw schema that passes bounds is forwarded to the backend
+        (provider resolves $ref itself)."""
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
         schema = {
@@ -291,10 +285,8 @@ class TestBoundsAfterRendering:
                 output_schema_json=schema,
                 schema_profile="provider-strict",
             )
-        rendered = backend.calls[0]["output_schema"]
-        # "minimum" is stripped by provider-strict for OpenAI
-        assert "minimum" not in rendered["properties"]["x"]
-        assert rendered["properties"]["x"]["type"] == "integer"
+        # FIX 7: raw passes bounds → raw is forwarded
+        assert backend.calls[0]["output_schema"] is schema
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +298,7 @@ class TestMakeNodeFnSchemaProfile:
     """FAR-900: schema_profile flows through make_node_fn to _invoke_node_model."""
 
     async def test_node_def_schema_profile_is_resolved(self) -> None:
-        """When node_def carries schema_profile, it is resolved and passed to _invoke_node_model."""
+        """FIX 7: When the raw schema passes bounds, the raw schema is forwarded."""
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
         schema = {
@@ -334,9 +326,8 @@ class TestMakeNodeFnSchemaProfile:
         ):
             result = await fn(state)
         assert result["artifacts"][0]["status"] == "completed"
-        rendered = backend.calls[0]["output_schema"]
-        # provider-strict rendered: "pattern" stripped
-        assert "pattern" not in rendered["properties"]["name"]
+        # FIX 7: raw passes bounds → raw schema forwarded
+        assert backend.calls[0]["output_schema"] is schema
 
     async def test_node_def_without_profile_uses_verbatim(self) -> None:
         """When node_def has no schema_profile, verbatim is used (raw schema forwarded)."""
@@ -492,27 +483,21 @@ class TestAgentDefaultDispatchIntegration:
     comes from the agent default (not just the node-level override)."""
 
     async def test_agent_default_profile_renders_schema(self) -> None:
-        """When _apply_agent_fields embeds schema_profile into the node dict
-        (no node-level override), make_node_fn resolves the agent default and
-        renders the schema for the target provider."""
+        """FIX 7: When the raw schema passes bounds, the raw schema is forwarded."""
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
-        # Schema with OpenAI-unsupported keywords — no "required" so the mock
-        # response ({"result": "ok"}) passes output validation in lenient mode.
         schema = {
             "type": "object",
             "properties": {
                 "result": {"type": "string", "pattern": "^[a-z]+$", "default": "foo"},
             },
         }
-        # Simulate the snapshot node dict AFTER _apply_agent_fields embedded
-        # the agent's schema_profile (no node-level key was present)
         node_def = {
             "id": "test-agent-default",
             "model_backend_id": "11111111-2222-3333-4444-555555555555",
             "prompt_template": "hello",
             "output_schema_json": schema,
-            "schema_profile": "provider-strict",  # embedded by _apply_agent_fields
+            "schema_profile": "provider-strict",
         }
         fn = nr.make_node_fn(node_def)
         state = {
@@ -528,9 +513,164 @@ class TestAgentDefaultDispatchIntegration:
         ):
             result = await fn(state)
         assert result["artifacts"][0]["status"] == "completed"
-        rendered = backend.calls[0]["output_schema"]
-        # provider-strict rendered: "pattern" and "default" stripped
-        result_props = rendered["properties"]["result"]
-        assert "pattern" not in result_props
-        assert "default" not in result_props
-        assert result_props["type"] == "string"
+        # FIX 7: raw passes bounds → raw schema forwarded
+        assert backend.calls[0]["output_schema"] is schema
+
+
+# ---------------------------------------------------------------------------
+# Tests: FIX 7 — bounds-check ordering + amplification window
+# ---------------------------------------------------------------------------
+
+
+class TestBoundsCheckOrdering:
+    """FIX 7: raw schema is bounds-checked BEFORE rendering to bound the
+    amplification window; if raw passes, raw is sent to the provider."""
+
+    async def test_raw_safe_rendered_unsafe_sends_raw(self) -> None:
+        """When the raw schema passes bounds but the rendered schema does not
+        (e.g. inlining made it too deep), the RAW schema is sent to the
+        provider (the provider resolves $ref itself)."""
+        backend = _RecordingBackend(supports_native=True)
+        hub = _FakeHub(backend)
+        # Schema that is safe raw but rendered could be larger:
+        # A schema with $ref that inlines to something larger.
+        # We mock _is_safe_schema to return (True, "") for the raw schema
+        # and (False, "too large") for the rendered schema.
+        raw_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+        }
+        rendered_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {"x": {"type": "string", "minimum": 0}},
+        }
+        call_count = 0
+
+        def _mock_is_safe(schema: dict[str, Any]) -> tuple[bool, str]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Raw schema check: safe
+                return True, ""
+            # Rendered schema check: unsafe
+            return False, "schema too large"
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                return_value=hub,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner._is_safe_schema",
+                side_effect=_mock_is_safe,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner.render_for_profile",
+                return_value=SimpleNamespace(
+                    schema=rendered_schema,
+                    profile="provider-strict",
+                    warnings=[],
+                    skipped=False,
+                    skip_reason=None,
+                ),
+            ),
+        ):
+            await nr._invoke_node_model(
+                "prompt",
+                "11111111-2222-3333-4444-555555555555",
+                "n1",
+                output_schema_json=raw_schema,
+                schema_profile="provider-strict",
+            )
+        assert len(backend.calls) == 1
+        # Raw passed bounds → raw is sent to the provider
+        assert backend.calls[0]["output_schema"] is raw_schema
+
+    async def test_raw_unsafe_rendered_safe_sends_rendered(self) -> None:
+        """When the raw schema fails bounds but the rendered schema passes,
+        the rendered schema is sent."""
+        backend = _RecordingBackend(supports_native=True)
+        hub = _FakeHub(backend)
+        raw_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+        }
+        rendered_schema: dict[str, Any] = {"type": "string"}
+        call_count = 0
+
+        def _mock_is_safe(schema: dict[str, Any]) -> tuple[bool, str]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Raw schema check: unsafe
+                return False, "schema too large"
+            # Rendered schema check: safe
+            return True, ""
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                return_value=hub,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner._is_safe_schema",
+                side_effect=_mock_is_safe,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner.render_for_profile",
+                return_value=SimpleNamespace(
+                    schema=rendered_schema,
+                    profile="provider-strict",
+                    warnings=[],
+                    skipped=False,
+                    skip_reason=None,
+                ),
+            ),
+        ):
+            await nr._invoke_node_model(
+                "prompt",
+                "11111111-2222-3333-4444-555555555555",
+                "n1",
+                output_schema_json=raw_schema,
+                schema_profile="provider-strict",
+            )
+        assert len(backend.calls) == 1
+        # Raw failed, rendered passed → rendered schema sent
+        assert backend.calls[0]["output_schema"] is rendered_schema
+
+    async def test_both_unsafe_no_schema_sent(self) -> None:
+        """When both raw and rendered fail bounds, no schema is sent."""
+        backend = _RecordingBackend(supports_native=True)
+        hub = _FakeHub(backend)
+        raw_schema: dict[str, Any] = {"type": "object", "properties": {"x": {"type": "string"}}}
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                return_value=hub,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner._is_safe_schema",
+                return_value=(False, "too large"),
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner.render_for_profile",
+                return_value=SimpleNamespace(
+                    schema={"type": "string"},
+                    profile="provider-strict",
+                    warnings=[],
+                    skipped=False,
+                    skip_reason=None,
+                ),
+            ),
+        ):
+            await nr._invoke_node_model(
+                "prompt",
+                "11111111-2222-3333-4444-555555555555",
+                "n1",
+                output_schema_json=raw_schema,
+                schema_profile="provider-strict",
+            )
+        assert len(backend.calls) == 1
+        # Both unsafe → no output_schema in kwargs
+        assert "output_schema" not in backend.calls[0]

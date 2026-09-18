@@ -35,7 +35,7 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 _log = logging.getLogger(__name__)
 
@@ -44,6 +44,9 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 SchemaProfile = Literal["verbatim", "provider-strict", "runtime-sdk"]
+
+# FIX 4: canonical value set derived from SchemaProfile — single source of truth.
+SCHEMA_PROFILE_VALUES: tuple[str, ...] = get_args(SchemaProfile)
 
 RENDERER_VERSION = "1"
 
@@ -93,7 +96,6 @@ _PROVIDER_UNSUPPORTED: dict[str, frozenset[str]] = {
             "definitions",
             "default",
             "examples",
-            "const",
             "minItems",
             "maxItems",
             "minLength",
@@ -117,7 +119,6 @@ _PROVIDER_UNSUPPORTED: dict[str, frozenset[str]] = {
             "definitions",
             "default",
             "examples",
-            "const",
             "minItems",
             "maxItems",
             "minLength",
@@ -142,7 +143,6 @@ _PROVIDER_UNSUPPORTED: dict[str, frozenset[str]] = {
             "definitions",
             "default",
             "examples",
-            "const",
             "minItems",
             "maxItems",
             "minLength",
@@ -167,7 +167,6 @@ _PROVIDER_UNSUPPORTED: dict[str, frozenset[str]] = {
             "definitions",
             "default",
             "examples",
-            "const",
             "pattern",
             "patternProperties",
             "minProperties",
@@ -202,6 +201,39 @@ _ALWAYS_KEEP = frozenset(
         "$defs",
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# Generic schema traversal helper (FIX 3)
+# ---------------------------------------------------------------------------
+
+
+def _walk_schema(
+    node: Any,
+    path: str,
+    visit_fn: Any,
+) -> None:
+    """Walk a JSON Schema, calling visit_fn for each (key, value, path) pair.
+
+    The visitor receives (key: str, value: Any, path: str) and returns None.
+    Recursion continues into dicts and lists unconditionally — the visitor
+    decides (by side-effect) whether to record warnings or strip keys.
+
+    Used by both ``_render_provider_strict`` and ``preview_strip_warnings``.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            visit_fn(key, value, path)
+            if isinstance(value, dict):
+                _walk_schema(value, f"{path}.{key}", visit_fn)
+            elif isinstance(value, list):
+                for i, item in enumerate(value):
+                    if isinstance(item, dict):
+                        _walk_schema(item, f"{path}.{key}[{i}]", visit_fn)
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            if isinstance(item, dict):
+                _walk_schema(item, f"{path}[{i}]", visit_fn)
 
 
 # ---------------------------------------------------------------------------
@@ -242,15 +274,21 @@ def _flatten_refs(
     _root: dict[str, Any] | None = None,
     _depth: int = 0,
     _node_count: int = 0,
+    _cache: dict[str, tuple[dict[str, Any], int]] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Inline $ref references within the schema.
 
     Returns (flattened_schema, total_node_count).
 
     Raises _RefFlattenError on hard limits or external refs.
+
+    FIX 6: Diamond-shaped schemas are memoised by ``$ref`` pointer so each
+    unique definition is flattened once and reused at every reference site.
     """
     if _root is None:
         _root = schema
+    if _cache is None:
+        _cache = {}
     if _depth > _MAX_REF_DEPTH:
         raise _RefFlattenError(f"Exceeded max $ref depth {_MAX_REF_DEPTH}")
     if _node_count > _MAX_EXPANDED_NODES:
@@ -265,21 +303,31 @@ def _flatten_refs(
                 raise _RefFlattenError(f"$ref must be a string, got {type(value).__name__}")
             if not _is_local_ref(value):
                 raise _RefFlattenError(f"External $ref not allowed: {value}")
-            resolved = _resolve_pointer(_root, value)
-            # Recurse into the resolved schema
-            flattened, node_count = _flatten_refs(
-                resolved,
-                _root=_root,
-                _depth=_depth + 1,
-                _node_count=node_count,
-            )
-            result.update(flattened)
+            # FIX 6: memoise by pointer — count each unique definition once
+            if value in _cache:
+                cached_result, _cached_count_delta = _cache[value]
+                result.update(cached_result)
+                # Each unique definition counted once (cached)
+            else:
+                resolved = _resolve_pointer(_root, value)
+                count_before = node_count
+                flattened, node_count = _flatten_refs(
+                    resolved,
+                    _root=_root,
+                    _depth=_depth + 1,
+                    _node_count=node_count,
+                    _cache=_cache,
+                )
+                # Cache the result and the node count delta for this pointer
+                _cache[value] = (flattened, node_count - count_before)
+                result.update(flattened)
         elif isinstance(value, dict):
             flattened_value, node_count = _flatten_refs(
                 value,
                 _root=_root,
                 _depth=_depth + 1,
                 _node_count=node_count,
+                _cache=_cache,
             )
             result[key] = flattened_value
         elif isinstance(value, list):
@@ -291,6 +339,7 @@ def _flatten_refs(
                         _root=_root,
                         _depth=_depth + 1,
                         _node_count=node_count,
+                        _cache=_cache,
                     )
                     new_list.append(flattened_item)
                 else:
@@ -323,6 +372,26 @@ def _render_verbatim(schema: dict[str, Any]) -> RenderResult:
     )
 
 
+def _strip_keywords(schema: dict[str, Any], strip_set: frozenset[str]) -> dict[str, Any]:
+    """Return a deep copy of *schema* with keys in *strip_set` removed.
+
+    Structural keywords in ``_ALWAYS_KEEP`` are never stripped regardless of
+    their presence in *strip_set*.  This is a write-side helper; the read-side
+    warning collection lives in ``preview_strip_warnings`` (which shares the
+    same ``_walk_schema`` traversal via FIX 3).
+    """
+
+    def _strip(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {k: _strip(v) for k, v in node.items() if k not in strip_set or k in _ALWAYS_KEEP}
+        if isinstance(node, list):
+            return [_strip(item) for item in node]
+        return node
+
+    result: dict[str, Any] = _strip(schema)
+    return result
+
+
 def _render_provider_strict(
     schema: dict[str, Any],
     provider_id: str | None,
@@ -337,36 +406,22 @@ def _render_provider_strict(
 
     warnings: list[RenderWarning] = []
 
-    def _walk(node: Any, path: str) -> Any:
-        if isinstance(node, dict):
-            result: dict[str, Any] = {}
-            for key, value in node.items():
-                if key in _ALWAYS_KEEP:
-                    result[key] = _walk(value, f"{path}.{key}")
-                elif key in strip_set:
-                    warnings.append(
-                        RenderWarning(
-                            keyword=key,
-                            path=path,
-                            message=f"Keyword '{key}' stripped for provider '{provider_id}'",
-                        )
-                    )
-                    # Skip this keyword — do not include in output
-                elif key == "$ref":
-                    # $ref should already be inlined by the flattener,
-                    # but if it survives, keep it (structural)
-                    result[key] = value
-                elif key in ("$defs", "definitions"):
-                    # Definitions should already be inlined; if present, keep
-                    result[key] = _walk(value, f"{path}.{key}")
-                else:
-                    result[key] = _walk(value, f"{path}.{key}")
-            return result
-        if isinstance(node, list):
-            return [_walk(item, f"{path}[]") for item in node]
-        return node
+    # FIX 3: collect warnings via shared _walk_schema traversal
+    def _warn_visitor(key: str, value: Any, path: str) -> None:
+        if key in strip_set and key not in _ALWAYS_KEEP:
+            warnings.append(
+                RenderWarning(
+                    keyword=key,
+                    path=path,
+                    message=f"Keyword '{key}' stripped for provider '{provider_id}'",
+                )
+            )
 
-    processed = _walk(schema, "#")
+    _walk_schema(schema, "#", _warn_visitor)
+
+    # Strip the flagged keywords from the output schema
+    processed = _strip_keywords(schema, strip_set)
+
     return RenderResult(
         schema=processed,
         profile="provider-strict",
@@ -402,12 +457,8 @@ def _is_abstract_schema(schema: dict[str, Any]) -> bool:
     keywords (``anyOf``, ``oneOf``, ``allOf``) without any concrete type
     or properties — it describes a shape but doesn't define one.
     """
-    # Empty or near-empty schemas are abstract
     non_meta_keys = {k for k in schema if not k.startswith("$") and k not in ("title", "description")}
-    if not non_meta_keys:
-        return True
-    # Schema with only a $ref (and no other structure) is abstract
-    return "$ref" in schema and len(non_meta_keys) == 0
+    return not non_meta_keys
 
 
 # ---------------------------------------------------------------------------
@@ -598,27 +649,16 @@ def preview_strip_warnings(
     strip_set = unsupported | _ADVISORY_KEYWORDS
     warnings: list[RenderWarning] = []
 
-    def _walk(node: Any, path: str) -> None:
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key in strip_set and key not in _ALWAYS_KEEP:
-                    warnings.append(
-                        RenderWarning(
-                            keyword=key,
-                            path=path,
-                            message=f"Keyword '{key}' will be stripped for provider '{provider_id}'",
-                        )
-                    )
-                if isinstance(value, dict):
-                    _walk(value, f"{path}.{key}")
-                elif isinstance(value, list):
-                    for i, item in enumerate(value):
-                        if isinstance(item, dict):
-                            _walk(item, f"{path}.{key}[{i}]")
-        elif isinstance(node, list):
-            for i, item in enumerate(node):
-                if isinstance(item, dict):
-                    _walk(item, f"{path}[{i}]")
+    # FIX 3: shared _walk_schema traversal (side-effect-only visitor)
+    def _warn_visitor(key: str, value: Any, path: str) -> None:
+        if key in strip_set and key not in _ALWAYS_KEEP:
+            warnings.append(
+                RenderWarning(
+                    keyword=key,
+                    path=path,
+                    message=f"Keyword '{key}' will be stripped for provider '{provider_id}'",
+                )
+            )
 
-    _walk(schema, "#")
+    _walk_schema(schema, "#", _warn_visitor)
     return warnings

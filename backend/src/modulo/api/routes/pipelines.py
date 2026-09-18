@@ -68,6 +68,7 @@ from modulo.core.reports.quality_report import (
 from modulo.core.run_context.autonomy import (
     autonomy_change_payload,
 )
+from modulo.core.schema_registry.rendering import SchemaProfile
 from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
 from modulo.core.team_visibility import (
     connector_team_mismatch_detail,
@@ -828,7 +829,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # (identity, no translation).  "provider-strict" strips unsupported keywords
     # for the target provider; "runtime-sdk" renders for the runtime's form.
     # NO graph migration: the field is optional and defaults to verbatim.
-    schema_profile: Literal["verbatim", "provider-strict", "runtime-sdk"] | None = None
+    schema_profile: SchemaProfile | None = None
     description: str | None = Field(default=None, max_length=2000)
     # FAR-306: opt-in stall detectors for sandbox_agent nodes. The heartbeat
     # (connection liveness) is enabled by default; the log-growth / stdout-delta
@@ -1395,6 +1396,7 @@ def _graph_response(
     *,
     validation_issues: list[GraphValidationIssue] | None = None,
     schema_translation_report: list[dict[str, Any]] | None = None,
+    include_schema_warnings: bool = False,
 ) -> PipelineGraphResponse:
     """Serialise stored graph data into a validated response.
 
@@ -1551,12 +1553,14 @@ def _graph_response(
     # per-node/per-edge validation already performed above, and fallback
     # nodes constructed via ``model_construct`` (no Pydantic field validation)
     # would fail re-validation here.
-    # FAR-900: compute schema_translation_report if not already provided.
-    report = (
-        schema_translation_report
-        if schema_translation_report is not None
-        else _build_schema_translation_report(valid_nodes)
-    )
+    # FAR-900: compute schema_translation_report only when opt-in flag is set
+    # or when an explicit report was provided (e.g. from a write path).
+    if schema_translation_report is not None:
+        report = schema_translation_report
+    elif include_schema_warnings:
+        report = _build_schema_translation_report(valid_nodes)
+    else:
+        report = []
     return PipelineGraphResponse.model_construct(
         nodes=valid_nodes,
         edges=valid_edges,
@@ -1961,6 +1965,10 @@ async def get_pipeline_graph_endpoint(
     # any_credential: declarative apply (FAR-681) fetches current graphs to
     # hash against declared state with mk_ org API keys.
     principal: TenantPrincipal = require_permission_any_credential("pipeline.graph.read"),
+    # FAR-900: opt-in schema_translation_report computation (expensive for
+    # large graphs).  Defaults to false; set to true to receive per-node
+    # schema translation warnings in the response.
+    include_schema_warnings: Annotated[bool, Query()] = False,
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
@@ -1972,7 +1980,11 @@ async def get_pipeline_graph_endpoint(
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     nodes, edges = graph
-    return _graph_response(nodes, edges)
+    return _graph_response(
+        nodes,
+        edges,
+        include_schema_warnings=include_schema_warnings,
+    )
 
 
 def _prepare_graph_write(

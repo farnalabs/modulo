@@ -15,6 +15,7 @@ Covers:
 from __future__ import annotations
 
 import copy
+import uuid
 from typing import Any
 
 import pytest
@@ -24,6 +25,7 @@ from modulo.core.schema_registry.rendering import (
     _is_abstract_schema,
     _render_cache,
     _RenderCache,
+    _walk_schema,
     preview_strip_warnings,
     render_for_profile,
 )
@@ -649,3 +651,263 @@ class TestAgentModelSchemaProfile:
             updated_at=datetime.now(UTC),
         )
         assert resp.schema_profile == "runtime-sdk"
+
+
+# ---------------------------------------------------------------------------
+# 11. FIX 2: const is preserved in provider-strict for all providers
+# ---------------------------------------------------------------------------
+
+
+class TestConstPreserved:
+    """FIX 2: ``const`` is in _ALWAYS_KEEP and was also in every _PROVIDER_UNSUPPORTED
+    set (dead code).  After removing it from the unsupported sets, ``const``
+    MUST survive provider-strict rendering for every provider."""
+
+    @pytest.mark.parametrize("provider", ["openai", "anthropic", "google", "deepseek"])
+    def test_const_preserved_for_provider(self, provider: str) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "status": {"const": "active"},
+            },
+        }
+        result = render_for_profile(schema, "provider-strict", provider)
+        assert result.skipped is False
+        assert result.schema["properties"]["status"]["const"] == "active"
+
+
+# ---------------------------------------------------------------------------
+# 12. FIX 3: _walk_schema shared traversal helper
+# ---------------------------------------------------------------------------
+
+
+class TestWalkSchema:
+    """FIX 3: verify that _walk_schema visits all dict/list nodes."""
+
+    def test_visits_all_keys(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "default": "foo"},
+            },
+        }
+        visited: list[str] = []
+
+        def _collector(key: str, value: Any, path: str) -> None:
+            visited.append(key)
+
+        _walk_schema(schema, "#", _collector)
+        assert "type" in visited
+        assert "properties" in visited
+        assert "name" in visited
+        assert "default" in visited
+
+    def test_visits_list_items(self) -> None:
+        schema = {
+            "type": "array",
+            "items": [
+                {"type": "string"},
+                {"type": "integer"},
+            ],
+        }
+        visited: list[str] = []
+
+        def _collector(key: str, value: Any, path: str) -> None:
+            visited.append(key)
+
+        _walk_schema(schema, "#", _collector)
+        assert "items" in visited
+        assert "type" in visited
+
+
+# ---------------------------------------------------------------------------
+# 13. FIX 4: single source of truth for SchemaProfile values
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaProfileSourceOfTruth:
+    """FIX 4: SCHEMA_PROFILE_VALUES and SQL CHECK must match get_args(SchemaProfile)."""
+
+    def test_schema_profile_values_matches_literal_args(self) -> None:
+        from typing import get_args
+
+        from modulo.core.schema_registry.rendering import SCHEMA_PROFILE_VALUES, SchemaProfile
+
+        expected = set(get_args(SchemaProfile))
+        assert set(SCHEMA_PROFILE_VALUES) == expected
+
+    def test_valid_schema_profiles_matches_literal_args(self) -> None:
+        from typing import get_args
+
+        from modulo.core.pipeline_engine.node_runner import _VALID_SCHEMA_PROFILES
+        from modulo.core.schema_registry.rendering import SchemaProfile
+
+        expected = frozenset(get_args(SchemaProfile))
+        assert expected == _VALID_SCHEMA_PROFILES
+
+    def test_agent_model_check_constraint_matches_literal_args(self) -> None:
+        """The SQL CHECK string in the Agent model must list exactly the values
+        from get_args(SchemaProfile)."""
+        import re
+        from typing import get_args
+
+        from modulo.core.schema_registry.rendering import SchemaProfile
+        from modulo.db.models.agent import Agent
+
+        # Extract the CHECK constraint text from table_args
+        check_constraints = [arg for arg in Agent.__table_args__ if hasattr(arg, "sqltext")]
+        assert check_constraints, "Agent model must have at least one CheckConstraint"
+        schema_profile_check = None
+        for cc in check_constraints:
+            if "schema_profile" in cc.name:
+                schema_profile_check = cc
+                break
+        assert schema_profile_check is not None, "Agent model must have ck_agents_schema_profile"
+
+        # Parse the IN clause values
+        sql_text = str(schema_profile_check.sqltext)
+        values_in_check = set(re.findall(r"'([^']+)'", sql_text))
+        expected_values = set(get_args(SchemaProfile))
+        assert values_in_check == expected_values, (
+            f"SQL CHECK values {values_in_check} do not match get_args(SchemaProfile) = {expected_values}"
+        )
+
+    def test_agent_model_valid_profiles_matches_literal_args(self) -> None:
+        """The _VALID_SCHEMA_PROFILES tuple in db.models.agent must match
+        get_args(SchemaProfile) — they are kept in separate modules due to the
+        import-linter contract (db must not import core)."""
+        from typing import get_args
+
+        import modulo.db.models.agent as _agent_mod
+        from modulo.core.schema_registry.rendering import SchemaProfile
+
+        expected = get_args(SchemaProfile)
+        db_profiles = _agent_mod._VALID_SCHEMA_PROFILES
+        assert set(db_profiles) == set(expected), (
+            f"db.models.agent._VALID_SCHEMA_PROFILES {db_profiles} does not match get_args(SchemaProfile) = {expected}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 14. FIX 5: schema_translation_report gated behind opt-in
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaTranslationReportGating:
+    """FIX 5: GET /pipelines/{id}/graph must not compute schema_translation_report
+    unless include_schema_warnings=true."""
+
+    def test_graph_response_empty_report_by_default(self) -> None:
+        from modulo.api.routes.pipelines import PipelineGraphNode, _graph_response
+
+        node = PipelineGraphNode(
+            id=uuid.uuid4(),
+            agent_id=uuid.uuid4(),
+            position={"x": 0, "y": 0},
+            schema_profile="provider-strict",
+            output_schema_json={
+                "type": "object",
+                "properties": {"x": {"type": "string", "default": "foo"}},
+            },
+        )
+        node_dict = node.model_dump(mode="json")
+        resp = _graph_response([node_dict], [])
+        # Without include_schema_warnings, the report is empty
+        assert not resp.schema_translation_report
+
+    def test_graph_response_populated_report_when_opted_in(self) -> None:
+        from modulo.api.routes.pipelines import PipelineGraphNode, _graph_response
+
+        node = PipelineGraphNode(
+            id=uuid.uuid4(),
+            agent_id=uuid.uuid4(),
+            position={"x": 0, "y": 0},
+            schema_profile="provider-strict",
+            output_schema_json={
+                "type": "object",
+                "properties": {"x": {"type": "string", "default": "foo"}},
+            },
+        )
+        node_dict = node.model_dump(mode="json")
+        resp = _graph_response([node_dict], [], include_schema_warnings=True)
+        # With include_schema_warnings=True, the report should be populated
+        assert resp.schema_translation_report
+
+
+# ---------------------------------------------------------------------------
+# 15. FIX 6: diamond-shaped $ref does not inflate node count
+# ---------------------------------------------------------------------------
+
+
+class TestRefMemoization:
+    """FIX 6: A definition referenced from many sites must be flattened once,
+    not once per reference, so it does not hit _MAX_EXPANDED_NODES."""
+
+    def test_diamond_ref_not_inflated(self) -> None:
+        """Schema with one definition referenced from 20 sites should not
+        hit the node-count limit (it did before memoisation)."""
+        num_refs = 20
+        schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {f"ref{i}": {"$ref": "#/$defs/Common"} for i in range(num_refs)},
+            "$defs": {
+                "Common": {
+                    "type": "object",
+                    "properties": {
+                        "a": {"type": "string"},
+                        "b": {"type": "integer"},
+                    },
+                },
+            },
+        }
+        result = render_for_profile(schema, "provider-strict", "openai")
+        assert result.skipped is False
+        # All refs should be inlined
+        for i in range(num_refs):
+            prop = result.schema["properties"][f"ref{i}"]
+            assert "type" in prop
+            assert "$defs" not in result.schema
+
+    def test_single_ref_counted_once(self) -> None:
+        """A single definition referenced from 50 sites should produce a
+        reasonable node count (well under the 10k limit)."""
+        from modulo.core.schema_registry.rendering import _flatten_refs
+
+        num_refs = 50
+        schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {f"r{i}": {"$ref": "#/$defs/Item"} for i in range(num_refs)},
+            "$defs": {
+                "Item": {"type": "object", "properties": {"v": {"type": "string"}}},
+            },
+        }
+        _, count = _flatten_refs(schema)
+        # Without memoisation this would be ~150+ nodes; with memoisation
+        # it should be under 100.
+        assert count < 100
+
+
+# ---------------------------------------------------------------------------
+# 16. FIX 8: dead branch removed from _is_abstract_schema
+# ---------------------------------------------------------------------------
+
+
+class TestIsAbstractSchema:
+    """FIX 8: verify _is_abstract_schema still works correctly after dead
+    branch removal."""
+
+    def test_empty_is_abstract(self) -> None:
+        assert _is_abstract_schema({}) is True
+
+    def test_ref_only_is_abstract(self) -> None:
+        assert _is_abstract_schema({"$ref": "#/$defs/Foo"}) is True
+
+    def test_meta_only_is_abstract(self) -> None:
+        assert _is_abstract_schema({"$schema": "...", "title": "Foo"}) is True
+
+    def test_concrete_not_abstract(self) -> None:
+        assert _is_abstract_schema({"type": "object", "properties": {}}) is False
+
+    def test_composition_only_not_abstract(self) -> None:
+        """anyOf is a non-meta key, so composition-only schemas are NOT abstract."""
+        assert _is_abstract_schema({"anyOf": [{"type": "string"}, {"type": "integer"}]}) is False

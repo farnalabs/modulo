@@ -46,6 +46,7 @@ async def create_agent(
     agent_commands: list[str] | None = None,
     prompt_always_visible: bool = False,
     required_environment_capabilities: list[str] | None = None,
+    schema_profile: str | None = None,
 ) -> Agent:
     agent = Agent(
         organisation_id=org_id,
@@ -69,6 +70,7 @@ async def create_agent(
         template_id=coerce_uuid(template_id),
         agent_commands=agent_commands,
         required_environment_capabilities=required_environment_capabilities or [],
+        schema_profile=schema_profile,
     )
     session.add(agent)
     await session.flush()

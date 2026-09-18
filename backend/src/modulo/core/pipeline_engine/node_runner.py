@@ -78,6 +78,8 @@ if TYPE_CHECKING:
     from modulo.core.artifacts.streaming import StreamingArtifactWriter
     from modulo.core.artifacts.writer import ArtifactWriter
 
+import typing
+
 from modulo.core.capability_scope import filter_run_context_scope
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_BAND_USD,
@@ -3298,7 +3300,8 @@ def _is_safe_schema(schema: dict[str, Any]) -> tuple[bool, str]:
 # FAR-900: schema profile resolution + provider extraction
 # ---------------------------------------------------------------------------
 
-_VALID_SCHEMA_PROFILES = frozenset({"verbatim", "provider-strict", "runtime-sdk"})
+# FIX 4: canonical value set derived from SchemaProfile — single source of truth.
+_VALID_SCHEMA_PROFILES = frozenset(typing.get_args(SchemaProfile))
 
 
 def _extract_provider_id(backend: Any) -> str | None:
@@ -3332,7 +3335,7 @@ def _resolve_schema_profile(node_def: dict[str, Any]) -> "SchemaProfile | None":
     """
     profile = node_def.get("schema_profile")
     if profile in _VALID_SCHEMA_PROFILES:
-        return profile  # type: ignore[no-any-return]  # validated against _VALID_SCHEMA_PROFILES
+        return profile  # validated against _VALID_SCHEMA_PROFILES
     return None
 
 
@@ -3380,6 +3383,12 @@ async def _invoke_node_model(
     if output_schema_json and backend.supports_native_structured_output:
         effective_profile: SchemaProfile = schema_profile or "verbatim"
         provider_id = _extract_provider_id(backend)
+        # FIX 7: bounds-check the RAW schema BEFORE rendering to bound the
+        # amplification window (inlining can make the rendered schema larger
+        # than the input).  Decide native-structured-output viability from
+        # the ORIGINAL schema so schemas that qualify before rendering are
+        # not silently disqualified after.
+        raw_ok, _raw_reason = _is_safe_schema(output_schema_json)
         try:
             rendered = render_for_profile(output_schema_json, effective_profile, provider_id)
             schema_to_check = rendered.schema
@@ -3400,16 +3409,20 @@ async def _invoke_node_model(
                 exc_info=True,
             )
             schema_to_check = output_schema_json
-        # FIX 6 (FAR-898): bounds-check the schema (AFTER rendering — the
-        # rendered output is what reaches the provider).
-        ok, reason = _is_safe_schema(schema_to_check)
-        if ok:
-            invoke_kwargs["output_schema"] = schema_to_check
+        # FIX 7: If the raw schema passed bounds, use it for the provider
+        # (the provider resolves $ref itself).  If only the rendered schema
+        # passes, prefer it.  If neither passes, no native structured output.
+        if raw_ok:
+            invoke_kwargs["output_schema"] = output_schema_json
         else:
-            _log.warning(
-                "node_model.schema_bounds_rejected",
-                extra={"node_id": node_id, "reason": reason},
-            )
+            ok, reason = _is_safe_schema(schema_to_check)
+            if ok:
+                invoke_kwargs["output_schema"] = schema_to_check
+            else:
+                _log.warning(
+                    "node_model.schema_bounds_rejected",
+                    extra={"node_id": node_id, "reason": reason},
+                )
     response = await backend.invoke(messages, **invoke_kwargs)
 
     content = response.content if hasattr(response, "content") else str(response)

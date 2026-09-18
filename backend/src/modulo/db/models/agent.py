@@ -20,7 +20,9 @@ from modulo.db.models.base import OrgScoped
 # Repeated column type (S1192): JSON with PostgreSQL JSONB variant.
 _JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
 
-# FAR-900: valid schema_profile values for the Agent model.
+# FAR-900: valid schema_profile values — MUST match get_args(SchemaProfile) from
+# modulo.core.schema_registry.rendering.  Kept static here because the DB layer
+# must not import core (import-linter contract).  A test asserts consistency.
 _VALID_SCHEMA_PROFILES = ("verbatim", "provider-strict", "runtime-sdk")
 
 
