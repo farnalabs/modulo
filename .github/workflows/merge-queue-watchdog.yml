@@ -91,6 +91,7 @@ jobs:
           WORKFLOW="merge-queue.yml"
           NOW=$(date -u +%s)
           CUTOFF=$((NOW - 600))  # 10 minutes
+          CANCELLED_COUNT=0
 
           # ---- 1. Find in_progress runs of merge-queue.yml ----
           IN_PROGRESS="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status in_progress --limit 50 --json databaseId,createdAt 2>/dev/null)" || IN_PROGRESS="[]"
@@ -125,6 +126,7 @@ jobs:
                 echo "  Run #$RUN_ID has all $TOTAL job(s) unstarted for >10 min — cancelling."
                 if gh run cancel "$RUN_ID" --repo "$REPO" 2>/dev/null; then
                   echo "  Cancelled run #$RUN_ID."
+                  CANCELLED_COUNT=$((CANCELLED_COUNT + 1))
                 else
                   echo "  Cancel of #$RUN_ID failed (ignoring — next tick retries)."
                 fi
@@ -181,7 +183,10 @@ jobs:
           IN_PROGRESS_COUNT="$(echo "$IN_PROGRESS_NOW" | jq --argjson me "${{ github.run_id }}" '[.[] | select(.databaseId != $me)] | length' 2>/dev/null)" || IN_PROGRESS_COUNT="0"
 
           SHOULD_DISPATCH=false
-          if [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$LAST_SUCCESS_AGE" -ge 30 ]; then
+          if [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$CANCELLED_COUNT" -gt 0 ]; then
+            SHOULD_DISPATCH=true
+            echo "Freed the queue by cancelling ${CANCELLED_COUNT} stuck run(s) — rearming."
+          elif [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$LAST_SUCCESS_AGE" -ge 30 ]; then
             SHOULD_DISPATCH=true
             echo "No in_progress merge-queue runs and last success was ${LAST_SUCCESS_AGE} min ago — rearming."
           elif [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$LAST_SUCCESS_AGE" -eq -1 ]; then
