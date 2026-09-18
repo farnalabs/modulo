@@ -1,0 +1,204 @@
+name: "Merge: Queue Watchdog"
+
+# Out-of-lock self-healing sweep for the merge queue.
+#
+# Incident (2026-09-17 ~20:03-21:21 UTC): a merge-queue run (35268537695,
+# workflow_dispatch) entered in_progress but never got a runner — its job has
+# started_at: null. Because merge-queue.yml declares concurrency:
+# { group: merge-queue, cancel-in-progress: false }, that run held the group
+# lock indefinitely. Every later run queued behind it. GitHub keeps only the
+# newest pending run per group, so each new event cancelled the previous
+# pending run — a stream of cancelled runs plus one permanent pending.
+#
+# The in-job "Cancel stale stuck runs" sweep (merge-queue.yml ~207-241)
+# lives INSIDE the queue job — but that job cannot start while the lock is
+# held. Chicken-and-egg: the sweep never runs, so the queue never self-heals.
+# Manual unblock was `gh run cancel 35268537695`.
+#
+# A job that never starts also never hits its timeout-minutes — that only
+# counts from job start. That is the real reason an out-of-band watchdog is
+# required.
+#
+# This watchdog runs entirely OUTSIDE the merge-queue concurrency group so it
+# can cancel stuck runs that hold the lock. Its unique job is:
+#   1. Cancel in_progress merge-queue runs ALL of whose jobs have never started
+#      and that are older than ~10 minutes (the stuck-runner failure mode).
+#      A run with SOME jobs started is left alone — a healthy self-chaining run
+#      can legitimately have an unstarted job (queue waiting on event-gate's
+#      CHAIN_READY_AT sleep), and cancelling it would destroy good queue work.
+#   2. Re-arm the queue by dispatching merge-queue.yml after clearing a stuck
+#      run, or whenever no merge-queue run is in progress but the last
+#      successful one is stale (>30 min).
+#   3. Escalate when the last successful merge-queue run is >30 min old
+#      (::error:: annotation).
+#
+# Division of labour with merge-queue.yml's in-job sweep:
+#   - merge-queue.yml in-job sweep = belt-and-braces: runs only when the lock
+#     is free (i.e. when it is not needed); catches stale runs that accumulated
+#     between watchdog ticks.
+#   - merge-queue-watchdog.yml (this file) = authoritative out-of-lock sweep:
+#     runs regardless of the lock state; handles the chicken-and-egg failure
+#     mode that the in-job sweep cannot.
+#
+# FAR-492 caveat: GitHub DROPS high-frequency cron events on high-activity
+# repos. The */10 schedule is opportunistic; treat every tick as best-effort
+# and verify run history before trusting liveness. If cron proves unreliable,
+# the known reliability upgrade is a PR-Housekeeper dispatch leg calling this
+# workflow via repository_dispatch.
+
+on:
+  schedule:
+    # FAR-492: */10 is an UNVERIFIED BEST-EFFORT band. The lesson's data
+    # proves only >=1/day is safe on this repo. Dropped ticks are silent;
+    # the escalation below covers liveness gaps.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+  repository_dispatch:
+    # Accept poke from app.modulo.run or other automation so the queue can be
+    # re-armed on demand without waiting for the next cron tick.
+    types: [merge-queue-watchdog-poke]
+
+# Own concurrency group — must NOT be merge-queue. This watchdog runs outside
+# the lock it clears; overlapping ticks must not pile up.
+concurrency:
+  group: merge-queue-watchdog
+  cancel-in-progress: false
+
+# contents: write -> repository_dispatch to re-arm the queue. POST
+#   /repos/{owner}/{repo}/dispatches requires contents: write, so a read-only
+#   contents scope makes every re-arm attempt 403 (behaviour #2 silently dead).
+# actions: write -> gh run cancel (the cancel leg needs only actions: write).
+permissions:
+  contents: write
+  actions: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  sweep:
+    name: Cancel stuck runs + re-arm queue
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    steps:
+      - name: Cancel stuck merge-queue runs and re-arm
+        id: watchdog
+        shell: bash
+        run: |
+          set -o pipefail
+
+          REPO="${{ github.repository }}"
+          WORKFLOW="merge-queue.yml"
+          NOW=$(date -u +%s)
+          CUTOFF=$((NOW - 600))  # 10 minutes
+          CANCELLED_COUNT=0
+
+          # ---- 1. Find in_progress runs of merge-queue.yml ----
+          IN_PROGRESS="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status in_progress --limit 50 --json databaseId,createdAt 2>/dev/null)" || IN_PROGRESS="[]"
+          if [ "$IN_PROGRESS" = "[]" ] || [ -z "$IN_PROGRESS" ]; then
+            echo "No in_progress merge-queue runs found."
+          else
+            echo "Found in_progress merge-queue runs — checking for stuck runners..."
+
+            # Iterate candidates (exclude this run if somehow in the list)
+            CANDIDATES="$(echo "$IN_PROGRESS" | jq -r --argjson me "${{ github.run_id }}" '.[] | select(.databaseId != $me) | select(.createdAt != null) | @base64' 2>/dev/null)" || CANDIDATES=""
+            for CAND in $CANDIDATES; do
+              RUN_ID="$(echo "$CAND" | base64 -d | jq -r '.databaseId' 2>/dev/null)" || continue
+              CREATED="$(echo "$CAND" | base64 -d | jq -r '.createdAt' 2>/dev/null)" || continue
+              CREATED_TS="$(date -u -d "$CREATED" +%s 2>/dev/null)" || continue
+
+              if [ "$CREATED_TS" -ge "$CUTOFF" ]; then
+                echo "  Run #$RUN_ID (created $CREATED) is younger than 10 min — leaving it."
+                continue
+              fi
+
+              # Only a run whose EVERY job has never started is the true
+              # stuck-runner failure mode (2026-09-17 incident: the single job
+              # had started_at == null). A healthy self-chaining run that is
+              # >10 min old can legitimately have an unstarted job — e.g. the
+              # queue job while event-gate sleeps through CHAIN_READY_AT pacing
+              # — so cancelling on ANY unstarted job would kill good queue
+              # passes. Compare the unstarted count against the total job count.
+              JOB_COUNTS="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --jq '{total: (.jobs | length), unstarted: ([.jobs[] | select(.started_at == null)] | length)}' 2>/dev/null)" || JOB_COUNTS=""
+              TOTAL="$(echo "$JOB_COUNTS" | jq -r '.total // 0' 2>/dev/null)" || TOTAL="0"
+              UNSTARTED="$(echo "$JOB_COUNTS" | jq -r '.unstarted // 0' 2>/dev/null)" || UNSTARTED="0"
+              if [ "$TOTAL" -gt 0 ] && [ "$UNSTARTED" -eq "$TOTAL" ]; then
+                echo "  Run #$RUN_ID has all $TOTAL job(s) unstarted for >10 min — cancelling."
+                if gh run cancel "$RUN_ID" --repo "$REPO" 2>/dev/null; then
+                  echo "  Cancelled run #$RUN_ID."
+                  CANCELLED_COUNT=$((CANCELLED_COUNT + 1))
+                else
+                  echo "  Cancel of #$RUN_ID failed (ignoring — next tick retries)."
+                fi
+              else
+                echo "  Run #$RUN_ID has $UNSTARTED/$TOTAL unstarted job(s) — leaving it."
+              fi
+            done
+          fi
+
+          # ---- 2. Check last successful merge-queue run age ----
+          # A successful run is one with conclusion == "success".
+          COMPLETED="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status completed --limit 10 --json databaseId,conclusion,updatedAt 2>/dev/null)" || COMPLETED="[]"
+          LAST_SUCCESS_AGE="$(echo "$COMPLETED" | python3 -c '
+          import json, sys, datetime
+          try:
+              runs = json.loads(sys.stdin.read())
+          except Exception:
+              runs = []
+          for r in runs:
+              if r.get("conclusion") == "success" and r.get("updatedAt"):
+                  updated = r["updatedAt"].replace("Z", "+00:00")
+                  dt = datetime.datetime.fromisoformat(updated)
+                  now = datetime.datetime.now(datetime.timezone.utc)
+                  age_min = int((now - dt).total_seconds() / 60)
+                  print(age_min)
+                  sys.exit(0)
+          print(-1)
+          ' 2>/dev/null)" || LAST_SUCCESS_AGE="-1"
+
+          if [ "$LAST_SUCCESS_AGE" -ge 30 ]; then
+            echo "::error::merge-queue-watchdog: last successful merge-queue run was ${LAST_SUCCESS_AGE} min ago — the merge queue is stalled."
+            echo "stalled=true" >> "$GITHUB_OUTPUT"
+            echo "last_success_age=${LAST_SUCCESS_AGE}" >> "$GITHUB_OUTPUT"
+          elif [ "$LAST_SUCCESS_AGE" -ge 0 ]; then
+            echo "Last successful merge-queue run was ${LAST_SUCCESS_AGE} min ago — within threshold."
+          else
+            echo "::warning::merge-queue-watchdog: no successful run among the last 10 completed merge-queue runs — the queue may be stalled; re-arming."
+          fi
+
+          # ---- 3. Re-arm: dispatch merge-queue.yml if queue appears idle ----
+          # Re-arm when: (a) we just cancelled a stuck run, or (b) no merge-queue
+          # run is in progress and the last successful one is older than 30 min
+          # (the documented threshold — safely above merge-queue.yml's own 15-min
+          # cron so the watchdog only fires when the queue has genuinely missed
+          # ticks). Use repository_dispatch (NOT workflow_dispatch) —
+          # merge-queue.yml documents a GitHub caching bug where
+          # workflow_dispatch on a recently modified workflow returns HTTP 422.
+          # repository_dispatch is the established convention.
+          # Re-query in_progress AFTER the cancel loop: if the sweep just
+          # cancelled the only stuck run, the pre-sweep snapshot still shows it
+          # as in_progress and would skip re-arm for a whole tick (up to 10 min).
+          # Re-query so a freed queue can be re-armed in the same tick.
+          IN_PROGRESS_NOW="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status in_progress --limit 50 --json databaseId 2>/dev/null)" || IN_PROGRESS_NOW="[]"
+          IN_PROGRESS_COUNT="$(echo "$IN_PROGRESS_NOW" | jq --argjson me "${{ github.run_id }}" '[.[] | select(.databaseId != $me)] | length' 2>/dev/null)" || IN_PROGRESS_COUNT="0"
+
+          SHOULD_DISPATCH=false
+          if [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$CANCELLED_COUNT" -gt 0 ]; then
+            SHOULD_DISPATCH=true
+            echo "Freed the queue by cancelling ${CANCELLED_COUNT} stuck run(s) — rearming."
+          elif [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$LAST_SUCCESS_AGE" -ge 30 ]; then
+            SHOULD_DISPATCH=true
+            echo "No in_progress merge-queue runs and last success was ${LAST_SUCCESS_AGE} min ago — rearming."
+          elif [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$LAST_SUCCESS_AGE" -eq -1 ]; then
+            SHOULD_DISPATCH=true
+            echo "No in_progress merge-queue runs and no successful runs found — rearming."
+          fi
+
+          if [ "$SHOULD_DISPATCH" = "true" ]; then
+            PAYLOAD="$(jq -n '{event_type: "merge-queue-chain", client_payload: {depth: 0, ready_at: 0}}')"
+            if gh api -X POST "repos/$REPO/dispatches" --input - <<< "$PAYLOAD" 2>&1; then
+              echo "Re-armed merge-queue via repository_dispatch."
+            else
+              echo "::warning::merge-queue-watchdog: repository_dispatch to re-arm merge-queue.yml failed — the 15-min cron + PR/CI events still cover the queue."
+            fi
+          fi
