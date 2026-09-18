@@ -7,13 +7,16 @@ import pytest
 
 from modulo.core.runtime_provider import (
     ExecResult,
+    ProviderNotConfiguredError,
     RuntimeProvider,
+    UnknownProviderTypeError,
     WorkspaceSpec,
     build_hub,
     create_default_hub,
 )
 from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.core.runtime_provider.local import LocalRuntimeProvider
 
 
@@ -97,7 +100,8 @@ class TestBuildHub:
 
         assert isinstance(hub.get("runner_docker"), DockerRuntimeProvider)
 
-    def test_registers_runner_docker_on_any_modulo_runner_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_does_not_register_docker_on_unrelated_runner_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-996: an unrelated MODULO_RUNNER_* variable must not register Docker."""
         monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
         monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
@@ -105,7 +109,7 @@ class TestBuildHub:
 
         hub = build_hub()
 
-        assert isinstance(hub.get("runner_docker"), DockerRuntimeProvider)
+        assert hub.get("runner_docker") is None
 
     def test_no_runner_docker_without_any_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
@@ -238,11 +242,71 @@ def test_documented_env_var_actually_registers_provider(
 def test_retry_failure_signal_alone_registers_runner_docker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Parity pin: a bare MODULO_RUNNER_* signal (non-Docker-host) registers the provider."""
+    """Parity pin: MODULO_DOCKER_HOST signal registers the provider."""
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
     monkeypatch.delenv("DOCKER_HOST", raising=False)
-    monkeypatch.setenv("MODULO_RUNNER_RETRY_FAILURE_SCALE", "2.0")
+    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://localhost:2375")
 
     hub = build_hub()
     assert isinstance(hub.get("runner_docker"), DockerRuntimeProvider)
+
+
+# ---------------------------------------------------------------------------
+# Unknown provider type (FAR-997)
+# ---------------------------------------------------------------------------
+
+
+class TestUnknownProviderType:
+    def test_resolve_raises_unknown_type_for_bogus_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("DOCKER_HOST", raising=False)
+
+        hub = build_hub()
+        profile = type("P", (), {"provider_type": "nonexistent_provider", "provider_hint": None})()
+
+        with pytest.raises(UnknownProviderTypeError) as exc_info:
+            hub.resolve(profile)
+
+        assert "nonexistent_provider" in str(exc_info.value)
+        assert exc_info.value.provider_type == "nonexistent_provider"
+        assert isinstance(exc_info.value.valid_types, frozenset)
+
+    def test_resolve_raises_configured_error_for_known_unregistered_type(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """e2b is a known type but not registered (env var not set) — should be ProviderNotConfiguredError."""
+        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("DOCKER_HOST", raising=False)
+
+        hub = build_hub()
+        profile = type("P", (), {"provider_type": "e2b", "provider_hint": None})()
+
+        with pytest.raises(ProviderNotConfiguredError) as exc_info:
+            hub.resolve(profile)
+
+        assert exc_info.value.provider_type == "e2b"
+        assert exc_info.value.env_var == "MODULO_E2B_API_KEY"
+
+    def test_initialise_raises_unknown_type_for_bogus_type(self) -> None:
+        hub = RuntimeProviderHub()
+
+        import asyncio
+
+        with pytest.raises(UnknownProviderTypeError) as exc_info:
+            asyncio.get_event_loop().run_until_complete(hub.initialise({"my_runner": {"type": "nonexistent_provider"}}))
+
+        assert "nonexistent_provider" in str(exc_info.value)
+
+    def test_unknown_type_error_message_lists_valid_types(self) -> None:
+        """The error message includes the valid vocabulary for remediation."""
+        from modulo.db.models.environment_profile import PROVIDER_TYPES
+
+        err = UnknownProviderTypeError("kubernetes", PROVIDER_TYPES)
+        msg = str(err)
+        assert "kubernetes" in msg
+        for pt in sorted(PROVIDER_TYPES):
+            assert pt in msg

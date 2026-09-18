@@ -10,6 +10,7 @@ from modulo.core.runtime_provider import (
     ExecResult,
     ProviderNotConfiguredError,
     RuntimeProvider,
+    UnknownProviderTypeError,
     WorkspaceSpec,
 )
 from modulo.core.runtime_provider.docker import DockerRuntimeProvider
@@ -169,13 +170,14 @@ def test_resolve_docker_type_without_docker_env_raises_with_remediation() -> Non
 
 
 def test_resolve_unknown_provider_type_raises_without_fallback() -> None:
-    """Unknown provider types raise; no first-registered fallback exists."""
+    """Unknown provider types raise UnknownProviderTypeError; no first-registered fallback exists."""
     hub = RuntimeProviderHub()
     hub.register("local", LocalRuntimeProvider())
 
-    with pytest.raises(ProviderNotConfiguredError, match="k8s") as exc_info:
+    with pytest.raises(UnknownProviderTypeError, match="k8s") as exc_info:
         hub.resolve(SimpleNamespace(provider_type="k8s"))
-    assert exc_info.value.env_var is None
+    assert exc_info.value.provider_type == "k8s"
+    assert isinstance(exc_info.value.valid_types, frozenset)
 
 
 def test_resolve_missing_provider_type_raises() -> None:
@@ -274,11 +276,11 @@ class TestInitialise:
         assert hub.get("sandbox") is None
         assert "has no api_key" in caplog.text
 
-    async def test_skips_unknown_provider_type(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_raises_unknown_provider_type(self) -> None:
+        """Unknown provider types raise UnknownProviderTypeError (FAR-997)."""
         hub = RuntimeProviderHub()
-        await hub.initialise({"mystery": {"type": "not-a-provider"}})
-        assert hub.get("mystery") is None
-        assert "Unknown provider type" in caplog.text
+        with pytest.raises(UnknownProviderTypeError, match="not-a-provider"):
+            await hub.initialise({"mystery": {"type": "not-a-provider"}})
 
     async def test_skips_already_registered_provider(self, caplog: pytest.LogCaptureFixture) -> None:
         hub = RuntimeProviderHub()
