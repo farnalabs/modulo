@@ -92,6 +92,7 @@ async def test_demo_seed_org_isolation_under_rls(db_engine: AsyncEngine, monkeyp
         # Derive the expected set from the seed's run specs so the assertion
         # tracks the demo data rather than hard-coding the original two runs.
         expected_run_numbers = {spec[0] for spec in seed_demo_module._DEMO_RUN_SPECS}
+        assert expected_run_numbers, "demo seed declares no runs - the isolation assertion would be vacuous"
         assert run_numbers == expected_run_numbers
 
         # Enforcement 2: other-org context sees NONE of the demo rows.
