@@ -4226,6 +4226,9 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+      - testid: settings-sso-provider-row
+        type: element
+        dynamic_testid: false
       - testid: settings-sso-add-provider
         type: button
         dynamic_testid: false
