@@ -90,21 +90,17 @@ test.describe('Settings SSO Provider Config', { tag: '@regression' }, () => {
 
     // ── Submit WITHOUT pressing Enter in the domain field ──
     const submitBtn = page.locator('button').filter({ hasText: /Save/ }).first()
-    const saveResponse = page.waitForResponse(
-      r => r.url().includes('/api/v1/admin/sso/providers/') && r.request().method() === 'PUT',
-    )
     await submitBtn.click()
 
-    // Assert the save actually succeeded. The "Add Provider" button is always
-    // rendered, so it is NOT a valid "form closed" signal — a failed save
-    // leaves the edit form open and still shows that button.
-    expect((await saveResponse).status()).toBe(200)
-
-    // ── Wait for the form to close, then for the list refetch ──
-    // The refetch swaps the list for a spinner before re-rendering it with the
-    // persisted domain; wait for the refreshed row so the reopened edit form is
-    // populated from saved state, not the stale pre-save provider.
-    await expect(domainInput).toHaveCount(0)
+    // ── Wait for the save to complete ──
+    // The add-provider button is always visible, so it is NOT a signal that
+    // the edit form closed. Wait for the form to detach, then reload so the
+    // re-opened form is seeded from fresh server state: the view calls the
+    // async loadProviders() refresh after closing the form, and clicking the
+    // row before that lands seeds the form from the stale pre-save provider
+    // (auto_provision=false, no domains), hiding the domain input.
+    await expect(domainInput).toBeHidden({ timeout: 15000 })
+    await page.goto('/settings/sso')
     await expect(row).toBeVisible({ timeout: 15000 })
 
     // ── Verify domain persisted — re-open edit form and check ──
