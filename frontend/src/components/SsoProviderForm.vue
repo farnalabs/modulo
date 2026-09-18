@@ -120,7 +120,7 @@
           :value="data.client_secret"
           type="password"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          :placeholder="$t('components.SsoProviderForm.leave_blank_to_keep_existing')"
+          :placeholder="props.isEdit ? $t('components.SsoProviderForm.secret_masked_placeholder') : $t('components.SsoProviderForm.leave_blank_to_keep_existing')"
           @input="
             emitUpdate({
               ...data,
@@ -128,6 +128,7 @@
             })
           "
         />
+        <p v-if="props.isEdit" class="mt-1 text-xs text-muted-foreground">{{ $t('components.SsoProviderForm.leave_blank_to_keep_existing') }}</p>
       </div>
 
       <!-- Tenant Domain (only for presets that require_tenant) -->
@@ -397,6 +398,8 @@
           :aria-describedby="domainError ? 'sso-domain-error' : undefined"
           @keydown.enter.prevent="addDomain"
           @keydown.tab="addDomain"
+          @blur="commitPendingDomain"
+          @paste="handleDomainPaste"
         />
       </div>
       <div v-if="domainError" id="sso-domain-error" class="mt-1 text-xs text-destructive" role="alert" aria-live="polite" data-testid="sso-domain-error">
@@ -426,7 +429,7 @@
     <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
 
     <div class="flex items-center gap-2">
-      <Button :disabled="!data.name.trim() || saving" @click="$emit('submit')">
+      <Button :disabled="!data.name.trim() || saving" @click="onSubmitClick">
         {{ saving ? savingLabel : submitLabel }}
       </Button>
       <button type="button"
@@ -497,6 +500,7 @@ const props = defineProps<{
   presets: SsoPresetInfo[];
   callbackUrl?: string | null;
   unrestrictedProvisioningAvailable?: boolean;
+  isEdit?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -507,6 +511,15 @@ const emit = defineEmits<{
 
 function emitUpdate(updated: SsoFormState) {
   emit("update:data", updated);
+}
+
+/** Fix #4: commit any pending domain before submitting the form. */
+function onSubmitClick() {
+  if (provisioningMode.value === 'domains') {
+    const ok = commitPendingDomain()
+    if (!ok) return // validation error shown, do not submit
+  }
+  emit('submit')
 }
 
 const { t } = useI18n()
@@ -530,6 +543,10 @@ const chosenMode = ref<ProvisioningMode | null>(null)
 const provisioningMode = computed<ProvisioningMode>(() => chosenMode.value ?? deriveMode(props.data))
 
 function onModeChange(mode: ProvisioningMode) {
+  // Fix #4: commit any pending domain input before switching modes
+  if (chosenMode.value === 'domains' || provisioningMode.value === 'domains') {
+    commitPendingDomain()
+  }
   chosenMode.value = mode
   if (mode === 'invitation') {
     emitUpdate({ ...props.data, auto_provision: false, allowed_domains: [] })
@@ -570,6 +587,64 @@ function addDomain() {
     allowed_domains: [...props.data.allowed_domains, normalised],
   })
   domainInput.value = ''
+}
+
+/**
+ * Fix #4: Commit any pending domain input that hasn't been added yet.
+ * Called on blur, before save, and when leaving domains mode.
+ * Returns true if the pending value was valid (or empty), false if invalid.
+ */
+function commitPendingDomain(): boolean {
+  const raw = domainInput.value.trim()
+  if (!raw) return true
+  const err = validateDomain(raw)
+  if (err) {
+    domainError.value = t(err)
+    return false
+  }
+  domainError.value = null
+  const normalised = raw.trim().toLowerCase().replace(/\.$/, '')
+  if (props.data.allowed_domains.includes(normalised)) {
+    domainInput.value = ''
+    return true
+  }
+  emitUpdate({
+    ...props.data,
+    allowed_domains: [...props.data.allowed_domains, normalised],
+  })
+  domainInput.value = ''
+  return true
+}
+
+/**
+ * Fix #3: Handle comma/space-separated pasted input.
+ * Splits on comma or whitespace and adds each valid domain.
+ */
+function handleDomainPaste(e: ClipboardEvent) {
+  const pasted = e.clipboardData?.getData('text') ?? ''
+  // If the paste contains a comma or whitespace, split and batch-add
+  if (/[, ]/.test(pasted)) {
+    e.preventDefault()
+    const parts = pasted.split(/[, ]+/).map(s => s.trim()).filter(Boolean)
+    let hasError = false
+    for (const part of parts) {
+      const err = validateDomain(part)
+      if (err) {
+        domainError.value = t(err)
+        hasError = true
+        break
+      }
+      const normalised = part.toLowerCase().replace(/\.$/, '')
+      if (!props.data.allowed_domains.includes(normalised)) {
+        emitUpdate({
+          ...props.data,
+          allowed_domains: [...props.data.allowed_domains, normalised],
+        })
+      }
+    }
+    if (!hasError) domainError.value = null
+    domainInput.value = ''
+  }
 }
 
 function removeDomain(idx: number) {

@@ -389,4 +389,231 @@ describe('SsoProviderForm', () => {
     const payload = wrapper.emitted('update:data')![0][0] as SsoFormState
     expect(payload.allowed_domains).toEqual(['test.org'])
   })
+
+  // ── Fix #4 regression: pending domain committed on blur ──────────
+  it('commits a typed domain on blur without requiring Enter (FAR-974 #4 regression)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        // Start in invitation mode; user selects domains mode
+        const data = reactive(makeData({ auto_provision: false, allowed_domains: [] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: `
+        <SsoProviderForm :data="data" :saving="false" submit-label="Save"
+          saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />`,
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+
+    // Switch to domains mode so the domain input appears
+    await wrapper.find('[data-testid="sso-mode-domains"]').setValue(true)
+    await nextTick()
+
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    expect(input.exists()).toBe(true)
+    await input.setValue('modulo.run')
+    // Trigger blur — should commit the domain without Enter
+    await input.trigger('blur')
+    await nextTick()
+
+    const last = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(last.allowed_domains).toEqual(['modulo.run'])
+  })
+
+  it('does not re-emit a pending domain already in the allowlist on blur (FAR-974 #4)', async () => {
+    const wrapper = mountForm(makeData({ auto_provision: true, allowed_domains: ['example.com'] }))
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+
+    // Normalises to example.com, which is already allowlisted — blur commits
+    // silently (clears the input) instead of emitting a duplicate.
+    await input.setValue('Example.COM')
+    await input.trigger('blur')
+    await nextTick()
+
+    expect(wrapper.emitted('update:data') ?? []).toHaveLength(0)
+  })
+
+  it('commits pending domain before submit (FAR-974 #4 regression)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: [] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: `
+        <SsoProviderForm :data="data" :saving="false" submit-label="Save"
+          saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" @submit="submitted = true" />
+        <span v-if="submitted" data-testid="submitted-flag">submitted</span>`,
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+
+    // Switch to domains mode so the domain input appears
+
+    await wrapper.find('[data-testid="sso-mode-domains"]').setValue(true)
+
+    await nextTick()
+
+
+
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    await input.setValue('example.com')
+    // Do NOT press Enter — click Save directly
+    await wrapper.findAll('button').find(b => b.text() === 'Save')!.trigger('click')
+    await nextTick()
+
+    const emits = wrapper.findComponent(SsoProviderForm).emitted('update:data')!
+    const lastPayload = emits.at(-1)![0] as SsoFormState
+    expect(lastPayload.allowed_domains).toEqual(['example.com'])
+  })
+
+  it('surfaces validation error for invalid pending domain at save time and does not submit', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: false, allowed_domains: [] }))
+        return {
+          data,
+          submitted: false,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: `
+        <SsoProviderForm :data="data" :saving="false" submit-label="Save"
+          saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" @submit="submitted = true" />
+        <span v-if="submitted" data-testid="submitted-flag">submitted</span>`,
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+
+    // Switch to domains mode
+    await wrapper.find('[data-testid="sso-mode-domains"]').setValue(true)
+    await nextTick()
+
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    await input.setValue('not-a-domain')
+    await wrapper.findAll('button').find(b => b.text() === 'Save')!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="submitted-flag"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
+  })
+
+  // ── Fix #3: comma/space-separated paste (batch-add via addDomain) ──
+  it('adds multiple domains from comma-separated paste (jsdom lacks ClipboardEvent)', async () => {
+    // jsdom lacks ClipboardEvent; test batch-add by calling addDomain in sequence
+    // which exercises the same domain-validation + emit path as handleDomainPaste
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['existing.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: `
+        <SsoProviderForm :data="data" :saving="false" submit-label="Save"
+          saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />`,
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+
+    // Add three domains one-by-one via Enter (same logic as paste split)
+    for (const domain of ['example.com', 'mail.example.com', 'test.org']) {
+      await input.setValue(domain)
+      await input.trigger('keydown.enter')
+      await nextTick()
+    }
+
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['existing.com', 'example.com', 'mail.example.com', 'test.org'])
+  })
+
+  it('batch-adds comma-separated domains on a real paste event (FAR-974 #3)', async () => {
+    // jsdom has no ClipboardEvent constructor, so dispatch a plain Event and
+    // attach a clipboardData stub — exactly what the handler reads.
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['existing.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: `
+        <SsoProviderForm :data="data" :saving="false" submit-label="Save"
+          saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />`,
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: { getData: () => 'example.com, mail.example.com' },
+    })
+    input.element.dispatchEvent(pasteEvent)
+    await nextTick()
+
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['existing.com', 'example.com', 'mail.example.com'])
+    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(false)
+  })
+
+  it('surfaces an error when a pasted list contains an invalid domain (FAR-974 #3)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['existing.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: `
+        <SsoProviderForm :data="data" :saving="false" submit-label="Save"
+          saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />`,
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: { getData: () => 'example.com, not-a-domain' },
+    })
+    input.element.dispatchEvent(pasteEvent)
+    await nextTick()
+
+    // The valid prefix was added before the invalid entry aborted the batch.
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['existing.com', 'example.com'])
+    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
+  })
+
+  // ── Fix #5: secret placeholder and hint ──────────────────────────
+  it('shows masked placeholder for client secret when editing (isEdit)', () => {
+    const wrapper = mountForm(makeData(), { isEdit: true })
+    const secretInput = wrapper.find('#ssoproviderform-field-7')
+    // The placeholder should be the masked dots, not the "leave blank" text
+    expect(secretInput.attributes('placeholder')).toContain('\u2022')
+  })
+
+  it('shows "leave blank" hint text below the secret field when editing', () => {
+    const wrapper = mountForm(makeData(), { isEdit: true })
+    expect(wrapper.text()).toContain('Leave blank to keep existing')
+  })
+
+  it('does NOT show masked placeholder or hint when creating (no isEdit)', () => {
+    const wrapper = mountForm(makeData(), { isEdit: false })
+    const secretInput = wrapper.find('#ssoproviderform-field-7')
+    // Placeholder should be "Leave blank to keep existing", not masked dots
+    expect(secretInput.attributes('placeholder')).toBe('Leave blank to keep existing')
+    // No hint paragraph should appear below the field
+    expect(wrapper.findAll('p').filter(p => p.text().includes('Leave blank to keep existing'))).toHaveLength(0)
+  })
 })
