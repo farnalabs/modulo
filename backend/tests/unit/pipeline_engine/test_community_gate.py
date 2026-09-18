@@ -220,3 +220,49 @@ async def test_resolve_scope_keeps_non_community_install_connectors():
 
     assert not executor._community_gated_agents
     assert "github" in scope
+
+
+async def test_resolve_scope_gates_granted_install_when_kill_switch_off():
+    """FAR-959: when the org-level ``community_objects_enabled`` flag is OFF,
+    ALL community-sourced agents are gated — even an install the operator has
+    already granted — and its connector grants are zeroed."""
+    org_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    ci_id = uuid.uuid4()
+    agent = _make_agent(agent_id, ci_id, ["github"])
+    install = _make_install(ci_id, community_sourced=True, agents_granted=True)
+    executor = PipelineExecutor(MagicMock())
+    graph_json = {"nodes": [{"id": "n1", "agent_id": str(agent_id)}]}
+
+    with patch(
+        "modulo.core.runtime_config.read_org_flag",
+        new=AsyncMock(return_value=False),
+    ) as read_flag:
+        scope = await executor._resolve_run_connector_scope(_FakeSession([agent], [install]), org_id, graph_json)
+
+    read_flag.assert_awaited_once()
+    assert executor._community_gated_agents == {str(agent_id)}
+    assert scope is None or "github" not in scope
+
+
+async def test_resolve_scope_kill_switch_read_fails_open_for_granted_install():
+    """FAR-959: the kill-switch read is fail-open. A DB read error must leave
+    a granted community install ungated rather than silently disabling
+    community objects for every org (the FAR-764 default-deny grant gate is
+    unaffected)."""
+    org_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    ci_id = uuid.uuid4()
+    agent = _make_agent(agent_id, ci_id, ["github"])
+    install = _make_install(ci_id, community_sourced=True, agents_granted=True)
+    executor = PipelineExecutor(MagicMock())
+    graph_json = {"nodes": [{"id": "n1", "agent_id": str(agent_id)}]}
+
+    with patch(
+        "modulo.core.runtime_config.read_org_flag",
+        new=AsyncMock(side_effect=RuntimeError("db unavailable")),
+    ):
+        scope = await executor._resolve_run_connector_scope(_FakeSession([agent], [install]), org_id, graph_json)
+
+    assert not executor._community_gated_agents
+    assert "github" in scope

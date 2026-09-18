@@ -42,7 +42,13 @@ _log = logging.getLogger(__name__)
 #: Default OFF; only an explicit ``True`` (bool) enables minting.
 FLAG_WORK_ITEM_AGENT_MINTING_ENABLED = "work_item_agent_minting_enabled"
 
-_KNOWN_FLAGS: frozenset[str] = frozenset({FLAG_WORK_ITEM_AGENT_MINTING_ENABLED})
+#: FAR-959: org-level kill switch for community library browse, install, and
+#: community-sourced agent execution.  Default ON (True) — behaviour is
+#: unchanged when the flag is absent or True; setting it to False disables
+#: community objects end-to-end.
+FLAG_COMMUNITY_OBJECTS_ENABLED = "community_objects_enabled"
+
+_KNOWN_FLAGS: frozenset[str] = frozenset({FLAG_WORK_ITEM_AGENT_MINTING_ENABLED, FLAG_COMMUNITY_OBJECTS_ENABLED})
 
 # ── In-process TTL cache ────────────────────────────────────────────────────
 

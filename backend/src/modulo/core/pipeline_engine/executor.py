@@ -2430,6 +2430,9 @@ class PipelineExecutor:
         Also enforces the community execution gate (FAR-764 / ADR 032 D2):
         agents whose ``collection_install_id`` references a community-sourced,
         not-yet-granted install get NO connector scope (default-deny).
+
+        FAR-959: when the org-level ``community_objects_enabled`` flag is OFF,
+        ALL community-sourced agents are gated regardless of grant status.
         """
         if graph_json is None:
             return self._run_connector_scope
@@ -2440,8 +2443,19 @@ class PipelineExecutor:
             agent_granted_connector_types,
             compute_run_fetch_scope,
         )
+        from modulo.core.runtime_config import FLAG_COMMUNITY_OBJECTS_ENABLED, read_org_flag
         from modulo.db.models.agent import Agent
         from modulo.db.models.collection_install import CollectionInstall
+
+        # FAR-959: check the org-level community objects kill switch. This flag
+        # defaults ON, so read it fail-open: an absent flag or a DB read error
+        # must leave community objects enabled (the primary FAR-764 default-deny
+        # grant gate below still applies regardless of this switch).
+        try:
+            community_objects_on = await read_org_flag(session, org_id, FLAG_COMMUNITY_OBJECTS_ENABLED, default=True)
+        except Exception:
+            _log.exception("executor.community_objects_flag_read_failed", extra={"org_id": str(org_id)})
+            community_objects_on = True
 
         agent_ids = _connector_scope_agent_ids(graph_json)
         grants: dict[str, set[str]] = {}
@@ -2480,7 +2494,9 @@ class PipelineExecutor:
                     .all()
                 )
                 gated_installs = {
-                    str(ci.install_id) for ci in install_rows if ci.community_sourced and not ci.agents_granted
+                    str(ci.install_id)
+                    for ci in install_rows
+                    if ci.community_sourced and (not ci.agents_granted or not community_objects_on)
                 }
                 for agent in agent_rows:
                     cid = getattr(agent, "collection_install_id", None)

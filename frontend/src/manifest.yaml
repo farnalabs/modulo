@@ -1715,6 +1715,9 @@ elements:
       - testid: product-analytics-toggle
         type: element
         dynamic_testid: false
+      - testid: community-objects-toggle
+        type: element
+        dynamic_testid: false
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
