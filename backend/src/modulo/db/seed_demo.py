@@ -1103,6 +1103,12 @@ async def seed_demo(session: AsyncSession) -> str | None:
     if config is None:
         _log.info("demo_seed.disabled")
         return None
+    # ADR 005: the demo seed creates a second org (slug "demo"). In single-org
+    # deployments (modulo_multi_org_enabled=False), this must not happen — the
+    # demo login endpoint returns 404 and the demo org is never created.
+    if not settings.modulo_multi_org_enabled:
+        _log.info("demo_seed.skipped_single_org")
+        return None
     email, password = config
 
     # Org/account/membership writes follow the boot-seed pattern (system

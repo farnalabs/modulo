@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
+from modulo.settings import get_settings
 
 _VALID_32 = "a" * 32
 
@@ -40,6 +41,7 @@ def _make_settings(**overrides: object) -> object:
         "modulo_admin_password": "testpass",
         "modulo_auth_rate_limit_enabled": False,
         "redis_url": "",
+        "modulo_multi_org_enabled": True,
     }
     kwargs.update(overrides)
     return Settings(**kwargs)
@@ -129,7 +131,7 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
         yield session
 
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides["get_settings"] = lambda: _make_settings()
+    app.dependency_overrides[get_settings] = lambda: _make_settings()
     yield TestClient(app), session
     app.dependency_overrides.clear()
 

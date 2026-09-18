@@ -116,6 +116,22 @@ async def login_context(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
+    if settings.modulo_multi_org_enabled is False:
+        # ADR 005: single-org invariant. Always report single-org regardless
+        # of how many orgs exist in the DB. The login-context response drives
+        # the frontend's org-selection flow — returning multi_org=false means
+        # the frontend skips the org picker and goes straight to login.
+        if len(orgs) == 1:
+            org = orgs[0]
+            return LoginContextResponse(
+                multi_org=False,
+                org=OrgInfo(slug=org.slug, name=org.name),
+            )
+        # Zero or multiple login-active orgs: still report single-org.
+        # The login handler (auth.py) rejects org_slug when multi-org is
+        # disabled, so the session always binds to memberships[0].
+        return LoginContextResponse(multi_org=False, org=None)
+
     if len(orgs) == 1:
         org = orgs[0]
         return LoginContextResponse(
@@ -168,6 +184,13 @@ async def org_login(
     """
     try:
         async with session.begin():
+            # ADR 005: when multi-org is disabled, the org-login endpoint is
+            # effectively unavailable — the frontend never navigates to
+            # /login/:slug (login-context reports single-org), and any direct
+            # attempt gets a uniform 404.
+            if not settings.modulo_multi_org_enabled:
+                raise _GENERIC_404
+
             org = await get_login_active_org_by_slug(session, slug)
             if org is None:
                 raise _GENERIC_404
