@@ -1022,7 +1022,7 @@ def test_iter_executable_python_lines_skips_bracket_continuations():
         "    },",
     ]
     # The collection was opened before this added block (depth 1).
-    assert list(mod._iter_executable_python_lines(lines, initial_depth=1)) == []
+    assert not list(mod._iter_executable_python_lines(lines, initial_depth=1))
 
 
 def test_iter_executable_python_lines_counts_statement_starts():
