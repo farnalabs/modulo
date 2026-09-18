@@ -41,6 +41,7 @@ from modulo.db.crud.organisation import (
 )
 from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, ORPHAN_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org
+from modulo.settings import Settings, get_settings
 
 _CODE_SYSTEM_ORG_MANAGE = "system.org.manage"
 _CODE_ADMIN_ORGS_ADMIN_SET = "admin_orgs.admin_set_org_license"
@@ -190,8 +191,14 @@ class CreateOrgResponse(BaseModel):
 async def admin_create_org(
     req: CreateOrgRequest,
     current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_ORG_MANAGE)],
+    settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgResponse:
+    if not settings.modulo_multi_org_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Multi-org is not enabled for this deployment",
+        )
     try:
         async with session.begin():
             existing = await get_organisation_by_slug(session, req.slug)

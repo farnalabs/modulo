@@ -490,7 +490,7 @@ async def login(
             req.password,
             limiter=limiter,
             ip=ip,
-            org_slug=req.org_slug,
+            org_slug=req.org_slug if settings.modulo_multi_org_enabled else None,
         )
     except IntegrityError:
         _log.exception("auth.login")

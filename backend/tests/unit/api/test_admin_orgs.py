@@ -13,6 +13,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.models.organisation import Organisation
+from modulo.settings import get_settings
 
 ORG_ID = uuid4()
 USER_ID = uuid4()
@@ -92,6 +93,16 @@ def client_system_admin(mock_session):
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: SYSTEM_ADMIN_PRINCIPAL
+    # Enable multi-org for tests that exercise org creation.
+    from modulo.settings import Settings
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key="a" * 32,
+        fernet_key="a" * 32,
+        modulo_multi_org_enabled=True,
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url="http://test")
     yield client
