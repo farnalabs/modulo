@@ -1,0 +1,20 @@
+﻿rules:
+  - id: fastapi-dependency-override-vs-patch
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @patch("$MODULE.get_settings", ...)
+          - pattern: |
+              @patch("$MODULE.get_config", ...)
+          - pattern: |
+              patch("$MODULE.get_settings", ...)
+          - pattern: |
+              patch("$MODULE.get_config", ...)
+      - pattern-not-inside: |
+          class $TESTCLASS:
+            ...
+    message: "Using `@patch` to mock FastAPI dependencies — use `app.dependency_overrides[Dependency] = lambda: value` instead. Module-level patches have no effect when FastAPI resolves through `dependency_overrides`."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/tests/**"]

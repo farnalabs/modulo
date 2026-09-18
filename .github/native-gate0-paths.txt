@@ -1,0 +1,17 @@
+# Gate 0 pull_request paths filter (FAR-673, ADR 031 Decision 10).
+#
+# ALWAYS-RUN patterns: a change to any of these paths MUST trigger the
+# native Gate 0 workflow (.github/workflows/native-gate0.yml) even when
+# the PR looks otherwise launcher-unrelated, because the native bundle
+# boots these modules directly and a regression here is invisible to the
+# Compose-only CI until a release smoke fails.
+#
+# Extend this list when a new module joins the launcher's direct boot
+# path; backend/tests/unit/tools/test_gate0_paths.py asserts the critical
+# modules stay covered, so removing one of the patterns below without a
+# matching test update fails the unit suite.
+backend/src/modulo/db/**
+backend/src/modulo/settings.py
+backend/src/modulo/db/url_utils.py
+backend/src/modulo/api/main.py
+deploy/fly/**

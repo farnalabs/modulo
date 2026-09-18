@@ -1,0 +1,282 @@
+"""Org-scoped CRUD for Schema and SchemaVersion.
+
+Deletion protection: delete_schema refuses if any Agent, SnapshotSchemaPin,
+or LibraryPrimitive references this schema, or if the schema is a system schema.
+Use force=True to skip all checks.
+All functions require RLS org context to be set by the caller.
+"""
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from fastapi import HTTPException
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.db.crud.base import PageResult, apply_updates
+from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.models.agent import Agent
+from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.schema import Schema, SchemaVersion
+from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
+
+
+class SchemaDeletionProtectedError(Exception):
+    """Raised when a Schema cannot be deleted because references exist."""
+
+    def __init__(self, schema_id: uuid.UUID, detail: str | None = None) -> None:
+        if detail is None:
+            detail = (
+                f"Schema {schema_id} cannot be deleted: one or more Agents reference it. "
+                "Reassign or delete those Agents first."
+            )
+        super().__init__(detail)
+        self.schema_id = schema_id
+
+
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
+
+
+async def create_schema(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    name: str,
+    account_id: uuid.UUID,
+    description: str | None = None,
+    abstract_name: str | None = None,
+) -> Schema:
+    schema = Schema(
+        organisation_id=org_id,
+        name=name,
+        account_id=account_id,
+        description=description,
+        abstract_name=abstract_name,
+    )
+    session.add(schema)
+    await session.flush()
+    return schema
+
+
+async def get_schema(session: AsyncSession, schema_id: uuid.UUID) -> Schema | None:
+    result = await session.execute(select(Schema).where(Schema.id == schema_id))
+    return result.scalar_one_or_none()
+
+
+async def list_schemas(
+    session: AsyncSession,
+    *,
+    cursor: str | None = None,
+    limit: int = 20,
+    folder_id: uuid.UUID | None = None,
+) -> PageResult[Schema]:
+    q = select(Schema)
+    count_q = select(func.count()).select_from(Schema)
+    if folder_id is not None:
+        q = q.where(Schema.folder_id == folder_id)
+        count_q = count_q.where(Schema.folder_id == folder_id)
+
+    try:
+        total = (await session.execute(count_q)).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=1, page_size=limit)
+
+    if cursor is not None:
+        paginator = CursorPaginator()
+        cp = await paginator.paginate(
+            session,
+            q,
+            cursor=cursor,
+            limit=limit,
+            model=Schema,
+            compute_total=False,
+        )
+        return PageResult(
+            items=cp.items,
+            total=total,
+            page=1,
+            page_size=limit,
+            next_cursor=cp.next_cursor,
+            has_more=cp.has_more,
+        )
+
+    items = list((await session.execute(q.order_by(Schema.created_at.desc()).limit(limit + 1))).scalars())
+    has_more = len(items) > limit
+    items = items[:limit]
+    return PageResult(items=items, total=total, page=1, page_size=limit, has_more=has_more)
+
+
+async def update_schema(
+    session: AsyncSession,
+    schema_id: uuid.UUID,
+    updates: dict[str, Any],
+) -> Schema | None:
+    schema = await get_schema(session, schema_id)
+    if schema is None:
+        return None
+    apply_updates(schema, updates)
+    await session.flush()
+    return schema
+
+
+async def deprecate_schema(session: AsyncSession, schema_id: uuid.UUID) -> Schema | None:
+    """Mark a schema as deprecated."""
+    schema = await get_schema(session, schema_id)
+    if schema is None:
+        return None
+    schema.deprecated = True
+    schema.deprecated_at = datetime.now(UTC)
+    await session.flush()
+    return schema
+
+
+async def delete_schema(
+    session: AsyncSession,
+    schema_id: uuid.UUID,
+    force: bool = False,
+) -> bool:
+    """Delete a schema.
+
+    Raises SchemaDeletionProtectedError if references exist (Agents,
+    SnapshotSchemaPins, LibraryPrimitives) unless force=True.
+    """
+    schema = await get_schema(session, schema_id)
+    if schema is None:
+        return False
+
+    if not force:
+        if schema.system:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot delete system schema. System schemas are undeletable.",
+            )
+
+        refs: list[str] = []
+
+        agent_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Agent)
+                .where(
+                    or_(
+                        Agent.input_schema_id == schema_id,
+                        Agent.output_schema_id == schema_id,
+                    )
+                )
+            )
+        ).scalar_one()
+        if agent_count:
+            refs.append("Agents")
+
+        snap_pin_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(SnapshotSchemaPin)
+                .where(SnapshotSchemaPin.schema_id == schema_id)
+                .limit(1)
+            )
+        ).scalar_one()
+        if snap_pin_count:
+            refs.append("PipelineSnapshots (snapshot_schema_pins)")
+
+        library_refs = (
+            await session.execute(
+                select(func.count())
+                .select_from(LibraryPrimitive)
+                .where(
+                    LibraryPrimitive.primitive_type == "schema",
+                    LibraryPrimitive.source == "local",
+                )
+            )
+        ).scalar_one()
+        if library_refs:
+            refs.append("LibraryPrimitives (local schema entries)")
+
+        if refs:
+            detail = (
+                f"Schema {schema_id} cannot be deleted: references exist in "
+                f"{' and '.join(refs)}. "
+                "Remove those references or use force=true to delete unconditionally."
+            )
+            raise SchemaDeletionProtectedError(schema_id, detail=detail)
+    await session.delete(schema)
+    await session.flush()
+    return True
+
+
+# ---------------------------------------------------------------------------
+# SchemaVersion
+# ---------------------------------------------------------------------------
+
+
+async def create_schema_version(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    schema_id: uuid.UUID,
+    version: str,
+    version_number: int,
+    definition_json: dict[str, Any],
+    account_id: uuid.UUID,
+    published: bool = False,
+) -> SchemaVersion:
+    sv = SchemaVersion(
+        organisation_id=org_id,
+        schema_id=schema_id,
+        version=version,
+        version_number=version_number,
+        definition_json=definition_json,
+        account_id=account_id,
+        published=published,
+    )
+    session.add(sv)
+    await session.flush()
+    return sv
+
+
+async def get_schema_version(
+    session: AsyncSession,
+    schema_id: uuid.UUID,
+    version: str,
+) -> SchemaVersion | None:
+    result = await session.execute(
+        select(SchemaVersion).where(
+            SchemaVersion.schema_id == schema_id,
+            SchemaVersion.version == version,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_schema_versions(
+    session: AsyncSession,
+    schema_id: uuid.UUID,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+) -> PageResult[SchemaVersion]:
+    offset = (page - 1) * page_size
+    try:
+        total = (
+            await session.execute(
+                select(func.count()).select_from(SchemaVersion).where(SchemaVersion.schema_id == schema_id)
+            )
+        ).scalar_one()
+        items = list(
+            (
+                await session.execute(
+                    select(SchemaVersion)
+                    .where(SchemaVersion.schema_id == schema_id)
+                    .order_by(SchemaVersion.version_number.desc())
+                    .offset(offset)
+                    .limit(page_size)
+                )
+            ).scalars()
+        )
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
+    return PageResult(items=items, total=total, page=page, page_size=page_size)

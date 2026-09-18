@@ -1,0 +1,121 @@
+# Modulo — Caddy v2 Reverse Proxy Configuration
+# =============================================================================
+# Replace placeholders before use:
+#   {DOMAIN}         — your public domain (e.g. modulo.example.com)
+#   {ADMIN_EMAIL}    — Let's Encrypt registration contact
+#   {BACKEND_HOST}   — backend upstream (e.g. localhost:8000 or backend:8000)
+#   {FRONTEND_HOST}  — frontend upstream (e.g. localhost:5173 or frontend:5173)
+# =============================================================================
+# Environment variable substitution is supported — use {$ENV_VAR} syntax.
+# See README.md for complete usage guide.
+# =============================================================================
+
+{$DOMAIN:modulo.example.com} {
+    # -------------------------------------------------------------------------
+    # TLS / Automatic HTTPS via Let's Encrypt
+    # -------------------------------------------------------------------------
+    tls {$ADMIN_EMAIL:admin@example.com}
+
+    # -------------------------------------------------------------------------
+    # Security Headers
+    # -------------------------------------------------------------------------
+    header {
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Frame-Options                       "DENY"
+        X-Content-Type-Options                "nosniff"
+        Referrer-Policy                       "strict-origin-when-cross-origin"
+        Permissions-Policy                    "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+
+        -Server
+    }
+
+    # -------------------------------------------------------------------------
+    # Structured Request Logging (JSON)
+    # -------------------------------------------------------------------------
+    log {
+        output file {$LOG_FILE:/var/log/caddy/modulo.access.log} {
+            roll_size 100mb
+            roll_keep 7
+            roll_keep_for 720h
+        }
+        format json
+    }
+
+    # -------------------------------------------------------------------------
+    # Health & Metrics — no rate limiting, minimal logging
+    # -------------------------------------------------------------------------
+    @health {
+        path /healthz* /metrics
+    }
+    handle @health {
+        reverse_proxy {$BACKEND_HOST:localhost:8000} {
+            header_up X-Real-IP       {http.request.remote.host}
+            header_up X-Forwarded-For {http.request.remote.host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # -------------------------------------------------------------------------
+    # API — REST backend
+    # -------------------------------------------------------------------------
+    @api {
+        path /api/*
+    }
+    handle @api {
+        # Rate Limiting (requires Caddy v2.7+)
+        rate_limit {
+            zone api {
+                key {http.request.remote.host}
+                events 100
+                window 1m
+            }
+        }
+        reverse_proxy {$BACKEND_HOST:localhost:8000} {
+            header_up X-Real-IP       {http.request.remote.host}
+            header_up X-Forwarded-For {http.request.remote.host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # -------------------------------------------------------------------------
+    # MCP SSE Endpoint — server-sent events (no response buffering)
+    # -------------------------------------------------------------------------
+    @mcp {
+        path /mcp*
+    }
+    handle @mcp {
+        reverse_proxy {$BACKEND_HOST:localhost:8000} {
+            flush_interval -1
+            header_up X-Real-IP       {http.request.remote.host}
+            header_up X-Forwarded-For {http.request.remote.host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # -------------------------------------------------------------------------
+    # WebSocket — run event streaming (/api/v1/runs/{run_id}/ws)
+    # and legacy /ws prefix
+    # -------------------------------------------------------------------------
+    @ws {
+        path /ws* /api/v1/runs/*/ws
+    }
+    handle @ws {
+        reverse_proxy {$BACKEND_HOST:localhost:8000} {
+            header_up X-Real-IP       {http.request.remote.host}
+            header_up X-Forwarded-For {http.request.remote.host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # -------------------------------------------------------------------------
+    # Frontend — Vue.js SPA (Vite dev server or built nginx)
+    # -------------------------------------------------------------------------
+    handle {
+        reverse_proxy {$FRONTEND_HOST:localhost:5173} {
+            header_up X-Real-IP       {http.request.remote.host}
+            header_up X-Forwarded-For {http.request.remote.host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+}

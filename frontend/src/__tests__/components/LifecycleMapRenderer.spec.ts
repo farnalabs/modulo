@@ -1,0 +1,369 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
+import { createI18n } from 'vue-i18n'
+import type { LifecycleMap, LifecycleMapStage, LifecycleMapTransition } from '../../stores/lifecycleMaps'
+import type { JourneySummary } from '../../types/lifecycleMap'
+
+// Heavy third-party widget: mock @vue-flow/core as a stub that renders the
+// component's #node-stage slot for each node so the stage-node template is
+// exercised without pulling the real flow renderer into jsdom.
+vi.mock('@vue-flow/core', () => ({
+  MarkerType: { ArrowClosed: 'arrowclosed' },
+  VueFlow: {
+    name: 'VueFlowStub',
+    props: ['nodes', 'edges', 'defaultEdgeOptions', 'nodesDraggable', 'nodesConnectable', 'edgesUpdatable'],
+    template: `
+      <div class="vueflow-stub">
+        <template v-for="n in nodes" :key="n.id">
+          <slot name="node-stage" :id="n.id" :data="n.data" />
+        </template>
+      </div>`,
+  },
+}))
+vi.mock('@vue-flow/background', () => ({
+  Background: { name: 'BackgroundStub', template: '<div class="bg-stub" />' },
+}))
+vi.mock('@vue-flow/controls', () => ({
+  Controls: { name: 'ControlsStub', template: '<div class="controls-stub" />' },
+}))
+vi.mock('../../components/lifecycle-map/JourneyCard.vue', () => ({
+  default: {
+    name: 'JourneyCardStub',
+    props: ['journey'],
+    emits: ['open'],
+    template: '<button type="button" class="journey-card-stub" @click="$emit(\'open\')">{{ journey.ref }}</button>',
+  },
+}))
+
+import LifecycleMapRenderer, { MAX_CARDS_PER_NODE, NODE_NUDGE_STEP } from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
+
+const i18n = createI18n({
+  legacy: false,
+  locale: 'en-US',
+  messages: {
+    'en-US': {
+      views: {
+        LifecycleMapView: {
+          journey: {
+            more_on_node: '+{count} more',
+            more_on_node_title: '{count} older work items hidden',
+          },
+        },
+      },
+    },
+  },
+})
+
+function makeStage(overrides: Partial<LifecycleMapStage> = {}): LifecycleMapStage {
+  return {
+    id: 'stage-1',
+    name: 'Ingest',
+    description: 'Bring data in',
+    type: 'modulo',
+    owner_badge: 'Duncan',
+    graduated: false,
+    pipeline_id: 'pipe-1',
+    external_url: null,
+    x: 100,
+    y: 200,
+    ...overrides,
+  }
+}
+
+function makeMap(overrides: { stages?: LifecycleMapStage[]; transitions?: LifecycleMapTransition[] } = {}): LifecycleMap {
+  return {
+    id: 'map-1',
+    name: 'Delivery Map',
+    description: null,
+    owner: null,
+    owner_team_id: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    stages: [makeStage()],
+    transitions: [],
+    versions: [],
+    current_version: 1,
+    ...overrides,
+  }
+}
+
+function makeJourney(overrides: Partial<JourneySummary> = {}): JourneySummary {
+  return {
+    kind: 'pipeline',
+    ref: 'nightly-etl',
+    canonical_work_item_id: 'cwi-1',
+    current_stage: { map_id: 'map-1', version: 1, stage_id: 'stage-1' } as JourneySummary['current_stage'],
+    status: 'complete',
+    provenance: null,
+    run_count: 3,
+    latest_run_id: null,
+    updated_at: '2026-01-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+interface RendererProps {
+  mapData: LifecycleMap | null
+  journeys?: JourneySummary[]
+  onModuloStageClick?: (stage: LifecycleMapStage) => void
+  onExternalStageClick?: (stage: LifecycleMapStage) => void
+  savedPositions?: Record<string, { x: number; y: number }>
+}
+
+function mountRenderer(props: RendererProps) {
+  return mount(LifecycleMapRenderer, { props, global: { plugins: [i18n] } })
+}
+
+describe('LifecycleMapRenderer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('shows the no-data state when mapData is null', () => {
+    const wrapper = mountRenderer({ mapData: null })
+    expect(wrapper.text()).toContain('No map data provided.')
+    expect(wrapper.find('.vueflow-stub').exists()).toBe(false)
+  })
+
+  it('builds flow nodes from stages preserving explicit positions', () => {
+    const wrapper = mountRenderer({ mapData: makeMap() })
+    const flow = wrapper.findComponent({ name: 'VueFlowStub' })
+    const nodes = flow.props('nodes') as Array<{ id: string; position: { x: number; y: number }; data: Record<string, unknown> }>
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0].id).toBe('stage-1')
+    expect(nodes[0].position).toEqual({ x: 100, y: 200 })
+    expect(nodes[0].data).toMatchObject({
+      stageId: 'stage-1',
+      label: 'Ingest',
+      description: 'Bring data in',
+      type: 'modulo',
+      ownerBadge: 'Duncan',
+      graduated: false,
+      pipelineId: 'pipe-1',
+    })
+  })
+
+  it('auto-lays out stages that have no explicit position', () => {
+    const wrapper = mountRenderer({
+      mapData: makeMap({ stages: [makeStage({ id: 's1', x: null, y: null }), makeStage({ id: 's2', name: 'Review', x: null, y: null })] }),
+    })
+    const flow = wrapper.findComponent({ name: 'VueFlowStub' })
+    const nodes = flow.props('nodes') as Array<{ position: { x: number; y: number } }>
+    expect(nodes.every(n => Number.isFinite(n.position.x) && Number.isFinite(n.position.y))).toBe(true)
+  })
+
+  it('maps transitions to edges with trigger labels', () => {
+    const transitions: LifecycleMapTransition[] = [
+      { id: 't1', source_stage_id: 'stage-1', target_stage_id: 'stage-2', trigger_type: 'pipeline_completed', description: 'When ingest finishes' },
+    ]
+    const wrapper = mountRenderer({
+      mapData: makeMap({ stages: [makeStage(), makeStage({ id: 'stage-2', name: 'Review' })], transitions }),
+    })
+    const flow = wrapper.findComponent({ name: 'VueFlowStub' })
+    const edges = flow.props('edges') as Array<Record<string, unknown>>
+    expect(edges).toHaveLength(1)
+    expect(edges[0]).toMatchObject({ id: 't1', source: 'stage-1', target: 'stage-2', label: 'pipeline_completed', title: 'When ingest finishes' })
+  })
+
+  it('renders stage nodes with graduated and planned badges', async () => {
+    const wrapper = mountRenderer({
+      mapData: makeMap({
+        stages: [
+          makeStage({ graduated: true }),
+          makeStage({ id: 'stage-2', name: 'Planned Stage', type: 'placeholder', description: null, owner_badge: null }),
+        ],
+      }),
+    })
+    await nextTick()
+    const text = wrapper.text()
+    expect(text).toContain('Ingest')
+    expect(text).toContain('Graduated')
+    expect(text).toContain('Planned Stage')
+    expect(text).toContain('Planned')
+    expect(text).toContain('Bring data in')
+    expect(text).toContain('Duncan')
+  })
+
+  it('calls onModuloStageClick for a modulo stage and onExternalStageClick for an external stage', async () => {
+    const onModulo = vi.fn()
+    const onExternal = vi.fn()
+    const wrapper = mountRenderer({
+      mapData: makeMap({
+        stages: [makeStage(), makeStage({ id: 'stage-2', name: 'Vendor', type: 'external', pipeline_id: null, external_url: 'https://x' })],
+      }),
+      onModuloStageClick: onModulo,
+      onExternalStageClick: onExternal,
+    })
+    const stages = wrapper.findAll('.stage-node')
+    expect(stages).toHaveLength(2)
+    await stages[0].trigger('click')
+    expect(onModulo).toHaveBeenCalledTimes(1)
+    expect(onModulo.mock.calls[0][0].id).toBe('stage-1')
+    await stages[1].trigger('click')
+    expect(onExternal).toHaveBeenCalledTimes(1)
+    expect(onExternal.mock.calls[0][0].id).toBe('stage-2')
+  })
+
+  it('invokes the click handler via keyboard enter and space', async () => {
+    const onModulo = vi.fn()
+    const wrapper = mountRenderer({ mapData: makeMap(), onModuloStageClick: onModulo })
+    const stage = wrapper.find('.stage-node')
+    await stage.trigger('keydown.enter')
+    await stage.trigger('keydown.space')
+    expect(onModulo).toHaveBeenCalledTimes(2)
+  })
+
+  it('does nothing on click for manual or placeholder stages', async () => {
+    const onModulo = vi.fn()
+    const onExternal = vi.fn()
+    const wrapper = mountRenderer({
+      mapData: makeMap({ stages: [makeStage({ type: 'manual', pipeline_id: null })] }),
+      onModuloStageClick: onModulo,
+      onExternalStageClick: onExternal,
+    })
+    await wrapper.find('.stage-node').trigger('click')
+    expect(onModulo).not.toHaveBeenCalled()
+    expect(onExternal).not.toHaveBeenCalled()
+  })
+
+  it('groups journeys onto their current stage and emits journey-open', async () => {
+    const journey = makeJourney()
+    const wrapper = mountRenderer({
+      mapData: makeMap({
+        stages: [makeStage(), makeStage({ id: 'stage-2', name: 'Review' })],
+      }),
+      journeys: [journey, makeJourney({ ref: 'other-flow', current_stage: { map_id: 'map-1', version: 1, stage_id: 'stage-2' } as JourneySummary['current_stage'] })],
+    })
+    const cards = wrapper.findAll('.journey-card-stub')
+    expect(cards).toHaveLength(2)
+    expect(cards[0].text()).toBe('nightly-etl')
+    await cards[0].trigger('click')
+    expect(wrapper.emitted('journey-open')![0]).toEqual([journey])
+  })
+
+  it('ignores journeys without a current stage', () => {
+    const wrapper = mountRenderer({
+      mapData: makeMap(),
+      journeys: [makeJourney({ current_stage: null })],
+    })
+    expect(wrapper.findAll('.journey-card-stub')).toHaveLength(0)
+  })
+
+  it('exports the per-node card cap constant', () => {
+    expect(MAX_CARDS_PER_NODE).toBe(5)
+  })
+
+  it('caps cards per node at MAX_CARDS_PER_NODE, newest-moved first, with a +N more chip', async () => {
+    const journeys = Array.from({ length: 8 }, (_, i) =>
+      makeJourney({ ref: `flow-${i}`, updated_at: `2026-01-01T00:0${i}:00Z` }),
+    )
+    const wrapper = mountRenderer({ mapData: makeMap(), journeys })
+
+    const cards = wrapper.findAll('.journey-card-stub')
+    expect(cards).toHaveLength(MAX_CARDS_PER_NODE)
+    expect(cards[0].text()).toBe('flow-7')
+    expect(cards[4].text()).toBe('flow-3')
+
+    const chip = wrapper.find('[data-testid="journey-overflow-chip"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toContain('+3 more')
+    // The chip is muted and non-interactive — a span, not a button.
+    expect(chip.element.tagName).toBe('SPAN')
+  })
+
+  it('renders no overflow chip when the node has at most MAX_CARDS_PER_NODE journeys', async () => {
+    const journeys = Array.from({ length: MAX_CARDS_PER_NODE }, (_, i) =>
+      makeJourney({ ref: `flow-${i}`, updated_at: `2026-01-01T00:0${i}:00Z` }),
+    )
+    const wrapper = mountRenderer({ mapData: makeMap(), journeys })
+
+    expect(wrapper.findAll('.journey-card-stub')).toHaveLength(MAX_CARDS_PER_NODE)
+    expect(wrapper.find('[data-testid="journey-overflow-chip"]').exists()).toBe(false)
+  })
+
+  it('caps each node independently', async () => {
+    const journeys = [
+      ...Array.from({ length: 7 }, (_, i) =>
+        makeJourney({ ref: `a-${i}`, updated_at: `2026-01-01T00:0${i}:00Z` }),
+      ),
+      makeJourney({ ref: 'b-0', current_stage: { map_id: 'map-1', version: 1, stage_id: 'stage-2' } as JourneySummary['current_stage'] }),
+    ]
+    const wrapper = mountRenderer({
+      mapData: makeMap({ stages: [makeStage(), makeStage({ id: 'stage-2', name: 'Review' })] }),
+      journeys,
+    })
+
+    const cards = wrapper.findAll('.journey-card-stub')
+    expect(cards).toHaveLength(MAX_CARDS_PER_NODE + 1)
+    expect(wrapper.find('[data-testid="journey-overflow-chip"]').text()).toContain('+2 more')
+  })
+
+  it('enables node dragging on the VueFlow instance', () => {
+    const wrapper = mountRenderer({ mapData: makeMap() })
+    const flow = wrapper.findComponent({ name: 'VueFlowStub' })
+    expect(flow.props('nodesDraggable')).toBe(true)
+  })
+
+  it('nudges the focused node position with arrow keys (keyboard equivalent for drag, A11Y-3)', async () => {
+    const wrapper = mountRenderer({ mapData: makeMap() })
+    const stage = wrapper.find('.stage-node')
+    await stage.trigger('keydown', { key: 'ArrowRight' })
+    await nextTick()
+    let nodes = (wrapper.findComponent({ name: 'VueFlowStub' }).props('nodes') as Array<{ id: string; position: { x: number; y: number } }>)
+    expect(nodes.find((n) => n.id === 'stage-1')!.position).toEqual({ x: 100 + NODE_NUDGE_STEP, y: 200 })
+
+    await wrapper.find('.stage-node').trigger('keydown', { key: 'ArrowUp' })
+    await nextTick()
+    nodes = (wrapper.findComponent({ name: 'VueFlowStub' }).props('nodes') as Array<{ id: string; position: { x: number; y: number } }>)
+    expect(nodes.find((n) => n.id === 'stage-1')!.position).toEqual({ x: 100 + NODE_NUDGE_STEP, y: 200 - NODE_NUDGE_STEP })
+
+    await wrapper.find('.stage-node').trigger('keydown', { key: 'ArrowLeft' })
+    await nextTick()
+    nodes = (wrapper.findComponent({ name: 'VueFlowStub' }).props('nodes') as Array<{ id: string; position: { x: number; y: number } }>)
+    expect(nodes.find((n) => n.id === 'stage-1')!.position).toEqual({ x: 100, y: 200 - NODE_NUDGE_STEP })
+
+    await wrapper.find('.stage-node').trigger('keydown', { key: 'ArrowDown' })
+    await nextTick()
+    nodes = (wrapper.findComponent({ name: 'VueFlowStub' }).props('nodes') as Array<{ id: string; position: { x: number; y: number } }>)
+    expect(nodes.find((n) => n.id === 'stage-1')!.position).toEqual({ x: 100, y: 200 })
+  })
+
+  it('emits positions-changed on keyboard nudge (FAR-829)', async () => {
+    const wrapper = mountRenderer({ mapData: makeMap() })
+    await wrapper.find('.stage-node').trigger('keydown', { key: 'ArrowRight' })
+    await nextTick()
+    expect(wrapper.emitted('positions-changed')).toBeTruthy()
+    const emitted = wrapper.emitted('positions-changed')!
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0][0]).toEqual({ 'stage-1': { x: 100 + NODE_NUDGE_STEP, y: 200 } })
+  })
+
+  it('uses savedPositions prop over stage x/y when available (FAR-829)', () => {
+    const wrapper = mountRenderer({
+      mapData: makeMap({ stages: [makeStage({ x: 100, y: 200 })] }),
+      savedPositions: { 'stage-1': { x: 999, y: 888 } },
+    })
+    const flow = wrapper.findComponent({ name: 'VueFlowStub' })
+    const nodes = flow.props('nodes') as Array<{ id: string; position: { x: number; y: number } }>
+    expect(nodes[0].position).toEqual({ x: 999, y: 888 })
+  })
+
+  it('applies type-specific styling classes to stage nodes', () => {
+    const wrapper = mountRenderer({
+      mapData: makeMap({
+        stages: [
+          makeStage(),
+          makeStage({ id: 's2', name: 'Ext', type: 'external', pipeline_id: null }),
+          makeStage({ id: 's3', name: 'Manual', type: 'manual', pipeline_id: null }),
+          makeStage({ id: 's4', name: 'Ph', type: 'placeholder', pipeline_id: null }),
+        ],
+      }),
+    })
+    const stages = wrapper.findAll('.stage-node')
+    expect(stages[0].classes().join(' ')).toContain('border-blue-500')
+    expect(stages[1].classes().join(' ')).toContain('border-emerald-500')
+    expect(stages[2].classes().join(' ')).toContain('border-amber-500')
+    expect(stages[3].classes().join(' ')).toContain('opacity-60')
+  })
+})

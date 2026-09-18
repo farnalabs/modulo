@@ -1,0 +1,29 @@
+rules:
+  - id: asyncio-waitfor-wait-unshielded
+    patterns:
+      - pattern: |
+          asyncio.wait_for($OBJ.wait(), ...)
+      - pattern-not: |
+          asyncio.wait_for(asyncio.shield(...), ...)
+      # Known-safe object names in this codebase. asyncio.Event.wait(),
+      # asyncio.subprocess.Process.wait(), and Lock primitives create a fresh
+      # future per call, so a wait_for timeout cannot kill a long-lived
+      # internal task (PR #934 sweep). Every OTHER $OBJ.wait() is flagged: a
+      # timeout cancels the awaited task, and if that task is a long-lived SDK
+      # events loop created once (E2B RunHandle), every later wait() re-awaits
+      # a dead task -> NodeCancelledError -> every run fails (PR #933).
+      - pattern-not: |
+          asyncio.wait_for(proc.wait(), ...)
+      - pattern-not: |
+          asyncio.wait_for(event.wait(), ...)
+      - pattern-not: |
+          asyncio.wait_for(ev.wait(), ...)
+      - pattern-not: |
+          asyncio.wait_for(resume_ev.wait(), ...)
+      - pattern-not: |
+          asyncio.wait_for(first_progress.wait(), ...)
+    message: "asyncio.wait_for($OBJ.wait(), ...) on a long-lived SDK/async object can cancel its internal task on timeout, killing every later wait() (NodeCancelledError -> every run fails; PR #933). If $OBJ is a long-lived handle whose wait() awaits a persistent events task, shield it: asyncio.wait_for(asyncio.shield($OBJ.wait()), ...). Safe when $OBJ.wait() creates a fresh future per call (asyncio.Event, subprocess.Process, Lock) - add those names to the pattern-not list if new safe uses appear."
+    languages: [python]
+    severity: WARNING
+    paths:
+      include: ["**/backend/src/**"]

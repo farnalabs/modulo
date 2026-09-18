@@ -1,0 +1,12 @@
+﻿rules:
+  - id: pytest-raises-too-broad
+    patterns:
+      - pattern: |
+          pytest.raises(Exception)
+      - pattern-not: |
+          pytest.raises(Exception, match=$X)
+    message: "`pytest.raises(Exception)` is too broad — it passes for unexpected exceptions like SystemExit, TypeError, etc. Narrow to the specific exception type the code is expected to raise."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/tests/**"]

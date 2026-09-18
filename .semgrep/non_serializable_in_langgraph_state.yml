@@ -1,0 +1,14 @@
+rules:
+  - id: non-serializable-in-langgraph-state
+    patterns:
+      - pattern: |
+          initial_state[$KEY] = $VALUE
+      - metavariable-pattern:
+          metavariable: $VALUE
+          patterns:
+            - pattern-not-regex: '^(True|False|None|-?\d+(\.\d+)?|"[^"]*"|\x27[^\x27]*\x27|\[[\s\S]*\]|\{[\s\S]*\})$'
+    message: "initial_state[$KEY] = $VALUE seeds a non-literal into LangGraph state. Checkpoints are msgpack-serialized (JsonPlusSerializer.dumps_typed in modulo_saver.py); a live object (e.g. RunEventBroker) raises 'TypeError: Type is not msgpack serializable' and breaks every checkpoint write (outage PR #895). Verify $VALUE is a primitive or collection of primitives (str, int, float, bool, None, list, dict). Identifiers that hold primitives (e.g. run_id) are flagged for manual verification - this is a heuristic guardrail, not a type checker."
+    languages: [python]
+    severity: WARNING
+    paths:
+      include: ["**/backend/src/**"]

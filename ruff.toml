@@ -1,0 +1,286 @@
+line-length = 120
+target-version = "py312"
+exclude = ["*.feature", "node_modules", ".git", "__pycache__", "*.egg-info", ".semgrep/tests/"]
+
+[lint]
+select = [
+    "E", "W",
+    "F",
+    "I",
+    "N",
+    "UP",
+    "B",
+    "S",
+    "ASYNC",
+    "RUF",
+    "SIM",
+    "C4",
+    "ISC",
+    "T20",
+    "RET",
+    "PYI",
+    "FURB",
+    "PIE",
+    "RSE",
+    # Defensive gate-strengthening: every rule below was verified to have zero
+    # current violations (run `ruff check . --extend-select <codes> --statistics`),
+    # so enabling them tightens the lint gate against future regressions without
+    # touching existing code.
+    "G001", "G002", "G003", "G004", "G201",
+    "PT020", "PT021",
+    "Q000", "Q003",
+    "ICN",
+    "FA",
+    "NPY",
+    "RUF100",
+    # Second wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.15.20: run `ruff check . --extend-select <codes>
+    # --statistics`). Mirrors the backend/pyproject.toml gate.
+    "PLC3002", "PLR0206", "PLR1711", "PLR1722", "PLR5501",
+    "PLW0120", "PLW0127", "PLW0131", "PLW0211", "PLW0642",
+    "PLW2901",
+    "PYI025",
+    "UP032",
+    # Third wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.16.5: `ruff check . --extend-select <codes>
+    # --statistics`). Mirrors the repo-root ruff.toml gate. Combines the two
+    # independent third-wave additions from this branch and origin/main.
+    "B017",
+    "B019",
+    "B025",
+    "B905",
+    "SIM105",
+    "SIM107",
+    "SIM108",
+    "SIM115",
+    "SIM118",
+    "SIM201",
+    "SIM202",
+    "SIM210",
+    "SIM211",
+    "SIM212",
+    "SIM220",
+    "SIM221",
+    "SIM222",
+    "SIM223",
+    "SIM300",
+    "SIM910",
+    "C401",
+    "C408",
+    "C409",
+    "C410",
+    "C411",
+    "C413",
+    "C414",
+    "C415",
+    "C416",
+    "C417",
+    "C418",
+    "C419",
+    "C420",
+    "PGH",
+    "RUF005",
+    "RUF010",
+    "RUF015",
+    "RUF016",
+    "RUF018",
+    "RUF019",
+    "RUF022",
+    "RUF026",
+    "RUF051",
+    "TRY400",
+    "RSE102",
+    "PLW0406",
+    "PLR0124",
+    "PLR1714",
+    "PLR0133",
+    "PLW1508",
+    "PLC0414",
+    "PLC0205",
+    "PLR1730",
+    "PLR1733",
+    "PLR1736",
+    "PLC2401",
+    # PERF group: matches backend/pyproject.toml full PERF prefix to close drift.
+    # Verified zero current violations with ruff==0.16.5: `ruff check . --select PERF --statistics`.
+    "PERF",
+    # Fourth wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.16.5: `ruff check . --extend-select <codes>
+    # --statistics`). Mirrors the backend/pyproject.toml gate.
+    "PLC0105",
+    "PLC0131",
+    "PLC0206",
+    "PLC2403",
+    "PLR1716",
+    "PLW0129",
+    "PLW0133",
+    "PLW0245",
+    "PLW0604",
+    # Fifth wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.16.5: `ruff check . --extend-select <codes>
+    # --statistics`). Mirrors the backend/pyproject.toml gate. Includes PT027
+    # (already enforced by the backend gate) to close the existing drift.
+    "PT027",
+    "YTT101", "YTT102", "YTT103",
+    "YTT201", "YTT202", "YTT203", "YTT204",
+    "YTT301", "YTT302", "YTT303",
+    "SLOT002",
+    # flake8-use-pathlib: every member of the family now has zero current call
+    # sites across the whole tree (incl. scripts/, which were migrated to match)
+    # — the PTH118/PTH120/PTH123 backlog was cleared in a scan-by-scan migration.
+    "PTH100", "PTH101", "PTH102", "PTH103", "PTH104", "PTH105", "PTH106", "PTH107",
+    "PTH108", "PTH109", "PTH110", "PTH111", "PTH112", "PTH113", "PTH114", "PTH115",
+    "PTH116", "PTH117", "PTH118", "PTH119", "PTH120", "PTH121", "PTH122", "PTH123",
+    "PTH124", "PTH201", "PTH202", "PTH203", "PTH204", "PTH205", "PTH206", "PTH207",
+    "PTH208", "PTH210", "PTH211",
+    # flake8-logging hygiene: logger must be obtained via getLogger() with
+    # __name__ (LOG001/LOG002), never the deprecated WARN constant (LOG009),
+    # never a root-logger call (LOG015).
+    "LOG001", "LOG002", "LOG009", "LOG015",
+    # Sixth wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.16.5: `ruff check . --extend-select <codes>
+    # --statistics`). Mirrors the backend/pyproject.toml gate. These families
+    # close drift and block future regressions: B007 (unused loop variable),
+    # B904 (raise without `from` — chain exceptions), RUF009/RUF012/RUF013
+    # (mutable defaults / typed-class hygiene), the TODO-comment TD family
+    # (author/link/capitalization hygiene), and FIX001 (no stray FIXME).
+    "B007", "B904",
+    "RUF009", "RUF012", "RUF013",
+    "TD004", "TD006", "TD007",
+    "FIX001",
+    # flake8-datetimez: production time handling must be timezone-aware;
+    # remaining violations are intentional naive datetime fixtures in tests/,
+    # covered by the tests/** per-file-ignore.
+    "DTZ",
+    # Seventh wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.16.5 under both this gate and the
+    # backend/pyproject.toml gate: `ruff check . --select PT023,PT026`).
+    # Mirrors the backend/pyproject.toml gate. Upon any future regression the
+    # newly-flagged decorators must be normalized rather than re-ignored.
+    "PT023",  # consistent @pytest.mark.<marker>() parentheses style
+    "PT026",  # reject useless arg-free @pytest.mark.usefixtures()
+    # Eighth wave of defensive gate-strengthening (verified zero current
+    # violations with ruff==0.16.5 under both this gate and the
+    # backend/pyproject.toml gate: `ruff check . --select PT001,PT002,PT003,
+    # PT007,PT008,PT009,PT010,PT014,PT015,PT016,PT017,PT022,PT024,PT025,PT030,
+    # PT031 --statistics`). Mirrors the backend/pyproject.toml gate. These
+    # pytest-style rules are all pass-to-enable (zero current violations across
+    # the whole tree), so enabling them tightens the test-quality gate against
+    # future regressions without touching existing tests.
+    "PT001",  # consistent @pytest.fixture() parentheses style
+    "PT002",  # no positional arguments to @pytest.fixture()/@pytest.mark.parametrize()
+    "PT003",  # @pytest.fixture(scope=...) should not be spelled with scope="function"
+    "PT007",  # @pytest.mark.parametrize() values must be a collection, not a bare dict/list
+    "PT008",  # no lambda argument to mocker.patch()
+    "PT009",  # use plain asserts rather than unittest-style assertEquals() etc.
+    "PT010",  # pytest.raises()/pytest.warns() must name at least one exception/warning
+    "PT014",  # no duplicated test cases in @pytest.mark.parametrize()
+    "PT015",  # no assert that is always False
+    "PT016",  # no pytest.fail() without a message
+    "PT017",  # no assert inside an except block
+    "PT022",  # no unused-yield fixture (use plain return instead)
+    "PT024",  # no redundant @pytest.mark.asyncio on an already-coroutine fixture
+    "PT025",  # no erroneous use_fixtures() marker on a fixture
+    "PT030",  # pytest.warns() too broad (bare Exception) — narrow to the concrete warning
+    "PT031",  # pytest.warns() with multiple statements — assert inside the block
+    # Ninth wave of defensive gate-strengthening: unlike the pass-to-enable waves
+    # above, these rules had a small existing backlog that this PR FIXED, so the
+    # gate now also locks the fixes in against future regressions (verified zero
+    # remaining violations with ruff==0.16.5 under both the backend and repo-root
+    # gates: `ruff check . --select LOG004,LOG014,PLW1510,ARG003,ARG004
+    # --statistics`). Mirrors the backend/pyproject.toml gate.
+    "LOG004",  # logger.exception() must not be used outside an exception handler
+    "LOG014",  # exc_info= must carry the real exception, not rely on ambient state
+    "PLW1510", # subprocess.run() needs an explicit `check=` argument
+    "ARG003",  # unused class-method argument
+    "ARG004",  # unused static-method argument
+    # Tenth wave of defensive gate-strengthening: pass-to-enable rules that
+    # tighten logging correctness (LOG007/G010/G101/G202), string-quote
+    # consistency (Q001/Q002) and stdlib modernization (UP033). Verified zero
+    # current violations under both the repo-root and backend gates with
+    # ruff==0.16.5: `ruff check . --select LOG007,G010,G101,G202,Q001,Q002,
+    # UP033 --statistics`. Mirrors the backend/pyproject.toml gate. (FLY002 was
+    # evaluated and dropped: the one join site feeds raw SQL text, so the S608
+    # security gate and FLY002 cannot both be satisfied there.)
+    "LOG007",  # logging.exception() must not set exc_info=False (defeats its capture)
+    "G010",    # logger.warn() is deprecated — use logger.warning()
+    "G101",    # logging `extra=` key must not clash with a LogRecord attribute
+    "G202",    # no redundant exc_info= on logging calls that pass an exception
+    "Q001",    # multiline string quote style must follow the configured inline-quotes
+    "Q002",    # docstring quote style must follow the configured inline-quotes
+    "UP033",   # @lru_cache(maxsize=None) → @functools.cache
+    # Tenth wave (backend sync): T10/TID families block future regressions
+    # (verified zero current violations with ruff==0.16.5:
+    # `ruff check . --extend-select T10,TID --statistics`).
+    "T10",     # no committed debuggers (pdb/ipdb/breakpoint)
+    "TID",     # tidy imports — absolute imports only, no out-of-package relatives
+    # Eleventh wave of defensive gate-strengthening — merged from both sides of
+    # the main/branch merge. The branch side (verified zero current violations
+    # with ruff==0.16.5 under both the repo-root and backend/pyproject.toml
+    # gates: `ruff check . --select TRY002,PLE0101,PLE2502,PLW0711,PLW0128,
+    # PLC0207,PLC0208 --statistics`) locks in TRY002/PLE0101/PLE2502/PLW0711/
+    # PLW0128/PLC0207/PLC0208 (PLC0207/PLC0208 had a tiny test-only backlog of
+    # 9 autofix sites this wave FIXED). The main side fixed a small PT006/PT013
+    # backlog (verified zero remaining with ruff==0.16.5: `ruff check . --select
+    # PT006,PT013 --statistics`).
+    "TRY002",   # raise bare Exception/BaseException — prefer the concrete class
+    "PLE0101",  # `__init__` must not return a value
+    "PLE2502",  # no bidirectional-formatting Unicode control characters
+    "PLW0711",  # except clause must guard a generator, not binary-op exceptions
+    "PLW0128",  # redeclared-assigned-name — redundant double assignment
+    "PLC0207",  # str.split('sep')[0] → split('sep', maxsplit=1)[0]
+    "PLC0208",  # iterate a tuple literal, not a set literal, in a for-loop
+    "PT006",   # @pytest.mark.parametrize() names must be a tuple, not a bare str
+    "PT013",   # no shadowing `import pytest as _pytest` when `import pytest` exists
+    # Twelfth wave of defensive gate-strengthening (a real fixed backlog, then
+    # pass-to-enable): PT011/PT012/PT019 flagged genuine pytest-style defects
+    # across the tree that the improving PR FIXED (verified zero remaining with
+    # ruff==0.16.5: `ruff check . --select PT011,PT012,PT019 --statistics`).
+    # Mirrors the backend/pyproject.toml gate. PT019 is per-file-ignored for the
+    # two FastAPI route modules that use underscore-prefixed dependency-injection
+    # binding targets, which are not pytest fixtures.
+    "PT011",   # `pytest.raises(X)` too broad — set `match` or use a more specific exception
+    "PT012",   # `pytest.raises()` block should contain a single simple statement
+    "PT019",   # underscore fixture param without value — use `@pytest.mark.usefixtures`
+]
+ignore = [
+    "S101",
+    "S105",
+    "B008",
+]
+
+[lint.per-file-ignores]
+"scripts/*" = ["T20", "E402", "E501", "S106", "S603", "S607", "S608", "RUF005", "ASYNC240"]
+"backend/scripts/*" = ["T20", "PERF", "ISC"]
+"backend/scripts/gen_seed_sql.py" = ["S608"]
+"backend/scripts/generate_remy_primer.py" = ["ASYNC240"]
+".github/scripts/*" = ["T20", "S603", "S607"]
+"deploy/*" = ["T20", "S108"]
+"tests/**" = ["S101", "S105", "S106", "S107", "S108", "S112", "S311", "B007", "B008", "DTZ"]
+"backend/tests/**" = ["S101", "S105", "S106", "S107", "S108", "S112", "S311", "B007", "B008", "PERF", "ISC", "DTZ"]
+"docs/**" = ["T20"]
+".semgrep/**" = ["F821"]
+"docs/api/examples/**" = ["T20", "S108"]
+"backend/tests/unit/runtime_provider/*" = ["E402"]
+"backend/tests/unit/secrets_backend/*" = ["E402"]
+"backend/src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
+"backend/src/modulo/api/routes/scim.py" = ["N803", "N815"]
+# PT019 mis-fires on FastAPI dependency-injection parameters (require_feature /
+# require_permission / Depends) whose underscore-prefixed names are DI binding
+# targets, not pytest fixtures. These files are route handlers, not tests.
+"backend/src/modulo/api/routes/admin_sso.py" = ["PT019"]
+"backend/src/modulo/api/routes/observability.py" = ["PT019"]
+"backend/src/modulo/api/routes/triggers.py" = ["UP017"]
+"backend/src/modulo/core/cron_scheduler.py" = ["UP017"]
+"backend/src/modulo/core/reports/scheduler.py" = ["UP017"]
+"backend/src/modulo/core/trigger_engine/polling.py" = ["UP017"]
+"backend/src/modulo/api/mcp_server.py" = ["RET503"]
+"backend/src/modulo/core/housekeeping.py" = ["E501"]
+"backend/tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
+"backend/tests/bdd/check-bdd-coverage.py" = ["N999"]
+"backend/tests/unit/test_mcp_security.py" = ["E402"]
+"backend/tests/unit/test_multi_backend_sqlite.py" = ["E402"]
+"backend/tests/unit/test_pipeline_node_conversion.py" = ["E402"]
+"backend/tests/integration/test_product_analytics_identity.py" = ["F811"]
+"pipeline-scripts/**" = ["S", "T201", "RET"]
+"conftest.py" = ["I001"]

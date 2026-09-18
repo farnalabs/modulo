@@ -1,0 +1,10 @@
+rules:
+  - id: pipeline-executor-missing-checkpointer
+    patterns:
+      - pattern: PipelineExecutor($X)
+      - pattern-not: PipelineExecutor($X, ...)
+    message: "PipelineExecutor() must pass checkpointer_conn_string= or the resume path will crash with RuntimeError"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

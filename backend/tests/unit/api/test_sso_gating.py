@@ -1,0 +1,467 @@
+"""Tests for SSO feature gating via require_feature('sso')."""
+
+import json
+import uuid
+from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from modulo.api.dependencies import (
+    _get_engine,
+    get_anonymous_plan_context,
+    get_db_session,
+    get_plan_context,
+    get_system_db_session,
+)
+from modulo.api.main import app
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.settings import Settings, get_settings
+
+_VALID_32 = "a" * 32
+_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+_PROVIDER_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
+
+
+def _settings_without_license() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+        modulo_license_key="",
+    )
+
+
+def _settings_with_license() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+        modulo_license_key="valid-license-key",
+    )
+
+
+@pytest.fixture
+def unauth_client() -> Generator[TestClient, None, None]:
+    app.dependency_overrides.clear()
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def _make_mock_session() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    # Shape the CRUD read results so resolve_plan_context's catalog reads and
+    # the provider listings see empty lists instead of MagicMock iterables.
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    result.scalars.return_value.all.return_value = []
+    session.execute.return_value = result
+    return session
+
+
+def _build_client(settings_fn, sso_enabled: bool = True) -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = settings_fn
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_system_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = sso_enabled
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    app.dependency_overrides[get_anonymous_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_no_sso() -> Generator[TestClient, None, None]:
+    yield from _build_client(_settings_without_license, sso_enabled=False)
+
+
+@pytest.fixture
+def client_with_sso() -> Generator[TestClient, None, None]:
+    yield from _build_client(_settings_with_license, sso_enabled=True)
+
+
+# ── SSO admin endpoints (should return 402 when feature disabled) ────────
+
+
+class TestAdminSsoGating:
+    def test_list_providers_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.get("/api/v1/admin/sso/providers")
+        assert resp.status_code == 402
+        assert "not available on your plan" in resp.text.lower()
+
+    def test_list_providers_succeeds_when_enabled(self, client_with_sso: TestClient) -> None:
+        mock_provider = MagicMock()
+        mock_provider.id = _PROVIDER_ID
+        mock_provider.provider_type = "oidc"
+        mock_provider.provider_id = "test-oidc"
+        mock_provider.name = "Test"
+        mock_provider.client_id = "cid"
+        mock_provider.client_secret = "secret"
+        mock_provider.discovery_url = "https://example.com"
+        mock_provider.metadata_url = None
+        mock_provider.metadata_xml = None
+        mock_provider.entity_id = None
+        mock_provider.scopes = json.dumps(["openid"])
+        mock_provider.enabled = True
+        mock_provider.auto_provision = True
+        mock_provider.default_role = "runner"
+        mock_provider.group_mappings = []
+        mock_provider.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+        mock_provider.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+
+        with patch("modulo.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=[mock_provider])):
+            resp = client_with_sso.get("/api/v1/admin/sso/providers")
+            assert resp.status_code == 200
+
+    def test_create_provider_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.post(
+            "/api/v1/admin/sso/providers",
+            json={"provider_type": "oidc", "name": "Test"},
+        )
+        assert resp.status_code == 402
+
+    def test_update_provider_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.put(
+            f"/api/v1/admin/sso/providers/{_PROVIDER_ID}",
+            json={"name": "Updated"},
+        )
+        assert resp.status_code == 402
+
+    def test_delete_provider_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.delete(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}")
+        assert resp.status_code == 402
+
+    def test_toggle_provider_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.put(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}/toggle")
+        assert resp.status_code == 402
+
+    def test_test_connection_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.post(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}/test")
+        assert resp.status_code == 402
+
+    def test_set_group_mappings_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.put(
+            f"/api/v1/admin/sso/providers/{_PROVIDER_ID}/group-mappings",
+            json={"mappings": []},
+        )
+        assert resp.status_code == 402
+
+    def test_get_group_mappings_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.get(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}/group-mappings")
+        assert resp.status_code == 402
+
+
+# ── SSO auth login/callback endpoints ────────────────────────────────────
+#
+# NOTE: /api/v1/auth/sso/providers is a PRE-AUTH discovery endpoint (the login
+# page fetches it before any user exists). It no longer sits behind
+# require_feature/get_current_user: when the SSO feature is disabled or
+# unlicensed it answers a normal 200 with an EMPTY provider list, so the
+# pre-auth call never surfaces an auth error in the browser console. The other
+# auth endpoints (login flows) keep the 402 gate — they are only reached by
+# users clicking a provider button that this endpoint advertised.
+
+
+class TestSsoAuthGating:
+    def test_sso_providers_returns_200_empty_when_disabled(self, client_no_sso: TestClient) -> None:
+        """SSO unlicensed -> normal 200 with an empty providers list (no 402/401)."""
+        with (
+            patch("modulo.core.license.get_license", return_value=None),
+            patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+        ):
+            resp = client_no_sso.get("/api/v1/auth/sso/providers")
+        assert resp.status_code == 200
+        assert resp.json() == {"oidc": [], "saml": False}
+
+    def test_sso_providers_needs_no_authentication(self) -> None:
+        """Anonymous request with the REAL auth dependencies in place gets a 200.
+
+        Regression guard: require_feature used to pull get_current_user into
+        this route, which 401'd the pre-auth login-page call.
+        """
+        app.dependency_overrides.clear()
+        mock_session = _make_mock_session()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_settings] = _settings_without_license
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_system_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        # get_current_user / get_plan_context deliberately NOT overridden: the
+        # real dependencies would run for any request. The route must never
+        # consult them.
+        try:
+            client = TestClient(app)
+            with (
+                patch("modulo.core.license.get_license", return_value=None),
+                patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+            ):
+                resp = client.get("/api/v1/auth/sso/providers")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 200
+        assert resp.json() == {"oidc": [], "saml": False}
+
+    def test_sso_providers_anonymous_plan_fallback_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A session that cannot run the anonymous plan resolution (TypeError
+        from ``session.begin()``, as with test-double sessions) degrades to
+        CommunityTier AND logs a warning — the fallback must not be silent
+        (mirrors get_plan_context's warning in dependencies.py)."""
+        app.dependency_overrides.clear()
+        broken_session = MagicMock()
+
+        def _begin_raises() -> None:
+            raise TypeError("test-double session does not support begin()")
+
+        broken_session.begin.side_effect = _begin_raises
+
+        async def override_session() -> AsyncGenerator[MagicMock, None]:
+            yield broken_session
+
+        app.dependency_overrides[get_settings] = _settings_without_license
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_system_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        try:
+            client = TestClient(app)
+            with (
+                caplog.at_level("WARNING", logger="modulo.api.dependencies"),
+                patch("modulo.core.license.get_license", return_value=None),
+                patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+            ):
+                resp = client.get("/api/v1/auth/sso/providers")
+        finally:
+            app.dependency_overrides.clear()
+        fallback_warnings = [
+            rec
+            for rec in caplog.records
+            if "anonymous_plan_context_fallback" in rec.message
+            or "returning CommunityTier" in getattr(rec, "reason", "")
+        ]
+        assert fallback_warnings, "anonymous plan fallback must log a warning, not degrade silently"
+        assert resp.status_code == 200
+        assert resp.json() == {"oidc": [], "saml": False}
+
+    def test_sso_providers_lists_env_providers_when_enabled(self, client_with_sso: TestClient) -> None:
+        """SSO licensed/enabled -> 200 with the configured OIDC providers."""
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_license_key="valid-license-key",
+            modulo_oidc_providers=json.dumps(
+                [
+                    {
+                        "provider_id": "google",
+                        "client_id": "cid",
+                        "client_secret": "secret",
+                        "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
+                    }
+                ]
+            ),
+        )
+        app.dependency_overrides[get_settings] = lambda: settings
+        licensed = SimpleNamespace(tier="team", features=["sso"], expires_at=None)
+        with (
+            patch("modulo.core.license.get_license", return_value=licensed),
+            patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+        ):
+            resp = client_with_sso.get("/api/v1/auth/sso/providers")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "google" in [p["provider_id"] for p in body["oidc"]]
+
+    def test_oidc_login_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.get("/api/v1/auth/oidc/google/login")
+        assert resp.status_code == 402
+
+    def test_oidc_callback_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.get("/api/v1/auth/oidc/google/callback?code=abc&state=def")
+        assert resp.status_code == 402
+
+    def test_saml_login_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.get("/api/v1/auth/saml/login")
+        assert resp.status_code == 402
+
+    def test_saml_acs_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.post("/api/v1/auth/saml/acs", data={"SAMLResponse": "dGVzdA=="})
+        assert resp.status_code == 402
+
+    def test_saml_metadata_returns_402_when_disabled(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.get("/api/v1/auth/saml/metadata")
+        assert resp.status_code == 402
+
+
+# ── Non-SSO endpoints should be unaffected ──
+
+
+class TestNonSsoEndpoints:
+    def test_health_returns_200(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.get("/api/v1/health")
+        assert resp.status_code in (200, 404)
+
+    def test_login_returns_422_without_body(self, client_no_sso: TestClient) -> None:
+        resp = client_no_sso.post("/api/v1/auth/login", json={})
+        assert resp.status_code == 422
+
+
+# ── FAR-847: Pre-auth SSO routes must not require authentication ──────────
+#
+# Regression guard: the five SSO login/callback/SAML routes are authentication
+# entry points — a browser navigating from the logged-out login page never
+# carries a bearer token.  Before this fix, require_feature("sso") pulled
+# get_current_user into the dependency chain, which raised 401 "Not
+# authenticated" BEFORE the route handler executed.  The fix replaces
+# require_feature with require_feature_anonymous, which resolves the plan
+# WITHOUT get_current_user.
+
+
+class TestPreAuthSsoNoAuthRequired:
+    """Pre-auth SSO routes must NOT return 401 when no Authorization header is present.
+
+    These tests exercise the REAL dependency chain (no get_current_user or
+    get_plan_context overrides) with a mock session so resolve_anonymous_plan_context
+    can run.  The anonymous plan resolves to CommunityTier (sso disabled), so the
+    expected response is 402 (feature unavailable) — the important property is
+    that the response is NOT 401 "Not authenticated".
+    """
+
+    def _build_anon_client(self) -> TestClient:
+        """Build a TestClient with real auth deps but a mock DB session.
+
+        Does NOT override get_current_user or get_plan_context: those
+        dependencies must never be consulted by the pre-auth routes.
+        """
+        mock_session = _make_mock_session()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_settings] = _settings_without_license
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_system_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        # get_current_user deliberately NOT overridden — if the route
+        # consults it, the request will 401 and the test fails.
+        return TestClient(app)
+
+    def test_oidc_login_no_auth_not_401(self) -> None:
+        """GET /oidc/{provider}/login without Authorization must not 401."""
+        try:
+            client = self._build_anon_client()
+            resp = client.get("/api/v1/auth/oidc/google/login")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code != 401, f"Pre-auth OIDC login must not require authentication, got 401: {resp.text}"
+        # SSO is disabled on CommunityTier, so expect 402 (feature unavailable)
+        assert resp.status_code == 402
+
+    def test_oidc_callback_no_auth_not_401(self) -> None:
+        """GET /oidc/{provider}/callback without Authorization must not 401.
+
+        A missing code/state should give 400 (if SSO enabled) or 402
+        (feature unavailable) — never 401.
+        """
+        try:
+            client = self._build_anon_client()
+            resp = client.get("/api/v1/auth/oidc/google/callback")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code != 401, f"Pre-auth OIDC callback must not require authentication, got 401: {resp.text}"
+
+    def test_saml_login_no_auth_not_401(self) -> None:
+        """GET /saml/login without Authorization must not 401."""
+        try:
+            client = self._build_anon_client()
+            resp = client.get("/api/v1/auth/saml/login")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code != 401, f"Pre-auth SAML login must not require authentication, got 401: {resp.text}"
+        assert resp.status_code == 402
+
+    def test_saml_acs_no_auth_not_401(self) -> None:
+        """POST /saml/acs without Authorization must not 401."""
+        try:
+            client = self._build_anon_client()
+            resp = client.post("/api/v1/auth/saml/acs", data={"SAMLResponse": "dGVzdA=="})
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code != 401, f"Pre-auth SAML ACS must not require authentication, got 401: {resp.text}"
+        assert resp.status_code == 402
+
+    def test_saml_metadata_no_auth_not_401(self) -> None:
+        """GET /saml/metadata without Authorization must not 401."""
+        try:
+            client = self._build_anon_client()
+            resp = client.get("/api/v1/auth/saml/metadata")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code != 401, f"Pre-auth SAML metadata must not require authentication, got 401: {resp.text}"
+        assert resp.status_code == 402
+
+
+class TestAuthenticatedRoutesStillGuarded:
+    """Control: authenticated-only routes MUST still 401 without credentials.
+
+    Proves the gate was not globally weakened — only the five pre-auth SSO
+    routes use require_feature_anonymous; admin SSO routes keep the
+    authenticated require_feature dependency.
+    """
+
+    def test_admin_sso_list_providers_401_without_auth(self) -> None:
+        """GET /admin/sso/providers without auth must 401 (not 200/402).
+
+        The admin SSO list endpoint is behind the standard
+        require_feature("sso") which chains to get_current_user.  Without
+        a bearer token it must 401, proving the anonymous gate was NOT
+        applied to authenticated routes.
+        """
+        app.dependency_overrides.clear()
+        mock_session = _make_mock_session()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_settings] = _settings_with_license
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_system_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        # Do NOT override get_current_user: the real dependency must 401.
+        try:
+            client = TestClient(app)
+            resp = client.get("/api/v1/admin/sso/providers")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 401, (
+            f"Admin SSO route must still require authentication, got {resp.status_code}: {resp.text}"
+        )

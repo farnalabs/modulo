@@ -1,0 +1,8 @@
+rules:
+  - id: bare-err-in-template
+    pattern-regex: \$\{(?:err|error)\}
+    message: "Bare `${err}` or `${error}` in template literals renders error objects as `[object Object]` — use `formatApiError(err)` or `err.message`"
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include: ["**/frontend/src/**"]

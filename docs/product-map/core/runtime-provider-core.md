@@ -1,0 +1,76 @@
+---
+id: feat-core-runtime-provider-core
+prd: 6
+adr: [Repos/devtools/adr/003-agent-dispatch-model.md]
+delivery-tasks: []
+code:
+  - backend/src/modulo/core/runtime_provider/
+  - backend/src/modulo/db/models/environment_profile.py
+  - backend/src/modulo/db/crud/environment_profile.py
+  - backend/src/modulo/api/routes/environment_profiles.py
+  - backend/src/modulo/core/graph_validator/__init__.py
+  - backend/src/modulo/connectors/shell/__init__.py
+  - frontend/src/views/environment-profiles/
+  - frontend/src/stores/environmentProfiles.ts
+unit-tests:
+  - backend/tests/unit/core/runtime_provider/test_abc.py
+  - backend/tests/unit/core/runtime_provider/test_hub.py
+  - backend/tests/unit/core/runtime_provider/test_e2b.py
+  - backend/tests/unit/core/runtime_provider/test_local.py
+  - backend/tests/unit/runtime_provider/test_docker_provider.py
+  - backend/tests/unit/graph_validator/test_environment_capabilities.py
+  - backend/tests/unit/api/test_environment_profiles_routes.py
+bdd:
+  - backend/tests/bdd/features/environments/environment_profiles.feature
+  - backend/tests/bdd/features/workflows/binding.feature
+depends-on: []
+status: covered
+---
+
+# Runtime Provider Core
+
+Provider abstraction that executes `sandbox_agent` nodes and manages workspaces
+(ADR 003 — Agent Dispatch Model). Runtime providers (`local`, `runner_docker` with
+`docker`/`local_docker` aliases, `e2b`) expose the same capability surface, gated
+per-environment via environment profiles and validated at graph-validation time.
+`ShellConnector` (the legacy command connector) is deprecated since ADR 003 and maps
+onto the same runtime-provider surface; its product-map entry carries the ADR 003
+deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 029)
+— workspace state lives in `runs.sandbox_dispatch_state`.
+
+## Behaviours
+
+- [x] Runtime provider base contract (`base.py`): lifecycle, health, execution, teardown
+- [x] Provider registry/hub resolves the configured provider deterministically
+      (explicit provider_type/hint match; `ProviderNotConfiguredError` otherwise)
+- [x] Built-in providers: `local`, `runner_docker` (aliases `docker`, `local_docker`), `e2b`
+- [x] Environment profiles CRUD (`/api/v1/environment-profiles`): list, create, get,
+      update, delete, restore, and `POST /{id}/test` (SSE sandbox connectivity check) —
+      input-validated, org-scoped, gated on the `environment_profiles` feature
+- [x] Graph validator rejects pipelines whose nodes need a capability the profile lacks
+      (`test_environment_capabilities`)
+- [x] `sandbox_agent` node dispatch, crash-resume, and output-handling contracts
+      (run model fields: node retry/resume markers)
+- [x] ShellConnector is deprecated (ADR 003, 2026-07-16) with a runtime
+      `DeprecationWarning` and doc notice; existing ShellConnector pipelines continue
+      running, and the node type is marked deprecated in the UI — new pipelines should
+      use `sandbox_agent`
+
+## Known Gaps
+
+- **No BDD coverage for the platform-provider matrix** — environment-profile BDD exists,
+  but no `.feature` file exercises each provider backend end to end.
+- **E2B provider is V3-deferred / environment-dependent** — runs only where the E2B
+  integration is configured.
+
+## QA History
+
+- 2026-09-02: **FAR-551** — collapsed the duplicate `/admin/environments` UI +
+  `environments.py` router into `/environment-profiles`; ported the `/test`
+  connectivity check; added the missing API feature-gate.
+- 2026-08-25: **improve-architecture (product-map walk)** — restored this entry as part of
+  rebuilding the `docs/product-map/` feature graph. This entry is the one ADR 003
+  requires to carry the ShellConnector deprecation notice
+  (`Repos/devtools/adr/003-agent-dispatch-model.md`). Re-verified the runtime_provider package
+  layout, environment-profile CRUD routes, workspace-lease model, and ShellConnector
+  deprecation notice against the current tree. Status: covered.

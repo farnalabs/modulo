@@ -1,0 +1,19 @@
+rules:
+  - id: logging-reserved-extra-key
+    patterns:
+      - pattern: |
+          $LOGGER.$LEVEL(..., extra={..., $KEY: ..., ...})
+      - metavariable-regex:
+          metavariable: $LOGGER
+          regex: ^(logging|logger|log|_log|_logger|LOG)$
+      - metavariable-regex:
+          metavariable: $LEVEL
+          regex: ^(debug|info|warning|error|critical|exception)$
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '^"(name|msg|args|exc_info|filename|module|funcName|created|msecs|relativeCreated|thread|threadName|processName|process|levelname|lineno|pathname|stack_info|taskName|asctime|message)"$'
+    message: "Reserved LogRecord key in logging extra= ($KEY) crashes at INFO level (KeyError: Attempt to overwrite '$KEY'). Use a non-reserved key (e.g. component_name, schema_name)."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

@@ -1,0 +1,488 @@
+"""Minimal /api/v1/me endpoint — delegates to auth's /me logic."""
+
+import asyncio
+import logging
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field, StrictBool
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.api.constants import MSG_THIS_FEATURE_NOT_AVAILABLE
+from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.dependencies import get_db_session
+from modulo.api.routes.admin_remy import (
+    SkillCreate,
+    SkillResponse,
+    SkillUpdate,
+    _skill_to_response,
+    get_user_skill_or_404,
+    get_user_skills,
+)
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.passwords import hash_password, validate_password_strength, verify_password
+from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
+from modulo.core.remy.context_source_service import (
+    ContextSourceResponseItem,
+    RemyContextSourceService,
+)
+from modulo.db.crud.account import (
+    AccountNotFoundError,
+    get_account_by_id,
+    set_hitl_email_preference,
+    update_account_preferences,
+)
+from modulo.db.crud.token_family import blacklist_family, list_families_for_account
+from modulo.db.models.remy_skill import RemySkill
+from modulo.db.rls import set_rls_org
+
+_CODE_ROUTES_ME = "routes.me"
+_MSG_ACCOUNT_NOT_FOUND = "Account not found"
+
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/v1", tags=["user"])
+
+
+class SettingsResponse(BaseModel):
+    theme: str | None = None
+    locale: str | None = None
+
+
+class SettingsUpdate(BaseModel):
+    theme: str | None = None
+    locale: str | None = None
+
+
+@router.get("/me/settings", response_model=SettingsResponse)
+@handle_db_errors("me.get_user_settings")
+async def get_user_settings(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            account = await get_account_by_id(session, current_user.account_id)
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+    return account.preferences
+
+
+@router.put("/me/settings", response_model=SettingsResponse)
+@handle_db_errors("me.update_user_settings")
+async def update_user_settings(
+    req: SettingsUpdate | None = None,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    if req is None:
+        try:
+            async with session.begin():
+                account = await get_account_by_id(session, current_user.account_id)
+        except ProgrammingError:
+            logger.exception(_CODE_ROUTES_ME)
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+            ) from None
+
+        if account is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+        return account.preferences
+    prefs: dict[str, object] = {}
+    if req.theme is not None:
+        prefs["theme"] = req.theme
+    if req.locale is not None:
+        prefs["locale"] = req.locale
+    try:
+        async with session.begin():
+            return await update_account_preferences(session, current_user.account_id, prefs)
+    except AccountNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND) from None
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+
+# ── User-level HITL email-alert preferences (FAR-602) ─────────────────
+
+
+class HitlEmailPreferenceResponse(BaseModel):
+    """Canonical view of the caller's HITL email-alert preferences.
+
+    Absent/malformed stored data normalises to the all-off default so the
+    response always matches what ``resolve_hitl_email_pref`` would resolve.
+    """
+
+    default: bool = False
+    pipeline_overrides: dict[str, bool] = Field(default_factory=dict)
+
+
+class HitlEmailPreferenceUpdate(BaseModel):
+    """PUT body for the caller's own HITL email-alert preferences.
+
+    ``pipeline_overrides`` keys are validated as pipeline UUIDs (stored
+    stringified) and both fields as strict booleans — emails are OFF by
+    default, overridable per pipeline.
+    """
+
+    default: StrictBool = False
+    pipeline_overrides: dict[uuid.UUID, StrictBool] = Field(default_factory=dict)
+
+
+def _hitl_email_pref_payload(preferences: Any) -> dict[str, Any]:
+    """Normalise the stored ``hitl_email`` preference block to the API shape.
+
+    Delegates to the single stored-shape parser in core so the API view and
+    the dispatch resolver agree mechanically.
+    """
+    default, overrides = normalize_hitl_email_prefs(preferences)
+    return {"default": default, "pipeline_overrides": overrides}
+
+
+@router.get("/me/hitl-email-preferences", response_model=HitlEmailPreferenceResponse)
+@handle_db_errors("me.get_hitl_email_preferences")
+async def get_hitl_email_preferences(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Return the CALLER's HITL email-alert preferences (absent = all off)."""
+    async with session.begin():
+        account = await get_account_by_id(session, current_user.account_id)
+
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+    return _hitl_email_pref_payload(account.preferences)
+
+
+@router.put("/me/hitl-email-preferences", response_model=HitlEmailPreferenceResponse)
+@handle_db_errors("me.update_hitl_email_preferences")
+async def update_hitl_email_preferences(
+    req: HitlEmailPreferenceUpdate,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Persist the CALLER's HITL email-alert preferences under the
+    ``hitl_email`` key of ``Account.preferences`` (other keys untouched).
+
+    FAR-620: the write goes through the SHARED row-locked helper
+    (``set_hitl_email_preference``) — the single writer of the ``hitl_email``
+    key, now also used by the JSON column's other writers. The ``FOR UPDATE``
+    lock serialises this endpoint against the sibling preference writers
+    (``PUT /me/settings``, the in-app dashboard level), closing the
+    cross-endpoint lost-update race the previous unlocked settings helper
+    left open.
+    """
+    try:
+        async with session.begin():
+            merged = await set_hitl_email_preference(
+                session,
+                current_user.account_id,
+                default=req.default,
+                # REPLACE semantics when the body carries ``pipeline_overrides``
+                # (each key → its bool); omitted from the JSON body ⇒ the
+                # helper preserves the stored override map untouched.
+                pipeline_overrides=(
+                    None
+                    if "pipeline_overrides" not in req.model_fields_set
+                    else {str(pipeline_id): enabled for pipeline_id, enabled in req.pipeline_overrides.items()}
+                ),
+            )
+    except AccountNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND) from None
+
+    return _hitl_email_pref_payload(merged)
+
+
+@router.put("/me/password", status_code=status.HTTP_200_OK)
+@handle_db_errors("me.change_password")
+async def change_password(
+    req: PasswordChangeRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, str]:
+    try:
+        async with session.begin():
+            # NOTE: do NOT scope the transaction to the user's org up front.
+            # ``token_families`` retains a fail-open ``rls_org_isolation`` policy
+            # (the null-context branch returns every row when ``app.organisation_id``
+            # is unset), so leaving the org context unset here makes
+            # ``list_families_for_account`` / ``blacklist_family`` operate on ALL of
+            # the account's token families across every org — which is exactly the
+            # correct, fail-closed behaviour for credential change: every refresh
+            # token family for the account must be revoked, regardless of which org
+            # it was minted under. Scoping to the current org would silently leave
+            # cross-org / NULL-org families live (a token-invalidation gap).
+            account = await get_account_by_id(session, current_user.account_id)
+            if account is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+
+            if not account.password_hash or not verify_password(req.current_password, account.password_hash):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+
+            if req.new_password == req.current_password:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="New password must be different from the current password",
+                )
+
+            try:
+                validate_password_strength(req.new_password)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+            account.password_hash = hash_password(req.new_password)
+            # Clear the admin-reset flag (FAR-460): the user has now set their
+            # own credential, so the post-login forced-change gate is satisfied.
+            account.must_change_password = False
+            session.add(account)
+
+            families = await list_families_for_account(session, current_user.account_id)
+            for family in families:
+                try:
+                    await blacklist_family(session, family.family_id, current_user.account_id)
+                except (HTTPException, asyncio.CancelledError):
+                    raise
+                except SQLAlchemyError:
+                    logger.exception("me.change_password.blacklist_failed")
+                    logger.warning(
+                        "Failed to blacklist token family %s for account %s — aborting password change",
+                        family.family_id,
+                        current_user.account_id,
+                    )
+                    raise
+
+            # Audit is fail-open-with-alert: the password change ALWAYS commits;
+            # a failed audit write is loudly logged and never rolls back the change.
+            # Establish the org context now (the token-family ops above ran with it
+            # unset on purpose) so the strict ``audit_events`` insert is org-scoped.
+            try:
+                from modulo.core.audit_logger import append_audit_event
+
+                await set_rls_org(session, current_user.organisation_id)
+                await append_audit_event(
+                    session,
+                    org_id=current_user.organisation_id,
+                    event_type="password_changed",
+                    actor_user_id=current_user.account_id,
+                    resource_type="account",
+                    resource_id=current_user.account_id,
+                    payload_json={"method": "self_service"},
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("me.change_password audit write failed")
+
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+
+    return {"detail": "Password changed successfully"}
+
+
+# ── User-level Remy Skills ────────────────────────────────────────────
+
+
+@router.get("/me/remy/skills")
+@handle_db_errors("me.list_user_skills")
+async def list_user_skills(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[SkillResponse]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            skills = await get_user_skills(session, current_user.account_id, current_user.organisation_id)
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+
+    return [_skill_to_response(s) for s in skills]
+
+
+@router.post("/me/remy/skills", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("me.create_user_skill")
+async def create_user_skill(
+    req: SkillCreate,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> SkillResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            skill = RemySkill(
+                id=uuid.uuid4(),
+                organisation_id=None,
+                account_id=current_user.account_id,
+                name=req.name,
+                description=req.description,
+                triggers=req.triggers,
+                body=req.body,
+                active=req.active,
+            )
+            session.add(skill)
+            await session.flush()
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+
+    return _skill_to_response(skill)
+
+
+@router.put("/me/remy/skills/{skill_id}")
+@handle_db_errors("me.update_user_skill")
+async def update_user_skill(
+    skill_id: uuid.UUID,
+    req: SkillUpdate,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> SkillResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
+            if req.name is not None:
+                skill.name = req.name
+            if req.description is not None:
+                skill.description = req.description
+            if req.triggers is not None:
+                skill.triggers = req.triggers
+            if req.body is not None:
+                skill.body = req.body
+            if req.active is not None:
+                skill.active = req.active
+            await session.flush()
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+
+    return _skill_to_response(skill)
+
+
+@router.delete("/me/remy/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("me.delete_user_skill")
+async def delete_user_skill(
+    skill_id: uuid.UUID,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
+            await session.delete(skill)
+
+    # ── User-level Context Sources ─────────────────────────────────────────
+
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+
+
+class ContextSourceModeUpdate(BaseModel):
+    source_mode: str = Field(..., pattern=r"^(always_on|tool|off)$")
+
+
+@router.get("/me/remy/context-sources")
+@handle_db_errors("me.get_user_context_sources")
+async def get_user_context_sources(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[ContextSourceResponseItem]:
+    try:
+        async with session.begin():
+            service = RemyContextSourceService(session)
+            config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
+            user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+
+    return service.build_effective_items(config.context_sources, user_overrides)
+
+
+@router.put("/me/remy/context-sources/{source_key}")
+@handle_db_errors("me.set_user_context_source")
+async def set_user_context_source(
+    source_key: str,
+    req: ContextSourceModeUpdate,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[ContextSourceResponseItem]:
+    try:
+        async with session.begin():
+            service = RemyContextSourceService(session)
+            await service.set_user_override(
+                current_user.organisation_id,
+                current_user.account_id,
+                source_key,
+                req.source_mode,
+            )
+            config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
+            user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+
+    return service.build_effective_items(config.context_sources, user_overrides)
+
+
+@router.delete("/me/remy/context-sources", status_code=status.HTTP_200_OK)
+@handle_db_errors("me.reset_user_context_sources")
+async def reset_user_context_sources(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[ContextSourceResponseItem]:
+    try:
+        async with session.begin():
+            service = RemyContextSourceService(session)
+            await service.reset_user_overrides(current_user.organisation_id, current_user.account_id)
+            config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
+    except ProgrammingError:
+        logger.exception(_CODE_ROUTES_ME)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from None
+
+    return service.build_effective_items(config.context_sources, {})

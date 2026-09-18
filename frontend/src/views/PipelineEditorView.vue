@@ -1,0 +1,2747 @@
+﻿<template>
+  <div class="flex h-[calc(100vh-3.5rem)]">
+    <div v-if="loading" class="flex flex-1 items-center justify-center">
+      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+    </div>
+    <div v-else-if="pageError" class="flex flex-1 items-center justify-center">
+      <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
+    </div>
+    <template v-else>
+      <div class="flex min-w-0 flex-1 flex-col">
+        <!-- Docked toolbar: in-flow above the canvas so it never covers node details -->
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2" data-testid="pipeline-editor-toolbar">
+          <!-- Group: identity -->
+          <div class="flex min-w-0 items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-identity">
+            <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
+            <button type="button" :class="btnToolbarIcon" :aria-label="$t('views.PipelineEditorView.rename_pipeline')" :title="$t('views.PipelineEditorView.rename_pipeline')" data-testid="pipeline-editor-rename" @click="openRenameDialog">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+            </button>
+            <span v-if="pipeline?.archived_at" class="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.archived') }}</span>
+            <span v-if="folderPath.length > 0" class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+              <span v-for="(f, i) in folderPath" :key="f.id" class="truncate">
+                <template v-if="i > 0"><span class="text-muted-foreground/50">/</span></template>
+                <router-link :to="`/pipelines?folder_id=${f.id}`" class="hover:text-foreground">{{ f.name }}</router-link>
+              </span>
+            </span>
+            <template v-if="linkedLifecycleMaps.length > 0">
+              <span :class="groupDividerClass" />
+              <span class="flex items-center gap-1 text-xs text-muted-foreground">
+                <router-link
+                  v-for="map in linkedLifecycleMaps"
+                  :key="map.id"
+                  :to="`/lifecycle-maps/${map.id}`"
+                  class="whitespace-nowrap hover:text-foreground"
+                >
+                  {{ map.name }}
+                </router-link>
+              </span>
+            </template>
+          </div>
+          <span :class="groupDividerClass" />
+          <!-- Group: graph file actions -->
+          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-file">
+            <button type="button" :class="btnToolbarSecondary" :disabled="savingGraph" data-testid="pipeline-editor-save" @click="saveGraph">
+              <svg v-if="savingGraph" class="h-3 w-3 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+              {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
+            </button>
+            <button v-if="planStore.featureEnabled('pipeline_diff_rollback')" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-version-timeline" @click="showVersionTimeline = !showVersionTimeline">
+              {{ $t('views.PipelineEditorView.versions') }}
+            </button>
+            <div class="relative" @click.stop @keydown.enter.stop @keydown.space.prevent.stop>
+              <button
+                type="button"
+                :class="btnToolbarSecondary"
+                :aria-expanded="showSaveAsDropdown"
+                aria-haspopup="menu"
+                data-testid="pipeline-editor-save-as-template"
+                @click="showSaveAsDropdown = !showSaveAsDropdown"
+              >
+                {{ $t('views.PipelineEditorView.save_as_template') }}
+              </button>
+              <div
+                v-if="showSaveAsDropdown"
+                class="absolute left-0 top-full z-30 mt-1 w-48 rounded-lg border bg-card py-1 shadow-lg"
+              >
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent"
+                  @click="openSaveAsComposite"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-indigo-400" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v8M4.93 10.93 12 18l7.07-7.07"/><path d="M4 20h16"/></svg>
+                  {{ $t('views.PipelineEditorView.composite') }}
+                </button>
+              </div>
+            </div>
+          </div>
+          <span :class="groupDividerClass" />
+          <!-- Group: run -->
+          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-run">
+            <button type="button" :class="btnToolbarPrimary" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" data-testid="pipeline-editor-run" @click="openRunDialog">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
+            </button>
+            <span v-if="saveGraphError" class="max-w-40 truncate text-xs text-destructive" :title="saveGraphError" data-testid="pipeline-editor-save-error">{{ saveGraphError }}</span>
+          </div>
+          <span :class="groupDividerClass" />
+          <!-- Group: pipeline settings -->
+          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-settings">
+            <button v-if="!pipeline?.archived_at" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <button v-else type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" :class="btnToolbarDestructive" data-testid="pipeline-editor-delete" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
+            <div class="flex items-center gap-1">
+              <label for="pipeline-max-duration" class="whitespace-nowrap text-[10px] text-muted-foreground">{{ $t('views.PipelineEditorView.max_duration_s') }}:</label>
+              <input id="pipeline-max-duration"
+                v-model.number="maxDurationInput"
+                type="number"
+                min="0"
+                :placeholder="$t('views.PipelineEditorView.no_limit')"
+                class="w-20 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                @change="updateMaxDuration"
+                data-testid="pipeline-editor-max-duration"
+              />
+            </div>
+            <div class="relative">
+              <button
+                type="button"
+                ref="retryPolicyToggleRef"
+                :id="retryPolicyToggleId"
+                :class="btnToolbarSecondary"
+                @click="toggleRetryPolicy"
+                :aria-expanded="retryPolicyOpen"
+                aria-haspopup="dialog"
+                :aria-controls="retryPolicyPanelId"
+                data-testid="pipeline-editor-retry-policy-toggle"
+              >
+                {{ $t('views.PipelineEditorView.retry_policy') }}
+              </button>
+              <dialog
+                v-if="retryPolicyOpen"
+                open
+                :id="retryPolicyPanelId"
+                ref="retryPolicyPanelRef"
+                class="absolute right-0 left-auto top-full z-50 mt-1 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
+                tabindex="-1"
+                :aria-label="$t('views.PipelineEditorView.retry_policy')"
+                data-testid="pipeline-editor-retry-policy-panel"
+              >
+                <div class="mb-1 text-xs font-medium text-foreground">{{ $t('views.PipelineEditorView.retry_policy') }}</div>
+                <div class="mb-2 text-[10px] text-muted-foreground">
+                  {{ $t('views.PipelineEditorView.retry_policy_description') }}
+                </div>
+                <!-- FAR-649: coverage mode. "All errors" (the default) saves the
+                     policy WITHOUT the `on` key (absent on = all retryable
+                     events at runtime); "Choose specific errors" saves the
+                     explicit event list. -->
+                <div
+                  class="mb-2 space-y-1"
+                  role="radiogroup"
+                  :aria-label="$t('views.PipelineEditorView.retry_policy_mode_label')"
+                >
+                  <label class="flex min-h-6 items-center gap-2 text-xs">
+                    <input
+                      type="radio"
+                      value="all"
+                      v-model="retryPolicyMode"
+                      class="h-4 w-4"
+                      data-testid="pipeline-editor-retry-mode-all"
+                    />
+                    {{ $t('views.PipelineEditorView.retry_policy_mode_all') }}
+                  </label>
+                  <label class="flex min-h-6 items-center gap-2 text-xs">
+                    <input
+                      type="radio"
+                      value="specific"
+                      v-model="retryPolicyMode"
+                      class="h-4 w-4"
+                      data-testid="pipeline-editor-retry-mode-specific"
+                    />
+                    {{ $t('views.PipelineEditorView.retry_policy_mode_specific') }}
+                  </label>
+                </div>
+                <div v-if="retryPolicyMode === 'specific'" class="space-y-1">
+                  <label
+                    v-for="opt in retryPolicyOptions"
+                    :key="opt.value"
+                    class="flex min-h-6 items-center gap-2 text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      :value="opt.value"
+                      v-model="retryPolicyEvents"
+                      class="h-4 w-4"
+                      :data-testid="`pipeline-editor-retry-event-${opt.value}`"
+                    />
+                    {{ $t(opt.labelKey) }}
+                  </label>
+                </div>
+                <div class="mt-3 flex items-center gap-2">
+                  <label for="retry-policy-max" class="whitespace-nowrap text-[10px] text-muted-foreground">
+                    {{ $t('views.PipelineEditorView.max_retries') }}
+                  </label>
+                  <input
+                    id="retry-policy-max"
+                    v-model.number="retryPolicyMaxRetries"
+                    type="number"
+                    min="0"
+                    max="5"
+                    class="w-14 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                    data-testid="pipeline-editor-retry-policy-max"
+                  />
+                </div>
+                <div class="mt-2 flex items-center gap-2">
+                  <label for="retry-policy-delay" class="whitespace-nowrap text-[10px] text-muted-foreground">
+                    {{ $t('views.PipelineEditorView.backoff_delay_seconds') }}
+                  </label>
+                  <input
+                    id="retry-policy-delay"
+                    v-model.number="retryPolicyDelaySeconds"
+                    type="number"
+                    min="1"
+                    max="300"
+                    step="1"
+                    class="w-14 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                    data-testid="pipeline-editor-retry-policy-delay"
+                  />
+                </div>
+                <div class="mt-2 flex items-center gap-2">
+                  <label for="retry-policy-multiplier" class="whitespace-nowrap text-[10px] text-muted-foreground">
+                    {{ $t('views.PipelineEditorView.backoff_multiplier') }}
+                  </label>
+                  <input
+                    id="retry-policy-multiplier"
+                    v-model.number="retryPolicyMultiplier"
+                    type="number"
+                    min="1"
+                    max="10"
+                    step="0.1"
+                    class="w-14 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                    data-testid="pipeline-editor-retry-policy-multiplier"
+                  />
+                </div>
+                <p class="mt-1 text-[10px] leading-snug text-muted-foreground">
+                  {{ $t('views.PipelineEditorView.backoff_schedule_help') }}
+                </p>
+                <div
+                  v-if="retryPolicyScheduleWarning"
+                  class="mt-2 text-xs text-warning"
+                  role="alert"
+                  data-testid="pipeline-editor-retry-policy-schedule-warning"
+                >
+                  {{ retryPolicyScheduleWarning }}
+                </div>
+                <div
+                  v-if="retryPolicyNoRetriesWarning"
+                  class="mt-2 text-xs text-warning"
+                  role="alert"
+                  data-testid="pipeline-editor-retry-policy-warning"
+                >
+                  {{ retryPolicyNoRetriesWarning }}
+                </div>
+                <div
+                  v-if="retryPolicyError"
+                  class="mt-2 text-xs text-destructive"
+                  role="alert"
+                  data-testid="pipeline-editor-retry-policy-error"
+                >
+                  {{ retryPolicyError }}
+                </div>
+                <div class="mt-3 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    class="rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
+                    @click="closeRetryPolicy"
+                  >
+                    {{ $t('views.PipelineEditorView.cancel') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-md border border-input bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="retryPolicySaving || retryPolicySaveBlocked"
+                    @click="saveRetryPolicy"
+                    data-testid="pipeline-editor-retry-policy-save"
+                  >
+                    {{ retryPolicySaving ? $t('views.PipelineEditorView.saving') : $t('views.PipelineEditorView.save') }}
+                  </button>
+                </div>
+              </dialog>
+            </div>
+          </div>
+          <span :class="groupDividerClass" />
+          <!-- Group: canvas tools -->
+          <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-canvas">
+            <Select
+              v-model="newNodeType"
+              :options="nodeTypeOptions"
+              option-label="label"
+              option-value="value"
+              class="toolbar-select w-40 text-xs"
+              append-to="self"
+              :aria-label="$t('views.PipelineEditorView.new_node_type')"
+              :title="$t('views.PipelineEditorView.new_node_type_hint')"
+              data-testid="pipeline-editor-node-type-select"
+            />
+            <button
+              type="button"
+              :class="btnToolbarSecondary"
+              :title="$t('views.PipelineEditorView.add_node')"
+              data-testid="pipeline-editor-add-node"
+              @click="addNode()"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              {{ $t('views.PipelineEditorView.add_node') }}
+            </button>
+            <button
+              type="button"
+              :class="btnToolbarSecondary"
+              :title="$t('views.PipelineEditorView.fit_to_view')"
+              data-testid="pipeline-editor-fit-view"
+              @click="() => fitView()"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+              {{ $t('views.PipelineEditorView.fit_to_view') }}
+            </button>
+          </div>
+        </div>
+        <!-- FAR-688: legacy HITL gates whose descriptions predate the
+             minimum (reads never hard-fail on them) — surface WHICH gates
+             need descriptions so the user can find and fix them. -->
+        <div
+          v-if="showLegacyHitlBanner && legacyHitlIssues.length > 0"
+          class="border-b bg-warning/10 px-3 py-2 text-xs text-warning"
+          role="alert"
+          data-testid="pipeline-editor-legacy-hitl-banner"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="font-medium">{{ $t('views.PipelineEditorView.legacy_hitl_description_title') }}</p>
+              <!-- FAR-688 per-kind hint: edge gates are fixable in this editor
+                   ("open the edge"); node-level gates have no hitl_config
+                   panel here (documented deferral), so they get a distinct,
+                   truthful hint instead of an unactionable one. -->
+              <p v-if="hasLegacyEdgeIssues" class="mt-0.5 text-warning/80">{{ $t('views.PipelineEditorView.legacy_hitl_description_hint') }}</p>
+              <p v-if="hasLegacyNodeIssues" class="mt-0.5 text-warning/80">{{ $t('views.PipelineEditorView.legacy_hitl_hint_node') }}</p>
+              <ul class="mt-1 list-inside list-disc space-y-0.5">
+                <li v-for="issue in legacyHitlIssues" :key="issue.key" class="max-w-full truncate" :title="issue.label">
+                  {{ $t(issue.kind === 'node' ? 'views.PipelineEditorView.legacy_hitl_item_node' : 'views.PipelineEditorView.legacy_hitl_item_edge', { label: issue.label }) }}
+                </li>
+              </ul>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 rounded p-1 hover:bg-warning/20"
+              :aria-label="$t('common.close')"
+              data-testid="pipeline-editor-legacy-hitl-banner-dismiss"
+              @click="showLegacyHitlBanner = false"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="relative min-h-0 flex-1">
+        <!-- Empty-state overlay on top of the canvas -->
+        <div v-if="flowNodes.length === 0" class="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 pointer-events-none">
+          <div class="text-center">
+            <h2 class="text-xl font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_fallback_title') }}</h2>
+            <p v-if="pipeline?.description" class="mt-1 text-sm text-muted-foreground">{{ pipeline.description }}</p>
+            <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">{{ $t('views.PipelineEditorView.empty_state_hint') }}</p>
+          </div>
+          <div class="flex items-center gap-2 pointer-events-auto">
+            <Button size="small" type="button" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
+            <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <button v-else type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
+            <Select
+              v-model="newNodeType"
+              :options="nodeTypeOptions"
+              option-label="label"
+              option-value="value"
+              class="toolbar-select w-40 text-xs"
+              append-to="self"
+              :aria-label="$t('views.PipelineEditorView.new_node_type')"
+            />
+            <Button severity="secondary" outlined size="small" type="button" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
+          </div>
+        </div>
+        <!-- Run dialog modal -->
+        <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- modal backdrop: needs keyboard Escape handler for accessible dismissal -->
+        <div
+          v-if="showRunDialog"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          @click.self="closeRunDialog"
+          @keydown.escape="closeRunDialog"
+          tabindex="-1"
+          data-testid="pipeline-editor-run-dialog-backdrop"
+        >
+          <dialog
+            open
+            aria-modal="true"
+            :aria-label="$t('views.PipelineEditorView.run_dialog_title')"
+            class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4"
+            style="position: static"
+          >
+            <div class="flex items-center justify-between">
+              <h2 class="text-base font-semibold text-foreground">{{ $t('views.PipelineEditorView.run_dialog_title') }}</h2>
+              <button
+                type="button"
+                class="text-muted-foreground hover:text-foreground transition-colors"
+                @click="closeRunDialog"
+                :aria-label="$t('views.PipelineEditorView.close')"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <p class="text-sm text-muted-foreground">
+              {{ $t('views.PipelineEditorView.run_label') }} <span class="font-medium text-foreground">{{ pipeline?.name }}</span>
+            </p>
+            <div v-if="isWebhookTriggered" class="rounded-lg bg-muted border p-3 text-sm text-muted-foreground">
+              {{ $t('views.PipelineEditorView.webhook_triggered_info') }}
+            </div>
+            <div v-else class="space-y-2">
+              <label for="pipeline-editor-run-prompt" class="block text-sm font-medium text-foreground">{{ $t('views.PipelineEditorView.prompt') }}</label>
+              <textarea id="pipeline-editor-run-prompt"
+                v-model="runPrompt"
+                :placeholder="$t('views.PipelineEditorView.run_prompt_placeholder')"
+                rows="4"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+                data-testid="pipeline-editor-run-prompt"
+              />
+            </div>
+            <div v-if="runError" class="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
+              {{ runError }}
+            </div>
+            <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning">
+              {{ emptyRunWarning }}
+            </div>
+            <div class="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
+                @click="closeRunDialog"
+              >
+                {{ $t('views.PipelineEditorView.cancel') }}
+              </button>
+              <Button v-if="!isWebhookTriggered" type="button" class="border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500" :disabled="running" @click="triggerRun" data-testid="pipeline-editor-run-submit">
+                <svg
+                  v-if="running"
+                  class="animate-spin h-4 w-4 mr-1"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
+              </Button>
+            </div>
+          </dialog>
+        </div>
+        <VueFlow
+          :key="pipelineId"
+          v-model:nodes="flowNodes"
+          v-model:edges="flowEdges"
+          :node-types="nodeTypes"
+          :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: '#888' } }"
+          :fit-view-on-init="false"
+          :source-position="Position.Right"
+          :target-position="Position.Left"
+          @node-click="onNodeClick"
+          @edge-click="onEdgeClick"
+          @pane-click="onPaneClick"
+        >
+          <Background :gap="20" :size="1" />
+          <Controls :showInteractive="false" />
+          <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
+                    <div class="text-xs font-medium text-warning">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
+                  </div></template>
+          <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
+                    <div class="text-xs font-medium text-primary">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
+                    <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
+                  </div></template>
+          <template #node-router="nodeProps"><div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
+                    <div class="text-xs font-medium text-indigo-600 dark:text-indigo-300">{{ $t('views.PipelineEditorView.node_router_badge') }}</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
+                  </div></template>
+          <template #node-hitl="nodeProps"><div class="rounded-lg border-2 border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
+                    <div class="text-xs font-medium text-rose-600 dark:text-rose-300">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
+                  </div></template>
+          <template #edge-default="edgeProps">
+            <div v-if="edgeProps.data?.hitl_gate_config" class="absolute -translate-y-4 translate-x-2">
+              <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
+            </div>
+            <div v-if="edgeProps.data?.edge_type === 'loop'" class="absolute translate-y-4 translate-x-2">
+              <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-900 dark:text-blue-300">
+                {{ $t('views.PipelineEditorView.loop') }}{{ edgeProps.data?.max_iterations ? ` (${edgeProps.data.max_iterations})` : '' }}
+              </span>
+            </div>
+            <div v-if="edgeProps.data?.edge_type === 'llm'" class="absolute translate-y-4 translate-x-2">
+              <span class="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-600 dark:bg-purple-900 dark:text-purple-300">
+                {{ $t('views.PipelineEditorView.llm_badge') }}{{ edgeProps.data?.routing_label ? `: ${edgeProps.data.routing_label}` : '' }}
+              </span>
+            </div>
+          </template>
+        </VueFlow>
+        </div>
+      </div>
+      <!-- Node Properties Panel -->
+      <aside v-if="selectedNodeData && !selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
+        <dl class="space-y-4 text-sm">
+          <div>
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.id_label') }}</dt>
+            <dd class="font-mono text-[10px] text-muted-foreground break-all select-all" :title="selectedNodeData.id">{{ shortId(selectedNodeData.id) }}</dd>
+          </div>
+          <div>
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.type_label') }}</dt>
+            <dd>
+              <span :class="nodeTypeBadgeClass(selectedNodeData.node_type)">
+                {{ nodeTypeLabel(selectedNodeData.node_type) }}
+              </span>
+            </dd>
+          </div>
+          <div>
+            <label for="pipeline-editor-node-label" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.label') }}</label>
+            <input id="pipeline-editor-node-label"
+              v-model="selectedNodeData.label"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium mt-1"
+              :placeholder="$t('views.PipelineEditorView.enter_node_label')"
+              @input="syncNodeToFlow"
+              data-testid="pipeline-editor-node-label"
+            />
+          </div>
+          <div>
+            <label for="pipeline-editor-node-desc" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.description') }}</label>
+            <textarea id="pipeline-editor-node-desc"
+              v-model="selectedNodeData.description"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm mt-1"
+              :placeholder="$t('views.PipelineEditorView.optional_description')"
+              rows="2"
+              @input="syncNodeToFlow"
+              data-testid="pipeline-editor-node-description"
+            />
+          </div>
+          <!-- FAR-295: retry-safety indicator for every node type -->
+          <div>
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-idempotent-label">{{ $t('views.PipelineEditorView.idempotent') }}</dt>
+            <dd data-testid="pipeline-editor-idempotent-value">
+              {{ selectedNodeData.idempotent === false ? $t('views.PipelineEditorView.disabled') : $t('views.PipelineEditorView.enabled') }}
+            </dd>
+            <p class="mt-0.5 text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.idempotent_description') }}</p>
+          </div>
+          <!-- Manual node: Output Schema -->
+          <div v-if="selectedNodeData.node_type === 'manual' && selectedNodeData.output_schema_id">
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
+            <dd class="font-medium">{{ schemaName(selectedNodeData.output_schema_id) || shortId(selectedNodeData.output_schema_id) }}</dd>
+          </div>
+          <!-- Agent node: Agent details -->
+          <template v-if="(selectedNodeData.node_type === 'agent' || selectedNodeData.node_type === 'sandbox_agent') && selectedNodeData.agent_id">
+            <div>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.agent') }}</dt>
+              <dd class="font-medium">{{ agentName(selectedNodeData.agent_id) || shortId(selectedNodeData.agent_id) }}</dd>
+              <router-link
+                v-if="selectedNodeData.agent_id"
+                :to="`/admin/agents/${selectedNodeData.agent_id}`"
+                class="mt-0.5 inline-flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-400"
+              >
+                {{ $t('views.PipelineEditorView.view_agent') }}
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </router-link>
+            </div>
+            <div v-if="agentModelBackendId(selectedNodeData.agent_id)">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.model_backend') }}</dt>
+              <dd class="font-medium">{{ agentModelBackendName(selectedNodeData.agent_id) || shortId(agentModelBackendId(selectedNodeData.agent_id)) }}</dd>
+            </div>
+            <div v-if="agentInputSchemaId(selectedNodeData.agent_id)">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.input_schema') }}</dt>
+              <dd class="font-medium">{{ schemaName(agentInputSchemaId(selectedNodeData.agent_id) ?? '') || shortId(agentInputSchemaId(selectedNodeData.agent_id) ?? '') }}</dd>
+            </div>
+            <div v-if="agentOutputSchemaId(selectedNodeData.agent_id)">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
+              <dd class="font-medium">{{ schemaName(agentOutputSchemaId(selectedNodeData.agent_id) ?? '') || shortId(agentOutputSchemaId(selectedNodeData.agent_id) ?? '') }}</dd>
+            </div>
+            <div v-if="selectedNodeData.connector_binding">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector') }}</dt>
+              <dd class="font-medium">{{ connectorName(selectedNodeData.connector_binding) }}</dd>
+            </div>
+            <!-- Parameter Schema + Set -->
+            <div v-if="agentParamSchema(selectedNodeData.agent_id)">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.param_schema') }}</dt>
+              <dd class="font-medium">{{ agentParamSchemaName(selectedNodeData.agent_id) }}</dd>
+            </div>
+            <div v-if="agentParamSchema(selectedNodeData.agent_id)">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.param_set') }}</dt>
+              <dd>
+                <select
+                  v-model="selectedNodeParamSetId"
+                  :aria-label="$t('views.PipelineEditorView.param_set')"
+                  class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                  @change="onParamSetChange"
+                  data-testid="pipeline-node-param-set"
+                >
+                  <option :value="undefined">{{ $t('views.PipelineEditorView.no_set') }}</option>
+                  <option
+                    v-for="ps in availableParamSets"
+                    :key="ps.id"
+                    :value="ps.id"
+                  >{{ ps.name }}</option>
+                </select>
+              </dd>
+            </div>
+            <div v-if="selectedNodeParamSetId && paramSetOverridesKeys.length > 0">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.overrides') }}</dt>
+              <dd class="space-y-2">
+                <div v-for="pkey in paramSetOverridesKeys" :key="pkey" class="flex flex-col gap-0.5">
+                  <label :for="'pipelineeditorview-override-' + pkey" class="text-xs text-muted-foreground">{{ paramDefLabel(pkey) }}</label>
+                  <textarea
+                    v-if="paramDefByKey(pkey)?.type === 'string' && paramDefByKey(pkey)?.multiline"
+                    :id="'pipelineeditorview-override-' + pkey"
+                    v-model="selectedNodeOverrides[pkey]"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                    rows="2"
+                  />
+                  <input
+                    v-else-if="paramDefByKey(pkey)?.type === 'string'"
+                    :id="'pipelineeditorview-override-' + pkey"
+                    v-model="selectedNodeOverrides[pkey]"
+                    type="text"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  />
+                  <input
+                    v-else-if="paramDefByKey(pkey)?.type === 'number'"
+                    :id="'pipelineeditorview-override-' + pkey"
+                    v-model.number="selectedNodeOverrides[pkey]"
+                    type="number"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  />
+                  <select
+                    v-else-if="paramDefByKey(pkey)?.type === 'boolean'"
+                    :id="'pipelineeditorview-override-' + pkey"
+                    v-model="selectedNodeOverrides[pkey]"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option :value="undefined"></option>
+                    <option :value="true">true</option>
+                    <option :value="false">false</option>
+                  </select>
+                  <select
+                    v-else-if="paramDefByKey(pkey)?.type === 'select'"
+                    :id="'pipelineeditorview-override-' + pkey"
+                    v-model="selectedNodeOverrides[pkey]"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option :value="undefined"></option>
+                    <option v-for="o in (paramDefByKey(pkey)?.options || [])" :key="o" :value="o">{{ o }}</option>
+                  </select>
+                  <select
+                    v-else-if="paramDefByKey(pkey)?.type === 'model_backend_ref'"
+                    :id="'pipelineeditorview-override-' + pkey"
+                    v-model="selectedNodeOverrides[pkey]"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option :value="undefined"></option>
+                    <option v-for="mb in modelBackends" :key="mb.id" :value="mb.id">{{ mb.display_name || mb.name || shortId(mb.id) }}</option>
+                  </select>
+                  <select
+                    v-else-if="paramDefByKey(pkey)?.type === 'schema_ref'"
+                    :id="'pipelineeditorview-override-' + pkey"
+                    v-model="selectedNodeOverrides[pkey]"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option :value="undefined"></option>
+                    <option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.name || shortId(s.id) }}</option>
+                  </select>
+                  <span v-else class="text-xs text-muted-foreground">—</span>
+                </div>
+                <button
+                  type="button"
+                  class="mt-1 text-xs text-indigo-500 hover:text-indigo-400"
+                  data-testid="pipeline-save-param-set"
+                  @click="saveAsNewParamSet"
+                >
+                  {{ $t('views.PipelineEditorView.save_as_new_set') }}
+                </button>
+              </dd>
+            </div>
+          </template>
+          <!-- Capability Scope (FAR-437): narrow-not-widen authoring -->
+          <div v-if="(selectedNodeData.node_type === 'agent' || selectedNodeData.node_type === 'sandbox_agent') && selectedNodeData.agent_id" data-testid="pipeline-editor-capability-scope">
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.capability_scope') }}</dt>
+            <dd class="mt-1 space-y-3">
+              <p class="text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.capability_scope_description') }}</p>
+              <!-- Allowed Connectors (from the Agent's grants) -->
+              <div>
+                <div class="text-xs font-medium">{{ $t('views.PipelineEditorView.capability_scope_allowed_connectors') }}</div>
+                <div v-if="availableConnectorsForNode.length === 0" class="mt-1 text-[11px] text-muted-foreground" data-testid="pipeline-editor-scope-no-connectors">
+                  {{ $t('views.PipelineEditorView.capability_scope_no_connectors') }}
+                </div>
+                <div v-else class="mt-1 space-y-1">
+                  <label v-for="c in availableConnectorsForNode" :key="c.id" class="flex min-h-6 items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      :value="c.id"
+                      v-model="nodeCapabilityScope.allowed_connectors"
+                      class="h-4 w-4"
+                      :data-testid="`pipeline-editor-scope-connector-${c.id}`"
+                    />
+                    <span>{{ connectorName({ type: c.connector_type_id, instance_id: c.id }) }}</span>
+                  </label>
+                </div>
+                <div v-if="outOfScopeConnectors.length > 0" class="mt-1 text-[11px] text-warning" role="alert" data-testid="pipeline-editor-scope-widen-warning">
+                  {{ $t('views.PipelineEditorView.capability_scope_widen_warning') }}{{ outOfScopeConnectors.join(', ') }}
+                </div>
+              </div>
+              <!-- Allowed Tools (free-form list) -->
+              <div>
+                <div class="text-xs font-medium">{{ $t('views.PipelineEditorView.capability_scope_allowed_tools') }}</div>
+                <div v-if="nodeCapabilityScope.allowed_tools.length > 0" class="mt-1 flex flex-wrap gap-1">
+                  <span v-for="t in nodeCapabilityScope.allowed_tools" :key="t" class="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]">
+                    {{ t }}
+                    <button
+                      type="button"
+                      class="text-muted-foreground hover:text-foreground"
+                      :aria-label="$t('views.PipelineEditorView.capability_scope_remove_tool', { name: t })"
+                      :data-testid="`pipeline-editor-scope-tool-remove-${t}`"
+                      @click="removeCapabilityEntry('allowed_tools', t)"
+                    >&times;</button>
+                  </span>
+                </div>
+                <div class="mt-1 flex gap-1">
+                  <input
+                    v-model="capabilityToolInput"
+                    :placeholder="$t('views.PipelineEditorView.capability_scope_tool_placeholder')"
+                    :aria-label="$t('views.PipelineEditorView.capability_scope_allowed_tools')"
+                    class="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                    @keydown.enter.prevent="addCapabilityEntry('allowed_tools')"
+                    data-testid="pipeline-editor-scope-tool-input"
+                  />
+                  <button
+                    type="button"
+                    class="shrink-0 rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
+                    @click="addCapabilityEntry('allowed_tools')"
+                    data-testid="pipeline-editor-scope-tool-add"
+                  >{{ $t('views.PipelineEditorView.capability_scope_add') }}</button>
+                </div>
+              </div>
+              <!-- Context Scope (free-form list of run_context keys) -->
+              <div>
+                <div class="text-xs font-medium">{{ $t('views.PipelineEditorView.capability_scope_context_scope') }}</div>
+                <div v-if="nodeCapabilityScope.context_scope.length > 0" class="mt-1 flex flex-wrap gap-1">
+                  <span v-for="k in nodeCapabilityScope.context_scope" :key="k" class="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]">
+                    {{ k }}
+                    <button
+                      type="button"
+                      class="text-muted-foreground hover:text-foreground"
+                      :aria-label="$t('views.PipelineEditorView.capability_scope_remove_context', { name: k })"
+                      :data-testid="`pipeline-editor-scope-context-remove-${k}`"
+                      @click="removeCapabilityEntry('context_scope', k)"
+                    >&times;</button>
+                  </span>
+                </div>
+                <div class="mt-1 flex gap-1">
+                  <input
+                    v-model="capabilityContextInput"
+                    :placeholder="$t('views.PipelineEditorView.capability_scope_context_placeholder')"
+                    :aria-label="$t('views.PipelineEditorView.capability_scope_context_scope')"
+                    class="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                    @keydown.enter.prevent="addCapabilityEntry('context_scope')"
+                    data-testid="pipeline-editor-scope-context-input"
+                  />
+                  <button
+                    type="button"
+                    class="shrink-0 rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
+                    @click="addCapabilityEntry('context_scope')"
+                    data-testid="pipeline-editor-scope-context-add"
+                  >{{ $t('views.PipelineEditorView.capability_scope_add') }}</button>
+                </div>
+              </div>
+              <!-- Reset to unrestricted -->
+              <div class="flex items-center justify-between gap-2">
+                <span v-if="!doesNodeHaveCapabilityScope(selectedNodeData)" class="text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.capability_scope_unrestricted') }}</span>
+                <button
+                  type="button"
+                  class="text-[11px] text-indigo-500 hover:text-indigo-400"
+                  @click="resetCapabilityScope"
+                  data-testid="pipeline-editor-scope-reset"
+                >{{ $t('views.PipelineEditorView.capability_scope_reset') }}</button>
+              </div>
+            </dd>
+          </div>
+          <!-- Runner (sandbox_agent): template, command, env, context -->
+          <template v-if="selectedNodeData.node_type === 'sandbox_agent'">
+            <div v-if="selectedNodeData.template_id">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.template') }}</dt>
+              <dd class="font-mono text-xs select-all" :title="selectedNodeData.template_id">{{ shortId(selectedNodeData.template_id) }}</dd>
+            </div>
+            <div data-testid="pipeline-editor-node-commands">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.command') }}</dt>
+              <dd class="mt-1">
+                <SandboxCommandsEditor
+                  v-model:commands="selectedNodeData.agent_commands"
+                  v-model:joiner="selectedNodeData.commands_concatenation_string"
+                />
+              </dd>
+            </div>
+            <div v-if="selectedNodeData.timeout_seconds">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.timeout') }}</dt>
+              <dd>{{ selectedNodeData.timeout_seconds }}s</dd>
+            </div>
+            <div v-if="selectedNodeData.stall_timeout_seconds">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-stall-timeout-label">{{ $t('views.PipelineEditorView.stall_timeout') }}</dt>
+              <dd data-testid="pipeline-editor-stall-timeout-value">{{ selectedNodeData.stall_timeout_seconds }}s</dd>
+            </div>
+            <div>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-heartbeat-label">{{ $t('views.PipelineEditorView.heartbeat') }}</dt>
+              <dd data-testid="pipeline-editor-heartbeat-value">{{ selectedNodeData.enable_heartbeat === false ? $t('views.PipelineEditorView.disabled') : $t('views.PipelineEditorView.enabled') }}</dd>
+            </div>
+            <div v-if="selectedNodeData.watch_log_path">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-watch-log-path-label">{{ $t('views.PipelineEditorView.watch_log_path') }}</dt>
+              <dd class="font-mono text-xs break-all" data-testid="pipeline-editor-watch-log-path-value">{{ selectedNodeData.watch_log_path }}</dd>
+            </div>
+            <div v-if="selectedNodeData.stdout_percentage_delta != null">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-stdout-delta-label">{{ $t('views.PipelineEditorView.stdout_delta') }}</dt>
+              <dd data-testid="pipeline-editor-stdout-delta-value">{{ selectedNodeData.stdout_percentage_delta }}</dd>
+            </div>
+            <div v-if="selectedNodeData.watch_globs && selectedNodeData.watch_globs.length > 0">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-watch-globs-label">{{ $t('views.PipelineEditorView.watch_globs') }}</dt>
+              <dd class="font-mono text-[10px] break-all" data-testid="pipeline-editor-watch-globs-value">{{ selectedNodeData.watch_globs.join(', ') }}</dd>
+            </div>
+            <div v-if="selectedNodeData.env_vars && Object.keys(selectedNodeData.env_vars).length > 0">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.env_vars') }}</dt>
+              <dd class="font-mono text-[10px] break-all">{{ Object.keys(selectedNodeData.env_vars).join(', ') }}</dd>
+            </div>
+            <AgentRunnerBindings :agent-id="selectedNodeData.agent_id" />
+            <div v-if="selectedNodeData.context_files && Object.keys(selectedNodeData.context_files).length > 0">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.context_files') }}</dt>
+              <dd><ul class="list-inside list-disc text-xs text-muted-foreground"><li v-for="(content, fpath) in selectedNodeData.context_files" :key="fpath">{{ fpath }} <span class="text-[10px] opacity-60">({{ content.length }} bytes)</span></li></ul></dd>
+            </div>
+            <div v-if="selectedNodeData.agent_prompt">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.prompt') }}</dt>
+              <dd class="text-xs text-muted-foreground italic whitespace-pre-wrap max-h-32 overflow-y-auto">{{ selectedNodeData.agent_prompt.substring(0, 300) }}{{ selectedNodeData.agent_prompt.length > 300 ? '...' : '' }}</dd>
+            </div>
+          </template>
+          <!-- Non-sandbox nodes: commands are read-only. The authoring editor is
+               sandbox-only — a command typed on an agent node would flow into the
+               graph save and FAR-488a would then overwrite the bound Agent's row
+               command. What the graph already carries (the bound Agent's
+               agent_commands list) is displayed, never edited. The scalar
+               agent_command field was removed in FAR-820. -->
+          <div
+            v-if="selectedNodeData.node_type !== 'sandbox_agent' && selectedNodeData.agent_commands && selectedNodeData.agent_commands.length > 0"
+            data-testid="pipeline-editor-node-commands-readonly"
+          >
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.commands') }}</dt>
+            <dd>
+              <ul class="list-inside list-decimal text-xs font-mono text-muted-foreground">
+                <li v-for="(cmd, idx) in selectedNodeData.agent_commands" :key="idx">{{ cmd }}</li>
+              </ul>
+              <div v-if="selectedNodeData.commands_concatenation_string" class="text-[10px] text-muted-foreground mt-1">
+                {{ $t('views.PipelineEditorView.commands_concatenated_with') }} <code class="font-mono">{{ selectedNodeData.commands_concatenation_string }}</code>
+              </div>
+            </dd>
+          </div>
+          <!-- Lifecycle maps -->
+          <div v-if="linkedLifecycleMaps.length > 0">
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.lifecycle_maps') }}</dt>
+            <dd>
+              <div v-for="map in linkedLifecycleMaps" :key="map.id" class="flex items-center gap-1">
+                <router-link :to="`/lifecycle-maps/${map.id}`" class="text-xs text-indigo-500 hover:text-indigo-400">
+                  {{ map.name }}
+                </router-link>
+              </div>
+            </dd>
+          </div>
+        </dl>
+        <div class="mt-6 space-y-2">
+          <Button v-if="selectedNodeData.node_type === 'manual'" type="button" class="w-full" data-testid="pipeline-editor-convert-to-agent" @click="openAgentPicker">
+            {{ $t('views.PipelineEditorView.convert_to_agent') }}
+          </Button>
+          <button
+            v-if="selectedNodeData.node_type === 'agent'"
+            type="button"
+            data-testid="pipeline-editor-revert-to-manual"
+            class="inline-flex w-full items-center justify-center rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+            @click="openRevertDialog"
+          >
+            {{ $t('views.PipelineEditorView.revert_to_manual') }}
+          </button>
+        </div>
+      </aside>
+      <!-- Edge Properties Panel (with HITL gate config) -->
+      <aside v-if="selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
+        <dl class="space-y-3 text-sm">
+          <div>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.source') }}</dt>
+            <dd class="font-mono text-xs">{{ shortId(selectedEdgeData.source_node_id) }}</dd>
+          </div>
+          <div>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.target') }}</dt>
+            <dd class="font-mono text-xs">{{ shortId(selectedEdgeData.target_node_id) }}</dd>
+          </div>
+          <div>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.type_label') }}</dt>
+            <dd>
+              <Select
+  :aria-label="$t('views.PipelineEditorView.edge_type')"
+  v-model="edgeForm.edge_type"
+  append-to="self"
+  :placeholder="$t('views.PipelineEditorView.normal')"
+  class="w-full"
+  :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }, { value: 'llm', label: $t('views.PipelineEditorView.llm_routing') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+            </dd>
+          </div>
+          <div>
+            <label for="pipelineeditorview-field-16" class="text-muted-foreground">{{ $t('views.PipelineEditorView.condition_expression') }}</label>
+            <dd>
+              <input
+                id="pipelineeditorview-field-16"
+                v-model="edgeForm.condition_expression"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+                :placeholder="$t('views.PipelineEditorView.jmespath_expression_placeholder')"
+                :disabled="edgeForm.edge_type !== 'conditional' && edgeForm.edge_type !== 'loop'"
+              />
+            </dd>
+          </div>
+          <div v-if="edgeForm.edge_type === 'loop'">
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.max_iterations') }}</dt>
+            <dd>
+              <input
+                v-model.number="edgeForm.max_iterations"
+                type="number"
+                min="0"
+                :aria-label="$t('views.PipelineEditorView.max_iterations')"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                :placeholder="$t('views.PipelineEditorView.max_iterations_placeholder')"
+              />
+              <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.max_iterations_hint') }}</p>
+            </dd>
+          </div>
+          <div v-if="edgeForm.edge_type === 'llm'">
+            <label for="pipelineeditorview-field-17" class="text-muted-foreground">{{ $t('views.PipelineEditorView.routing_label') }}</label>
+            <dd>
+              <input
+                id="pipelineeditorview-field-17"
+                v-model="edgeForm.routing_label"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+                :placeholder="$t('views.PipelineEditorView.routing_label_placeholder')"
+              />
+              <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.the_llm_uses_this_label_to_select_this_path_must_be_unique_among_outgoing_edges') }}</p>
+            </dd>
+          </div>
+        </dl>
+        <hr class="my-4 border-t" />
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold">{{ $t('views.PipelineEditorView.hitl_gate') }}</h3>
+          <label for="pipelineeditorview-field-15" class="inline-flex cursor-pointer items-center">
+            <input id="pipelineeditorview-field-15"
+              v-model="edgeForm.hitl_enabled"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+            />
+            <span class="ml-2 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.enabled') }}</span>
+          </label>
+        </div>
+        <div v-if="edgeForm.hitl_enabled" class="mt-4 space-y-4">
+          <div>
+            <label for="pipelineeditorview-field-14" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.label') }}</label>
+            <input id="pipelineeditorview-field-14"
+              v-model="edgeForm.label"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              :placeholder="$t('views.PipelineEditorView.hitl_label_placeholder')"
+            />
+          </div>
+          <div>
+            <label for="pipelineeditorview-field-13" class="mb-1 block text-xs font-medium text-muted-foreground">
+              {{ $t('views.PipelineEditorView.description') }} <span class="text-destructive">*</span>
+            </label>
+            <textarea id="pipelineeditorview-field-13"
+              v-model="edgeForm.description"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              :placeholder="$t('views.PipelineEditorView.hitl_description_placeholder')"
+              :aria-invalid="hitlDescriptionTooShort ? 'true' : undefined"
+              rows="2"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.hitl_description_hint') }}</p>
+          </div>
+          <div>
+            <label for="pipelineeditorview-field-12" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.claim_expiry_minutes') }}</label>
+            <input id="pipelineeditorview-field-12"
+              v-model.number="edgeForm.claim_expiry_minutes"
+              type="number"
+              min="1"
+              max="1440"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            />
+          </div>
+          <div class="flex items-center gap-2">
+            <input :aria-label="$t('views.PipelineEditorView.aria_checkbox')"
+              v-model="edgeForm.human_only"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+            />
+            <span class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.human_only_block_llm_auto_approval') }}</span>
+          </div>
+          <hr class="border-t" />
+          <div>
+            <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.condition_type') }}</label>
+            <Select
+  :aria-label="$t('views.PipelineEditorView.condition_type')"
+  v-model="edgeForm.condition_type"
+  append-to="self"
+  :placeholder="$t('views.PipelineEditorView.none_always_gate')"
+  class="w-full"
+  :options="[{ value: 'none', label: $t('views.PipelineEditorView.none_always_gate') }, { value: 'jmespath', label: $t('views.PipelineEditorView.jmespath_expression') }, { value: 'eval', label: $t('views.PipelineEditorView.eval_reference') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+          </div>
+          <div v-if="edgeForm.condition_type === 'jmespath'">
+            <label for="pipelineeditorview-field-10" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.jmespath_condition') }}</label>
+            <input id="pipelineeditorview-field-10"
+              v-model="edgeForm.condition"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+              :placeholder="$t('views.PipelineEditorView.jmespath_condition_placeholder')"
+            />
+            <p class="mt-1 text-[10px] text-muted-foreground">
+              {{ $t('views.PipelineEditorView.jmespath_condition_hint') }}
+            </p>
+          </div>
+          <div v-if="edgeForm.condition_type === 'eval'" class="space-y-3">
+            <div>
+              <label for="pipelineeditorview-field-9" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.eval_name') }}</label>
+              <input id="pipelineeditorview-field-9"
+                v-model="edgeForm.eval_name"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+                :placeholder="$t('views.PipelineEditorView.eval_name_placeholder')"
+              />
+            </div>
+            <div class="flex gap-2">
+              <div class="flex-1">
+                <label for="pipelineeditorview-field-8" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.threshold') }}</label>
+                <input id="pipelineeditorview-field-8"
+                  v-model.number="edgeForm.eval_threshold"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                />
+              </div>
+              <div class="flex-1">
+                <label for="pipelineeditorview-field-7" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.operator') }}</label>
+                <Select
+  :aria-label="$t('views.PipelineEditorView.operator')"
+  v-model="edgeForm.eval_operator"
+  append-to="self"
+  :placeholder="$t('views.PipelineEditorView.eval_operator_placeholder')"
+  class="w-full"
+  :options="[{ value: 'lt', label: $t('views.PipelineEditorView.eval_operator_lt') }, { value: 'gt', label: $t('views.PipelineEditorView.eval_operator_gt') }, { value: 'lte', label: $t('views.PipelineEditorView.eval_operator_lte') }, { value: 'gte', label: $t('views.PipelineEditorView.eval_operator_gte') }, { value: 'eq', label: $t('views.PipelineEditorView.eval_operator_eq') }, { value: 'neq', label: $t('views.PipelineEditorView.eval_operator_neq') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+              </div>
+            </div>
+            <p class="mt-1 text-[10px] text-muted-foreground">
+              {{ $t('views.PipelineEditorView.eval_condition_hint') }}
+            </p>
+          </div>
+          <div class="flex gap-2 pt-2">
+            <Button type="button" data-testid="pipeline-editor-save-edge" class="flex-1" :disabled="savingEdge" @click="saveEdgeConfig">
+              {{ savingEdge ? $t('views.PipelineEditorView.saving') : $t('views.PipelineEditorView.save_edge') }}
+            </Button>
+            <button
+              type="button"
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+              @click="selectedEdgeData = null"
+            >
+              {{ $t('views.PipelineEditorView.close') }}
+            </button>
+          </div>
+          <div v-if="edgeSaveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            {{ edgeSaveError }}
+          </div>
+        </div>
+      </aside>
+    </template>
+    <FormDialog
+      :open="showAgentPicker"
+      @update:open="showAgentPicker = false"
+      :title="$t('views.PipelineEditorView.convert_to_agent')"
+      :confirmText="$t('views.PipelineEditorView.convert')"
+      :confirmDisabled="!canConvert"
+      @confirm="convertToAgent"
+    >
+      <div class="space-y-4">
+          <div>
+            <label for="pipelineeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent_select_label') }}</label>
+            <Select
+  :aria-label="$t('views.PipelineEditorView.agent_select_label')"
+  :title="$t('views.PipelineEditorView.agent_select_hint')"
+  v-model="pickerAgentId"
+  append-to="self"
+  @update:model-value="onAgentChange"
+  :placeholder="$t('views.PipelineEditorView.select_agent_placeholder')"
+  data-testid="pipeline-editor-agent-select"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('common.none') }, ...agents.map(a => ({ value: a.id, label: a.name }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+          </div>
+          <div v-if="selectedAgent">
+            <label for="pipelineeditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.connector') }}</label>
+            <Select
+  :aria-label="$t('views.PipelineEditorView.connector')"
+  v-model="pickerConnectorId"
+  append-to="self"
+  :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')"
+  data-testid="pipeline-editor-connector-select"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('common.none') }, ...eligibleConnectors.map(c => ({ value: c.id, label: c.name + '(' + c.connector_type_id + ')' }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+          </div>
+          <div v-if="selectedAgent">
+            <span class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.model_backend_label') }}</span>
+            <div class="rounded-lg border bg-muted px-3 py-2 text-sm">
+              {{ modelBackendName || $t('views.PipelineEditorView.loading') }}
+            </div>
+          </div>
+          <div v-if="selectedAgent" class="rounded-lg border bg-muted p-3 text-sm">
+            <p class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.schema') }}</p>
+            <p class="mt-0.5 font-medium">{{ $t('views.PipelineEditorView.input_label') }} {{ agentSchemaName(selectedAgent, 'input') }}</p>
+            <p class="font-medium">{{ $t('views.PipelineEditorView.output_label') }} {{ agentSchemaName(selectedAgent, 'output') }}</p>
+          </div>
+          <div v-if="convertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            {{ convertError }}
+          </div>
+      </div>
+    </FormDialog>
+    <FormDialog
+      :open="showRevertDialog"
+      @update:open="showRevertDialog = false"
+      :title="$t('views.PipelineEditorView.revert_dialog_title')"
+      :confirmText="$t('views.PipelineEditorView.revert')"
+      :confirmDisabled="!revertSnapshotId"
+      @confirm="revertToManual"
+    >
+      <div v-if="revertLoading" class="flex items-center justify-center py-8">
+        <div class="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+      <div v-else class="space-y-4">
+        <p class="text-sm text-muted-foreground">
+          {{ $t('views.PipelineEditorView.select_snapshot_description') }}
+        </p>
+        <div>
+          <label for="pipelineeditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
+          <Select
+  :aria-label="$t('views.PipelineEditorView.snapshot_label')"
+  v-model="revertSnapshotId"
+  append-to="self"
+  :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')"
+  data-testid="pipeline-editor-snapshot-select"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('common.none') }, ...snapshots.map(s => ({ value: s.id, label: 'v' + s.snapshot_version + (s.tag ? ` — ${s.tag}` : '') }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+        </div>
+        <div v-if="revertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          {{ revertError }}
+        </div>
+      </div>
+    </FormDialog>
+    <FormDialog
+      :open="showSaveAsComposite"
+      @update:open="showSaveAsComposite = false"
+      :title="$t('views.PipelineEditorView.save_as_composite')"
+      :confirmText="$t('views.PipelineEditorView.save')"
+      :confirmDisabled="!saveAsName || saveAsSelectedNodeIds.length === 0 || saving"
+      :loading="saving"
+      @confirm="handleSaveAsComposite"
+    >
+      <p class="mb-4 text-sm text-muted-foreground">
+        {{ $t('views.PipelineEditorView.save_as_composite_description') }}
+      </p>
+      <div class="space-y-4">
+        <div>
+          <label for="pipelineeditorview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.name_required') }}</label>
+          <input id="pipelineeditorview-field-3"
+            v-model="saveAsName"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            :placeholder="$t('views.PipelineEditorView.composite_name_placeholder')"
+          />
+        </div>
+        <div>
+          <label for="pipelineeditorview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.description') }}</label>
+          <textarea id="pipelineeditorview-field-2"
+            v-model="saveAsDescription"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            rows="3"
+            :placeholder="$t('views.PipelineEditorView.optional_description')"
+          />
+        </div>
+        <div>
+          <span class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.selected_nodes') }}</span>
+          <div class="max-h-32 space-y-1 overflow-y-auto">
+            <label
+              v-for="node in rawNodes"
+              :key="node.id"
+              class="flex items-center gap-2 rounded-md bg-muted/30 px-3 py-1.5 text-sm"
+            >
+              <input
+                v-model="saveAsSelectedNodeIds"
+                type="checkbox"
+                :value="node.id"
+                class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
+              />
+              <span>{{ node.label || $t('views.PipelineEditorView.node_fallback_label', { id: shortId(node.id) }) }}</span>
+            </label>
+          </div>
+        </div>
+        <div v-if="saveAsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          {{ saveAsError }}
+        </div>
+      </div>
+    </FormDialog>
+    <FormDialog
+      :open="showRenameDialog"
+      @update:open="showRenameDialog = false"
+      :title="$t('views.PipelineEditorView.rename_pipeline')"
+      :confirmText="$t('views.PipelineEditorView.save')"
+      :confirmDisabled="!renameName.trim() || renaming"
+      :loading="renaming"
+      @confirm="handleRename"
+    >
+      <div class="space-y-4">
+        <div>
+          <label for="pipelineeditorview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.name') }}</label>
+          <input id="pipelineeditorview-field-1"
+            v-model="renameName"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            :placeholder="$t('views.PipelineEditorView.pipeline_name_placeholder')"
+            @keyup.enter="handleRename"
+          />
+        </div>
+        <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          {{ renameError }}
+        </div>
+      </div>
+    </FormDialog>
+    <FormDialog
+      :open="showDeleteConfirm"
+      @update:open="showDeleteConfirm = false"
+      :title="$t('views.PipelineEditorView.delete_pipeline_title')"
+      :confirmText="$t('common.delete')"
+      @confirm="handleDelete"
+    >
+      <p class="mb-4 text-sm text-muted-foreground">
+        {{ $t('views.PipelineEditorView.delete_pipeline_confirm') }}
+      </p>
+      <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+        {{ deleteError }}
+      </div>
+    </FormDialog>
+
+    <PipelineSnapshotTimeline v-if="showVersionTimeline" :pipeline-id="pipelineId" @close="showVersionTimeline = false" />
+  </div>
+</template>
+<script setup lang="ts">
+import { ref, computed, reactive, watch, nextTick, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
+import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
+import { Background } from '@vue-flow/background'
+import { Controls } from '@vue-flow/controls'
+import '@vue-flow/core/dist/style.css'
+import '@vue-flow/core/dist/theme-default.css'
+import { useDataFetch } from '../composables/useDataFetch'
+import { formatApiError } from '../lib/api/formatError'
+import { usePlanStore } from '../stores/planStore'
+
+import FormDialog from '../components/shared/FormDialog.vue'
+import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
+import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
+import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
+import { shortId } from '../utils/format'
+import { api } from '../lib/api/client'
+import { useApi } from '../composables/useApi'
+import Button from 'primevue/button'
+import Select from '../components/shared/AppSelect.vue'
+
+function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000): Promise<T> {
+  const ctrl = new AbortController()
+  const timeout = setTimeout(() => ctrl.abort(), ms)
+  return factory(ctrl.signal).finally(() => clearTimeout(timeout))
+}
+
+const { t } = useI18n()
+
+function nodeTypeBadgeClass(nodeType: string): string {
+  if (nodeType === 'manual') return 'badge badge-status-warning'
+  if (nodeType === 'router') return 'badge bg-indigo-500/10 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300'
+  if (nodeType === 'hitl') return 'badge bg-rose-500/10 text-rose-600 dark:bg-rose-900 dark:text-rose-300'
+  return 'badge badge-status-primary'
+}
+
+function nodeTypeLabel(nodeType: string): string {
+  if (nodeType === 'manual') return t('views.PipelineEditorView.manual')
+  if (nodeType === 'sandbox_agent') return t('views.PipelineEditorView.sandbox_agent')
+  if (nodeType === 'router') return t('views.PipelineEditorView.node_router_label')
+  if (nodeType === 'hitl') return t('views.PipelineEditorView.node_hitl_label')
+  return t('views.PipelineEditorView.node_type_agent')
+}
+const planStore = usePlanStore()
+const route = useRoute()
+const router = useRouter()
+const pipelineId = route.params.id as string
+
+const rawNodes = ref<any[]>([])
+const rawEdges = ref<any[]>([])
+const flowNodes = ref<any[]>([])
+const flowEdges = ref<any[]>([])
+
+const selectedNodeData = ref<any | null>(null)
+const selectedEdgeData = ref<any | null>(null)
+const showSaveAsDropdown = ref(false)
+const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl' }
+const { fitView, onPaneReady } = useVueFlow()
+
+// Docked-toolbar styling: one height/radius/spacing per action class so the
+// menu bar reads as one consistent control set (presentation only).
+const btnToolbarBase = 'inline-flex h-7 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50'
+const btnToolbarSecondary = `${btnToolbarBase} border border-input bg-background hover:bg-accent`
+const btnToolbarPrimary = `${btnToolbarBase} bg-indigo-600 text-white hover:bg-indigo-500`
+const btnToolbarDestructive = `${btnToolbarBase} border border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/20`
+const btnToolbarIcon = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground'
+const groupDividerClass = 'mx-0.5 hidden h-5 w-px shrink-0 bg-border md:block'
+
+// Fit the graph as soon as the canvas is ready and nodes exist, so the whole
+// graph is visible on load without user action. Runs after layout settles
+// (nextTick + two animation frames) so the docked toolbar's final height is
+// accounted for by the fit.
+let initialFitDone = false
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    } else {
+      resolve()
+    }
+  })
+}
+async function runInitialFitView() {
+  if (initialFitDone || flowNodes.value.length === 0) return
+  await nextTick()
+  await nextFrame()
+  try {
+    // fitView resolves false when the viewport has nothing measurable to fit,
+    // and is a noop resolving undefined before the viewport initialises, so
+    // the guard latches only on a truthy result. Until a fit succeeds,
+    // pane-ready and the nodes watch keep re-attempting.
+    const ok = await fitView({ padding: 0.1 })
+    if (ok) initialFitDone = true
+  } catch (error) {
+    // fitView signals an unmeasured pane via its resolved value, so a
+    // rejection here is a genuine error — surface it instead of swallowing.
+    console.warn('[PipelineEditorView] initial fitView failed; retry paths remain armed', error)
+  }
+}
+onPaneReady(() => { void runInitialFitView() })
+watch(() => flowNodes.value.length, (len) => { if (len > 0) void runInitialFitView() })
+
+const agents = ref<any[]>([])
+const connectors = ref<any[]>([])
+const modelBackends = ref<any[]>([])
+const schemas = ref<any[]>([])
+const snapshots = ref<any[]>([])
+
+const showAgentPicker = ref(false)
+const showRevertDialog = ref(false)
+const showSaveAsComposite = ref(false)
+const showVersionTimeline = ref(false)
+const pickerAgentId = ref<string>('__all__')
+const pickerConnectorId = ref<string>('__all__')
+const revertSnapshotId = ref<string>('__all__')
+const convertError = ref<string | null>(null)
+const { get, post: postUntyped } = useApi()
+const revertError = ref<string | null>(null)
+const revertLoading = ref(false)
+
+const saveAsName = ref('')
+const saveAsDescription = ref('')
+const saveAsSelectedNodeIds = ref<string[]>([])
+const saveAsError = ref<string | null>(null)
+const saving = ref(false)
+
+const savingEdge = ref(false)
+const edgeSaveError = ref<string | null>(null)
+
+const pipeline = ref<any>(null)
+const showRenameDialog = ref(false)
+const renameName = ref('')
+const renameError = ref<string | null>(null)
+const renaming = ref(false)
+const showDeleteConfirm = ref(false)
+const deleteError = ref<string | null>(null)
+
+const savingGraph = ref(false)
+const saveGraphError = ref<string | null>(null)
+const showRunDialog = ref(false)
+const runPrompt = ref('')
+const running = ref(false)
+const runError = ref<string | null>(null)
+const confirmEmptyRun = ref(false)
+const emptyRunWarning = ref<string | null>(null)
+
+watch(runPrompt, () => {
+  if (confirmEmptyRun.value) {
+    confirmEmptyRun.value = false
+    emptyRunWarning.value = null
+  }
+})
+
+const maxDurationInput = ref<number | undefined>(undefined)
+
+const retryPolicyOpen = ref(false)
+const retryPolicySaving = ref(false)
+// FAR-649: coverage mode. 'all' = All errors (the default; saves the policy
+// WITHOUT the `on` key, which the runtime resolves to all retryable events).
+// 'specific' = granular (saves the explicit event list).
+const retryPolicyMode = ref<'all' | 'specific'>('all')
+const retryPolicyEvents = ref<string[]>([])
+const retryPolicyMaxRetries = ref(0)
+const retryPolicyDelaySeconds = ref(45)
+const retryPolicyMultiplier = ref(2)
+const retryPolicyScheduleWarning = ref<string | null>(null)
+const retryPolicyLegacyBackoff = ref<number | undefined>(undefined)
+const retryPolicyError = ref<string | null>(null)
+const retryPolicyToggleRef = ref<HTMLButtonElement | null>(null)
+const retryPolicyPanelRef = ref<HTMLElement | null>(null)
+const retryPolicyToggleId = 'pipeline-editor-retry-policy-toggle'
+const retryPolicyPanelId = 'pipeline-editor-retry-policy-panel'
+const retryPolicyOptions = [
+  { value: 'stall', labelKey: 'views.PipelineEditorView.retry_policy_stall' },
+  { value: 'timeout', labelKey: 'views.PipelineEditorView.retry_policy_timeout' },
+  { value: 'failure', labelKey: 'views.PipelineEditorView.retry_policy_failure' },
+  { value: 'eval_failed', labelKey: 'views.PipelineEditorView.retry_policy_eval_failed' },
+]
+const retryPolicyEventValues = new Set(retryPolicyOptions.map((o) => o.value))
+
+interface RetryPolicy {
+  on?: string[]
+  max_retries?: number
+  [key: string]: unknown
+}
+
+type PipelineRetryPolicySource = {
+  retry_policy?: RetryPolicy | null
+}
+
+const retryPolicyNoRetriesWarning = computed(() => {
+  const max = Number(retryPolicyMaxRetries.value) || 0
+  // FAR-649: granular with ZERO events selected = retry effectively off —
+  // the zero-selected warning (save is blocked too, no silent inert policy).
+  if (retryPolicyMode.value === 'specific' && retryPolicyEvents.value.length === 0) {
+    return t('views.PipelineEditorView.retry_policy_warning_no_events')
+  }
+  if (max === 0) {
+    return t('views.PipelineEditorView.retry_policy_warning_no_max')
+  }
+  return null
+})
+
+// FAR-649: granular with zero events selected cannot save (disable-save with
+// warning, never a silent inert policy). All-errors mode is never blocked by
+// this (a 0 budget there is the explicit "retry nothing" state).
+const retryPolicySaveBlocked = computed(
+  () => retryPolicyMode.value === 'specific' && retryPolicyEvents.value.length === 0,
+)
+
+function syncRetryPolicyFromPipeline() {
+  const rp = (pipeline.value as PipelineRetryPolicySource | null)?.retry_policy
+  retryPolicyScheduleWarning.value = null
+  if (rp && typeof rp === 'object' && !Array.isArray(rp)) {
+    // FAR-649: coverage mode from the stored shape. An ABSENT `on` (key
+    // missing or null) renders as All-errors — the runtime resolves it to all
+    // retryable events. An explicit `on` list renders as granular (a stored
+    // empty list is retry-effectively-off, surfaced by the zero-selected
+    // warning). A malformed non-list `on` fail-closes at runtime (no retry),
+    // so it renders as granular with nothing selected to surface the warning.
+    const stored = rp as Record<string, unknown>
+    if (stored.on === undefined || stored.on === null) {
+      retryPolicyMode.value = 'all'
+      retryPolicyEvents.value = []
+    } else if (Array.isArray(stored.on)) {
+      retryPolicyMode.value = 'specific'
+      retryPolicyEvents.value = (stored.on as unknown[]).filter((e): e is string =>
+        retryPolicyEventValues.has(e as string),
+      )
+    } else {
+      retryPolicyMode.value = 'specific'
+      retryPolicyEvents.value = []
+    }
+    const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
+    retryPolicyMaxRetries.value = Math.min(5, Math.max(0, max))
+
+    // FAR-525: keep the legacy node-level inherited `backoff` so a save can
+    // re-send it losslessly (the editor rebuilds the policy from a whitelist).
+    const legacyBackoff = (rp as Record<string, unknown>).backoff
+    retryPolicyLegacyBackoff.value =
+      typeof legacyBackoff === 'number' && Number.isFinite(legacyBackoff) ? legacyBackoff : undefined
+
+    // FAR-525: load the run-level backoff schedule into the panel. Out-of-range
+    // stored values are clamped here for editing ONLY — the runtime resolver
+    // fails open to the default 45s x 2.0 schedule, which the warning surfaces.
+    let scheduleClamped = false
+    const schedule = (rp as Record<string, unknown>).backoff_schedule
+    if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)) {
+      const s = schedule as Record<string, unknown>
+      const rawDelay = Number(s.delay_seconds)
+      if (Number.isFinite(rawDelay) && rawDelay >= 1 && rawDelay <= 300) {
+        retryPolicyDelaySeconds.value = Math.round(rawDelay)
+      } else {
+        retryPolicyDelaySeconds.value = Number.isFinite(rawDelay)
+          ? Math.min(300, Math.max(1, Math.round(rawDelay)))
+          : 45
+        scheduleClamped = true
+      }
+      if (s.multiplier === undefined) {
+        retryPolicyMultiplier.value = 2
+      } else {
+        const rawMult = Number(s.multiplier)
+        if (Number.isFinite(rawMult) && rawMult >= 1 && rawMult <= 10) {
+          retryPolicyMultiplier.value = rawMult
+        } else {
+          retryPolicyMultiplier.value = Number.isFinite(rawMult) ? Math.min(10, Math.max(1, rawMult)) : 2
+          scheduleClamped = true
+        }
+      }
+    } else {
+      retryPolicyDelaySeconds.value = 45
+      retryPolicyMultiplier.value = 2
+    }
+    if (scheduleClamped) {
+      retryPolicyScheduleWarning.value = t('views.PipelineEditorView.retry_policy_schedule_clamped_warning')
+    }
+  } else {
+    retryPolicyMode.value = 'all'
+    retryPolicyEvents.value = []
+    retryPolicyMaxRetries.value = 0
+    retryPolicyLegacyBackoff.value = undefined
+    retryPolicyDelaySeconds.value = 45
+    retryPolicyMultiplier.value = 2
+  }
+  retryPolicyError.value = null
+}
+
+function toggleRetryPolicy() {
+  retryPolicyOpen.value = !retryPolicyOpen.value
+  if (retryPolicyOpen.value) {
+    syncRetryPolicyFromPipeline()
+    nextTick(() => {
+      retryPolicyPanelRef.value?.focus()
+    })
+  } else {
+    retryPolicyToggleRef.value?.focus()
+  }
+}
+
+function closeRetryPolicy() {
+  retryPolicyOpen.value = false
+  retryPolicyToggleRef.value?.focus()
+}
+
+function onRetryPolicyKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && retryPolicyOpen.value) {
+    event.preventDefault()
+    closeRetryPolicy()
+  }
+}
+
+watch(retryPolicyOpen, (open) => {
+  if (open) {
+    document.addEventListener('keydown', onRetryPolicyKeydown)
+  } else {
+    document.removeEventListener('keydown', onRetryPolicyKeydown)
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onRetryPolicyKeydown)
+})
+
+async function saveRetryPolicy() {
+  if (retryPolicySaving.value) return
+  retryPolicyError.value = null
+  const max = Math.min(5, Math.max(0, Number(retryPolicyMaxRetries.value) || 0))
+  const granular = retryPolicyMode.value === 'specific'
+  const on = [...retryPolicyEvents.value]
+  if (granular && on.length === 0) {
+    // FAR-649: no silent inert policy — granular with zero events selected is
+    // blocked (the save button is disabled; this guard also blocks direct
+    // invocation). Switch to All-errors or select at least one event.
+    retryPolicyError.value = t('views.PipelineEditorView.retry_policy_warning_no_events')
+    return
+  }
+  if (granular && on.length > 0 && max === 0) {
+    retryPolicyError.value = t('views.PipelineEditorView.retry_policy_warning_no_max')
+    return
+  }
+  // FAR-525: rebuild the policy from a whitelist so no API-set key is silently
+  // destroyed: the legacy node-level `backoff` is preserved explicitly, and the
+  // run-level `backoff_schedule` is rebuilt from the panel inputs (never spread
+  // from the stored object, so junk inner keys are dropped). FAR-649: All-errors
+  // mode saves WITHOUT the `on` key (absent `on` = all retryable events at
+  // runtime); granular mode saves the explicit event list.
+  const delay = Math.min(300, Math.max(1, Math.round(Number(retryPolicyDelaySeconds.value) || 0)))
+  const multiplier = Math.min(10, Math.max(1, Number(retryPolicyMultiplier.value) || 0))
+  const policy: RetryPolicy = { max_retries: max }
+  if (granular) {
+    policy.on = on
+  }
+  if (retryPolicyLegacyBackoff.value !== undefined) {
+    policy.backoff = retryPolicyLegacyBackoff.value
+  }
+  policy.backoff_schedule = { delay_seconds: delay, multiplier }
+  const body: { retry_policy: RetryPolicy } = {
+    retry_policy: policy,
+  }
+  retryPolicySaving.value = true
+  try {
+    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body,
+      signal,
+    }))
+    await loadPipeline()
+    retryPolicyOpen.value = false
+    retryPolicyToggleRef.value?.focus()
+    saveGraphError.value = null
+  } catch (e) {
+    retryPolicyError.value = `${t('views.PipelineEditorView.retry_policy_update_failed')}${formatApiError(e)}`
+  } finally {
+    retryPolicySaving.value = false
+  }
+}
+
+const folders = ref<any[]>([])
+const linkedLifecycleMaps = ref<any[]>([])
+
+const folderPath = computed(() => {
+  const path: { name: string; id: string }[] = []
+  let current: any = folders.value.find((f: any) => f.id === pipeline.value?.folder_id)
+  while (current) {
+    path.unshift({ name: current.name, id: current.id })
+    current = current.parent_id ? folders.value.find((f: any) => f.id === current.parent_id) : null
+  }
+  return path
+})
+
+const defaultEdgeForm = {
+  edge_type: 'normal',
+  condition_expression: '',
+  max_iterations: 0,
+  routing_label: '',
+  hitl_enabled: false,
+  label: '',
+  description: '',
+  claim_expiry_minutes: 15,
+  // FAR-609: every HITL gate defaults to human_only; the checkbox opts out.
+  human_only: true,
+  condition_type: 'none',
+  condition: '',
+  eval_name: '',
+  eval_threshold: 0.8,
+  eval_operator: 'lt',
+}
+
+const edgeForm = reactive({ ...defaultEdgeForm })
+
+// FAR-613/FAR-688: a HITL gate must carry a human description of at least
+// this many trimmed characters — ONE constant for the template's
+// aria-invalid hint and the save guard (previously the literal 20 in two
+// places). Counted as CODE POINTS ([...str].length) to match the backend's
+// Python len() — a description padded with astral-plane characters (emoji)
+// must not be miscounted by UTF-16 units.
+const HITL_DESCRIPTION_MIN_LENGTH = 20
+
+function codePointLength(value: string): number {
+  return [...value].length
+}
+
+const hitlDescriptionTooShort = computed(
+  () => edgeForm.hitl_enabled && codePointLength(edgeForm.description.trim()) < HITL_DESCRIPTION_MIN_LENGTH,
+)
+
+// ---------------------------------------------------------------------------
+// FAR-688: legacy HITL description violations.
+//
+// Graph READS never hard-fail on gate descriptions below the minimum (the
+// forcing function applies to the next SAVE — legacy pipelines stay
+// readable/editable), and the read response's ``validation_issues`` is
+// always empty for reads. So the editor scans the loaded graph CLIENT-SIDE
+// for gates whose description would fail the save-time check and surfaces
+// them in a dismissible banner, listing the offending edges/nodes so the
+// user can find legacy gates without hunting the graph.
+// ---------------------------------------------------------------------------
+
+interface LegacyHitlIssue {
+  /** Stable list key (kind + id). */
+  key: string
+  /** 'edge' gates report the edge; 'node' gates the FAR-402 HITL node. */
+  kind: 'edge' | 'node'
+  /** Human label for the list (node label or shortId pair). */
+  label: string
+}
+
+function hitlConfigDescriptionTooShort(config: unknown): boolean {
+  // Mirrors GraphValidator._hitl_description_issue: a config without a
+  // usable description string of >= HITL_DESCRIPTION_MIN_LENGTH trimmed
+  // code points violates the rule.
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return true
+  const description = (config as Record<string, unknown>).description
+  if (typeof description !== 'string') return true
+  return codePointLength(description.trim()) < HITL_DESCRIPTION_MIN_LENGTH
+}
+
+function findLegacyHitlDescriptionIssues(nodes: any[], edges: any[]): LegacyHitlIssue[] {
+  const issues: LegacyHitlIssue[] = []
+  const hitlNodeIds = new Set<string>()
+  for (const node of nodes) {
+    if (!node || typeof node !== 'object' || !node.id) continue
+    if (node.node_type !== 'hitl') continue
+    hitlNodeIds.add(String(node.id))
+    if (hitlConfigDescriptionTooShort(node.hitl_config)) {
+      const label = (typeof node.label === 'string' && node.label.trim()) || shortId(String(node.id))
+      issues.push({ key: `node:${node.id}`, kind: 'node', label })
+    }
+  }
+  for (const edge of edges) {
+    if (!edge || typeof edge !== 'object') continue
+    const config = edge.hitl_gate_config
+    if (!config || typeof config !== 'object') continue
+    // A node-level gate's config is injected onto its outgoing edges at
+    // compile time; the persisted definition carries it on the NODE, and
+    // the node pass already reported it — never double-list one gate.
+    if (edge.source_node_id != null && hitlNodeIds.has(String(edge.source_node_id))) continue
+    if (!hitlConfigDescriptionTooShort(config)) continue
+    const source = shortId(String(edge.source_node_id ?? edge.source ?? '?'))
+    const target = shortId(String(edge.target_node_id ?? edge.target ?? '?'))
+    const fallbackKey = `${source}->${target}`
+    issues.push({ key: `edge:${edge.id ?? fallbackKey}`, kind: 'edge', label: `${source} → ${target}` })
+  }
+  return issues
+}
+
+// Reactive over the loaded graph — a save that fixed the last violation
+// clears the banner; a reverted graph brings it back.
+const legacyHitlIssues = computed(() => findLegacyHitlDescriptionIssues(rawNodes.value, rawEdges.value))
+const showLegacyHitlBanner = ref(true)
+
+// FAR-688: which KINDS of violations are present drives the per-kind hints —
+// edge gates keep the "open the edge and add one" hint; node-level gates get
+// the API/MCP hint because the editor cannot edit their hitl_config yet.
+const hasLegacyEdgeIssues = computed(() => legacyHitlIssues.value.some(issue => issue.kind === 'edge'))
+const hasLegacyNodeIssues = computed(() => legacyHitlIssues.value.some(issue => issue.kind === 'node'))
+
+const selectedAgent = computed(() => agents.value.find(a => a.id === pickerAgentId.value) || null)
+
+const eligibleConnectors = computed(() => {
+  if (!selectedAgent.value) return []
+  const refs: Array<{ connector_type: string }> = selectedAgent.value.connector_type_refs || []
+  const allowedTypes = new Set(refs.map(r => r.connector_type))
+  return connectors.value.filter(c => allowedTypes.has(c.connector_type_id))
+})
+
+const modelBackendName = computed(() => {
+  if (!selectedAgent.value) return ''
+  const mb = modelBackends.value.find(b => b.id === selectedAgent.value.model_backend_id)
+  return mb ? `${mb.display_name} (${mb.provider})` : 'Unknown'
+})
+
+function agentSchemaName(agent: any, dir: 'input' | 'output') {
+  const s = schemas.value.find(s => s.id === agent[`${dir}_schema_id`])
+  return s ? s.name : `${dir}_schema_id`
+}
+
+const isWebhookTriggered = computed(() => pipeline.value?.trigger_type === 'webhook')
+
+function agentName(agentId: string): string | undefined {
+  return agents.value.find((a: any) => a.id === agentId)?.name
+}
+
+function agentModelBackendId(agentId: string): string | undefined {
+  const agent = agents.value.find((a: any) => a.id === agentId)
+  return agent?.model_backend_id
+}
+
+function agentModelBackendName(agentId: string): string | undefined {
+  const agent = agents.value.find((a: any) => a.id === agentId)
+  if (!agent?.model_backend_id) return undefined
+  const mb = modelBackends.value.find((b: any) => b.id === agent.model_backend_id)
+  return mb?.display_name
+}
+
+function agentInputSchemaId(agentId: string): string | undefined {
+  const agent = agents.value.find((a: any) => a.id === agentId)
+  return agent?.input_schema_id
+}
+
+function agentOutputSchemaId(agentId: string): string | undefined {
+  const agent = agents.value.find((a: any) => a.id === agentId)
+  return agent?.output_schema_id
+}
+
+function schemaName(schemaId: string): string | undefined {
+  const s = schemas.value.find((s: any) => s.id === schemaId)
+  return s?.name
+}
+
+function connectorName(binding: any): string {
+  if (!binding) return '-'
+  const conn = connectors.value.find((c: any) => c.id === binding.instance_id)
+  if (conn) return `${conn.name} (${binding.type})`
+  return binding.instance_id ? `${binding.type} / ${shortId(binding.instance_id)}` : binding.type
+}
+
+// FAR-437: node-level capability_scope authoring (narrow-not-widen)
+const nodeCapabilityScope = reactive<{ allowed_connectors: string[]; allowed_tools: string[]; context_scope: string[] }>({
+  allowed_connectors: [],
+  allowed_tools: [],
+  context_scope: [],
+})
+const capabilityToolInput = ref('')
+const capabilityContextInput = ref('')
+
+function doesNodeHaveCapabilityScope(node: any): boolean {
+  const cs = node?.capability_scope
+  if (!cs || typeof cs !== 'object') return false
+  return [cs.allowed_connectors, cs.allowed_tools, cs.context_scope]
+    .some((arr) => Array.isArray(arr) && arr.length > 0)
+}
+
+function nodeAgent(node: any): any | undefined {
+  return agents.value.find((a: any) => a.id === node?.agent_id)
+}
+
+function agentConnectorTypes(agent: any): Set<string> {
+  const refs: Array<{ connector_type: string }> = agent?.connector_type_refs || []
+  return new Set(refs.map((r) => r.connector_type))
+}
+
+const availableConnectorsForNode = computed(() => {
+  const agent = nodeAgent(selectedNodeData.value)
+  const types = agentConnectorTypes(agent)
+  if (types.size === 0) return []
+  return connectors.value.filter((c: any) => types.has(c.connector_type_id))
+})
+
+const outOfScopeConnectors = computed(() => {
+  const available = new Set(availableConnectorsForNode.value.map((c: any) => c.id))
+  return nodeCapabilityScope.allowed_connectors.filter((v) => !available.has(v))
+})
+
+function syncCapabilityScopeToNode() {
+  if (!selectedNodeData.value) return
+  const cs = nodeCapabilityScope
+  const hasAny = cs.allowed_connectors.length > 0 || cs.allowed_tools.length > 0 || cs.context_scope.length > 0
+  const capability_scope = hasAny
+    ? {
+        ...(cs.allowed_connectors.length > 0 ? { allowed_connectors: [...cs.allowed_connectors] } : {}),
+        ...(cs.allowed_tools.length > 0 ? { allowed_tools: [...cs.allowed_tools] } : {}),
+        ...(cs.context_scope.length > 0 ? { context_scope: [...cs.context_scope] } : {}),
+      }
+    : null
+  selectedNodeData.value.capability_scope = capability_scope
+  const fn = flowNodes.value.find((n: any) => n.id === selectedNodeData.value.id)
+  if (fn) {
+    fn.data = { ...fn.data, hasCapabilityScope: hasAny }
+  }
+}
+
+watch(nodeCapabilityScope, () => syncCapabilityScopeToNode(), { deep: true })
+
+function addCapabilityEntry(field: 'allowed_tools' | 'context_scope') {
+  const input = field === 'allowed_tools' ? capabilityToolInput.value : capabilityContextInput.value
+  const trimmed = input.trim()
+  if (!trimmed) return
+  const arr = nodeCapabilityScope[field]
+  if (!arr.includes(trimmed)) arr.push(trimmed)
+  if (field === 'allowed_tools') capabilityToolInput.value = ''
+  else capabilityContextInput.value = ''
+}
+
+function removeCapabilityEntry(field: 'allowed_tools' | 'context_scope', value: string) {
+  const arr = nodeCapabilityScope[field]
+  const idx = arr.indexOf(value)
+  if (idx >= 0) arr.splice(idx, 1)
+}
+
+function resetCapabilityScope() {
+  nodeCapabilityScope.allowed_connectors = []
+  nodeCapabilityScope.allowed_tools = []
+  nodeCapabilityScope.context_scope = []
+}
+
+function syncNodeToFlow() {
+  if (!selectedNodeData.value) return
+  const fn = flowNodes.value.find((n: any) => n.id === selectedNodeData.value.id)
+  if (fn) {
+    fn.data = {
+      ...fn.data,
+      label: selectedNodeData.value.label,
+      description: selectedNodeData.value.description || '',
+      hasCapabilityScope: doesNodeHaveCapabilityScope(selectedNodeData.value),
+    }
+  }
+}
+
+// Parameter schema + set support
+const paramSchemas = ref<any[]>([])
+const paramSets = ref<any[]>([])
+const selectedNodeParamSetId = ref<string | undefined>(undefined)
+const selectedNodeOverrides = ref<Record<string, any>>({})
+
+function agentParamSchema(agentId: string): any | undefined {
+  const agent = agents.value.find((a: any) => a.id === agentId)
+  if (!agent?.parameter_schema_id) return undefined
+  return paramSchemas.value.find((ps: any) => ps.id === agent.parameter_schema_id)
+}
+
+function agentParamSchemaName(agentId: string): string | undefined {
+  return agentParamSchema(agentId)?.name
+}
+
+const availableParamSets = computed(() => {
+  const schema = agentParamSchema(selectedNodeData.value?.agent_id)
+  if (!schema) return []
+  return paramSets.value.filter((ps: any) => ps.parameter_schema_id === schema.id)
+})
+
+const paramSetOverridesKeys = computed(() => Object.keys(selectedNodeOverrides.value))
+
+function paramDefByKey(key: string): any | undefined {
+  const schema = agentParamSchema(selectedNodeData.value?.agent_id)
+  return schema?.parameters?.find((p: any) => p.name === key)
+}
+
+function paramDefLabel(key: string): string {
+  const def = paramDefByKey(key)
+  return def?.label || def?.name || key
+}
+
+function onParamSetChange() {
+  if (!selectedNodeParamSetId.value) {
+    selectedNodeOverrides.value = {}
+    return
+  }
+  const set = paramSets.value.find((ps: any) => ps.id === selectedNodeParamSetId.value)
+  selectedNodeOverrides.value = { ...set?.values }
+  // Also update the backend node data
+  if (selectedNodeData.value) {
+    selectedNodeData.value.parameter_set_id = selectedNodeParamSetId.value
+    selectedNodeData.value.parameter_overrides = { ...selectedNodeOverrides.value }
+  }
+}
+
+async function saveAsNewParamSet() {
+  const schema = agentParamSchema(selectedNodeData.value?.agent_id)
+  if (!schema) return
+  const name = prompt('Name for new parameter set:')
+  if (!name?.trim()) return
+  try {
+    const resp = await api.POST('/api/v1/parameter-schemas/{schema_id}/sets', {
+      params: { path: { schema_id: schema.id } },
+      body: { name: name.trim(), description: null, values: selectedNodeOverrides.value },
+    })
+    if (resp.error) {
+      console.warn('Failed to create param set:', formatApiError(resp.error))
+      return
+    }
+    await loadParamSets()
+  } catch (err: unknown) {
+    console.warn('Failed to create param set:', err)
+  }
+}
+
+async function loadParamSets() {
+  const schema = agentParamSchema(selectedNodeData.value?.agent_id)
+  if (!schema) return
+  try {
+    const resp = await api.GET('/api/v1/parameter-schemas/{schema_id}/sets', {
+      params: { path: { schema_id: schema.id } },
+    })
+    if (resp.data) {
+      const data = resp.data as any
+      paramSets.value = Array.isArray(data) ? data : (data.items ?? [])
+    }
+  } catch (e) {
+    console.warn('Failed to load param sets:', e)
+  }
+}
+
+const canConvert = computed(() => pickerAgentId.value !== '__all__' && pickerConnectorId.value !== '__all__')
+
+function convertBackendNode(n: any): any {
+  const nodeType =
+    n.node_type === 'manual' ? 'manual'
+    : n.node_type === 'router' ? 'router'
+    : n.node_type === 'hitl' ? 'hitl'
+    : 'agent'
+  return {
+    id: n.id,
+    type: nodeType,
+    position: n.position || { x: 0, y: 0 },
+    data: {
+      label: n.label || 'Node ' + shortId(n.id),
+      description: n.description || '',
+      node_type: n.node_type,
+      parameter_set_id: n.parameter_set_id,
+      parameter_overrides: n.parameter_overrides,
+      hasCapabilityScope: doesNodeHaveCapabilityScope(n),
+    },
+  }
+}
+
+function convertBackendEdge(e: any, i: number): any {
+  const isLoop = e.edge_type === 'loop'
+  const isLlm = e.edge_type === 'llm'
+  let style: Record<string, string>
+  if (isLoop) {
+    style = { stroke: '#3b82f6', strokeDasharray: '5,5' }
+  } else if (isLlm) {
+    style = { stroke: '#8b5cf6' }
+  } else {
+    style = { stroke: '#888' }
+  }
+  return {
+    id: e.id || `edge-${i}`,
+    source: e.source_node_id,
+    target: e.target_node_id,
+    type: 'smoothstep',
+    animated: isLoop,
+    style,
+    data: {
+      hitl_gate_config: e.hitl_gate_config || null,
+      edge_type: e.edge_type || 'normal',
+      condition_expression: e.condition_expression || null,
+      max_iterations: e.max_iterations || 0,
+      routing_label: e.routing_label || '',
+    },
+  }
+}
+
+async function loadGraph() {
+  pageError.value = null
+  try {
+    const { data, error: graphError } = await withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
+      params: { path: { pipeline_id: pipelineId } },
+      signal,
+    }))
+    if (graphError) {
+      pageError.value = t('views.PipelineEditorView.failed_to_load_graph', { error: formatApiError(graphError) })
+      return
+    }
+    const result = data as any
+    if (!result) {
+      rawNodes.value = []
+      rawEdges.value = []
+      flowNodes.value = []
+      flowEdges.value = []
+      return
+    }
+    rawNodes.value = result.nodes || []
+    rawEdges.value = result.edges || []
+    flowNodes.value = rawNodes.value.map(convertBackendNode)
+    flowEdges.value = rawEdges.value.map(convertBackendEdge)
+  } catch (e: unknown) {
+    pageError.value = t('views.PipelineEditorView.failed_to_load_graph', { error: formatApiError(e) })
+  }
+}
+
+async function loadCatalog() {
+  pageError.value = null
+  try {
+    const [a, c, mb, s, snaps, ps] = await Promise.all([
+      withTimeout((signal) => api.GET('/api/v1/agents', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout((signal) => api.GET('/api/v1/connectors', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout((signal) => api.GET('/api/v1/model-backends', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout((signal) => api.GET('/api/v1/schemas', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
+        params: { path: { pipeline_id: pipelineId } },
+        signal,
+      }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout((signal) => api.GET('/api/v1/parameter-schemas', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+    ])
+    agents.value = a
+    connectors.value = c
+    modelBackends.value = mb
+    schemas.value = s
+    snapshots.value = (snaps as any[]).filter((sn: any) => sn.snapshot_version > 0)
+    paramSchemas.value = ps
+  } catch (e) {
+    console.warn('Failed to load pipeline data', e)
+  }
+}
+
+function onNodeClick(event: any) {
+  selectedEdgeData.value = null
+  const node = event.node
+  if (!node) return
+  const backendNode = rawNodes.value.find((n: any) => n.id === node.id)
+  selectedNodeData.value = backendNode || null
+  // Populate capability scope (narrow-not-widen)
+  const scope = backendNode?.capability_scope
+  nodeCapabilityScope.allowed_connectors = Array.isArray(scope?.allowed_connectors) ? [...scope.allowed_connectors] : []
+  nodeCapabilityScope.allowed_tools = Array.isArray(scope?.allowed_tools) ? [...scope.allowed_tools] : []
+  nodeCapabilityScope.context_scope = Array.isArray(scope?.context_scope) ? [...scope.context_scope] : []
+  // Populate parameter set + overrides
+  if (backendNode?.parameter_set_id) {
+    selectedNodeParamSetId.value = backendNode.parameter_set_id
+    selectedNodeOverrides.value = { ...backendNode.parameter_overrides }
+    loadParamSets()
+  } else {
+    selectedNodeParamSetId.value = undefined
+    selectedNodeOverrides.value = {}
+  }
+}
+
+function onEdgeClick(event: any) {
+  selectedNodeData.value = null
+  const edge = event.edge
+  if (!edge) return
+  const backendEdge = rawEdges.value.find((e: any) => e.id === edge.id)
+  if (backendEdge) {
+    selectedEdgeData.value = backendEdge
+    populateEdgeForm(backendEdge)
+  }
+}
+
+function populateEdgeForm(edge: any) {
+  // Reset to defaults FIRST, then apply the edge's own values. Resetting in
+  // the gate-less branch instead would wipe edge_type / condition_expression /
+  // max_iterations / routing_label with defaults: a loop/llm edge without a
+  // HITL gate would open as type "normal" and saving the panel would
+  // overwrite the graph edge's type.
+  Object.assign(edgeForm, { ...defaultEdgeForm })
+  edgeForm.edge_type = edge.edge_type || 'normal'
+  edgeForm.condition_expression = edge.condition_expression || ''
+  edgeForm.max_iterations = edge.max_iterations || 0
+  edgeForm.routing_label = edge.routing_label || ''
+  const hc = edge.hitl_gate_config
+  if (hc) {
+    edgeForm.hitl_enabled = true
+    edgeForm.label = hc.label || ''
+    edgeForm.description = hc.description || ''
+    edgeForm.claim_expiry_minutes = hc.claim_expiry_minutes || 15
+    // FAR-609: an existing config without the key is human-only now —
+    // only an explicit `false` loads the checkbox unticked.
+    edgeForm.human_only = hc.human_only !== false
+    if (hc.condition) {
+      edgeForm.condition_type = 'jmespath'
+      edgeForm.condition = hc.condition
+      edgeForm.eval_name = ''
+      edgeForm.eval_threshold = 0.8
+      edgeForm.eval_operator = 'lt'
+    } else if (hc.eval_condition) {
+      edgeForm.condition_type = 'eval'
+      edgeForm.eval_name = hc.eval_condition.eval_name || ''
+      edgeForm.eval_threshold = hc.eval_condition.threshold ?? 0.8
+      edgeForm.eval_operator = hc.eval_condition.operator || 'lt'
+      edgeForm.condition = ''
+    } else {
+      edgeForm.condition_type = 'none'
+      edgeForm.condition = ''
+      edgeForm.eval_name = ''
+      edgeForm.eval_threshold = 0.8
+      edgeForm.eval_operator = 'lt'
+    }
+  }
+}
+
+function buildHitlGateConfig(): any {
+  if (!edgeForm.hitl_enabled) return null
+  const config: any = {
+    label: edgeForm.label || t('views.PipelineEditorView.review_gate'),
+    description: edgeForm.description || '',
+    reject_target: selectedEdgeData.value?.hitl_gate_config?.reject_target || null,
+    claim_expiry_minutes: edgeForm.claim_expiry_minutes || 15,
+    human_only: edgeForm.human_only || false,
+    required_team_id: selectedEdgeData.value?.hitl_gate_config?.required_team_id || null,
+  }
+  if (edgeForm.condition_type === 'jmespath' && edgeForm.condition) {
+    config.condition = edgeForm.condition
+  }
+  if (edgeForm.condition_type === 'eval' && edgeForm.eval_name) {
+    config.eval_condition = {
+      eval_name: edgeForm.eval_name,
+      threshold: edgeForm.eval_threshold,
+      operator: edgeForm.eval_operator,
+    }
+  }
+  return config
+}
+
+async function saveEdgeConfig() {
+  if (!selectedEdgeData.value) return
+  // FAR-613: a HITL gate must explain WHY it exists — the backend rejects
+  // saves whose gate config carries no usable description (min 20 trimmed
+  // chars, counted as code points to match Python's len()), so block
+  // client-side first with a clear, localised message (FAR-688 single const).
+  if (hitlDescriptionTooShort.value) {
+    edgeSaveError.value = t('views.PipelineEditorView.hitl_description_required')
+    return
+  }
+  savingEdge.value = true
+  edgeSaveError.value = null
+
+  const updatedEdges = rawEdges.value.map((e: any) => {
+    if (e.id === selectedEdgeData.value.id) {
+      return {
+        id: e.id,
+        source_node_id: e.source_node_id,
+        target_node_id: e.target_node_id,
+        edge_type: edgeForm.edge_type,
+        condition_expression: edgeForm.condition_expression || null,
+        max_iterations: edgeForm.edge_type === 'loop' ? (edgeForm.max_iterations || 0) : undefined,
+        routing_label: edgeForm.edge_type === 'llm' ? (edgeForm.routing_label || undefined) : undefined,
+        hitl_gate_config: buildHitlGateConfig(),
+        source_port: e.source_port || 'out',
+        target_port: e.target_port || 'in',
+      }
+    }
+    return {
+      id: e.id,
+      source_node_id: e.source_node_id,
+      target_node_id: e.target_node_id,
+      edge_type: e.edge_type || 'normal',
+      condition_expression: e.condition_expression || null,
+      hitl_gate_config: e.hitl_gate_config || null,
+      source_port: e.source_port || 'out',
+      target_port: e.target_port || 'in',
+    }
+  })
+
+  try {
+    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: {
+        nodes: rawNodes.value.map(buildNodePayload),
+        edges: updatedEdges,
+      },
+      signal,
+    }))
+    await loadGraph()
+    const updatedEdge = rawEdges.value.find((e: any) => e.id === selectedEdgeData.value.id)
+    if (updatedEdge) {
+      selectedEdgeData.value = updatedEdge
+      populateEdgeForm(updatedEdge)
+    }
+  } catch (e: unknown) {
+    edgeSaveError.value = formatApiError(e)
+  } finally {
+    savingEdge.value = false
+  }
+}
+
+function onPaneClick() {
+  selectedNodeData.value = null
+  selectedEdgeData.value = null
+  showSaveAsDropdown.value = false
+  selectedNodeParamSetId.value = undefined
+  selectedNodeOverrides.value = {}
+  nodeCapabilityScope.allowed_connectors = []
+  nodeCapabilityScope.allowed_tools = []
+  nodeCapabilityScope.context_scope = []
+  capabilityToolInput.value = ''
+  capabilityContextInput.value = ''
+}
+
+const newNodeType = ref<'agent' | 'router' | 'hitl'>('agent')
+const nodeTypeOptions = [
+  { value: 'agent', label: t('views.PipelineEditorView.node_type_agent') },
+  // Router/HITL authoring is deferred: addNode cannot yet emit the mandatory
+  // router_config/hitl_config the backend requires, so exposing them here
+  // produces unsavable (422) nodes. Imported router/HITL graphs still render
+  // correctly via convertBackendNode. Re-add once a config editor lands.
+]
+
+function addNode(nodeType: 'agent' | 'router' | 'hitl' = newNodeType.value) {
+  const id = `node-${Date.now()}`
+  const newNode = {
+    id,
+    type: nodeType,
+    position: { x: 250, y: 100 },
+    data: { label: t('views.PipelineEditorView.new_node_label'), description: '', node_type: nodeType },
+  }
+  flowNodes.value = [...flowNodes.value, newNode]
+  rawNodes.value = [...rawNodes.value, {
+    id,
+    node_type: nodeType,
+    label: t('views.PipelineEditorView.new_node_label'),
+    description: '',
+    position: { x: 250, y: 100 },
+  }]
+}
+
+function openAgentPicker() {
+  convertError.value = null
+  pickerAgentId.value = '__all__'
+  pickerConnectorId.value = '__all__'
+  showAgentPicker.value = true
+}
+
+function openRevertDialog() {
+  revertError.value = null
+  revertSnapshotId.value = '__all__'
+  showRevertDialog.value = true
+}
+
+function openSaveAsComposite() {
+  showSaveAsDropdown.value = false
+  saveAsName.value = ''
+  saveAsDescription.value = ''
+  saveAsSelectedNodeIds.value = rawNodes.value.map((n: any) => n.id)
+  saveAsError.value = null
+  showSaveAsComposite.value = true
+}
+
+async function handleSaveAsComposite() {
+  if (!saveAsName.value || saveAsSelectedNodeIds.value.length === 0) return
+  saving.value = true
+  saveAsError.value = null
+  try {
+    await withTimeout((signal) => api.POST('/api/v1/pipelines/{pipeline_id}/save-as-composite', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: {
+        name: saveAsName.value,
+        description: saveAsDescription.value || null,
+        selected_node_ids: saveAsSelectedNodeIds.value,
+      },
+      signal,
+    }))
+    showSaveAsComposite.value = false
+    router.push({ name: 'library' })
+  } catch (e: unknown) {
+    saveAsError.value = formatApiError(e)
+  } finally {
+    saving.value = false
+  }
+}
+
+function onAgentChange() {
+  pickerConnectorId.value = '__all__'
+}
+
+async function convertToAgent() {
+  if (!canConvert.value || !selectedNodeData.value) return
+  convertError.value = null
+  try {
+    const nodeId = selectedNodeData.value.id
+    await withTimeout((signal) => api.POST('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/convert-to-agent', {
+      params: { path: { pipeline_id: pipelineId, node_id: nodeId } },
+      body: {
+        agent_id: pickerAgentId.value,
+        connector_binding: {
+          type: connectors.value.find(c => c.id === pickerConnectorId.value)?.connector_type_id || '',
+          instance_id: pickerConnectorId.value,
+        },
+        model_backend_id: selectedAgent.value?.model_backend_id,
+      },
+      signal,
+    }))
+    showAgentPicker.value = false
+    await loadGraph()
+    selectedNodeData.value = rawNodes.value.find((n: any) => n.id === nodeId) || null
+  } catch (e: unknown) {
+    convertError.value = formatApiError(e)
+  }
+}
+
+async function revertToManual() {
+  if (revertSnapshotId.value === '__all__' || !selectedNodeData.value) return
+  revertError.value = null
+  revertLoading.value = true
+  try {
+    const nodeId = selectedNodeData.value.id
+    await withTimeout((signal) => api.POST('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/revert-to-manual', {
+      params: {
+        path: { pipeline_id: pipelineId, node_id: nodeId },
+        query: { snapshot_id: revertSnapshotId.value },
+      },
+      signal,
+    }))
+    showRevertDialog.value = false
+    await loadGraph()
+    selectedNodeData.value = rawNodes.value.find((n: any) => n.id === nodeId) || null
+  } catch (e: unknown) {
+    revertError.value = formatApiError(e)
+  } finally {
+    revertLoading.value = false
+  }
+}
+
+async function loadPipeline() {
+  pageError.value = null
+  try {
+    const { data } = await withTimeout((signal) => api.GET('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      signal,
+    }))
+    pipeline.value = data as any
+    maxDurationInput.value = (data as any)?.max_duration_seconds ?? undefined
+    syncRetryPolicyFromPipeline()
+  } catch (e) {
+    pageError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(e) })
+  }
+}
+
+function openRenameDialog() {
+  renameName.value = pipeline.value?.name || ''
+  renameError.value = null
+  showRenameDialog.value = true
+}
+
+async function handleRename() {
+  if (!renameName.value.trim()) return
+  renaming.value = true
+  renameError.value = null
+  try {
+    const { data } = await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { name: renameName.value.trim() },
+      signal,
+    }))
+    pipeline.value = data as any
+    showRenameDialog.value = false
+  } catch (e: unknown) {
+    renameError.value = formatApiError(e)
+  } finally {
+    renaming.value = false
+  }
+}
+
+async function handleArchive() {
+  try {
+    pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/archive`)
+  } catch (e: unknown) {
+    pageError.value = t('views.PipelineEditorView.failed_to_archive_pipeline', { error: formatApiError(e) })
+  }
+}
+
+async function handleUnarchive() {
+  try {
+    pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/unarchive`)
+  } catch (e: unknown) {
+    pageError.value = t('views.PipelineEditorView.failed_to_unarchive_pipeline', { error: formatApiError(e) })
+  }
+}
+
+async function handleDelete() {
+  deleteError.value = null
+  try {
+    await withTimeout((signal) => api.DELETE('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      signal,
+    }))
+    router.push({ name: 'library' })
+  } catch (e: unknown) {
+    deleteError.value = formatApiError(e)
+  }
+}
+
+async function updateMaxDuration() {
+  const val = maxDurationInput.value && maxDurationInput.value > 0 ? maxDurationInput.value : undefined
+  try {
+    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { max_duration_seconds: val },
+      signal,
+    }))
+    if (pipeline.value) pipeline.value.max_duration_seconds = val
+    saveGraphError.value = null
+  } catch (e) {
+    saveGraphError.value = t('views.PipelineEditorView.failed_to_update_max_duration', { error: formatApiError(e) })
+  }
+}
+
+function openRunDialog() {
+  runPrompt.value = ''
+  runError.value = null
+  confirmEmptyRun.value = false
+  emptyRunWarning.value = null
+  showRunDialog.value = true
+}
+
+function closeRunDialog() {
+  showRunDialog.value = false
+  runPrompt.value = ''
+  runError.value = null
+  confirmEmptyRun.value = false
+  emptyRunWarning.value = null
+}
+
+function onRunDialogKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && showRunDialog.value) {
+    event.preventDefault()
+    closeRunDialog()
+  }
+}
+
+watch(showRunDialog, (open) => {
+  if (open) {
+    document.addEventListener('keydown', onRunDialogKeydown)
+  } else {
+    document.removeEventListener('keydown', onRunDialogKeydown)
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onRunDialogKeydown)
+})
+
+// Sandbox command authoring → graph-save payload. The graph save REPLACES
+// graph_nodes_json wholesale, so every command field must be serialised here
+// or it is wiped. Mirrors the backend contract (routes/pipelines.py +
+// sandbox_mode): sandbox_agent nodes carry ONLY the agent_commands list
+// (the scalar agent_command field was removed in FAR-820 — the backend
+// PipelineGraphNode no longer declares it, so any scalar save is silently
+// dropped and the runtime join would crash on a missing list). The joiner is
+// persisted as a non-empty string — a null joiner would crash the runtime
+// join (None.join), so an unset joiner saves the " && " default. Non-sandbox
+// nodes never gain command mutations here: the commands editor is
+// sandbox-gated and the spread round-trips whatever the graph already
+// carried (FAR-488a syncs a bound Agent's row from a node-level command —
+// the editor must not fabricate one).
+function nodeCommandFields(n: any): {
+  agent_commands?: string[] | null
+  commands_concatenation_string?: string | null
+} {
+  if (n.node_type !== 'sandbox_agent') {
+    return {}
+  }
+  const rows = (Array.isArray(n.agent_commands) ? n.agent_commands : [])
+    .map((c: unknown) => (typeof c === 'string' ? c : String(c ?? '')))
+    .filter((c: string) => c.trim() !== '')
+  if (rows.length === 0) {
+    return { agent_commands: null, commands_concatenation_string: null }
+  }
+  const joiner = typeof n.commands_concatenation_string === 'string' && n.commands_concatenation_string.length > 0
+    ? n.commands_concatenation_string
+    : ' && '
+  return { agent_commands: rows, commands_concatenation_string: joiner }
+}
+
+// View-only / UI-only keys that must never leak into a graph-save payload.
+// rawNodes come from the GET /graph response (every key is a PipelineGraphNode
+// field) or addNode, so none occur in practice today — this block is durable
+// insurance against UI-state markers (VueFlow node fields like type/data/
+// selected/dragging/dimensions, editor conveniences like hasCapabilityScope)
+// ever being merged into rawNodes and silently persisted. model_backend_id is
+// an Agent-level field (convert-to-agent endpoint), not a PipelineGraphNode
+// field; the model tolerates extras, but it is omitted for hygiene.
+// agent_command is the removed scalar (FAR-820); PipelineGraphNode no longer
+// declares it, so any legacy value must never be persisted.
+const VIEW_ONLY_NODE_KEYS = new Set([
+  'type',
+  'data',
+  'selected',
+  'dragging',
+  'dimensions',
+  'hasCapabilityScope',
+  'model_backend_id',
+  'agent_command',
+])
+
+// Build one node's save payload by spreading the raw node data — the GET
+// response is typed by PipelineGraphNode, so every model-accepted field
+// (template_id, composite_*, schema pins, ports, egress/resource/sandbox
+// config, autonomy_recommendation, command/prompt fields, ...) survives the
+// save — then layering the command normalisation on top. Position flows
+// through the spread exactly as the previous hand-maintained map sent it
+// (n.position, the graph's {x, y} — VueFlow drag state is not synced).
+// Return is `any` because the payload is dynamically spread from the (any)
+// raw node data; the generated client's node body type cannot express that.
+function buildNodePayload(n: any): any {
+  const payload: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(n)) {
+    if (!VIEW_ONLY_NODE_KEYS.has(key)) payload[key] = value
+  }
+  payload.node_type = n.node_type || 'agent'
+  Object.assign(payload, nodeCommandFields(n))
+  return payload
+}
+
+async function saveGraph() {
+  savingGraph.value = true
+  saveGraphError.value = null
+  try {
+    // Sync current param set + overrides into selected node data
+    if (selectedNodeData.value) {
+      selectedNodeData.value.parameter_set_id = selectedNodeParamSetId.value || null
+      selectedNodeData.value.parameter_overrides = Object.keys(selectedNodeOverrides.value).length > 0
+        ? { ...selectedNodeOverrides.value }
+        : null
+    }
+    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: {
+        nodes: rawNodes.value.map(buildNodePayload),
+        edges: rawEdges.value.map((e: any) => ({
+          id: e.id,
+          source_node_id: e.source_node_id,
+          target_node_id: e.target_node_id,
+          edge_type: e.edge_type || 'normal',
+          condition_expression: e.condition_expression || null,
+          max_iterations: e.edge_type === 'loop' ? (e.max_iterations || 0) : undefined,
+          routing_label: e.edge_type === 'llm' ? (e.routing_label || undefined) : undefined,
+          hitl_gate_config: e.hitl_gate_config || null,
+          source_port: e.source_port || 'out',
+          target_port: e.target_port || 'in',
+        })),
+      },
+      signal,
+    }))
+    // Reload graph to sync flowNodes with saved state
+    await loadGraph()
+  } catch (e: unknown) {
+    saveGraphError.value = formatApiError(e)
+  } finally {
+    savingGraph.value = false
+  }
+}
+
+async function triggerRun() {
+  if (!pipeline.value) return
+  const trimmedPrompt = runPrompt.value.trim()
+  if (!trimmedPrompt) {
+    if (!confirmEmptyRun.value) {
+      confirmEmptyRun.value = true
+      emptyRunWarning.value = t('views.PipelineEditorView.empty_run_warning')
+      return
+    }
+    emptyRunWarning.value = null
+  }
+  running.value = true
+  runError.value = null
+  try {
+    await saveGraph()
+    if (saveGraphError.value) {
+      runError.value = t('views.PipelineEditorView.failed_to_save_graph', { error: saveGraphError.value })
+      return
+    }
+    const { data } = await withTimeout((signal) => api.POST('/api/v1/runs', {
+      body: {
+        pipeline_id: pipelineId,
+        input_payload: trimmedPrompt ? { prompt: trimmedPrompt } : {},
+      },
+      signal,
+    }))
+    showRunDialog.value = false
+    if (data) router.push({ name: 'run-detail', params: { id: (data as any).id } })
+  } catch (e: unknown) {
+    runError.value = formatApiError(e)
+  } finally {
+    running.value = false
+  }
+}
+
+async function loadFolders() {
+  try {
+    const response = await get<any[] | { items?: any[] }>('/api/v1/pipeline-folders')
+    // Accept both the raw-array and { items: [...] } response shapes — the
+    // folderPath computed iterates folders.value unconditionally, so a
+    // non-array payload would throw on every render (see loadLifecycleMaps
+    // for the same tolerance pattern).
+    folders.value = Array.isArray(response) ? response : (response.items ?? [])
+  } catch (e) {
+    console.warn('Failed to load folders', e)
+  }
+}
+
+async function loadLifecycleMaps() {
+  pageError.value = null
+  try {
+    const response = await get<any[] | { items?: any[] }>('/api/v1/lifecycle-maps')
+    const summaries = Array.isArray(response) ? response : (response.items ?? [])
+    const first10 = (summaries ?? []).slice(0, 10)
+    const fullMaps = await Promise.all(
+      first10.map((m: any) =>
+        get<any>(`/api/v1/lifecycle-maps/${m.id}`).catch(() => null)
+      )
+    )
+    linkedLifecycleMaps.value = fullMaps.filter(
+      (m: any) => m && m.stages?.some((s: any) => s.pipeline_id === pipelineId)
+    )
+  } catch (e) {
+    console.warn('Failed to load lifecycle maps', e)
+  }
+}
+
+// Declared before useDataFetch: vue-query invokes the fetcher synchronously
+// during setup, and the fetcher + the loaders it calls (loadPipeline,
+// loadGraph, loadLifecycleMaps) read/write pageError — the binding must be
+// initialised before the fetcher can run.
+const pageError = ref<string | null>(null)
+
+const { loading } = useDataFetch<null>(
+  async () => {
+    pageError.value = null
+    await Promise.all([loadPipeline(), loadGraph(), loadCatalog(), loadFolders(), loadLifecycleMaps()])
+    // useDataFetch's queryFn forwards `result.data`; vue-query rejects an
+    // undefined query result ("data is undefined"), so always resolve with a
+    // defined payload (the loaders write their state directly).
+    return { data: null }
+  },
+)
+</script>
+
+<style scoped>
+/* The docked toolbar row is h-7 (1.75rem); PrimeVue's Select keeps its default
+   ~2.5rem height inside it, breaking the row's uniform look. Size the toolbar
+   Selects (node-type picker in the canvas-tools group + the empty-state
+   picker, which share the visual row) to h-7 to match. The scoped attribute
+   selector outranks PrimeVue styled-mode's single-class rules; dialog/aside
+   Selects are intentionally NOT sized by this class. */
+.toolbar-select {
+  height: 1.75rem;
+  font-size: 0.75rem;
+}
+
+.toolbar-select :deep(.p-select-label) {
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+}
+</style>

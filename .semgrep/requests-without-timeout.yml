@@ -1,0 +1,12 @@
+﻿rules:
+  - id: requests-without-timeout
+    patterns:
+      - pattern-either:
+          - pattern-regex: (?s)\brequests\.(?:get|post|put|delete|request)\((?:(?!timeout\s*=)(?:[^()]|\([^()]*\)))*?\)
+          - pattern-regex: (?s)\bhttpx\.Client\(\)\.(?:get|post|put|delete|patch|request)\((?:(?!timeout\s*=)(?:[^()]|\([^()]*\)))*?\)
+          - pattern-regex: (?s)\bhttpx\.(?:get|post|put|delete|patch|request)\((?:(?!timeout\s*=)(?:[^()]|\([^()]*\)))*?\)
+    message: "HTTP request without explicit `timeout=` — network hang blocks the caller indefinitely. Always set a timeout."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**", "**/backend/tests/**"]

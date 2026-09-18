@@ -1,0 +1,147 @@
+"""Step definitions for auth/change_password.feature."""
+
+import contextlib
+import uuid
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from pytest_bdd import given, parsers, scenarios, then, when
+
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../features/auth/change_password.feature")
+
+_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+
+@pytest.fixture
+def ctx() -> dict[str, Any]:
+    return {}
+
+
+def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
+    request.node._resp = resp
+    request.node.response = resp
+    ctx["response"] = resp
+
+
+@then(parsers.parse('the error mentions "{text}"'))
+def step_error_mentions(text: str, request: Any) -> None:
+    body = request.node.response.json()
+    detail = body.get("detail", str(body)).lower()
+    assert text.lower() in detail, f"Expected error to mention {text!r}, got {body!r}"
+
+
+@when(
+    parsers.parse('I change my password from "{old_pw}" to "{new_pw}"'),
+)
+def step_change_password(
+    client: Any,
+    old_pw: str,
+    new_pw: str,
+    request: Any,
+    ctx: dict[str, Any],
+) -> None:
+    from modulo.auth.passwords import hash_password
+
+    with (
+        patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock) as mock_get_user,
+        patch("modulo.api.routes.me.list_families_for_account", new_callable=AsyncMock) as mock_list,
+        patch("modulo.api.routes.me.blacklist_family", new_callable=AsyncMock) as mock_blacklist,
+        patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_rls,
+        patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as mock_audit,
+    ):
+        mock_user = MagicMock()
+        mock_user.password_hash = hash_password("correct-horse-battery")
+        mock_user.must_change_password = bool(ctx.get("_change_pending", False))
+        mock_get_user.return_value = mock_user
+
+        mock_family = MagicMock()
+        mock_family.family_id = uuid.uuid4()
+        mock_list.return_value = [mock_family]
+        mock_blacklist.return_value = True
+
+        resp = client.put(
+            "/api/v1/me/password",
+            json={
+                "current_password": old_pw,
+                "new_password": new_pw,
+            },
+        )
+        _store_response(request, ctx, resp)
+        ctx["_mock_user"] = mock_user
+        ctx["_mock_blacklist"] = mock_blacklist
+        ctx["_mock_rls"] = mock_rls
+        ctx["_mock_audit"] = mock_audit
+
+
+@when("I attempt to change my password without a local password set")
+def step_change_password_no_local(
+    client: Any,
+    request: Any,
+    ctx: dict[str, Any],
+) -> None:
+    with (
+        patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock) as mock_get_user,
+        patch("modulo.api.routes.me.list_families_for_account", new_callable=AsyncMock) as mock_list,
+        patch("modulo.api.routes.me.blacklist_family", new_callable=AsyncMock) as mock_blacklist,
+    ):
+        mock_user = MagicMock()
+        mock_user.password_hash = None
+        mock_get_user.return_value = mock_user
+
+        mock_list.return_value = []
+        mock_blacklist.return_value = True
+
+        resp = client.put(
+            "/api/v1/me/password",
+            json={
+                "current_password": "anything",
+                "new_password": "new-strong-password-42",
+            },
+        )
+        _store_response(request, ctx, resp)
+
+
+@then(parsers.parse('the response says "{message}"'))
+def step_response_message(request: Any, message: str) -> None:
+    body = request.node.response.json()
+    assert body.get("detail") == message, f"Expected detail {message!r}, got {body!r}"
+
+
+@then("all token families for my user are blacklisted")
+def step_all_families_blacklisted(ctx: dict[str, Any]) -> None:
+    mock_blacklist = ctx.get("_mock_blacklist")
+    assert mock_blacklist is not None, "No blacklist_family mock found — was the When step run?"
+    mock_blacklist.assert_called()
+
+
+@then("the password change is recorded in the audit trail")
+def step_password_change_audited(ctx: dict[str, Any]) -> None:
+    mock_audit = ctx.get("_mock_audit")
+    assert mock_audit is not None, "No append_audit_event mock found — was the When step run?"
+    mock_audit.assert_called_once()
+    _, kwargs = mock_audit.call_args
+    assert kwargs["event_type"] == "password_changed"
+    assert kwargs["resource_type"] == "account"
+
+
+@given("a forced password change is pending for my account")
+def step_forced_change_pending(ctx: dict[str, Any]) -> None:
+    """Arms the admin-reset ``must_change_password`` flag (FAR-460).
+
+    The flag is what App.vue gates on to render the forced change-password
+    view: the admin reset set it, and the forced flow ends with the same
+    ``PUT /api/v1/me/password`` that clears it.
+    """
+    ctx["_change_pending"] = True
+
+
+@then("the admin-reset must_change_password flag is cleared for my account")
+def step_forced_change_flag_cleared(ctx: dict[str, Any]) -> None:
+    mock_user = ctx.get("_mock_user")
+    assert mock_user is not None, "No account mock found — was the When step run?"
+    assert mock_user.must_change_password is False, (
+        "the password change did not clear must_change_password — the post-login forced-change gate would stay armed"
+    )

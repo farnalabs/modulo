@@ -1,0 +1,13 @@
+rules:
+  - id: async-session-missing-autobegin
+    patterns:
+      - pattern-either:
+          - pattern: AsyncSession($BIND)
+          - pattern: AsyncSession($BIND, ...)
+      - pattern-not: AsyncSession($BIND, ..., autobegin=False, ...)
+      - pattern-not: AsyncSession($BIND, autobegin=False)
+    message: "AsyncSession() must pass autobegin=False to match the DI factory pattern. Default is autobegin=True which auto-starts transactions after commit(), causing 'A transaction is already begun' errors on subsequent begin() calls."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

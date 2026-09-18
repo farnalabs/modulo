@@ -1,0 +1,2092 @@
+<template>
+    <div class="page-wide">
+    <LoadingSpinner v-if="loading" />
+    <ErrorAlert v-else-if="error" :message="error" />
+    <template v-else-if="run">
+      <nav aria-label="Breadcrumb" class="mb-4 flex items-center gap-1 text-sm text-muted-foreground">
+        <router-link to="/runs" class="hover:text-foreground transition-colors">{{ $t('views.RunDetailView.runs') }}</router-link>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-3.5 w-3.5"><polyline points="9 18 15 12 9 6"/></svg>
+        <span class="text-foreground font-medium">{{ run.pipeline_name || (run.run_number != null ? '#' + run.run_number : shortId(run.run_id)) }}</span>
+      </nav>
+      <!-- Run Header -->
+      <header class="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div class="flex items-center gap-3">
+            <PageHeader :title="$t('views.RunDetailView.run_detail')" />
+            <span :class="statusBadgeClass" class="capitalize" :title="runStatusDescription(run.status, t)" :aria-label="runStatusDescription(run.status, t)">{{ runStatusLabel(run.status) }}</span>
+          </div>
+          <p class="mt-1 text-sm text-muted-foreground">
+            Pipeline: <span class="font-medium text-foreground">{{ formatRun(run) }}</span>
+          </p>
+          <p class="text-xs text-muted-foreground">
+            Run ID: <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ shortId(run.run_id) }}</code>
+            <button
+              type="button"
+              :aria-label="$t('views.RunDetailView.copy_run_id')"
+              class="ml-1 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+              @click="copyRunId"
+            >
+              {{ copied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
+            </button>
+          </p>
+        </div>
+        <div class="text-right text-xs text-muted-foreground">
+          <div v-if="run.total_cost_usd != null" class="text-base font-semibold tabular-nums text-foreground">
+            Total: {{ formatMoney(Number(formattedCost), currencyCode, 6) }}
+          </div>
+          <button
+            type="button"
+            data-testid="run-detail-share-summary"
+            class="mt-2 inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10"
+            @click="copyShareSummary"
+          >
+            {{ shareCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.share_summary') }}
+          </button>
+        </div>
+      </header>
+
+      <!-- Run-level warnings summary strip: surfaces run-level issues at the
+           top of the page so they are visible without scrolling to the
+           dedicated detail sections below. -->
+      <div
+        v-if="runLevelWarnings.length > 0"
+        id="warnings"
+        data-testid="run-detail-warnings-strip"
+        aria-live="polite"
+        class="mb-4 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning"
+      >
+        <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold tracking-tight">
+          <AlertTriangle aria-hidden="true" class="h-4 w-4 shrink-0" />
+          {{ $t('views.RunDetailView.warnings_strip_title', { count: runLevelWarnings.length }) }}
+        </h2>
+        <ul class="space-y-1.5">
+          <li v-for="warning in runLevelWarnings" :key="warning.id">
+            <button
+              type="button"
+              :data-testid="`run-detail-warnings-strip-${warning.id}`"
+              :aria-label="$t(warning.labelKey)"
+              class="w-full rounded-md border border-warning/50 bg-warning/10 px-3 py-1.5 text-left text-xs font-medium text-warning transition-colors hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              @click="scrollToWarning(warning.targetId)"
+            >
+              {{ $t(warning.labelKey) }}
+            </button>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Queue position banner (pending + waiting on sandbox capacity) -->
+      <output
+        v-if="run.status === 'pending' && run.capacity?.waiting"
+        data-testid="run-detail-queue-banner"
+        aria-live="polite"
+        :aria-label="$t('views.RunDetailView.queued_waiting_slot', { active: run.capacity.active_runs, limit: run.capacity.concurrency_limit ?? '∞' })"
+        class="mb-4 block rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning"
+      >
+        {{ $t('views.RunDetailView.queued_waiting_slot', { active: run.capacity.active_runs, limit: run.capacity.concurrency_limit ?? '∞' }) }}
+      </output>
+      <output
+        v-else-if="run.status === 'pending'"
+        data-testid="run-detail-queued-starting"
+        :aria-label="$t('views.RunDetailView.queued_starting_soon')"
+        class="mb-4 block text-xs text-muted-foreground"
+      >
+        {{ $t('views.RunDetailView.queued_starting_soon') }}
+      </output>
+
+      <!-- HITL Gate -->
+      <!-- qa F4: a parked run still shows its open (claimable) gate — the status changed, the review did not. -->
+      <section v-if="(run.status === 'awaiting_human' || run.status === 'hitl_parked') && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
+        <h2 class="text-base font-semibold tracking-tight mb-4">{{ $t('views.RunDetailView.hitl_gate') }}</h2>
+        <!-- Shared card (FAR-686): the component owns claim token, notes and
+             approve/reject actions. The FAR-631 invariant is preserved by
+             re-emitting decision messages to the hoisted hitlMessage below —
+             the card (and its internal banner) may unmount when the run
+             status flips, so the hoisted message is what survives. The card
+             renders the FAR-613 decision briefing (description + context). -->
+        <HitlGateCard
+          v-for="gate in pendingGates"
+          :key="gate.gate_id"
+          :gate="gate"
+          @claimed="onHitlClaimed"
+          @decided="onHitlDecided"
+        />
+      </section>
+
+      <!-- HITL action feedback. Hoisted outside the per-gate loop AND outside
+           the section gate (FAR-631): approve/reject empties pendingGates and
+           flips the run status, unmounting the section — a message rendered
+           inside it could never be seen. -->
+      <div
+        v-if="hitlMessage"
+        data-testid="run-detail-hitl-message"
+        class="mb-4 text-sm"
+        :class="hitlMessage.type === 'error' ? 'text-destructive' : 'text-success'"
+      >
+        {{ hitlMessage.text }}
+      </div>
+
+      <!-- Timestamps -->
+      <div v-if="runTimestamps" class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+        <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.created') }}</span> {{ runTimestamps.created }}</div>
+        <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
+        <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
+        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || triggerTypeLabel(run.trigger_type, t) }}</div>
+        <div data-testid="run-detail-heartbeat" id="run-detail-heartbeat-anchor">
+          <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>{{ ' ' }}<span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
+        </div>
+      </div>
+
+      <!-- Live cost + tokens so far (non-terminal runs only) -->
+      <div v-if="liveCostPresent" data-testid="run-detail-live-cost" class="mt-2 mb-4 text-xs text-muted-foreground">
+        <span class="font-medium text-foreground">{{ $t('views.RunDetailView.cost_so_far') }}:</span>
+        {{ formatMoney(liveCostTotal, currencyCode, 4) }}<span v-if="liveTokenTotal > 0"> · {{ formatTokenCount(liveTokenTotal) }} {{ $t('views.RunDetailView.tokens') }}</span>
+      </div>
+
+      <!-- Live node progress strip -->
+      <div
+        v-if="nodeProgressChips.length > 0"
+        data-testid="run-detail-node-progress"
+        class="mb-4 flex flex-wrap items-center gap-1.5"
+        aria-live="polite"
+      >
+        <button
+          v-for="chip in nodeProgressChips"
+          :key="chip.name"
+          type="button"
+          :aria-label="$t('views.RunDetailView.node_progress_aria', { name: chip.name, state: nodeStateLabel(chip.state) })"
+          :data-testid="`run-detail-node-progress-${chip.name}`"
+          class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors hover:opacity-80"
+          :class="[chipClass(chip.state), expandedLogs.has(chip.name) ? 'underline decoration-dotted underline-offset-2' : '']"
+          @click="toggleNodeLogs(chip.name)"
+        >
+          <template v-if="chip.state === 'running'">
+            <span class="relative flex h-2 w-2" aria-hidden="true">
+              <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-warning opacity-75"></span>
+              <span class="relative inline-flex h-2 w-2 rounded-full bg-warning"></span>
+            </span>
+            {{ $t('views.RunDetailView.running_label') }}
+          </template>
+          <Check v-else-if="chip.state === 'completed'" class="h-3 w-3" aria-hidden="true" />
+          <X v-else-if="chip.state === 'failed'" class="h-3 w-3" aria-hidden="true" />
+          <span v-else class="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" aria-hidden="true"></span>
+          <span>{{ nodeLabel(chip.name) }}</span>
+        </button>
+      </div>
+
+      <!-- Run Input Payload — the parameters provided when the run was scheduled -->
+      <div v-if="runIO?.input_payload" data-testid="run-detail-input-payload" class="rounded-lg border border-border bg-card p-4 mb-4">
+        <div class="flex items-center justify-between mb-1">
+          <h3 class="text-sm font-semibold">{{ $t('views.RunDetailView.run_input') }}</h3>
+          <button
+            type="button"
+            class="text-xs text-primary hover:bg-primary/10 rounded px-2 py-1"
+            data-testid="run-detail-copy-input"
+            @click="copyInputPayload"
+          >
+            {{ inputPayloadCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
+          </button>
+        </div>
+        <JsonViewer :data="runIO.input_payload" :show-toolbar="true" :max-height="'16rem'" />
+      </div>
+
+      <!-- Work items -->
+      <section v-if="run.work_item_refs && run.work_item_refs.length > 0" data-testid="run-detail-work-items" class="rounded-lg border border-border bg-card p-4 mb-4">
+        <h3 class="text-sm font-semibold mb-2">{{ $t('views.RunDetailView.work_items') }}</h3>
+        <div class="space-y-1.5">
+          <div v-for="(item, idx) in run.work_item_refs" :key="`${item.kind}-${item.ref}-${idx}`" class="flex flex-wrap items-center gap-2 text-xs">
+            <template v-if="isGithubWorkItem(item)">
+              <a v-if="getPrUrl(item)" :href="getPrUrl(item)!" target="_blank" rel="noopener noreferrer" :data-testid="`run-detail-pr-link-${idx}`" class="inline-flex items-center transition-opacity hover:opacity-80">
+                <span class="badge text-xs badge-context-blue">{{ githubWorkItemBadgeLabel(item) }}</span>
+              </a>
+              <span v-else class="badge text-xs badge-context-blue">{{ githubWorkItemBadgeLabel(item) }}</span>
+              <span v-if="prTitle(item)" class="max-w-[24rem] truncate text-muted-foreground" :title="prTitle(item)!">{{ prTitle(item) }}</span>
+            </template>
+            <template v-else>
+              <span class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 font-medium capitalize">{{ item.kind || '—' }}</span>
+              <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ item.ref || '—' }}</code>
+            </template>
+            <span v-if="item.source" class="text-muted-foreground">{{ item.source }}</span>
+            <span v-if="item.status" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-muted-foreground capitalize">{{ item.status }}</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Child runs -->
+      <section v-if="run.child_runs && run.child_runs.length > 0" data-testid="run-detail-child-runs" class="rounded-lg border border-border bg-card p-4 mb-4">
+        <h3 class="text-sm font-semibold mb-2">{{ $t('views.RunDetailView.child_runs') }}</h3>
+        <div class="space-y-1.5">
+          <div v-for="child in run.child_runs" :key="child.run_id" class="flex flex-wrap items-center gap-2 text-xs">
+            <router-link
+              :to="`/runs/${child.run_id}`"
+              :data-testid="`run-detail-child-link-${child.run_id}`"
+              class="font-medium text-primary hover:underline"
+            >
+              {{ child.run_number != null ? `#${child.run_number}` : shortId(child.run_id) }}
+            </router-link>
+            <span :class="childRunBadgeClass(child.status)" class="capitalize">{{ child.status || '—' }}</span>
+            <span v-if="child.pipeline_name" class="text-muted-foreground">{{ child.pipeline_name }}</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Cancel button for non-terminal runs -->
+      <div v-if="canCancel" class="my-4">
+        <button
+          type="button"
+          :disabled="cancelling"
+          data-testid="run-detail-cancel"
+          class="inline-flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+          @click="cancelRun"
+        >
+          <svg v-if="cancelling" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          {{ cancelling ? $t('views.RunDetailView.stopping') : $t('views.RunDetailView.stop') }}
+        </button>
+        <span v-if="cancelError" role="alert" class="ml-3 text-xs text-destructive">{{ cancelError }}</span>
+      </div>
+
+      <!-- Re-run button for terminal runs (FAR-788) -->
+      <div v-if="canRerun" class="my-4" data-testid="run-detail-rerun">
+        <button
+          type="button"
+          :disabled="rerunning"
+          data-testid="run-rerun"
+          :aria-label="$t('views.RunDetailView.rerun')"
+          class="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50"
+          @click="onRerunClick"
+        >
+          <svg v-if="rerunning" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          <RotateCcw v-else class="h-4 w-4" aria-hidden="true" />
+          {{ rerunning ? $t('views.RunDetailView.rerunning') : (rerunConfirming ? $t('views.RunDetailView.rerun_confirm') : $t('views.RunDetailView.rerun')) }}
+        </button>
+        <span v-if="rerunConfirming" role="alert" class="ml-3 text-xs text-warning">{{ $t('views.RunDetailView.rerun_confirm_warning') }}</span>
+        <span v-if="rerunError" role="alert" class="ml-3 text-xs text-destructive">{{ rerunError }}</span>
+      </div>
+
+      <!-- Trace ID -->
+      <div v-if="run.trace_id" class="flex items-center gap-2">
+        <span class="text-xs text-muted-foreground">{{ $t('views.RunDetailView.otel_trace_id') }}</span>
+        <code class="select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs" :title="run.trace_id">{{ shortId(run.trace_id) }}</code>
+        <button
+          type="button"
+          data-testid="run-detail-copy-trace-id"
+          :aria-label="$t('views.RunDetailView.copy_trace_id')"
+          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+          @click="copyTraceId"
+        >
+          {{ copied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
+        </button>
+        <a
+          v-if="run.trace_url"
+          :href="run.trace_url"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid="run-detail-view-trace"
+          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          {{ $t('views.RunDetailView.view_trace') }}
+        </a>
+      </div>
+
+      <div v-if="run?.status === 'complete' && lastNodeOutput" class="card p-5 mb-6">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-base font-semibold text-foreground">{{ $t('views.RunDetailView.final_output') }}</h2>
+          <button
+            type="button"
+            class="px-3 py-1.5 text-xs font-medium rounded-lg border border-input bg-background hover:bg-accent transition-colors"
+            @click="copyOutput"
+            data-testid="run-detail-copy-output"
+          >
+            {{ outputCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
+          </button>
+        </div>
+        <JsonViewer :data="lastNodeOutput" :show-toolbar="false" :max-height="'30rem'" />
+      </div>
+
+      <!-- Capacity-blocked pending run (queued on sandbox concurrency limit) -->
+      <div v-if="run.status === 'pending' && (run.error_code === 'capacity.org' || run.error_code === 'capacity.pipeline')" data-testid="run-detail-waiting-for-capacity" class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4">
+        <h3 class="text-sm font-semibold text-warning mb-1">{{ $t('views.RunDetailView.waiting_for_capacity') }}</h3>
+        <p v-if="run.error_detail" class="text-xs whitespace-pre-wrap text-warning/80">{{ run.error_detail }}</p>
+      </div>
+
+      <!-- Failed Run Diagnostics -->
+      <div v-if="run.status === 'failed' && run.error_detail" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 mb-4">
+        <div class="flex flex-wrap items-center gap-2 mb-1">
+          <h3 class="text-sm font-semibold text-destructive">{{ $t('views.RunDetailView.run_error') }}</h3>
+          <RunErrorTag
+            v-if="run.error_code"
+            :code="run.error_code"
+            :detail="(run.error_detail as string | null | undefined)?.slice(0, 200)"
+          />
+        </div>
+        <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
+      </div>
+
+      <!-- Guardrail Summary -->
+      <section v-if="guardrailBuckets.length > 0" class="rounded-lg border bg-card p-6 mb-6" data-testid="run-detail-guardrail-summary">
+        <h2 class="mb-3 text-base font-semibold tracking-tight">{{ $t('views.RunDetailGuardrailSummary.guardrail_summary_title') }}</h2>
+        <div class="flex flex-wrap gap-3">
+          <div
+            v-for="bucket in guardrailBuckets"
+            :key="bucket.key"
+            data-testid="run-detail-guardrail-bucket"
+            class="inline-flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-sm"
+          >
+            <span :class="bucketClass(bucket.key)" class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize">
+              {{ bucket.label }}
+            </span>
+            <span class="tabular-nums font-semibold">{{ bucket.value }}</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Guardrail-blocked override (terminal eval_failed / eval_blocked) -->
+      <div
+        v-if="isGuardrailBlocked"
+        id="run-detail-guardrail-override"
+        data-testid="run-detail-guardrail-override-panel"
+        class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4"
+      >
+        <h3 class="text-sm font-semibold text-warning mb-1">{{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}</h3>
+        <p class="text-xs text-warning/80 mb-3">{{ $t('views.RunDetailGuardrailSummary.override_disclosure') }}</p>
+        <Button v-if="isOrgOperator" data-testid="run-detail-override-guardrail" @click="openOverrideDialog">
+          {{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}
+        </Button>
+        <p
+          v-else
+          data-testid="run-detail-override-role-note"
+          class="text-xs text-muted-foreground"
+        >
+          {{ $t('views.RunDetailGuardrailSummary.override_requires_operator') }}
+        </p>
+      </div>
+
+      <!-- Per-Node Execution Trace -->
+      <section class="space-y-4 rounded-lg border bg-card p-6">
+        <div class="flex items-baseline justify-between gap-4">
+          <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.execution_trace') }}</h2>
+          <p class="text-xs text-muted-foreground">{{ $t('views.RunDetailView.per_node_model_cost_caveat') }}</p>
+        </div>
+
+        <div v-if="nodeEntries.length === 0 && run.status !== 'failed'" class="py-4 text-center text-sm text-muted-foreground">
+          {{ $t('views.RunDetailView.no_node_data') }}
+        </div>
+        <div v-else-if="nodeEntries.length === 0 && run.status === 'failed'" class="py-4 text-center text-sm text-muted-foreground">
+          {{ $t('views.RunDetailView.no_node_data_failed') }}
+        </div>
+
+        <div v-else class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
+          <thead>
+            <tr class="border-b text-xs uppercase text-muted-foreground">
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.node') }}</th>
+              <th class="pb-2 pr-4 font-medium capitalize">{{ $t('views.RunDetailView.status') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.duration') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.input_tokens') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.output_tokens') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.model_cost') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.trace_id') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.io') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.logs') }}</th>
+              <th class="pb-2 font-medium">{{ $t('views.RunDetailView.prompt') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="node in nodeEntries"
+              :key="node.name"
+              class="border-b last:border-b-0 hover:bg-muted/30"
+            >
+              <td class="py-3 pr-4 font-medium" :title="node.name">
+                <span class="select-all">{{ nodeLabel(node.name) }}</span>
+                <button
+                  type="button"
+                  data-testid="run-detail-copy-node-id"
+                  :aria-label="$t('views.RunDetailView.copy_node_id')"
+                  class="ml-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+                  @click="copyText(node.name)"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                </button>
+              </td>
+              <td class="py-3 pr-4">
+                <span :class="[nodeStatusBadgeClass(node), 'capitalize']">{{ node.status }}</span>
+                <span
+                  v-if="node.stallReason"
+                  data-testid="run-detail-node-stalled"
+                  class="ml-2 inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning"
+                  :title="node.stallReason"
+                >
+                  {{ $t('views.RunDetailView.agent_stalled', { reason: node.stallReason }) }}
+                </span>
+              </td>
+              <td class="py-3 pr-4 tabular-nums text-muted-foreground">{{ node.duration }}</td>
+              <td class="py-3 pr-4 tabular-nums">{{ node.inputTokens ?? '—' }}</td>
+              <td class="py-3 pr-4 tabular-nums">{{ node.outputTokens ?? '—' }}</td>
+              <td class="py-3 pr-4 tabular-nums">{{ node.cost != null ? formatMoney(node.cost, currencyCode, 6) : '—' }}</td>
+              <td class="py-3 pr-4">
+                <button
+                  v-if="node.traceId"
+                  type="button"
+                  data-testid="run-detail-node-trace-id"
+                  :aria-label="node.isNodeSpanId ? $t('views.RunDetailView.copy_node_span_id') : $t('views.RunDetailView.copy_node_trace_id')"
+                  class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
+                  :title="node.traceId"
+                  @click="copyText(node.traceId!)"
+                  @keydown.enter="copyText(node.traceId!)"
+                  @keydown.space.prevent="copyText(node.traceId!)"
+                >{{ shortId(node.traceId) }}…</button>
+                <span v-else class="text-muted-foreground">—</span>
+              </td>
+              <td class="py-3">
+                <button
+                  v-if="node.io"
+                  type="button"
+                  data-testid="run-detail-toggle-io"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+                  @click="toggleNodeIO(node.name)"
+                >
+                  {{ expandedNodes.has(node.name) ? $t('views.RunDetailView.hide') : $t('views.RunDetailView.show') }}
+                </button>
+                <span v-else class="text-muted-foreground">—</span>
+              </td>
+              <td class="py-3">
+                <button
+                  v-if="node.hasLogs || node.telemetry"
+                  type="button"
+                  data-testid="run-detail-toggle-logs"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+                  @click="toggleNodeLogs(node.name)"
+                >
+                  {{ expandedLogs.has(node.name) ? $t('views.RunDetailView.hide') : $t('views.RunDetailView.view') }}
+                </button>
+                <span v-else class="text-muted-foreground">—</span>
+              </td>
+              <td class="py-3">
+                <button
+                  type="button"
+                  data-testid="run-detail-show-prompt"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                  :disabled="promptLoading.has(node.name)"
+                  @click="revealPrompt(node.name)"
+                >
+                  {{ $t('views.RunDetailView.view_prompt') }}
+                </button>
+              </td>
+            </tr>
+
+            <!-- Expandable IO rows -->
+            <tr
+              v-for="node in nodeEntries"
+              :key="'io-' + node.name"
+              v-show="expandedNodes.has(node.name)"
+              data-testid="run-detail-io-row"
+            >
+              <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
+                <div class="rounded-lg border bg-muted p-4">
+                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.input') }}</h4>
+                  <JsonViewer v-if="node.io?.input != null" :data="node.io.input" :show-toolbar="false" :max-height="'16rem'" />
+                  <p v-else data-testid="run-detail-no-input" class="text-sm text-muted-foreground">{{ $t('views.RunDetailView.no_input_data') }}</p>
+                </div>
+                <div class="rounded-lg border bg-muted p-4">
+                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.output') }}</h4>
+                  <JsonViewer v-if="node.io?.output != null" :data="node.io.output" :show-toolbar="false" :max-height="'16rem'" />
+                  <p v-else data-testid="run-detail-no-output" class="text-sm text-muted-foreground">{{ $t('views.RunDetailView.no_output_data') }}</p>
+                </div>
+              </td>
+            </tr>
+
+            <!-- Expandable Telemetry / Log rows -->
+            <tr
+              v-for="node in nodeEntries"
+              :key="'log-' + node.name"
+              v-show="expandedLogs.has(node.name)"
+              data-testid="run-detail-log-row"
+            >
+              <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
+                <div
+                  v-if="!isTerminal && liveOutput[node.name]"
+                  class="rounded-lg border border-primary/40 bg-muted p-4"
+                  data-testid="run-detail-live-output"
+                >
+                  <h4 class="mb-2 text-xs font-semibold text-primary">{{ $t('views.RunDetailView.live_output') }}</h4>
+                  <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ liveOutput[node.name] }}</code></pre>
+                </div>
+                <div v-if="node.telemetry" class="rounded-lg border bg-muted p-4" data-testid="run-detail-node-telemetry">
+                  <div class="mb-2 flex flex-wrap items-center gap-2">
+                    <h4 class="text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.telemetry') }}</h4>
+                    <span v-if="node.telemetry?.status != null" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium capitalize">{{ node.telemetry?.status }}</span>
+                    <span v-if="node.telemetry?.exit_code != null && Number(node.telemetry?.exit_code) !== 0" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">{{ $t('views.RunDetailView.exit_code') }}: {{ node.telemetry?.exit_code }}</span>
+                    <span v-if="node.telemetry?.wall_clock_time_ms != null" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">{{ $t('views.RunDetailView.wall_clock_time') }}: {{ formatMs(Number(node.telemetry?.wall_clock_time_ms)) }}</span>
+                    <span v-if="node.telemetry?.cost_estimate_usd != null" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">{{ $t('views.RunDetailView.cost_estimate') }}: {{ formatMoney(Number(node.telemetry?.cost_estimate_usd), currencyCode, 6) }}</span>
+                    <span
+                      v-if="node.stallReason"
+                      data-testid="run-detail-node-stall-telemetry"
+                      class="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning"
+                      :title="node.stallReason"
+                    >
+                      {{ $t('views.RunDetailView.agent_stalled', { reason: node.stallReason }) }}
+                    </span>
+                  </div>
+                  <p v-if="nodeSummary(node)" class="text-xs whitespace-pre-wrap text-muted-foreground" data-testid="run-detail-node-summary">
+                    <span class="font-medium text-foreground">{{ $t('views.RunDetailView.summary') }}:</span> {{ nodeSummary(node) }}
+                  </p>
+                </div>
+                <div v-if="getNodeLog(node.name, 'agent_stdout')" class="rounded-lg border bg-muted p-4">
+                  <div class="mb-2 flex flex-wrap items-center gap-2">
+                    <h4 class="text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.agent_stdout') }}</h4>
+                    <label class="inline-flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
+                      <input
+                        type="checkbox"
+                        :checked="prettyPrintLogs"
+                        class="h-3 w-3 rounded border-muted-foreground/30"
+                        data-testid="run-detail-pretty-print"
+                        :aria-label="$t('views.RunDetailView.pretty_print_toggle')"
+                        @change="prettyPrintLogs = !prettyPrintLogs"
+                      />
+                      {{ $t('views.RunDetailView.pretty_print') }}
+                    </label>
+                    <label
+                      v-if="hasAnsiSequences(getNodeLog(node.name, 'agent_stdout') ?? '')"
+                      class="inline-flex items-center gap-1 text-xs text-muted-foreground cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        :checked="stripAnsiLogs"
+                        class="h-3 w-3 rounded border-muted-foreground/30"
+                        data-testid="run-detail-strip-ansi"
+                        :aria-label="$t('views.RunDetailView.strip_ansi_toggle')"
+                        @change="stripAnsiLogs = !stripAnsiLogs"
+                      />
+                      {{ $t('views.RunDetailView.strip_ansi') }}
+                    </label>
+                  </div>
+                  <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLogTransformed(node.name, 'agent_stdout') }}</code></pre>
+                  <p v-if="isNodeLogTruncated(node.name, 'agent_stdout')" class="mt-1 text-xs text-muted-foreground" data-testid="run-detail-log-truncated-stdout">
+                    {{ $t('views.RunDetailView.log_truncated_shown_of', { shown: MAX_LOG_CHARS.toLocaleString(), total: rawLogLength(node.name, 'agent_stdout').toLocaleString() }) }}
+                  </p>
+                </div>
+                <div v-if="getNodeLog(node.name, 'agent_stderr')" class="rounded-lg border bg-destructive/10 p-4">
+                  <div class="mb-2 flex flex-wrap items-center gap-2">
+                    <h4 class="text-xs font-semibold text-destructive">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
+                    <label class="inline-flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
+                      <input
+                        type="checkbox"
+                        :checked="prettyPrintLogs"
+                        class="h-3 w-3 rounded border-muted-foreground/30"
+                        data-testid="run-detail-pretty-print-stderr"
+                        :aria-label="$t('views.RunDetailView.pretty_print_toggle')"
+                        @change="prettyPrintLogs = !prettyPrintLogs"
+                      />
+                      {{ $t('views.RunDetailView.pretty_print') }}
+                    </label>
+                  </div>
+                  <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLogTransformed(node.name, 'agent_stderr') }}</code></pre>
+                  <p v-if="isNodeLogTruncated(node.name, 'agent_stderr')" class="mt-1 text-xs text-muted-foreground" data-testid="run-detail-log-truncated-stderr">
+                    {{ $t('views.RunDetailView.log_truncated_shown_of', { shown: MAX_LOG_CHARS.toLocaleString(), total: rawLogLength(node.name, 'agent_stderr').toLocaleString() }) }}
+                  </p>
+                </div>
+                <!-- FAR-582: full-log artifact download links -->
+                <div
+                  v-if="nodeArtifactMap[node.name]?.length"
+                  class="rounded-lg border bg-muted p-4"
+                  data-testid="run-detail-node-artifacts"
+                  aria-live="polite"
+                >
+                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.full_logs') }}</h4>
+                  <p v-if="isNodeLogTruncated(node.name, 'agent_stdout') || isNodeLogTruncated(node.name, 'agent_stderr')" class="mb-2 text-xs text-primary font-medium">
+                    {{ $t('views.RunDetailView.full_log_download_hint') }}
+                  </p>
+                  <ul class="flex flex-wrap gap-2">
+                    <li v-for="art in nodeArtifactMap[node.name]" :key="art.attempt_key + art.stream">
+                      <a
+                        :href="artifactDownloadUrl(run?.run_id, node.name, art.attempt_key, art.stream)"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                        :data-testid="`run-detail-artifact-${art.stream}`"
+                        :aria-label="artifactAriaLabel(art)"
+                      >
+                        <Download class="h-3 w-3 shrink-0" aria-hidden="true" />
+                        {{ art.stream }}
+                        <span v-if="nodeArtifactMap[node.name] && nodeArtifactMap[node.name].length > 1" class="text-muted-foreground">({{ art.attempt_key.split(':').pop() }})</span>
+                      </a>
+                    </li>
+                  </ul>
+                </div>
+                <div
+                  v-if="nodeArtifactError[node.name]"
+                  class="flex items-center justify-center gap-2 text-center text-sm text-destructive py-2"
+                  role="alert"
+                  aria-live="assertive"
+                  data-testid="run-detail-artifact-error"
+                >
+                  <span>{{ $t('views.RunDetailView.artifact_load_error') }}</span>
+                  <button
+                    type="button"
+                    class="rounded-md border border-border bg-background px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                    :aria-label="$t('views.RunDetailView.artifact_load_retry_aria')"
+                    data-testid="run-detail-artifact-retry"
+                    @click="retryNodeArtifacts(node.name)"
+                  >
+                    {{ $t('views.RunDetailView.artifact_load_retry') }}
+                  </button>
+                </div>
+                <div
+                  v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr') && !liveOutput[node.name] && !nodeArtifactMap[node.name]?.length"
+                  class="text-center text-sm text-muted-foreground py-4"
+                >
+                  {{ $t('views.RunDetailView.no_agent_logs') }}
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+      </section>
+
+      <!-- Total Run Cost -->
+      <section v-if="run.total_cost_usd != null" id="run-detail-cost-section" class="rounded-lg border bg-card p-6">
+        <div class="flex items-center justify-between">
+          <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.total_run_cost') }}</h2>
+          <span class="text-2xl font-semibold tabular-nums">{{ formatMoney(Number(formattedCost), currencyCode, 6) }}</span>
+        </div>
+        <p v-if="totalTokens != null || costBasisTokens != null" class="mt-1 text-xs text-muted-foreground">
+          <template v-if="nodesReportedTokens && (totalTokens ?? 0) > 0">
+            {{ $t('views.RunDetailView.total_tokens_node_reported', { count: (totalTokens ?? 0).toLocaleString() }) }}
+          </template>
+          <template v-else-if="!nodesReportedTokens && costBasisTokens != null && costBasisTokens > 0">
+            {{ $t('views.RunDetailView.total_tokens_not_reported_by_nodes', { count: costBasisTokens.toLocaleString() }) }}
+          </template>
+          <template v-else-if="totalTokens != null">
+            {{ $t('views.RunDetailView.total_tokens', { count: totalTokens.toLocaleString() }) }}
+          </template>
+        </p>
+
+        <div
+          v-if="childRunCost > 0 && aggregateCost != null"
+          data-testid="run-detail-aggregate-cost"
+          class="mt-3 rounded-lg border border-muted bg-muted/30 px-3 py-2 text-sm"
+        >
+          <span class="font-medium text-foreground">{{ childRunCount > 0 ? $t('views.RunDetailView.total_including_child_runs_count', childRunCount) : $t('views.RunDetailView.total_including_child_runs') }}</span>
+          <span class="ml-1 tabular-nums font-semibold">{{ formatMoney(aggregateCost, currencyCode, 6) }}</span>
+          <span class="ml-1 text-xs text-muted-foreground">{{ $t('views.RunDetailView.includes_child_run_cost', { amount: formatMoney(childRunCost, currencyCode, 6) }) }}</span>
+        </div>
+
+        <template v-if="breakdownPresent">
+          <p v-if="breakdownTotalClamped" class="mt-4 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning" data-testid="run-detail-cost-clamped">
+            {{ $t('views.RunDetailView.total_clamped_to_column_capacity') }}
+          </p>
+          <div v-if="breakdownEntries.length > 0" class="mt-4 overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr class="border-b text-xs uppercase text-muted-foreground">
+                  <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.component') }}</th>
+                  <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.amount') }}</th>
+                  <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.source') }}</th>
+                  <th class="pb-2 font-medium">{{ $t('views.RunDetailView.basis') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="entry in breakdownEntries" :key="entry.component" class="border-b last:border-b-0">
+                  <td class="py-2 pr-4 font-medium">
+                    {{ entry.display_name || entry.component }}
+                    <span v-if="entry.error" class="ml-1 inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning">{{ $t('views.RunDetailView.eval_error_badge') }}</span>
+                  </td>
+                  <td class="py-2 pr-4 tabular-nums">{{ entry.missing_self_report ? '—' : formatMoney(Number(entry.amountUsd), currencyCode, 6) }}</td>
+                  <td class="py-2 pr-4">
+                    <template v-if="entry.missing_self_report">
+                      <span class="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground" data-testid="run-detail-not-reported">{{ $t('views.RunDetailView.not_reported') }}</span>
+                    </template>
+                    <template v-else>
+                      <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs" :class="entry.source === 'self_reported' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
+                        {{ entry.source === 'self_reported' ? $t('views.RunDetailView.reported') : $t('views.RunDetailView.estimated') }}
+                      </span>
+                    </template>
+                  </td>
+                  <td class="py-2 text-xs text-muted-foreground">{{ entry.basisLine }}</td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr class="border-t font-medium">
+                  <td class="py-2 pr-4">{{ $t('views.RunDetailView.sum_of_components') }}</td>
+                  <td class="py-2 pr-4 tabular-nums">{{ formatMoney(Number(breakdownTotal), currencyCode, 6) }}</td>
+                  <td colspan="2" class="py-2 text-xs text-muted-foreground">{{ $t('views.RunDetailView.breakdown_sum_not_total') }}</td>
+                </tr>
+              </tfoot>
+            </table>
+            <p class="mt-2 text-xs text-muted-foreground">
+              {{ $t('views.RunDetailView.amounts_below_micro_note') }}
+            </p>
+          </div>
+          <p v-else class="mt-4 text-sm text-muted-foreground" data-testid="run-detail-no-attributable-costs">
+            {{ $t('views.RunDetailView.no_attributable_costs_this_run') }}
+          </p>
+          <p class="mt-2 text-xs text-muted-foreground" data-testid="run-detail-cost-transition-note">
+            {{ $t('views.RunDetailView.cost_accounting_migrated') }}
+          </p>
+        </template>
+      </section>
+
+      <!-- Prompt Reveal Dialog -->
+      <Dialog v-if="selectedPrompt" :visible="!!selectedPrompt" :modal="true" :dismissable-mask="true" :style="{ width: '48rem' }" @update:visible="closePromptDialog">
+        <template #header>
+          <div>
+            <div class="text-lg font-semibold">
+              Prompt — {{ selectedPrompt.nodeName }}
+              <span v-if="selectedPrompt.tokenCount != null" class="ml-2 text-sm font-normal text-muted-foreground">
+                ~{{ selectedPrompt.tokenCount.toLocaleString() }} tokens
+              </span>
+            </div>
+          </div>
+        </template>
+        <div class="max-h-[60vh] overflow-auto rounded-lg border bg-muted p-4">
+          <pre class="whitespace-pre-wrap text-xs leading-relaxed"><code>{{ selectedPrompt.prompt }}</code></pre>
+        </div>
+        <template #footer>
+          <div class="flex justify-end">
+            <Button data-testid="run-detail-copy-prompt" @click="copyPromptText">
+              {{ promptCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy_prompt') }}
+            </Button>
+          </div>
+        </template>
+      </Dialog>
+
+      <!-- Guardrail Override Dialog -->
+      <Dialog :visible="overrideDialogOpen" :modal="true" :dismissable-mask="true" :style="{ width: '42rem' }" @update:visible="overrideDialogOpen = false">
+        <template #header>
+          <div>
+            <div class="text-lg font-semibold">{{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}</div>
+            <div class="mt-0.5 text-sm text-muted-foreground">
+              {{ $t('views.RunDetailGuardrailSummary.override_guardrail_description') }}
+            </div>
+          </div>
+        </template>
+        <div class="space-y-4">
+          <label for="run-detail-override-input" class="mb-1 block text-sm font-medium">
+            {{ $t('views.RunDetailGuardrailSummary.input_payload') }}
+          </label>
+          <textarea
+            id="run-detail-override-input"
+            v-model="overrideInput"
+            rows="10"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="run-detail-override-input"
+            :aria-label="$t('views.RunDetailGuardrailSummary.input_payload')"
+          />
+          <p class="text-xs text-muted-foreground">{{ $t('views.RunDetailGuardrailSummary.override_disclosure') }}</p>
+          <output
+            v-if="overrideMessage"
+            :data-testid="overrideMessage.type === 'error' ? 'run-detail-override-error' : 'run-detail-override-success'"
+            :aria-label="overrideMessage.text"
+            class="block text-sm font-medium"
+            :class="overrideMessage.type === 'error' ? 'text-destructive' : 'text-success'"
+          >
+            {{ overrideMessage.text }}
+          </output>
+        </div>
+        <template #footer>
+          <div class="flex justify-end">
+            <Button data-testid="run-detail-override-submit" :disabled="overrideSubmitting" @click="submitOverride">
+              {{ overrideSubmitting ? '...' : $t('views.RunDetailGuardrailSummary.override_guardrail') }}
+            </Button>
+          </div>
+        </template>
+      </Dialog>
+    </template>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import type { Ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { api } from '../lib/api/client'
+import type { components } from '../lib/api/client'
+import { useCurrentUser } from '../composables/useCurrentUser'
+import { useApi } from '../composables/useApi'
+import PageHeader from '../components/shared/PageHeader.vue'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import RunErrorTag from '../components/shared/RunErrorTag.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
+import HitlGateCard from '../components/hitl/HitlGateCard.vue'
+import Dialog from 'primevue/dialog'
+import Button from 'primevue/button'
+import { formatApiError } from '../lib/api/formatError'
+import { requestRunCancellation, requestRunRerun } from '../lib/api/runs'
+import { isTerminalStatus } from '../constants/runStatuses'
+import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription } from '../utils/runUtils'
+import { shortId, formatRun } from '../utils/format'
+import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
+import { Check, X, AlertTriangle, RotateCcw, Download } from '@lucide/vue'
+
+type RunResponse = components['schemas']['RunResponse'] & {
+  created_at?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+  child_runs_cost_usd?: string | null
+  child_runs_count?: number
+  aggregate_cost_usd?: string | null
+  trigger_actor?: string | null
+  trigger_type?: string | null
+  trigger_id?: string | null
+  heartbeat_at?: string | null
+  work_item_refs?: WorkItemRef[] | null
+  child_runs?: ChildRunRef[] | null
+  capacity?: RunCapacity | null
+}
+type RunIOResponse = components['schemas']['RunIOResponse']
+
+interface NodeTokenUsage {
+  input_tokens?: number
+  output_tokens?: number
+  total_tokens?: number
+  cost_usd?: number
+  model_cost_display_usd?: number
+}
+
+interface WorkItemRef {
+  kind?: string
+  ref?: string
+  source?: string
+  status?: string | null
+}
+
+interface ChildRunRef {
+  run_id: string
+  run_number?: number | null
+  status?: string
+  pipeline_name?: string | null
+}
+
+interface RunCapacity {
+  active_runs: number
+  concurrency_limit: number | null
+  waiting: boolean
+}
+
+interface CostBreakdownEntry {
+  component?: string
+  display_name?: string
+  source?: string
+  amount_usd?: string | number
+  formula_applied?: string | null
+  rate_usd?: string | number | null
+  basis?: Record<string, unknown>
+  missing_self_report?: boolean
+  missing_self_report_reason?: string
+  error?: string
+  total_clamped?: boolean
+}
+
+interface NodeEntry {
+  name: string
+  status: string
+  duration: string
+  inputTokens: number | null
+  outputTokens: number | null
+  cost: number | null
+  traceId: string | null
+  isNodeSpanId: boolean
+  io: { input: unknown; output: unknown } | null
+  telemetry: Record<string, unknown> | null
+  hasLogs: boolean
+  stallReason: string | null
+}
+
+interface RunChunkEvent {
+  seq: number
+  event_type: string
+  payload?: { node_id?: string; chunk?: string }
+  ts?: string
+}
+
+const route = useRoute()
+const router = useRouter()
+const { t, locale } = useI18n()
+const { currencyCode, loadCurrency } = useOrgCurrency()
+const run = ref<RunResponse | null>(null)
+const runIO = ref<RunIOResponse | null>(null)
+const expandedNodes = ref(new Set<string>())
+const expandedLogs = ref(new Set<string>())
+const copied = ref(false)
+const shareCopied = ref(false)
+const promptCopied = ref(false)
+const outputCopied = ref(false)
+const inputPayloadCopied = ref(false)
+const pollInterval = ref<ReturnType<typeof setInterval> | null>(null)
+const promptLoading = ref(new Set<string>())
+const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { role: string; content: string }[]; tokenCount: number; promptAlwaysVisible: boolean }>>({})
+const selectedPrompt = ref<{ nodeName: string; prompt: string; tokenCount: number | null } | null>(null)
+const cancelling = ref(false)
+const cancelError = ref<string | null>(null)
+const rerunning = ref(false)
+const rerunError = ref<string | null>(null)
+const rerunConfirming = ref(false)
+const pipelineIdempotent = ref<boolean | null>(null)
+const pendingGates = ref<components['schemas']['GateResponse'][]>([])
+const hitlLoading = ref(false)
+const hitlMessage = ref<{ type: string; text: string } | null>(null)
+const liveOutput = ref<Record<string, string>>({})
+const liveOutputSeq = ref(0)
+const liveNodeStates = ref<Record<string, 'running' | 'completed' | 'failed'>>({})
+const heartbeatNow = ref(Date.now())
+const overrideDialogOpen = ref(false)
+const overrideInput = ref('')
+const overrideSubmitting = ref(false)
+const overrideMessage = ref<{ type: string; text: string } | null>(null)
+
+// agent_stdout strings can reach ~512KB; cap the Logs pre for display.
+// (FAR-123 delivers the full truncation UX later.)
+const MAX_LOG_CHARS = 20000
+
+// ── Log display toggles (FAR-849) ──────────────────────────────────
+const prettyPrintLogs = ref(false)
+const stripAnsiLogs = ref(false)
+
+const { isOperator: isOrgOperator } = useCurrentUser()
+
+const isGuardrailBlocked = computed(() =>
+  run.value?.status === 'eval_failed' && run.value?.error_code === 'eval_blocked',
+)
+
+const guardrailSummary = computed<Record<string, number>>(() => {
+  const s = run.value?.guardrail_summary
+  return s && typeof s === 'object' ? (s as Record<string, number>) : {}
+})
+
+const GUARDRAIL_BUCKET_KEYS = ['evaluated', 'passed', 'violated', 'observed', 'errored', 'redacted', 'skipped'] as const
+
+const guardrailBuckets = computed(() => {
+  const summary = guardrailSummary.value
+  if (Object.keys(summary).length === 0) return []
+  return GUARDRAIL_BUCKET_KEYS
+    .filter(key => typeof summary[key] === 'number' && summary[key] > 0)
+    .map(key => ({
+      key,
+      value: summary[key] as number,
+      label: t(`views.RunDetailGuardrailSummary.${key}`),
+    }))
+})
+
+function bucketClass(key: string): string {
+  const classes: Record<string, string> = {
+    evaluated: 'bg-muted text-muted-foreground',
+    passed: 'bg-success/10 text-success',
+    violated: 'bg-destructive/10 text-destructive',
+    observed: 'bg-warning/10 text-warning',
+    errored: 'bg-destructive/10 text-destructive',
+    redacted: 'bg-purple-500/10 text-purple-600',
+    skipped: 'bg-muted text-muted-foreground',
+  }
+  return classes[key] || 'bg-muted text-muted-foreground'
+}
+
+function openOverrideDialog() {
+  overrideInput.value = ''
+  overrideMessage.value = null
+  overrideDialogOpen.value = true
+}
+
+async function submitOverride() {
+  const runId = route.params.id as string
+  if (!runId || overrideSubmitting.value) return
+  let inputData: unknown
+  try {
+    inputData = JSON.parse(overrideInput.value || '{}')
+  } catch {
+    overrideMessage.value = {
+      type: 'error',
+      text: t('views.RunDetailGuardrailSummary.override_invalid_json'),
+    }
+    return
+  }
+  overrideSubmitting.value = true
+  overrideMessage.value = null
+  try {
+    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/guardrail-override', {
+      params: { path: { run_id: runId } },
+      body: { input_data: inputData } as any,
+    })
+    if (err) {
+      const status = (err as Record<string, unknown>)?.status
+      // 422 = still-violating supplied input — re-block safe.
+      overrideMessage.value = {
+        type: 'error',
+        text: status === 422
+          ? t('views.RunDetailGuardrailSummary.override_reblocked')
+          : `${t('views.RunDetailGuardrailSummary.override_failed')} ${formatApiError(err)}`,
+      }
+      return
+    }
+    if (data) {
+      if (run.value) run.value.status = (data as { status?: string }).status ?? 'pending'
+      overrideMessage.value = {
+        type: 'success',
+        text: t('views.RunDetailGuardrailSummary.override_success'),
+      }
+      setTimeout(() => {
+        overrideDialogOpen.value = false
+        overrideMessage.value = null
+      }, 1500)
+    }
+  } catch (e: unknown) {
+    overrideMessage.value = {
+      type: 'error',
+      text: `${t('views.RunDetailGuardrailSummary.override_failed')} ${formatApiError(e)}`,
+    }
+  } finally {
+    overrideSubmitting.value = false
+  }
+}
+
+const shareSummary = computed(() => {
+  const r = run.value
+  if (!r) return ''
+  const completed = nodeEntries.value.filter(n => n.status === 'complete').length
+  const total = nodeEntries.value.length
+  const tokens = nodesReportedTokens.value
+    ? `${(totalTokens.value ?? 0).toLocaleString()} (node-reported)`
+    : costBasisTokens.value != null
+      ? `${costBasisTokens.value.toLocaleString()} (cost basis)`
+      : (totalTokens.value?.toLocaleString() ?? '—')
+  const cost = r.total_cost_usd != null ? formatMoney(Number(r.total_cost_usd), currencyCode.value, 6) : '—'
+  const runNumber = r.run_number != null ? `#${r.run_number}` : shortId(r.run_id)
+  return [
+    `Run: ${runNumber}`,
+    `Pipeline: ${r.pipeline_name || shortId(r.pipeline_id)}`,
+    `Status: ${r.status}`,
+    `Nodes: ${completed}/${total}`,
+    `Tokens: ${tokens}`,
+    `Cost: ${cost}`,
+    `Duration: —`,
+  ].join('\n')
+})
+
+async function copyShareSummary() {
+  const text = shareSummary.value
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    shareCopied.value = true
+    setTimeout(() => { shareCopied.value = false }, 2000)
+  } catch (e) {
+    console.warn('Failed to copy share summary', e)
+  }
+}
+
+function toggleNodeIO(name: string) {
+  const s = expandedNodes.value
+  if (s.has(name)) s.delete(name)
+  else s.add(name)
+}
+
+function toggleNodeLogs(name: string) {
+  const s = expandedLogs.value
+  if (s.has(name)) s.delete(name)
+  else s.add(name)
+  // FAR-582: fetch artifacts when opening the logs panel for the first time
+  if (s.has(name) && !nodeArtifactMap.value[name] && !nodeArtifactFetched.value.has(name)) {
+    fetchNodeArtifacts(name)
+  }
+}
+
+// ── FAR-582: artifact listing ──────────────────────────────────────
+
+interface ArtifactPointer {
+  attempt_key: string
+  stream: string
+  size_bytes: number
+  sha256: string
+  compression: string
+}
+
+const nodeArtifactMap = ref<Record<string, ArtifactPointer[]>>({})
+const nodeArtifactError = ref<Record<string, boolean>>({})
+const nodeArtifactFetched = ref(new Set<string>())
+
+async function fetchNodeArtifacts(nodeName: string) {
+  if (!run.value?.run_id) return
+  nodeArtifactFetched.value.add(nodeName)
+  nodeArtifactError.value[nodeName] = false
+  try {
+    const { data, error: err } = await api.GET('/api/v1/runs/{run_id}/nodes/{node_id}/artifacts', {
+      params: { path: { run_id: run.value.run_id, node_id: nodeName } },
+    })
+    // A 404 means the (run, node) pair has no artifact rows (e.g. runs that
+    // predate the run_node_outputs table) — render empty, NOT an error.
+    // Reserve the error state for 5xx / network failures (STATE-2).
+    if (err && (err as { status?: number }).status !== 404) {
+      nodeArtifactError.value[nodeName] = true
+      return
+    }
+    nodeArtifactMap.value[nodeName] = data?.artifacts ?? []
+  } catch {
+    nodeArtifactError.value[nodeName] = true
+  }
+}
+
+function retryNodeArtifacts(nodeName: string) {
+  nodeArtifactError.value[nodeName] = false
+  nodeArtifactFetched.value.delete(nodeName)
+  fetchNodeArtifacts(nodeName)
+}
+
+function artifactDownloadUrl(
+  runId: string | undefined | null,
+  nodeId: string,
+  attemptKey: string,
+  stream: string,
+): string {
+  if (!runId) return '#'
+  return `/api/v1/runs/${runId}/nodes/${nodeId}/attempts/${encodeURIComponent(attemptKey)}/artifacts/${stream}`
+}
+
+function artifactAriaLabel(art: ArtifactPointer): string {
+  const attemptSuffix = art.attempt_key.split(':').pop() ?? ''
+  return t('views.RunDetailView.artifact_download_aria', { stream: art.stream, attempt: attemptSuffix })
+}
+
+async function copyTraceId() {
+  if (!run.value?.trace_id) return
+  await copyText(run.value.trace_id)
+}
+
+async function copyRunId() {
+  if (!run.value?.run_id) return
+  await copyText(run.value.run_id)
+}
+
+async function copyText(text: string, flag: Ref<boolean> = copied) {
+  try {
+    await navigator.clipboard.writeText(text)
+    flag.value = true
+    setTimeout(() => { flag.value = false }, 2000)
+  } catch (e) {
+    console.warn('Failed to copy text', e)
+  }
+}
+
+function nodeLabel(nodeId: string): string {
+  const labels = runIO.value?.node_labels as Record<string, string> | undefined
+  return labels?.[nodeId] || shortId(nodeId)
+}
+
+const GITHUB_KINDS = ['github', 'github_pr', 'github_issue'] as const
+
+// The PR Reviewer pipeline derives work items with bare kinds ('pr',
+// 'pull_request', 'issue') rather than the 'github_*' kinds the badge
+// originally expected (FAR-726). Normalize every alias onto the canonical
+// kind so kind-based branching (badge label, URL, title) treats them
+// identically; unknown kinds pass through unchanged so the generic
+// fallback chip still renders them.
+function normalizeGithubKind(kind: string | null | undefined): string {
+  const normalized = (kind || '').toLowerCase()
+  if (normalized === 'pr' || normalized === 'pull_request') return 'github_pr'
+  if (normalized === 'issue') return 'github_issue'
+  return normalized
+}
+
+function isGithubWorkItem(item: WorkItemRef): boolean {
+  return GITHUB_KINDS.includes(normalizeGithubKind(item.kind) as (typeof GITHUB_KINDS)[number])
+}
+
+function githubKindLabel(item: WorkItemRef): string {
+  const kind = normalizeGithubKind(item.kind)
+  const key =
+    kind === 'github' || kind === 'github_pr' || kind === 'github_issue'
+      ? `views.RunDetailView.work_item_kind_${kind}`
+      : 'views.RunDetailView.work_item_kind_github_default'
+  return t(key)
+}
+
+function githubRefId(item: WorkItemRef): string {
+  return (item.ref || '').trim().replace(/^[^/\s]+\/[^/\s]+#/, '')
+}
+
+function getPrUrl(item: WorkItemRef): string | null {
+  const kind = normalizeGithubKind(item.kind)
+  const ref = (item.ref || '').trim()
+  const hashIndex = ref.indexOf('#')
+  if (hashIndex > 0) {
+    const slashIndex = ref.indexOf('/')
+    if (slashIndex > 0 && slashIndex < hashIndex) {
+      const owner = ref.slice(0, slashIndex)
+      const repo = ref.slice(slashIndex + 1, hashIndex)
+      const id = ref.slice(hashIndex + 1)
+      if (owner && repo && id && !/\s/.test(owner) && !/\s/.test(repo) && !repo.includes('/')) {
+        if (kind === 'github_pr') return `https://github.com/${owner}/${repo}/pull/${id}`
+        if (kind === 'github_issue') return `https://github.com/${owner}/${repo}/issues/${id}`
+        return `https://github.com/${owner}/${repo}`
+      }
+    }
+  }
+  if (kind === 'github_pr') {
+    const ctx = prContext.value
+    const refId = githubRefId(item)
+    const refIsNumber = /^\d+$/.test(refId)
+    const ctxNumber = ctx && /^\d+$/.test(ctx.number) ? ctx.number : ''
+    if (ctx && ctx.fullName && refIsNumber && (!ctxNumber || ctxNumber === refId)) {
+      return `https://github.com/${ctx.fullName}/pull/${refId}`
+    }
+    if (ctx && ctx.fullName && !refIsNumber && ctxNumber) {
+      return `https://github.com/${ctx.fullName}/pull/${ctxNumber}`
+    }
+  }
+  return null
+}
+
+const prContext = computed<{ fullName: string; number: string; title: string | null } | null>(() => {
+  const payload = runIO.value?.input_payload as Record<string, unknown> | null | undefined
+  if (!payload || typeof payload !== 'object') return null
+  const repo = payload.repository as Record<string, unknown> | null | undefined
+  const pr = payload.pull_request as Record<string, unknown> | null | undefined
+  const fullName = typeof repo?.full_name === 'string' ? repo.full_name.trim() : ''
+  if (!fullName) return null
+  const rawNumber = pr?.number
+  const number = rawNumber == null ? '' : String(rawNumber).trim()
+  const title = typeof pr?.title === 'string' && pr.title.trim() ? pr.title.trim() : null
+  return { fullName, number, title }
+})
+
+function githubWorkItemBadgeLabel(item: WorkItemRef): string {
+  const refId = githubRefId(item)
+  return refId ? `${githubKindLabel(item)} #${refId}` : githubKindLabel(item)
+}
+
+function prTitle(item: WorkItemRef): string | null {
+  if (normalizeGithubKind(item.kind) !== 'github_pr') return null
+  const ctx = prContext.value
+  if (!ctx || !ctx.title || !ctx.number) return null
+  const refId = githubRefId(item)
+  if (refId && /^\d+$/.test(refId) && refId !== ctx.number) return null
+  return ctx.title
+}
+
+async function revealPrompt(nodeName: string) {
+  const cached = revealedPrompts.value[nodeName]
+  if (cached?.prompt) {
+    showPrompt(nodeName)
+    return
+  }
+  if (promptLoading.value.has(nodeName)) return
+  const runId = route.params.id as string
+  if (!runId) return
+
+  promptLoading.value = new Set([...promptLoading.value, nodeName])
+  try {
+    const { data, error: err } = await api.POST(
+      '/api/v1/runs/{run_id}/nodes/{node_id}/prompt/reveal',
+      {
+        params: { path: { run_id: runId, node_id: nodeName } },
+      },
+    )
+    if (err || !data) {
+      if (typeof err === 'object' && err !== null && 'name' in err && (err as Record<string, unknown>).name === 'AbortError') throw err
+      revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: null }
+      const detail = (err as Record<string, unknown>)?.detail
+      error.value = `${t('views.RunDetailView.prompt_reveal_error')} ${detail ? String(detail) : ''}`
+      return
+    }
+    const d = data as components['schemas']['PromptRevealResponse']
+    const revealed = {
+      prompt: d.prompt,
+      messages: d.messages.map(message => ({
+        role: message.role ?? '',
+        content: message.content ?? '',
+      })),
+      tokenCount: d.token_count,
+      promptAlwaysVisible: d.prompt_always_visible,
+    }
+    revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: revealed }
+    showPrompt(nodeName)
+  } finally {
+    const s = new Set(promptLoading.value)
+    s.delete(nodeName)
+    promptLoading.value = s
+  }
+}
+
+function showPrompt(nodeName: string) {
+  const entry = revealedPrompts.value[nodeName]
+  if (!entry) return
+  selectedPrompt.value = {
+    nodeName,
+    prompt: entry.prompt,
+    tokenCount: entry.tokenCount,
+  }
+}
+
+function closePromptDialog() {
+  selectedPrompt.value = null
+}
+
+async function copyPromptText() {
+  if (!selectedPrompt.value?.prompt) return
+  try {
+    await navigator.clipboard.writeText(selectedPrompt.value.prompt)
+    promptCopied.value = true
+    setTimeout(() => { promptCopied.value = false }, 2000)
+  } catch (e) {
+    console.warn('Failed to copy prompt text', e)
+  }
+}
+
+function getNodeLog(nodeName: string, field: string): string | null {
+  const nodeTelemetry = nodeTelemetryFor(nodeName)
+  if (!nodeTelemetry) return null
+  const val = nodeTelemetry[field]
+  if (typeof val !== 'string' || val.length === 0) return null
+  return val.length > MAX_LOG_CHARS ? val.slice(0, MAX_LOG_CHARS) : val
+}
+
+function isNodeLogTruncated(nodeName: string, field: string): boolean {
+  const nodeTelemetry = nodeTelemetryFor(nodeName)
+  const val = nodeTelemetry?.[field]
+  return typeof val === 'string' && val.length > MAX_LOG_CHARS
+}
+
+function rawLogLength(nodeName: string, field: string): number {
+  const nodeTelemetry = nodeTelemetryFor(nodeName)
+  const val = nodeTelemetry?.[field]
+  return typeof val === 'string' ? val.length : 0
+}
+
+// ── Log pretty-print transform (FAR-849) ───────────────────────────
+// Unescapes literal \n/\t sequences, pretty-prints JSON, and renders
+// tool-use blocks readably. Returns an object with rendered HTML and
+// whether any transformation was applied.
+
+function getNodeLogTransformed(nodeName: string, field: string): string | null {
+  const raw = getNodeLog(nodeName, field)
+  if (!raw) return null
+  let result = raw
+  if (stripAnsiLogs.value) {
+    result = stripAnsi(result)
+  }
+  if (prettyPrintLogs.value) {
+    result = prettyPrintLog(result).html
+  }
+  return result
+}
+
+function nodeTelemetryFor(nodeName: string): Record<string, unknown> | null {
+  const telemetry = runIO.value?.node_telemetry as Record<string, unknown> | null ?? {}
+  const entry = telemetry[nodeName]
+  return entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null
+}
+
+function nodeSummary(node: NodeEntry): string | null {
+  const telemetryStatus = node.telemetry?.status
+  const output = node.io?.output as Record<string, unknown> | null | undefined
+  if (output && typeof output === 'object' && output !== null) {
+    const returnSummary = output.summary
+    if (typeof returnSummary === 'string' && returnSummary.length > 0 && telemetryStatus !== 'failed') {
+      return returnSummary
+    }
+  }
+  const telemetrySummary = node.telemetry?.summary
+  return typeof telemetrySummary === 'string' && telemetrySummary.length > 0 ? telemetrySummary : null
+}
+
+function statusBadgeClassFor(status: string | undefined): string {
+  const map: Record<string, string> = {
+    running: 'badge badge-status-primary',
+    complete: 'badge badge-status-success',
+    failed: 'badge badge-status-destructive',
+    stalled: 'badge badge-status-destructive',
+    cancelled: 'badge badge-status-warning',
+    pending: 'badge badge-status-muted',
+    awaiting_human: 'badge badge-status-pending',
+    hitl_parked: 'badge badge-status-pending',
+  }
+  return map[status ?? ''] ?? 'badge badge-context-slate'
+}
+
+const statusBadgeClass = computed(() => statusBadgeClassFor(run.value?.status))
+
+const isTerminal = computed(() => run.value != null && isTerminalStatus(run.value.status))
+
+const canCancel = computed(() => run.value != null && !isTerminalStatus(run.value.status))
+
+const canRerun = computed(() => isTerminal.value && !!run.value?.pipeline_id)
+
+function nodeStatusBadgeClass(node: NodeEntry): string {
+  return statusBadgeClassFor(node.status)
+}
+
+const runTimestamps = computed(() => {
+  const r = run.value
+  if (!r) return null
+  return {
+    created: r.created_at ? formatTimestamp(r.created_at) : '—',
+    started: r.started_at ? formatTimestamp(r.started_at) : '—',
+    completed: r.completed_at ? formatTimestamp(r.completed_at) : '—',
+  }
+})
+
+function formatTimestamp(dateStr: string): string {
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString(locale.value, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
+
+const totalTokens = computed(() => {
+  if (!run.value?.node_token_usage) return null
+  const ntu = run.value.node_token_usage as Record<string, NodeTokenUsage>
+  return Object.values(ntu).reduce((sum, n) => sum + (n.total_tokens ?? 0), 0)
+})
+
+// Tokens reported in the cost breakdown basis (from the cost system, not per-node telemetry)
+const costBasisTokens = computed(() => {
+  const entries = breakdownRaw.value
+  for (const entry of entries) {
+    const basis = entry.basis
+    if (basis && typeof basis === 'object') {
+      const reported = basis.tokens_total_reported ?? basis.tokens_input_reported
+      if (typeof reported === 'number' && reported > 0) return reported
+    }
+  }
+  return null
+})
+
+// Whether nodes actually reported per-node token usage
+const nodesReportedTokens = computed(() => {
+  if (!run.value?.node_token_usage) return false
+  const ntu = run.value.node_token_usage as Record<string, NodeTokenUsage>
+  return Object.values(ntu).some(n => (n.total_tokens ?? 0) > 0 || (n.input_tokens ?? 0) > 0 || (n.output_tokens ?? 0) > 0)
+})
+
+const formattedCost = computed(() => {
+  const c = run.value?.total_cost_usd
+  if (c == null) return '0.00'
+  return Number(c).toFixed(6)
+})
+
+const childRunCost = computed(() => {
+  const c = run.value?.child_runs_cost_usd
+  if (c == null || c === '') return 0
+  const n = Number(c)
+  return Number.isFinite(n) ? n : 0
+})
+
+const aggregateCost = computed(() => {
+  const a = run.value?.aggregate_cost_usd
+  if (a == null || a === '') return null
+  const n = Number(a)
+  return Number.isFinite(n) ? n : null
+})
+
+const childRunCount = computed(() => {
+  const c = run.value?.child_runs_count
+  return Number.isInteger(c) && (c ?? 0) > 0 ? (c as number) : 0
+})
+
+const breakdownRaw = computed<CostBreakdownEntry[]>(() => {
+  const raw = run.value?.cost_breakdown
+  return Array.isArray(raw) ? (raw as CostBreakdownEntry[]) : []
+})
+
+const breakdownPresent = computed(() => breakdownRaw.value.length > 0)
+
+const breakdownTotalClamped = computed(() => breakdownRaw.value.some((e) => e.total_clamped === true))
+
+function parseBreakdownAmount(value: string | number | undefined): number {
+  if (value == null || value === '') return 0
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+function formatBreakdownAmount(value: string | number | undefined): string {
+  return parseBreakdownAmount(value).toFixed(6)
+}
+
+function breakdownBasisLine(entry: CostBreakdownEntry): string {
+  // A missing self-report is a CLEAR non-billing state — never render the
+  // confusing ``reported=0, node_count=0`` numeric basis. Surface the human
+  // message instead (the fix for the phantom $0.000000 row).
+  if (entry.missing_self_report === true) {
+    return t('views.RunDetailView.no_model_cost_reported_basis')
+  }
+  const basis = entry.basis
+  if (!basis || typeof basis !== 'object') return '—'
+  const parts = Object.entries(basis)
+    .filter(([k]) => k !== 'raw_reported' && k !== 'per_node_raw')
+    .slice(0, 6)
+    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+  return parts.length > 0 ? parts.join(', ') : '—'
+}
+
+const breakdownEntries = computed(() =>
+  breakdownRaw.value
+    .filter((e) => e.total_clamped !== true)
+    .filter((e) => {
+      const amount = parseBreakdownAmount(e.amount_usd)
+      // Zero-amount rows are omitted — except self-report / eval-error rows
+      // that carry a chip or badge (a dead report_key must stay visible).
+      if (amount !== 0) return true
+      return Boolean(e.error) || e.missing_self_report === true
+    })
+    .map((e) => ({
+      ...e,
+      amountUsd: formatBreakdownAmount(e.amount_usd),
+      basisLine: breakdownBasisLine(e),
+    })),
+)
+
+const breakdownTotal = computed(() =>
+  breakdownEntries.value.reduce((sum, e) => sum + parseBreakdownAmount(e.amount_usd), 0).toFixed(6),
+)
+
+const lastNodeOutput = computed(() => {
+  const outputs = runIO.value?.outputs_json as Record<string, unknown> | null | undefined
+  if (!outputs) return null
+  const keys = Object.keys(outputs)
+  for (let i = keys.length - 1; i >= 0; i--) {
+    const value = outputs[keys[i]]
+    if (value != null) return value
+  }
+  return null
+})
+
+const formattedOutput = computed(() => {
+  const output = lastNodeOutput.value
+  if (output == null) return ''
+  if (typeof output === 'string') return output
+  return JSON.stringify(output, null, 2)
+})
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  return `${h}h ${m}m`
+}
+
+function formatMs(ms: number): string {
+  if (!Number.isFinite(ms)) return '—'
+  return formatDuration(ms / 1000)
+}
+
+async function copyOutput() {
+  const text = formattedOutput.value
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    outputCopied.value = true
+    setTimeout(() => { outputCopied.value = false }, 2000)
+  } catch (e) {
+    console.warn('Failed to copy output', e)
+  }
+}
+
+async function copyInputPayload() {
+  const payload = runIO.value?.input_payload
+  if (!payload) return
+  await copyText(JSON.stringify(payload, null, 2), inputPayloadCopied)
+}
+
+async function cancelRun() {
+  const runId = route.params.id as string
+  if (!runId) return
+  cancelling.value = true
+  cancelError.value = null
+  try {
+    const { error } = await requestRunCancellation(runId, t('views.RunDetailView.cancel_failed'))
+    if (error) {
+      cancelError.value = error
+    } else {
+      if (run.value) run.value.status = 'cancelled'
+      if (pollInterval.value) {
+        clearInterval(pollInterval.value)
+        pollInterval.value = null
+      }
+    }
+  } finally {
+    cancelling.value = false
+  }
+}
+
+// FAR-788: idempotency is a per-graph-node flag — the replay is side-effect
+// safe only when EVERY node in the pipeline's graph is idempotent. When the
+// graph cannot be read (or has no nodes) we fall back to the confirm path.
+// The fetch only runs once the run is terminal (button becomes visible).
+watch(
+  () => (isTerminal.value ? (run.value?.pipeline_id ?? null) : null),
+  async (pipelineId) => {
+    pipelineIdempotent.value = null
+    rerunConfirming.value = false
+    if (!pipelineId) return
+    try {
+      const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
+        params: { path: { pipeline_id: pipelineId } },
+      })
+      const nodes = data?.nodes ?? []
+      pipelineIdempotent.value = nodes.length > 0 && nodes.every((n) => n.idempotent !== false)
+    } catch (e) {
+      // Best-effort: fall back to the confirm-required path when unknown.
+      console.warn('Failed to fetch pipeline graph idempotency', e)
+    }
+  },
+  { immediate: true },
+)
+
+async function doRerun() {
+  const runId = route.params.id as string
+  if (!runId) return
+  rerunning.value = true
+  rerunError.value = null
+  try {
+    const { runId: newRunId, error } = await requestRunRerun(runId, t('views.RunDetailView.rerun_failed'))
+    if (error) {
+      rerunError.value = error
+    } else if (newRunId) {
+      router.push(`/runs/${newRunId}`)
+    }
+  } finally {
+    rerunning.value = false
+    rerunConfirming.value = false
+  }
+}
+
+function onRerunClick() {
+  if (rerunConfirming.value || pipelineIdempotent.value === true) {
+    void doRerun()
+    return
+  }
+  rerunConfirming.value = true
+}
+
+// FAR-631 invariant: approve/reject empties pendingGates and flips the run
+// status, unmounting the section — so the message emitted by the card is
+// hoisted into hitlMessage, rendered OUTSIDE the section (see template).
+let hitlMessageTimer: ReturnType<typeof setTimeout> | null = null
+
+// One timer at a time: a stale claim banner timer must not clear a newer
+// decided banner shown seconds later.
+function hoistHitlMessage(payload: { type: string; text: string }) {
+  if (hitlMessageTimer !== null) clearTimeout(hitlMessageTimer)
+  hitlMessage.value = payload
+  hitlMessageTimer = setTimeout(() => { hitlMessage.value = null; hitlMessageTimer = null }, 5000)
+}
+
+function onHitlClaimed(payload: { type: string; text: string }) {
+  hoistHitlMessage(payload)
+}
+
+function onHitlDecided(payload: { type: string; text: string }) {
+  hoistHitlMessage(payload)
+  pendingGates.value = []
+  if (run.value && (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked')) {
+    run.value.status = 'running'
+  }
+}
+
+function resolveNodeIO(nodeOutput: Record<string, unknown> | undefined): { input: unknown; output: unknown } | null {
+  if (nodeOutput == null) return null
+  if (!Array.isArray(nodeOutput) && typeof nodeOutput === 'object') {
+    if ('artifacts' in nodeOutput) {
+      // Legacy mixed envelope — the meaningful output is under `output`.
+      return {
+        input: nodeOutput.input ?? runIO.value?.input_payload ?? null,
+        output: nodeOutput.output ?? null,
+      }
+    }
+    // P1+ pure return — honour an explicit `input` key, otherwise fall back to
+    // the run-level input payload; the value itself is the output when there is
+    // no `output` wrapper. An empty object carries no data — treat as absent.
+    if (Object.keys(nodeOutput).length === 0) {
+      return {
+        input: runIO.value?.input_payload ?? null,
+        output: null,
+      }
+    }
+    return {
+      input: nodeOutput.input ?? runIO.value?.input_payload ?? null,
+      output: nodeOutput.output !== undefined ? nodeOutput.output : nodeOutput,
+    }
+  }
+  // Pure scalar/array return — the value itself is the output.
+  return {
+    input: runIO.value?.input_payload ?? null,
+    output: nodeOutput,
+  }
+}
+
+const nodeEntries = computed<NodeEntry[]>(() => {
+  const r = run.value
+  if (!r) return []
+
+  const ntu = r.node_token_usage as Record<string, NodeTokenUsage> | null ?? {}
+  const outputs = runIO.value?.outputs_json as Record<string, unknown> | null ?? {}
+  const telemetry = runIO.value?.node_telemetry as Record<string, unknown> | null ?? {}
+
+  const names = new Set([...Object.keys(ntu), ...Object.keys(outputs), ...Object.keys(telemetry)])
+  if (names.size === 0) return []
+
+  return Array.from(names).map(name => {
+    const usage = ntu[name] as NodeTokenUsage | undefined
+    const nodeOutput = outputs[name] as Record<string, unknown> | undefined
+    const nodeTelemetry = (telemetry[name] as Record<string, unknown> | undefined) ?? null
+    const stallReason = nodeTelemetry && typeof nodeTelemetry.stall_reason === 'string' && nodeTelemetry.stall_reason.length > 0
+      ? nodeTelemetry.stall_reason
+      : null
+    const hasLogs = !!(
+      nodeTelemetry &&
+      ((typeof nodeTelemetry.agent_stdout === 'string' && nodeTelemetry.agent_stdout.length > 0)
+        || (typeof nodeTelemetry.agent_stderr === 'string' && nodeTelemetry.agent_stderr.length > 0))
+    )
+    // FAR-198: prefer the node's REAL span id (stamped into node telemetry at
+    // execution time); fall back to the run trace id so the column never
+    // shows a duplicate run value when no per-node span is available.
+    const nodeSpanId = nodeTelemetry && typeof nodeTelemetry.otel_span_id === 'string' && nodeTelemetry.otel_span_id.length > 0
+      ? nodeTelemetry.otel_span_id
+      : null
+    const nodeTraceId = nodeTelemetry && typeof nodeTelemetry.otel_trace_id === 'string' && nodeTelemetry.otel_trace_id.length > 0
+      ? nodeTelemetry.otel_trace_id
+      : null
+
+    return {
+      name,
+      status: run.value?.status ?? 'unknown',
+      duration: '—',
+      inputTokens: usage?.input_tokens ?? null,
+      outputTokens: usage?.output_tokens ?? null,
+      cost: usage?.model_cost_display_usd ?? usage?.cost_usd ?? null,
+      traceId: nodeSpanId ?? nodeTraceId ?? run.value?.trace_id ?? null,
+      isNodeSpanId: nodeSpanId !== null,
+      io: resolveNodeIO(nodeOutput),
+      telemetry: nodeTelemetry,
+      hasLogs,
+      stallReason,
+    }
+  })
+})
+
+type NodeProgressState = 'completed' | 'running' | 'failed' | 'pending'
+
+function nodeHasUsageOrOutput(name: string): boolean {
+  const ntu = run.value?.node_token_usage as Record<string, NodeTokenUsage> | null ?? {}
+  const outputs = runIO.value?.outputs_json as Record<string, unknown> | null ?? {}
+  return Boolean(ntu[name]) || Boolean(outputs[name])
+}
+
+function nodeProgressState(name: string): NodeProgressState {
+  const live = liveNodeStates.value[name]
+  if (live === 'running') return 'running'
+  if (live === 'failed') return 'failed'
+  if (live === 'completed') return 'completed'
+  if (nodeHasUsageOrOutput(name)) return 'completed'
+  return 'pending'
+}
+
+const nodeProgressChips = computed(() => {
+  const names: string[] = []
+  const seen = new Set<string>()
+  for (const entry of nodeEntries.value) {
+    if (!seen.has(entry.name)) {
+      seen.add(entry.name)
+      names.push(entry.name)
+    }
+  }
+  for (const name of Object.keys(liveNodeStates.value)) {
+    if (!seen.has(name)) {
+      seen.add(name)
+      names.push(name)
+    }
+  }
+  return names.map(name => ({ name, state: nodeProgressState(name) }))
+})
+
+function nodeStateLabel(state: NodeProgressState): string {
+  return t(`views.RunDetailView.node_state_${state}`)
+}
+
+function chipClass(state: NodeProgressState): string {
+  const map: Record<NodeProgressState, string> = {
+    completed: 'bg-success/10 text-success border border-success/30',
+    running: 'bg-warning/10 text-warning border border-warning/30',
+    failed: 'bg-destructive/10 text-destructive border border-destructive/30',
+    pending: 'bg-muted text-muted-foreground border border-border',
+  }
+  return map[state]
+}
+
+const liveTokenTotal = computed(() => {
+  const ntu = run.value?.node_token_usage as Record<string, NodeTokenUsage> | null ?? {}
+  return Object.values(ntu).reduce((sum, n) => {
+    if (typeof n?.total_tokens === 'number') return sum + n.total_tokens
+    return sum + (n?.input_tokens ?? 0) + (n?.output_tokens ?? 0)
+  }, 0)
+})
+
+const liveCostTotal = computed(() => {
+  const ntu = run.value?.node_token_usage as Record<string, NodeTokenUsage> | null ?? {}
+  return Object.values(ntu).reduce((sum, n) => sum + (n?.cost_usd ?? n?.model_cost_display_usd ?? 0), 0)
+})
+
+const liveCostPresent = computed(() => {
+  const r = run.value
+  if (!r) return false
+  if (isTerminalStatus(r.status)) return false
+  return liveTokenTotal.value > 0 || liveCostTotal.value > 0
+})
+
+function formatTokenCount(count: number): string {
+  if (count >= 1_000_000) return `${(Math.round((count / 1_000_000) * 10) / 10)}M`
+  if (count >= 1_000) return `${(Math.round((count / 1_000) * 10) / 10)}k`
+  return String(count)
+}
+
+const heartbeatAge = computed<number | null>(() => {
+  const r = run.value
+  if (!r) return null
+  return heartbeatAgeSeconds(r.heartbeat_at, r.status, heartbeatNow.value)
+})
+
+// Run-level warnings summary (strip at the top of the page). Aggregates the
+// four run-level warning signals so users see them without scrolling to the
+// dedicated detail sections; each entry anchors to its section on click.
+// Cost entries are co-gated on the cost section's own render condition so an
+// entry never points at an anchor that is not in the DOM.
+interface RunLevelWarning {
+  id: string
+  labelKey: string
+  targetId: string
+}
+
+const costSectionPresent = computed(() => run.value?.total_cost_usd != null)
+
+const hasUnreportedCostEntries = computed(() =>
+  breakdownRaw.value.some((e) => e.missing_self_report === true),
+)
+
+const runLevelWarnings = computed<RunLevelWarning[]>(() => {
+  const warnings: RunLevelWarning[] = []
+  if (costSectionPresent.value && hasUnreportedCostEntries.value) {
+    warnings.push({
+      id: 'unreported-cost',
+      labelKey: 'views.RunDetailView.warnings_strip_unreported_cost',
+      targetId: 'run-detail-cost-section',
+    })
+  }
+  if (costSectionPresent.value && breakdownTotalClamped.value) {
+    warnings.push({
+      id: 'clamped-total',
+      labelKey: 'views.RunDetailView.warnings_strip_clamped_total',
+      targetId: 'run-detail-cost-section',
+    })
+  }
+  if (isGuardrailBlocked.value) {
+    warnings.push({
+      id: 'guardrail-override',
+      labelKey: 'views.RunDetailView.warnings_strip_guardrail_override',
+      targetId: 'run-detail-guardrail-override',
+    })
+  }
+  if (isHeartbeatStale(heartbeatAge.value)) {
+    warnings.push({
+      id: 'stale-heartbeat',
+      labelKey: 'views.RunDetailView.warnings_strip_stale_heartbeat',
+      targetId: 'run-detail-heartbeat-anchor',
+    })
+  }
+  return warnings
+})
+
+// Whether to auto-scroll to the #warnings anchor (the top warnings strip). Set
+// when arriving from the runs list badge (``?warn=1``) or a deep-link hash
+// (``#warnings``); a scrollBehavior-driven hash navigation is handled by the
+// router, so only the query-intent path needs a programmatic scroll here.
+const shouldScrollToWarnings = computed(
+  () => route.query?.warn !== undefined || (typeof window !== 'undefined' && window.location.hash === '#warnings'),
+)
+let hasScrolledToWarnings = false
+
+watch(
+  runLevelWarnings,
+  async (warnings) => {
+    if (hasScrolledToWarnings) return
+    if (!shouldScrollToWarnings.value || warnings.length === 0) return
+    // The warnings strip (``<div id="warnings">``) may still be settling in the
+    // DOM on the reactive pass that populates ``runLevelWarnings`` (deferred
+    // cost_breakdown load, async GET). Retry across a few ticks so a
+    // momentarily-missing target doesn't make the scroll silently no-op.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await nextTick()
+      const el = document.getElementById('warnings')
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        break
+      }
+    }
+    hasScrolledToWarnings = true
+  },
+  { immediate: true, flush: 'post' },
+)
+
+function scrollToWarning(targetId: string) {
+  document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function childRunBadgeClass(status: string | undefined): string {
+  return statusBadgeClassFor(status)
+}
+
+async function fetchHitlGates(runId: string) {
+  if (hitlLoading.value) return
+  hitlLoading.value = true
+  try {
+    const { data } = await api.GET('/api/v1/runs/{run_id}/hitl/pending', {
+      params: { path: { run_id: runId } },
+    })
+    if (data) {
+      pendingGates.value = ((data as any).gates || []) as components['schemas']['GateResponse'][]
+    }
+  } catch (e: unknown) {
+    console.warn('Failed to load pending HITL gates', e)
+  } finally {
+    hitlLoading.value = false
+  }
+}
+
+async function fetchRunData(runId: string) {
+  try {
+    const { data: runData } = await api.GET('/api/v1/runs/{run_id}', {
+      params: { path: { run_id: runId } },
+    })
+    if (runData) {
+      run.value = runData as unknown as RunResponse
+      if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
+        fetchHitlGates(runId)
+      }
+    }
+    const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
+      params: { path: { run_id: runId } },
+    })
+    if (ioData) runIO.value = ioData as unknown as RunIOResponse
+  } catch (e) {
+    console.warn('Failed to fetch run data', e)
+  }
+}
+
+async function fetchLiveOutput(runId: string) {
+  if (run.value && isTerminalStatus(run.value.status)) return
+  try {
+    const data = await useApi().get<{ events?: RunChunkEvent[] }>(
+      `/api/v1/runs/${runId}/events?since_seq=${liveOutputSeq.value}`,
+    )
+    const events = data?.events
+    if (!events || events.length === 0) return
+    const next = { ...liveOutput.value }
+    const nextStates = { ...liveNodeStates.value }
+    let maxSeq = liveOutputSeq.value
+    for (const evt of events) {
+      if (!applyLiveEvent(evt, next, nextStates)) continue
+      if (evt.seq > maxSeq) maxSeq = evt.seq
+    }
+    liveOutput.value = next
+    liveNodeStates.value = nextStates
+    liveOutputSeq.value = maxSeq
+  } catch (e) {
+    // Live output is best-effort — polling must never break the page.
+    console.warn('Failed to fetch live run output', e)
+  }
+}
+
+function applyLiveEvent(
+  evt: RunChunkEvent,
+  liveOutputRef: Record<string, string>,
+  liveNodeStatesRef: Record<string, 'running' | 'completed' | 'failed'>,
+): boolean {
+  if (!evt || typeof evt.seq !== 'number') return false
+  const nodeId = evt.payload?.node_id
+  if (!nodeId) return true
+  if (evt.event_type === 'node.stdout_chunk' || evt.event_type === 'node.stderr_chunk') {
+    liveOutputRef[nodeId] = (liveOutputRef[nodeId] ?? '') + (evt.payload?.chunk ?? '')
+    return true
+  }
+  if (evt.event_type === 'node_started') {
+    liveNodeStatesRef[nodeId] = 'running'
+  } else if (evt.event_type === 'node_completed') {
+    liveNodeStatesRef[nodeId] = 'completed'
+  } else if (evt.event_type === 'node_failed') {
+    liveNodeStatesRef[nodeId] = 'failed'
+  }
+  return true
+}
+
+function startPolling(runId: string) {
+  heartbeatNow.value = Date.now()
+  pollInterval.value = setInterval(async () => {
+    heartbeatNow.value = Date.now()
+    if (run.value && isTerminalStatus(run.value.status)) {
+      clearInterval(pollInterval.value!)
+      pollInterval.value = null
+      return
+    }
+    await fetchRunData(runId)
+    await fetchLiveOutput(runId)
+  }, 3000)
+}
+
+import { useDataFetch } from '../composables/useDataFetch'
+
+interface RunFetchResult {
+  run: RunResponse | null
+  io: RunIOResponse | null
+}
+
+const { loading, error } = useDataFetch<RunFetchResult>(
+  async () => {
+    const runId = route.params.id as string
+    if (!runId) {
+      return { data: { run: null, io: null }, error: { detail: t('views.RunDetailView.no_run_id_provided') } }
+    }
+
+    try {
+      const [runResp, ioResp] = await Promise.all([
+        api.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
+        api.GET('/api/v1/runs/{run_id}/io', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
+      ])
+      const runData = runResp?.data
+      const ioData = ioResp?.data
+
+      if (runData) {
+        run.value = runData as unknown as RunResponse
+        if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
+          fetchHitlGates(runId)
+        }
+      }
+      if (ioData) runIO.value = ioData as unknown as RunIOResponse
+
+      if (run.value?.status === 'complete' && nodeEntries.value.length > 0) {
+        const last = nodeEntries.value[nodeEntries.value.length - 1]
+        expandedNodes.value.add(last.name)
+      }
+      startPolling(runId)
+
+      return { data: { run: run.value, io: runIO.value }, error: undefined }
+    } catch (e: unknown) {
+      return { data: undefined, error: { detail: `${t('views.RunDetailView.failed_to_load_run')} ${formatApiError(e)}` } }
+    }
+  },
+  { immediate: true },
+)
+
+onUnmounted(() => {
+  if (pollInterval.value) {
+    clearInterval(pollInterval.value)
+  }
+})
+
+loadCurrency()
+</script>

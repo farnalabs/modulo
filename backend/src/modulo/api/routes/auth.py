@@ -1,0 +1,1467 @@
+"""Auth routes: login, refresh, logout, me (v1 account management)."""
+
+import asyncio
+import logging
+import secrets
+import uuid
+from datetime import UTC, datetime
+from typing import NamedTuple, NoReturn
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
+from jwt import InvalidTokenError as JWTError
+from pydantic import BaseModel, Field
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
+from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
+from modulo.api.routes.remy import clear_session_approvals_for_account
+from modulo.auth.dependencies import (
+    OrganisationMembershipNotFound,
+    get_current_user,
+    resolve_role_from_membership,
+)
+from modulo.auth.jwt import (
+    CLIENT_KIND_BROWSER,
+    AuthenticatedPrincipal,
+    TenantPrincipal,
+    create_access_token,
+    create_refresh_token,
+    decode_refresh_token_claims,
+)
+from modulo.auth.passwords import (
+    authenticate_db_user,
+    hash_password,
+    validate_password_strength,
+)
+from modulo.auth.ws_token import create_ws_token
+from modulo.core.audit_logger import append_audit_event
+from modulo.core.demo import DEMO_ORG_ROLE, DEMO_ORG_SLUG, demo_login_config
+from modulo.core.rate_limiter import AuthRateLimiter
+from modulo.db.crud.account import (
+    create_account,
+    get_account_by_email,
+    get_account_by_id,
+    update_last_login,
+)
+from modulo.db.crud.break_glass_deny import is_break_glass_denied
+from modulo.db.crud.invitations import (
+    consume_invitation,
+    get_valid_by_token_hash,
+    hash_invitation_token,
+)
+from modulo.db.crud.org_membership import (
+    create_membership,
+    get_membership_by_account_and_org,
+    list_memberships_for_account,
+    reactivate_membership,
+)
+from modulo.db.crud.organisation import get_login_active_org_by_slug
+from modulo.db.crud.token_family import (
+    advance_sequence,
+    blacklist_family,
+    consume_break_glass_credential,
+    create_family,
+)
+from modulo.db.models.account import Account
+from modulo.db.models.invitation import Invitation
+from modulo.db.models.org_membership import OrgMembership
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.token_family import TokenFamily
+from modulo.db.rls import set_rls_org
+from modulo.settings import Settings, get_settings
+
+_MSG_INCORRECT_EMAIL_PASSWORD = "Incorrect email or password"  # nosec B105 — error message, not a real credential
+_CODE_AUTH_REFRESH = "auth.refresh"
+_CODE_AUTH_LOGOUT = "auth.logout"
+# Byte-identical generic rejection for every invitation-validation failure:
+# never leak WHICH of unknown/expired/consumed/revoked the token is.
+_MSG_INVALID_OR_EXPIRED_INVITATION = "Invalid or expired invitation"
+_CODE_AUTH_ACCEPT_INVITE = "auth.accept_invite"
+_MSG_INVITE_NOT_LOCAL_ACCOUNT = "This email belongs to an SSO account. Sign in with your identity provider instead."
+
+
+_log = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+# Repeated token type default (S1192).
+_TOKEN_TYPE_BEARER = "bearer"
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    org_slug: str | None = None
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = _TOKEN_TYPE_BEARER
+    requires_bootstrap: bool = False
+    must_change_password: bool = False
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(min_length=1)
+
+
+class DemoLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = _TOKEN_TYPE_BEARER
+
+
+class RefreshResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = _TOKEN_TYPE_BEARER
+
+
+class LogoutResponse(BaseModel):
+    detail: str = "Logged out"
+
+
+class WsTokenResponse(BaseModel):
+    ws_token: str
+    token_type: str = "ws-opaque"
+    expires_in_seconds: int = 60
+
+
+class MeResponse(BaseModel):
+    id: str
+    email: str
+    display_name: str
+    org_role: str
+    active: bool
+    created_at: str
+    is_system_admin: bool = False
+    must_change_password: bool = False
+
+
+class _LoginContext(NamedTuple):
+    account: Account
+    org_id: uuid.UUID | None
+    org_role: str | None
+    memberships: list[OrgMembership]
+    family: TokenFamily
+
+
+class _RefreshClaims(NamedTuple):
+    family_id: str
+    family_uuid: uuid.UUID
+    account_uuid: uuid.UUID
+    sequence: int
+    sub: str
+    org_id: str
+    org_role: object | None
+    account_id: str
+    #: FAR-634: the credential class of the ORIGINAL login that created this
+    #: refresh family, propagated onto the rotated access+refresh pair.
+    client_kind: str
+
+
+def get_clock() -> datetime:
+    """Application clock for the break-glass early-deny decision.
+
+    The DB clock (``current_timestamp``) stays authoritative for the SQL
+    predicates; this injected clock is used ONLY for the expired-branch
+    decision so tests can accelerate/retard the early deny deterministically.
+    Skew between the two is bounded: an early false-deny is a conservative
+    DoS, and an early false-accept is re-denied downstream by the DB-clock
+    SQL predicate — the direction is DoS-not-bypass.
+    """
+    return datetime.now(UTC)
+
+
+async def _enforce_break_glass(
+    account: Account,
+    *,
+    now: datetime,
+    limiter: AuthRateLimiter | None,
+    ip: str,
+) -> bool:
+    """Break-glass login hook — early-deny/late-consume decision.
+
+    Called after authentication succeeds. Fail-open fast path: a normal account
+    returns ``False`` immediately with zero extra DB queries (the login fast
+    path is unchanged). For a break-glass account it returns ``True`` when the
+    credential is live — the caller must then run the late compare-and-swap
+    consumption as the FINAL DB statement before token issuance. Deny-eligible
+    credentials (deactivated / NULL-expiry / expired) and hook errors are
+    fail-CLOSED: ``limiter.record_failure`` + a byte-identical 401
+    (detail ``Incorrect email or password``).
+    """
+    if account.is_break_glass is not True:
+        return False
+    try:
+        if is_break_glass_denied(
+            is_break_glass=True,
+            break_glass_expires_at=account.break_glass_expires_at,
+            break_glass_deactivated_at=account.break_glass_deactivated_at,
+            active=account.active,
+            now=now,
+        ):
+            if limiter is not None:
+                await limiter.record_failure(ip)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=_MSG_INCORRECT_EMAIL_PASSWORD,
+            )
+    except asyncio.CancelledError:
+        raise
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        _log.exception("auth.break_glass_hook_error")
+        if limiter is not None:
+            await limiter.record_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_MSG_INCORRECT_EMAIL_PASSWORD,
+        ) from None
+    return True
+
+
+async def _consume_break_glass_credential(
+    session: AsyncSession,
+    *,
+    account: Account,
+    limiter: AuthRateLimiter | None,
+    ip: str,
+) -> None:
+    """Late compare-and-swap consumption (family-first, CAS-last).
+
+    Runs as the FINAL DB statement inside the login transaction, after the
+    family mint. Fail-closed on ambiguity: a CAS error or a rowcount of 0
+    (already consumed / expired / deactivated / inactive) raises a byte-identical
+    401 and aborts the transaction, rolling back the phantom family.
+    """
+    try:
+        consumed = await consume_break_glass_credential(
+            session,
+            account_id=account.id,
+            current_password_hash=account.password_hash or "",
+            new_password_hash=str(uuid.uuid4()),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("auth.break_glass_cas_error")
+        if limiter is not None:
+            await limiter.record_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_MSG_INCORRECT_EMAIL_PASSWORD,
+        ) from None
+    if consumed != 1:
+        if limiter is not None:
+            await limiter.record_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_MSG_INCORRECT_EMAIL_PASSWORD,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------------
+
+
+async def _authenticate_credentials(
+    session: AsyncSession,
+    email: str,
+    password: str,
+    *,
+    limiter: AuthRateLimiter | None,
+    ip: str,
+) -> Account:
+    """Resolve and verify an account, recording a rate-limit failure on denial."""
+    account = await get_account_by_email(session, email)
+    if not account or not authenticate_db_user(password, account):
+        if limiter is not None:
+            await limiter.record_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_MSG_INCORRECT_EMAIL_PASSWORD,
+        )
+    return account
+
+
+def _resolve_login_org_context(
+    memberships: list[OrgMembership], account: Account
+) -> tuple[uuid.UUID | None, str | None]:
+    """Pick the primary org + role for a login, denying accounts with none.
+
+    ``memberships`` is the ACTIVE-membership list (``deactivated_at IS NULL``
+    — the login transaction filters tombstoned memberships, FAR-533), so the
+    first entry is always a live membership.
+    """
+    if not memberships and not account.is_system_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account has no org memberships",
+        )
+    if memberships:
+        membership = memberships[0]
+        return membership.organisation_id, membership.role
+    return None, None
+
+
+async def _resolve_demo_org_membership(session: AsyncSession, account_id: uuid.UUID) -> tuple[uuid.UUID, str] | None:
+    """Demo-org viewer membership for the account, or ``None`` when absent.
+
+    Resolves through the demo org SLUG + the viewer role (not just "any
+    membership") so the demo endpoint can only ever mint a session scoped to
+    the demo organisation. Defense-in-depth against operator
+    misconfiguration: if MODULO_DEMO_USER names a pre-existing privileged
+    account, its other-org memberships are never eligible here.
+
+    Soft-deleted demo orgs are excluded (``deleted_at IS NULL``): a soft-delete
+    answers ``None`` — the endpoint's plain feature-absent 404 — until the seed
+    undeletes the org on its next boot, matching the seed's soft-delete
+    semantics.
+    """
+    result = await session.execute(
+        select(OrgMembership.organisation_id, OrgMembership.role)
+        .join(Organisation, Organisation.id == OrgMembership.organisation_id)
+        .where(
+            OrgMembership.account_id == account_id,
+            Organisation.slug == DEMO_ORG_SLUG,
+            OrgMembership.role == DEMO_ORG_ROLE,
+            Organisation.deleted_at.is_(None),
+        )
+    )
+    row = result.first()
+    if row is None:
+        return None
+    return (row.organisation_id, row.role)
+
+
+async def _run_login_transaction(
+    session: AsyncSession,
+    email: str,
+    password: str,
+    *,
+    limiter: AuthRateLimiter | None,
+    ip: str,
+    org_slug: str | None = None,
+) -> _LoginContext:
+    """Authenticate, record login, resolve org context, and mint a family.
+
+    When ``org_slug`` is supplied the session is bound to that org:
+      - The org must be login-active (status='active', not deleted, not
+        a sentinel).  A non-login-active slug is treated identically to an
+        unknown slug — same generic failure, same timing shape.
+      - The account must have an ACTIVE membership there → 403 otherwise
+        (do NOT silently fall back to another org, do NOT create anything).
+      - The minted JWT's organisation_id is the bound org.
+
+    When ``org_slug`` is omitted, the legacy behaviour is preserved exactly
+    (``memberships[0]``) so nothing regresses before the frontend (FAR-857)
+    passes the slug.
+    """
+    async with session.begin():
+        account = await _authenticate_credentials(session, email, password, limiter=limiter, ip=ip)
+
+        must_consume = await _enforce_break_glass(
+            account,
+            now=get_clock(),
+            limiter=limiter,
+            ip=ip,
+        )
+
+        if limiter is not None:
+            await limiter.record_success(ip)
+        await update_last_login(session, account.id)
+
+        # FAR-533 (gh-1794): per-org deactivation tombstones the membership
+        # (deactivated_at) instead of flipping accounts.active. Login must
+        # resolve its org context from ACTIVE memberships only — a user
+        # per-org-deactivated in their first-joined org must not mint a token
+        # scoped to that org (live-role revalidation would then 401 on every
+        # API call, so the tombstone has to gate here at the org-scoping
+        # point). Other orgs' active memberships still resolve a login org.
+        memberships = await list_memberships_for_account(session, account.id, active_only=True)
+
+        org_id: uuid.UUID | None = None
+        org_role: str | None = None
+
+        if org_slug is not None:
+            # FAR-856: bind login to the explicit org.
+            org = await get_login_active_org_by_slug(session, org_slug)
+            if org is None:
+                # Non-login-active or unknown slug — same generic failure.
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Organisation not available for login",
+                )
+            # Find the account's active membership in this org.
+            membership = await get_membership_by_account_and_org(session, account.id, org.id)
+            if membership is None or membership.deactivated_at is not None:
+                # Account has no active membership in the requested org.
+                # Routing is NOT authorisation — do NOT silently fall back.
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Account is not a member of this organisation",
+                )
+            org_id = org.id
+            org_role = membership.role
+        else:
+            # Legacy: pick the first active membership.
+            org_id, org_role = _resolve_login_org_context(memberships, account)
+
+        family = await create_family(session, account.id, org_id)
+
+        if must_consume:
+            await _consume_break_glass_credential(
+                session,
+                account=account,
+                limiter=limiter,
+                ip=ip,
+            )
+
+        return _LoginContext(
+            account=account,
+            org_id=org_id,
+            org_role=org_role,
+            memberships=memberships,
+            family=family,
+        )
+
+
+def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse:
+    """Build the access+refresh token pair and auth cookies for a login."""
+    # FAR-634: password login is an interactive browser flow — the minted pair
+    # is explicitly stamped ``browser`` so the human_only credential class is
+    # an explicit decision at the mint site, not an implicit default.
+    access_token = create_access_token(
+        ctx.account.email,
+        settings.secret_key,
+        organisation_id=str(ctx.org_id) if ctx.org_id else "",
+        account_id=str(ctx.account.id),
+        org_role=ctx.org_role or "",
+        is_system_admin=ctx.account.is_system_admin,
+        ttl_minutes=settings.modulo_access_token_minutes,
+        client_kind=CLIENT_KIND_BROWSER,
+    )
+    refresh_token = create_refresh_token(
+        ctx.account.email,
+        settings.secret_key,
+        organisation_id=str(ctx.org_id) if ctx.org_id else "",
+        account_id=str(ctx.account.id),
+        org_role=ctx.org_role or "",
+        is_system_admin=ctx.account.is_system_admin,
+        token_family=str(ctx.family.family_id),
+        token_sequence=0,
+        client_kind=CLIENT_KIND_BROWSER,
+    )
+    requires_bootstrap = not ctx.memberships and ctx.account.is_system_admin
+    content = LoginResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        requires_bootstrap=requires_bootstrap,
+        must_change_password=bool(ctx.account.must_change_password),
+    ).model_dump()
+    response = JSONResponse(content=content)
+    _set_auth_cookies(response, access_token, settings)
+    return response
+
+
+@router.post("/login")
+@handle_db_errors("auth.login")
+async def login(
+    req: LoginRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> JSONResponse:
+    ip = _client_ip(request)
+    limiter = get_auth_rate_limiter(settings)
+
+    try:
+        ctx = await _run_login_transaction(
+            session,
+            req.email,
+            req.password,
+            limiter=limiter,
+            ip=ip,
+            org_slug=req.org_slug,
+        )
+    except IntegrityError:
+        _log.exception("auth.login")
+        _log.warning("login.integrity_error")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Account already has an active session. Try again.",
+        ) from None
+    except ProgrammingError:
+        _log.warning("login.programming_error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("auth.login")
+        _log.warning("login.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is temporarily unavailable. Please try again.",
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        _log.exception("Unexpected error in login")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return _mint_login_response(ctx, settings)
+
+
+# ---------------------------------------------------------------------------
+# Demo auto-login (FAR-535)
+# ---------------------------------------------------------------------------
+
+
+def _demo_not_found() -> HTTPException:
+    """The byte-identical plain 404 for EVERY demo failure (stealth contract).
+
+    Single-sourced so the "never reveal that a demo feature exists" shape —
+    plain 404, detail ``"Not Found"`` — cannot drift between failure paths.
+    """
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+
+@router.post("/demo")
+@handle_db_errors("auth.demo_login")
+async def demo_login(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> JSONResponse:
+    """Auto-login the env-configured read-only demo user (FAR-535).
+
+    The browser sends NO credentials — the server reads the demo email/password
+    from settings (MODULO_DEMO_USER / MODULO_DEMO_PASSWORD). Kill switch: when
+    MODULO_DEMO_ENABLED is falsy or either credential is unset the endpoint
+    answers a plain 404 so it never reveals that a demo feature exists.
+
+    The minted access token carries the SHORT demo TTL (modulo_demo_token_minutes,
+    default 2h, hard-capped at 4h) and NO refresh token is issued — the demo
+    session dies with the access token. Note the session persists until its TTL
+    expiry after the kill switch is flipped (no refresh token can extend it; the
+    4h cap bounds that residual window). The session is minted ONLY for a viewer
+    membership in the demo org: if the env user authenticates but has no viewer
+    membership in the demo org (operator misconfiguration — e.g.
+    MODULO_DEMO_USER naming a privileged account) the endpoint answers the same
+    plain 404, so a demo request can never mint a token for another org or
+    elevated role. Credential mismatches answer the SAME plain 404 (not
+    login's 401): the endpoint takes no client credentials, so a login-identical
+    401 would serve no purpose and would leak that the feature exists. Rate
+    limiting: the demo path NEVER touches the shared AuthRateLimiter at ANY
+    layer — handler AND middleware (AuthRateLimitMiddleware exempts
+    /api/v1/auth/demo) — so anonymous demo visitors cannot lock real users out
+    of /login; the demo abuse cap is the per-IP RateLimitMiddleware rule
+    (10/hour, with the process-local token-bucket floor when Redis is absent).
+    """
+    config = demo_login_config(settings)
+    if config is None:
+        raise _demo_not_found()
+    email, password = config
+
+    async with session.begin():
+        # Stealth: the endpoint takes NO client credentials, so a credential
+        # mismatch (operator misconfiguration / tampering) answers the same
+        # plain 404 as every other failure — not /login's 401, which would
+        # reveal that a demo feature exists. The shared AuthRateLimiter is
+        # deliberately NOT consulted on this path at ANY layer — the handler
+        # (no record_failure, no check_login, no record_success) AND the
+        # middleware (AuthRateLimitMiddleware._should_rate_limit exempts the
+        # demo path): anonymous demo visitors must never be able to lock real
+        # users out of /login; the demo abuse cap is the per-IP
+        # RateLimitMiddleware rule (10/hour).
+        account = await get_account_by_email(session, email)
+        if account is None or not authenticate_db_user(password, account):
+            _log.warning(
+                "auth.demo_login_credential_mismatch",
+                extra={"account_id": str(account.id) if account is not None else None, "configured_user": email},
+            )
+            raise _demo_not_found()
+        # Defense-in-depth: never mint a token from generic login org
+        # resolution — only the demo org's viewer membership qualifies,
+        # and is_system_admin is re-checked here rather than trusted to
+        # the boot seed. Anything else is treated as feature-absent.
+        demo_context = None
+        if not account.is_system_admin:
+            demo_context = await _resolve_demo_org_membership(session, account.id)
+        if demo_context is None:
+            _log.warning(
+                "auth.demo_login_membership_not_found",
+                extra={"account_id": str(account.id)},
+            )
+            raise _demo_not_found()
+        org_id, org_role = demo_context
+        await update_last_login(session, account.id)
+
+    # Structured audit log for the demo-login event (login's logging pattern);
+    # the token itself is minted only after the transaction committed.
+    _log.info(
+        "auth.demo_login",
+        extra={"account_id": str(account.id), "org_id": str(org_id)},
+    )
+
+    access_token = create_access_token(
+        account.email,
+        settings.secret_key,
+        organisation_id=str(org_id),
+        account_id=str(account.id),
+        org_role=org_role,
+        is_system_admin=account.is_system_admin,
+        ttl_minutes=settings.modulo_demo_token_minutes,
+        # FAR-634: the demo login is a browser flow (cookie-set response).
+        client_kind=CLIENT_KIND_BROWSER,
+    )
+    content = DemoLoginResponse(access_token=access_token).model_dump()
+    response = JSONResponse(content=content)
+    _set_auth_cookies(response, access_token, settings, max_age_seconds=settings.modulo_demo_token_minutes * 60)
+    return response
+
+
+# Accept invite (FAR-461 — unauthenticated one-time enrollment)
+# ---------------------------------------------------------------------------
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class AcceptInviteResponse(BaseModel):
+    detail: str = "Invitation accepted"
+    existing_account: bool = False
+
+
+async def _reject_invitation(limiter: AuthRateLimiter | None, ip: str) -> NoReturn:
+    """Denial path shared by every invalid-invitation branch.
+
+    Records the rate-limit failure and raises the byte-identical generic 400
+    so unknown / expired / consumed / revoked tokens are indistinguishable.
+    """
+    if limiter is not None:
+        await limiter.record_failure(ip)
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=_MSG_INVALID_OR_EXPIRED_INVITATION,
+    )
+
+
+async def _audit_invite_consumed_fail_open(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    invitation_id: uuid.UUID,
+) -> None:
+    """Record ``invite_consumed``; an audit failure never fails enrollment."""
+    try:
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="invite_consumed",
+            resource_type="invitation",
+            resource_id=invitation_id,
+            payload_json={"invitation_id": str(invitation_id)},
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("auth.accept_invite.audit_failed", exc_info=True)
+
+
+async def _resolve_invite_account(
+    session: AsyncSession,
+    invitation: Invitation,
+    pw_hash: str,
+    limiter: AuthRateLimiter | None,
+    ip: str,
+) -> tuple[Account, bool]:
+    """Account-resolution rules (a)-(d) for invitation enrollment (FAR-461).
+
+    Returns ``(account, existing_account)``. Branch (b) is a denial path:
+    SSO/SCIM accounts must never gain a local password — the rate-limit
+    failure is recorded and 409 raised, exactly as before the extraction.
+    """
+    account = await get_account_by_email(session, invitation.email)
+    existing_account = False
+
+    if account is None:
+        # (a) brand-new member
+        account = await create_account(
+            session,
+            email=invitation.email,
+            display_name=invitation.display_name,
+            password_hash=pw_hash,
+            auth_provider="local",
+        )
+    elif account.auth_provider != "local":
+        # (b) SSO/SCIM accounts must never gain a local password
+        if limiter is not None:
+            await limiter.record_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_INVITE_NOT_LOCAL_ACCOUNT,
+        )
+    elif account.password_hash is None:
+        # (c) adopt the locally-created-but-passwordless account
+        account.password_hash = pw_hash
+    else:
+        # (d) leave an existing local password untouched — the UI
+        # tells them to sign in with their existing credentials.
+        existing_account = True
+    return account, existing_account
+
+
+async def _ensure_invite_membership(session: AsyncSession, account: Account, invitation: Invitation) -> None:
+    """Membership ensure for invitation enrollment: create, or reactivate a tombstone.
+
+    A tombstoned membership (per-org deactivation, gh-1794/FAR-533) is not a
+    live membership: acceptance REACTIVATES it with the invitation's role
+    instead of skipping — otherwise the token is consumed while the holder
+    gains no access. The row is kept (history), aligned with the tombstone
+    design.
+    """
+    membership = await get_membership_by_account_and_org(
+        session,
+        account.id,
+        invitation.organisation_id,
+    )
+    if membership is None:
+        await create_membership(
+            session,
+            account_id=account.id,
+            org_id=invitation.organisation_id,
+            role=invitation.org_role,
+        )
+    elif membership.deactivated_at is not None:
+        await reactivate_membership(session, membership, invitation.org_role)
+
+
+async def _record_invite_rate_limit_success(limiter: AuthRateLimiter | None, ip: str, invitation_id: uuid.UUID) -> None:
+    """Record a successful enrollment on the limiter — fail-open.
+
+    Committed: mirror login's success path so a few denied attempts on
+    stale tokens never leak into login lockout on this IP. The enrollment
+    already succeeded and the token is consumed — a limiter outage must not
+    turn it into a 500 (a retry would then fail with a misleading 400).
+    """
+    if limiter is not None:
+        try:
+            await limiter.record_success(ip)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "auth.accept_invite.rate_limit_success_recording_failed",
+                extra={"invitation_id": str(invitation_id)},
+                exc_info=True,
+            )
+
+
+@router.post("/accept-invite")
+@handle_db_errors(_CODE_AUTH_ACCEPT_INVITE)
+async def accept_invite(
+    req: AcceptInviteRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> AcceptInviteResponse:
+    """Redeem a one-time invitation token and enroll the holder (FAR-461).
+
+    Unauthenticated by design — the token IS the credential. Account
+    resolution rules:
+      (a) no account → create local account + membership;
+      (b) non-local (SSO/SCIM) account → 409, never set a local password;
+      (c) local without password_hash → set it + membership;
+      (d) local with password_hash → membership only when absent, password
+          untouched, ``existing_account=true`` in the response. A tombstoned
+          membership (deactivated_at set, FAR-533) is reactivated with the
+          invitation's role instead of skipped, preserving the row.
+
+    The invitation compare-and-swap consumption runs as the FINAL DB statement
+    of the success path: if another consumer raced us, the CAS matches zero
+    rows and the whole transaction aborts. RLS context is set to the
+    *invitation's* org before any membership write (the caller is otherwise
+    pre-authenticated); the invitations table itself deliberately carries no
+    RLS policy. IP-based failures are recorded for every denial path; a
+    successful enrollment clears them (``record_success``).
+    """
+    ip = _client_ip(request)
+    limiter = get_auth_rate_limiter(settings)
+
+    try:
+        async with session.begin():
+            invitation = await get_valid_by_token_hash(session, hash_invitation_token(req.token))
+            if invitation is None:
+                await _reject_invitation(limiter, ip)
+
+            try:
+                validate_password_strength(req.password)
+            except ValueError as exc:
+                if limiter is not None:
+                    await limiter.record_failure(ip)
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+            # The pre-authenticated holder acts on behalf of the inviting org.
+            await set_rls_org(session, invitation.organisation_id)
+
+            pw_hash = hash_password(req.password)
+            account, existing_account = await _resolve_invite_account(session, invitation, pw_hash, limiter, ip)
+
+            await _ensure_invite_membership(session, account, invitation)
+
+            consumed = await consume_invitation(session, invitation)
+            if not consumed:
+                await _reject_invitation(limiter, ip)
+
+            await _audit_invite_consumed_fail_open(
+                session,
+                org_id=invitation.organisation_id,
+                invitation_id=invitation.id,
+            )
+
+        await _record_invite_rate_limit_success(limiter, ip, invitation.id)
+    except IntegrityError:
+        _log.exception(_CODE_AUTH_ACCEPT_INVITE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email cannot be enrolled with this invitation.",
+        ) from None
+    except ProgrammingError:
+        _log.warning("accept_invite.programming_error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_AUTH_ACCEPT_INVITE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Invitation acceptance is temporarily unavailable. Please try again.",
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        _log.exception("Unexpected error in accept_invite")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return AcceptInviteResponse(existing_account=existing_account)
+
+
+# ---------------------------------------------------------------------------
+# Refresh
+# ---------------------------------------------------------------------------
+
+
+def _parse_refresh_token(req: RefreshRequest, settings: Settings) -> _RefreshClaims:
+    """Decode and structurally validate a refresh token into typed claims."""
+    try:
+        claims = decode_refresh_token_claims(req.refresh_token, settings.secret_key)
+    except JWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        ) from exc
+
+    family_id_val = claims.get("token_family")
+    sequence_val = claims.get("token_sequence")
+    if not isinstance(family_id_val, str) or not isinstance(sequence_val, int):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token claims",
+        )
+    try:
+        family_uuid = uuid.UUID(family_id_val)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token family",
+        ) from exc
+
+    account_id_claim = claims.get("account_id") or claims.get("user_id")
+    if not isinstance(account_id_claim, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token claims",
+        )
+    try:
+        account_uuid = uuid.UUID(account_id_claim)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token account",
+        ) from exc
+
+    sub_val = claims.get("sub")
+    org_id_val = claims.get("org_id")
+    org_role_val = claims.get("org_role")
+    if not isinstance(sub_val, str) or not isinstance(org_id_val, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token payload",
+        )
+
+    # FAR-634: the credential class of the ORIGINAL login. Legacy refresh
+    # families minted before the claim existed carry none -> the browser
+    # default (backward compatible, matching decode_principal).
+    raw_client_kind = claims.get("client_kind")
+    if raw_client_kind is None:
+        client_kind_val = CLIENT_KIND_BROWSER
+    elif isinstance(raw_client_kind, str):
+        client_kind_val = raw_client_kind
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token claims",
+        )
+
+    return _RefreshClaims(
+        family_id=family_id_val,
+        family_uuid=family_uuid,
+        account_uuid=account_uuid,
+        sequence=sequence_val,
+        sub=sub_val,
+        org_id=org_id_val,
+        org_role=org_role_val,
+        account_id=account_id_claim,
+        client_kind=client_kind_val,
+    )
+
+
+async def _advance_refresh_sequence(
+    session: AsyncSession,
+    claims: _RefreshClaims,
+    settings: Settings,
+) -> tuple[str | None, int, bool, bool]:
+    """Re-check live account status + org role (ADR 017), then advance the family.
+
+    Returns (live_org_role, new_sequence, theft_detected, reuse_replay).
+    """
+    live_org_role: str | None = None
+    new_sequence = 0
+    theft_detected = False
+    reuse_replay = False
+    account_denied = False
+    async with session.begin():
+        # FAR-463 defense-in-depth: re-read ACCOUNT.ACTIVE on every refresh.
+        # Deactivation must kill outstanding sessions exactly like membership
+        # removal does. The caller-bound deactivate_break_glass blacklists only
+        # families scoped to the deactivating admin's orgs, so families minted
+        # under other orgs (or with NULL organisation_id) can outlive
+        # deactivation - and removed-member semantics cannot catch them because
+        # their memberships were left untouched. This check applies to ALL
+        # principals, including system admins without memberships (they
+        # authenticate by account too).
+        #
+        # Ordered BEFORE the membership read: equally decisive, cheaper (single
+        # PK lookup), and ADR-017 membership-not-found semantics stay intact
+        # for removed members whose accounts remain active.
+        account = await get_account_by_id(session, claims.account_uuid)
+        # getattr with a falsy default: a row shape that cannot report its
+        # active flag (missing row handled via the None check; inert test
+        # doubles or a partially-loaded row) is treated as INACTIVE and denied
+        # - fail-closed, matching authenticate_db_user's not-account-active
+        # semantics at login.
+        if account is None or getattr(account, "active", False) is not True:
+            _log.warning(
+                "auth.refresh_account_inactive",
+                extra={"account_id": claims.account_id},
+            )
+            # Inline correlated UPDATE (not blacklist_family): same predicate
+            # (family_id AND account_id - never crosses accounts), same flags,
+            # same transaction - expressed as a bulk statement so the denial
+            # persists atomically. Account-bound like the logout blacklisting.
+            await session.execute(
+                update(TokenFamily)
+                .where(
+                    TokenFamily.family_id == claims.family_uuid,
+                    TokenFamily.account_id == claims.account_uuid,
+                )
+                .values(is_blacklisted=True, blacklisted_at=datetime.now(UTC))
+            )
+            # Flag-and-raise-after-commit: raising inside the transaction would
+            # roll back the blacklist above; committing it first also means a
+            # later reactivation cannot resurrect pre-deactivation tokens.
+            account_denied = True
+        else:
+            # ADR 017: check live membership BEFORE advancing the token-family
+            # sequence - a removed member's repeated refresh attempts must not
+            # keep advancing sequences needlessly.
+            if claims.org_id:
+                live_org_role = await resolve_role_from_membership(
+                    session,
+                    claims.account_id,
+                    claims.org_id,
+                )
+            if claims.org_id and live_org_role is None:
+                _log.warning(
+                    "auth.refresh_membership_not_found",
+                    extra={"account_id": claims.account_id, "org_id": claims.org_id},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Account no longer has access to this organisation",
+                )
+            new_sequence, theft_detected, reuse_replay = await advance_sequence(
+                session,
+                claims.family_uuid,
+                claims.sequence,
+                claims.account_uuid,
+                reuse_grace_seconds=settings.refresh_reuse_grace_seconds,
+            )
+            if reuse_replay:
+                _log.info(
+                    "auth.refresh_reuse_replay",
+                    extra={
+                        "family_id": claims.family_id,
+                        "account_id": claims.account_id,
+                        "expected_sequence": claims.sequence,
+                        "max_sequence": new_sequence,
+                    },
+                )
+            elif theft_detected:
+                _log.warning(
+                    "auth.refresh_theft_blacklist",
+                    extra={
+                        "family_id": claims.family_id,
+                        "account_id": claims.account_id,
+                        "expected_sequence": claims.sequence,
+                        "max_sequence": new_sequence,
+                    },
+                )
+    if account_denied:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account no longer has access to this organisation",
+        )
+    return live_org_role, new_sequence, theft_detected, reuse_replay
+
+
+def _mint_refresh_response(
+    claims: _RefreshClaims,
+    minted_org_role: object,
+    new_sequence: int,
+    settings: Settings,
+) -> JSONResponse:
+    """Build the rotated access+refresh token pair and auth cookies."""
+    # FAR-634: rotation propagates the ORIGINAL credential class — a browser
+    # family stays browser, a (future) programmatic family stays programmatic.
+    new_access = create_access_token(
+        claims.sub,
+        settings.secret_key,
+        organisation_id=claims.org_id,
+        account_id=claims.account_id,
+        org_role=str(minted_org_role),
+        ttl_minutes=settings.modulo_access_token_minutes,
+        client_kind=claims.client_kind,
+    )
+    new_refresh = create_refresh_token(
+        claims.sub,
+        settings.secret_key,
+        organisation_id=claims.org_id,
+        account_id=claims.account_id,
+        org_role=str(minted_org_role),
+        token_family=claims.family_id,
+        token_sequence=new_sequence,
+        client_kind=claims.client_kind,
+    )
+    content = RefreshResponse(access_token=new_access, refresh_token=new_refresh).model_dump()
+    response = JSONResponse(content=content)
+    _set_auth_cookies(response, new_access, settings)
+    return response
+
+
+@router.post("/refresh")
+@handle_db_errors(_CODE_AUTH_REFRESH)
+async def refresh(
+    req: RefreshRequest,
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> JSONResponse:
+    claims = _parse_refresh_token(req, settings)
+
+    try:
+        live_org_role, new_sequence, theft_detected, _reuse_replay = await _advance_refresh_sequence(
+            session, claims, settings
+        )
+    except IntegrityError:
+        _log.exception(_CODE_AUTH_REFRESH)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_AUTH_REFRESH)
+        _log.warning("refresh.programming_error")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_AUTH_REFRESH)
+        _log.warning("refresh.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Token refresh is temporarily unavailable. Please try again.",
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except HTTPException as exc:
+        raise exc
+    except Exception:  # nosemgrep: bare-raise-in-except
+        _log.exception("Unexpected error in refresh")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    if theft_detected:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has been revoked due to suspected theft",
+        )
+    minted_org_role = live_org_role if live_org_role is not None else claims.org_role
+    return _mint_refresh_response(claims, minted_org_role, new_sequence, settings)
+
+
+# ---------------------------------------------------------------------------
+# Logout
+# ---------------------------------------------------------------------------
+
+
+async def _blacklist_refresh_family(session: AsyncSession, claims: dict[str, object]) -> None:
+    """Blacklist the refresh token's family if the claims carry one."""
+    family_id_val = claims.get("token_family")
+    account_id_val = claims.get("account_id") or claims.get("user_id")
+    if not isinstance(family_id_val, str) or not isinstance(account_id_val, str):
+        return
+    try:
+        family_uuid = uuid.UUID(family_id_val)
+        account_uuid = uuid.UUID(account_id_val)
+        try:
+            async with session.begin():
+                blacklisted = await blacklist_family(session, family_uuid, account_uuid)
+                if not blacklisted:
+                    _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
+        except IntegrityError:
+            _log.exception(_CODE_AUTH_LOGOUT)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A resource with this value already exists",
+            ) from None
+        except ProgrammingError:
+            _log.exception(_CODE_AUTH_LOGOUT)
+            _log.warning("logout.programming_error")
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail=MSG_FEATURE_NOT_AVAILABLE,
+            ) from None
+        except SQLAlchemyError:
+            _log.exception(_CODE_AUTH_LOGOUT)
+            _log.warning("logout.sqlalchemy_error")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Logout is temporarily unavailable. Please try again.",
+            ) from None
+        except asyncio.CancelledError:
+            raise
+        except HTTPException as exc:
+            raise exc
+        except Exception:
+            _log.exception("Unexpected error in logout (inner)")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=MSG_INTERNAL_SERVER_ERROR,
+            ) from None
+    except ValueError:
+        _log.warning("logout.invalid_token_family", extra={"token_family": family_id_val})
+
+
+def _clear_account_session_approvals(claims: dict[str, object]) -> None:
+    """Scope the approval clear to the caller's account only (FAR-1470)."""
+    account_id_val = claims.get("account_id") or claims.get("user_id")
+    if isinstance(account_id_val, str):
+        clear_session_approvals_for_account(account_id_val)
+
+
+@router.post("/logout")
+@handle_db_errors(_CODE_AUTH_LOGOUT)
+async def logout(
+    req: RefreshRequest,
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> JSONResponse:
+    try:
+        claims = decode_refresh_token_claims(req.refresh_token, settings.secret_key)
+    except JWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        ) from exc
+
+    await _blacklist_refresh_family(session, claims)
+    _clear_account_session_approvals(claims)
+
+    content = LogoutResponse(detail="Logged out").model_dump()
+    response = JSONResponse(content=content)
+    _clear_auth_cookies(response, settings)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# WS token / me (ADR 017 live-role resolution)
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_live_org_role(
+    session: AsyncSession,
+    *,
+    account_id: str,
+    org_id: str | None,
+    username: str,
+) -> str | None:
+    """ADR 017: re-read the LIVE org role; deny removed/deactivated members."""
+    if org_id is None:
+        return None
+    try:
+        async with session.begin():
+            live_org_role = await resolve_role_from_membership(session, account_id, org_id)
+    except SQLAlchemyError:
+        _log.warning("permission.live_role_read_failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Role verification temporarily unavailable. Please try again.",
+        ) from None
+    if live_org_role is None:
+        # ADR 017: missing/deactivated membership → deny. A removed user must
+        # not mint a WS token or keep the claimed role.
+        _log.warning(
+            "permission.membership_not_found",
+            extra={"account_id": account_id, "org_id": org_id, "username": username},
+        )
+        raise OrganisationMembershipNotFound
+    return live_org_role
+
+
+@router.post("/ws-token")
+@handle_db_errors("auth.ws_token")
+async def ws_token(
+    current_user: TenantPrincipal = require_permission("run.status"),
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> WsTokenResponse:
+    try:
+        # ADR 017: embed the LIVE org role (not the claim) so a demoted admin's
+        # WS token carries the reduced role.
+        live_org_role = await _resolve_live_org_role(
+            session,
+            account_id=str(current_user.account_id),
+            org_id=str(current_user.organisation_id),
+            username=current_user.username,
+        )
+
+        principal_json = {
+            "sub": current_user.username,
+            "org_id": str(current_user.organisation_id) if current_user.organisation_id else "",
+            "account_id": str(current_user.account_id),
+            "org_role": live_org_role or "",
+        }
+
+        from redis.asyncio import Redis
+
+        redis = Redis.from_url(settings.redis_url, decode_responses=False)
+        try:
+            token = await create_ws_token(
+                redis,
+                principal_json,
+                ttl=settings.modulo_ws_token_ttl_seconds,
+            )
+            return WsTokenResponse(
+                ws_token=token,
+                token_type="ws-opaque",  # noqa: S106  # nosec B106 — opaque-token type label, not a credential
+                expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
+            )
+        finally:
+            await redis.aclose()
+    except asyncio.CancelledError:
+        raise
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        _log.exception("Unexpected error in ws_token")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+
+@router.get("/me")
+@handle_db_errors("auth.me")
+async def me(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> MeResponse:
+    try:
+        async with session.begin():
+            account = await get_account_by_id(session, current_user.account_id)
+    except ProgrammingError:
+        _log.exception("auth.me")
+        _log.warning("me.programming_error")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("auth.me")
+        _log.warning("me.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Account service is temporarily unavailable. Please try again.",
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        _log.exception("Unexpected error in me")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    # ADR 017: return the LIVE org role (not the claim) so the frontend stops
+    # rendering admin controls for demoted/removed users.
+    live_org_role = await _resolve_live_org_role(
+        session,
+        account_id=str(current_user.account_id),
+        org_id=str(current_user.organisation_id) if current_user.organisation_id is not None else None,
+        username=current_user.username,
+    )
+
+    return MeResponse(
+        id=str(account.id),
+        email=account.email,
+        display_name=account.display_name,
+        org_role=live_org_role or "",
+        active=account.active,
+        created_at=account.created_at.isoformat(),
+        is_system_admin=current_user.is_system_admin,
+        must_change_password=bool(account.must_change_password),
+    )
+
+
+class CsrfTokenResponse(BaseModel):
+    csrf_token: str
+
+
+@router.get("/csrf-token", response_model=CsrfTokenResponse)
+@handle_db_errors("auth.csrf_token")
+async def csrf_token(
+    _current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    try:
+        token = secrets.token_hex(32)
+        content = CsrfTokenResponse(csrf_token=token).model_dump()
+        response = JSONResponse(content=content)
+        _set_csrf_cookie(response, token, settings)
+        return response
+    except asyncio.CancelledError:
+        raise
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        _log.exception("Unexpected error in csrf_token")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+
+def _set_auth_cookies(
+    response: Response, access_token: str, settings: Settings, *, max_age_seconds: int | None = None
+) -> None:
+    """Set the session + CSRF cookies for a freshly minted access token.
+
+    ``max_age_seconds`` overrides the default settings-derived TTL — the demo
+    login uses it so the cookie lifetime matches the shorter demo token expiry.
+    """
+    secure = not settings.debug
+    resolved_max_age = max_age_seconds if max_age_seconds is not None else settings.modulo_access_token_minutes * 60
+    response.set_cookie(
+        key="modulo_session",
+        value=access_token,
+        httponly=True,
+        samesite="strict",
+        secure=secure,
+        max_age=resolved_max_age,
+        path="/",
+    )
+    csrf_token_value = secrets.token_hex(32)
+    _set_csrf_cookie(response, csrf_token_value, settings, max_age_seconds=max_age_seconds)
+
+
+def _set_csrf_cookie(response: Response, token: str, settings: Settings, *, max_age_seconds: int | None = None) -> None:
+    response.set_cookie(
+        key="XSRF-TOKEN",
+        value=token,
+        httponly=False,  # NOSONAR S3330 — JS-readable CSRF token; SameSite=strict + secure mitigate.
+        samesite="strict",
+        secure=not settings.debug,
+        max_age=max_age_seconds if max_age_seconds is not None else settings.modulo_access_token_minutes * 60,
+        path="/",
+    )
+
+
+def _clear_auth_cookies(response: Response, settings: Settings) -> None:
+    secure = not settings.debug
+    response.set_cookie(
+        key="modulo_session",
+        value="",
+        httponly=True,
+        samesite="strict",
+        secure=secure,
+        max_age=0,
+        path="/",
+    )
+    response.set_cookie(
+        key="XSRF-TOKEN",
+        value="",
+        httponly=False,  # NOSONAR S3330 — JS-readable CSRF token; SameSite=strict + secure mitigate.
+        samesite="strict",
+        secure=secure,
+        max_age=0,
+        path="/",
+    )
+
+
+def _client_ip(request: Request) -> str:
+    if request.client:
+        return request.client.host
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return "unknown"

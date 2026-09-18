@@ -1,0 +1,26 @@
+name: CodeScene Analysis
+
+on:
+  workflow_dispatch:
+
+jobs:
+  codescene:
+    name: CodeScene scan
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Install CodeScene CLI
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL -o cs-cli.zip \
+            https://downloads.codescene.io/enterprise/cli/cs-linux-amd64-cfde0186a84e0588ea0a0e4cc9b9cde8389bbe80.zip
+          unzip -o cs-cli.zip
+          chmod +x cs
+
+      - name: Run CodeScene change-set analysis
+        run: ./cs delta --output-format=json --include-metadata origin/main
+        env:
+          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}

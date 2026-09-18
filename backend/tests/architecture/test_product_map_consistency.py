@@ -1,0 +1,966 @@
+"""Architecture test: the product map stays consistent with shipped routes.
+
+``frontend/src/manifest.yaml`` is the single source of truth for the product
+surface — every page, sidebar group and sidebar order, plus the breadcrumb /
+parent / permission metadata that the frontend router, the ``/api/v1/manifest``
+endpoint and Remy's documentation indexer all read from it. Drift between the
+map and the real frontend router silently does two opposite things: a page
+that exists (e.g. onboarding, system-admin pages) is invisible to the product
+map, and a page the map advertises can be a dead redirect that no longer
+renders.
+
+This suite pins the invariants a healthy product map must keep:
+
+- every route entry carries the core fields its consumers rely on
+  (``name`` / ``breadcrumb`` / ``type`` / ``deprecated``);
+- ``sidebar_group`` references resolve to a declared group;
+- ``sidebar_order`` is unique among the visible (non-``detail_page``) items
+  of a group, so the sidebar sort order is fully deterministic;
+- every mapped route resolves to a rendered router page (not a redirect-only
+  alias) and every non-auth router page has a map entry;
+- every ``elements`` record carries ``testid`` / ``type``, is unique within
+  its route, and its ``testid`` resolves to a real ``data-testid`` in the
+  shipped frontend (ADR-008: no orphaned elements, every static testid exists
+  in a template);
+- the sidebar rendering config (``config/navigation.ts``) covers every
+  sidebar-linked route — otherwise the nav falls back to a generic icon and
+  a ``nav.<name>`` label key that no locale defines — and every referenced
+  ``labelKey`` resolves in ``locales/en-US.js`` while every icon resolves in
+  ``components/SvgIcon.vue``.
+"""
+
+from __future__ import annotations
+
+import functools
+import re
+from pathlib import Path
+
+import yaml
+
+try:
+    # libyaml bindings: ~20x faster than the pure-Python SafeLoader on the
+    # 128KB manifest these tests re-parse per assertion (the elements loop
+    # alone parsed it once per route — ~60s of pure-Python scanning).
+    from yaml import CSafeLoader as _SafeLoader
+except ImportError:  # pragma: no cover - pure-Python PyYAML fallback
+    from yaml import SafeLoader as _SafeLoader
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+MANIFEST_PATH = REPO_ROOT / "frontend" / "src" / "manifest.yaml"
+ROUTER_PATH = REPO_ROOT / "frontend" / "src" / "router" / "index.ts"
+NAVIGATION_PATH = REPO_ROOT / "frontend" / "src" / "config" / "navigation.ts"
+LOCALE_PATH = REPO_ROOT / "frontend" / "src" / "locales" / "en-US.js"
+SVG_ICON_PATH = REPO_ROOT / "frontend" / "src" / "components" / "SvgIcon.vue"
+
+# Auth / public / dev / error plumbing that is intentionally not part of the
+# product map (no breadcrumb or sidebar surface a user navigates to).
+NON_PRODUCT_ROUTES = frozenset({"login", "org-login", "auth-callback", "not-found", "dev-metrics", "demo"})
+
+#: The frontend router file defines every route at a ``path:`` key indented at
+#: least six spaces (top-level records sit at six, NESTED children — e.g. the
+#: Runners page's route-per-tab children, FAR-591 — sit deeper); everything
+#: after the routes array (``scrollBehavior``, guards) is non-route and must
+#: not be parsed. A route is a page when its block carries a ``component:``
+#: and a pure alias when it only carries a ``redirect:``.
+_PATH_INDENT = r"^\s{6,}path: "
+_ROUTE_BLOCK_START = re.compile(_PATH_INDENT + r"'[^']*'", re.MULTILINE)
+_ROUTE_NAME = re.compile(r"^\s{6,}name: '([^']+)'", re.MULTILINE)
+_HAS_COMPONENT = re.compile(r"^\s{6,}component:", re.MULTILINE)
+_IS_REDIRECT = re.compile(r"^\s{6,}redirect:", re.MULTILINE)
+
+#: Static ``data-testid`` literals contributing to each element inventory are
+#: qualified with the exact attribute form they must appear as in the sources.
+#: A ``data-testid`` is *static* in three template forms:
+#:
+#: - a plain attribute ``data-testid="lit"`` (matched with a ``(?<!:)``
+#:   guard so the ``:data-testid="expr"`` dynamic-binding form is excluded —
+#:   a bare-identifier expression like ``:data-testid="dataTestId"`` would
+#:   otherwise be misread as a literal testid);
+#: - a bound single-quoted string ``:data-testid="'lit'"``;
+#: - a bound template literal ``:data-testid="`lit`"`` (no interpolation).
+#:
+#: Any other binding evaluates to a dynamic value and is not an element.
+_TESTID_LITERAL = re.compile(
+    r"(?<!:)data-testid=\"([a-zA-Z0-9_-]+)\""
+    r"|:data-testid=\"'([a-zA-Z0-9_-]+)'\""
+    r"|:data-testid=\"`([a-zA-Z0-9_-]+)`\""
+)
+
+
+def _routes_text() -> str:
+    text = ROUTER_PATH.read_text(encoding="utf-8")
+    return text.split("scrollBehavior", 1)[0]
+
+
+def _named_routes() -> dict[str, dict[str, bool]]:
+    """Map each router route name to whether it renders and/or redirects."""
+    text = _routes_text()
+    starts = list(_ROUTE_BLOCK_START.finditer(text))
+    named: dict[str, dict[str, bool]] = {}
+    for index, match in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        block = text[match.start() : end]
+        name_match = _ROUTE_NAME.search(block)
+        if name_match is None:
+            continue
+        named[name_match.group(1)] = {
+            "renders": _HAS_COMPONENT.search(block) is not None,
+            "redirects": _IS_REDIRECT.search(block) is not None,
+        }
+    return named
+
+
+def _load_manifest() -> dict:
+    with MANIFEST_PATH.open() as handle:
+        data = yaml.load(handle, Loader=_SafeLoader)
+    if not isinstance(data, dict):
+        raise AssertionError("manifest.yaml root must be a mapping")
+    if not isinstance(data.get("routes"), dict):
+        raise AssertionError("manifest.yaml must declare a 'routes' mapping")
+    return data
+
+
+def test_manifest_route_entries_have_core_fields():
+    routes = _load_manifest()["routes"]
+    incomplete: dict[str, list[str]] = {}
+    for path, entry in routes.items():
+        if not isinstance(entry, dict):
+            incomplete[path] = ["<entry is not a mapping>"]
+            continue
+        missing = sorted({"name", "breadcrumb", "type", "deprecated"} - set(entry))
+        if missing:
+            incomplete[path] = missing
+    assert not incomplete, (
+        "manifest routes missing core fields consumed by the router / sidebar / docs indexer:\n"
+        + "\n".join(f"  {path} -> {fields}" for path, fields in sorted(incomplete.items()))
+    )
+
+
+def test_sidebar_group_references_resolve():
+    data = _load_manifest()
+    groups = set(data.get("sidebar_groups", {}))
+    routes = data["routes"]
+    dangling = {
+        path: entry["sidebar_group"]
+        for path, entry in routes.items()
+        if isinstance(entry, dict) and entry.get("sidebar_group") and entry["sidebar_group"] not in groups
+    }
+    assert not dangling, "manifest routes reference undeclared sidebar_groups:\n" + "\n".join(
+        f"  {path} -> {group}" for path, group in sorted(dangling.items())
+    )
+
+
+def test_sidebar_order_unique_within_group():
+    routes = _load_manifest()["routes"]
+    seen: dict[str, dict[int, str]] = {}
+    conflicts: list[str] = []
+    for path, entry in routes.items():
+        if not isinstance(entry, dict):
+            continue
+        group = entry.get("sidebar_group")
+        order = entry.get("sidebar_order")
+        if not group or order is None or entry.get("type") == "detail_page":
+            continue
+        group_orders = seen.setdefault(group, {})
+        if order in group_orders:
+            conflicts.append(f"{group} order {order}: {group_orders[order]} and {path}")
+        else:
+            group_orders[order] = path
+    assert not conflicts, "duplicate sidebar_order within a group leaves the sort order ambiguous:\n" + "\n".join(
+        conflicts
+    )
+
+
+def test_mapped_routes_exist_in_router():
+    routes = _load_manifest()["routes"]
+    router_names = set(_named_routes())
+    missing = {
+        path: entry["name"]
+        for path, entry in routes.items()
+        if isinstance(entry, dict) and entry.get("name") and entry["name"] not in router_names
+    }
+    assert not missing, "manifest routes with no corresponding frontend router route:\n" + "\n".join(
+        f"  {path} -> {name}" for path, name in sorted(missing.items())
+    )
+
+
+def test_mapped_routes_render_a_page_not_a_redirect():
+    named = _named_routes()
+    routes = _load_manifest()["routes"]
+    redirect_only = {
+        path: entry["name"]
+        for path, entry in routes.items()
+        if isinstance(entry, dict)
+        and entry.get("name")
+        and entry["name"] in named
+        and not named[entry["name"]]["renders"]
+    }
+    assert not redirect_only, (
+        "manifest advertises pages the router only redirects away from; drop the map entry or ship the page:\n"
+        + "\n".join(f"  {path} -> {name}" for path, name in sorted(redirect_only.items()))
+    )
+
+
+def test_route_names_are_unique_across_manifest():
+    routes = _load_manifest()["routes"]
+    seen: dict[str, str] = {}
+    duplicated: list[str] = []
+    for path, entry in routes.items():
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        name = entry["name"]
+        if name in seen:
+            duplicated.append(f"  {name}: {seen[name]} and {path}")
+        else:
+            seen[name] = path
+    assert not duplicated, (
+        "duplicate route names corrupt the router's manifestByName lookup and breadcrumb hierarchy; "
+        "each route must be uniquely named:\n" + "\n".join(duplicated)
+    )
+
+
+def test_route_parent_hierarchy_is_acyclic_and_resolves():
+    routes = _load_manifest()["routes"]
+    invalid = []
+    for path, entry in routes.items():
+        if not isinstance(entry, dict):
+            continue
+        if not entry.get("parent"):
+            continue
+        parent = entry["parent"]
+        if parent not in routes:
+            invalid.append(f"{path} -> dangling parent {parent!r} (not a route path)")
+            continue
+
+        seen: set[str] = set()
+        cursor: str | None = parent
+        while cursor:
+            if cursor in seen:
+                invalid.append(f"{path} -> circular parent chain involving {cursor!r}")
+                break
+            seen.add(cursor)
+            next_entry = routes[cursor]
+            cursor = next_entry.get("parent") if isinstance(next_entry, dict) else None
+    assert not invalid, (
+        "dangling or circular parent references break breadcrumbs and Remy's page hierarchy:\n" + "\n".join(invalid)
+    )
+
+
+def _load_elements() -> dict[str, list[dict]]:
+    data = _load_manifest()
+    elements = data.get("elements")
+    assert isinstance(elements, dict), "manifest.yaml must declare an 'elements' mapping"
+    return elements
+
+
+def _static_testids_in_frontend() -> frozenset[str]:
+    """Every static ``data-testid`` literal shipped anywhere in the frontend."""
+    src = set()
+    for path in (REPO_ROOT / "frontend" / "src").rglob("*"):
+        if path.suffix not in {".vue", ".ts", ".js"}:
+            continue
+        try:
+            src.update(t for match in _TESTID_LITERAL.findall(path.read_text(encoding="utf-8")) for t in match if t)
+        except (OSError, UnicodeDecodeError):
+            continue
+    return frozenset(src)
+
+
+def test_element_entries_have_core_fields():
+    elements = _load_elements()
+    for path, items in elements.items():
+        assert path in _load_manifest()["routes"], f"elements map an unregistered route: {path}"
+        assert isinstance(items, list), f"elements for {path} must be a list"
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise AssertionError(f"elements[{path}][{index}] is not a mapping")
+            missing = sorted({"testid", "type"} - set(item))
+            assert not missing, f"elements[{path}][{index}] missing required fields: {missing}"
+
+
+def test_element_testids_unique_within_route():
+    elements = _load_elements()
+    for path, items in elements.items():
+        seen: dict[str, int] = {}
+        for index, item in enumerate(items):
+            testid = item.get("testid")
+            if testid is None:
+                continue
+            if testid in seen:
+                raise AssertionError(
+                    f"duplicate element testid {testid!r} in {path} (entries {seen[testid]} and {index})"
+                )
+            seen[testid] = index
+
+
+def test_element_testids_exist_in_frontend():
+    elements = _load_elements()
+    live = _static_testids_in_frontend()
+    dangling = {
+        testid: path for path, items in elements.items() for item in items if (testid := item.get("testid")) not in live
+    }
+    assert not dangling, "elements reference data-testids that do not exist in the frontend:\n" + "\n".join(
+        f"  {path} -> {testid}" for testid, path in sorted(dangling.items())
+    )
+
+
+def test_mapped_route_elements_cover_owning_view_testids():
+    """Every static ``data-testid`` in a route's owning view is documented.
+
+    The manifest is the single source of truth for the product surface, and
+    Remy's ``search_documentation`` tool builds its page inventory from it
+    (ADR 008). ``test_element_testids_exist_in_frontend`` only guards the
+    manifest -> frontend direction (documented elements must ship); this test
+    guards the reverse direction for whole-page views so a newly shipped
+    panel/control does not silently stay invisible to the product map.
+
+    It is intentionally scoped to whole-page view components that own their
+    testids end to end (no shared/imported controls), keeping the assertion
+    deterministic and free of shared-component noise.
+
+    The list covers every manifest route rendered by a single whole-page view
+    component: each view's static ``data-testid`` literals must be registered
+    in the product map ``elements`` inventory, or the surface it ships stays
+    invisible to Remy's docs indexer and to ``/api/v1/manifest``.
+
+    Routes that compose a page from a layout plus route-per-tab (or per-tab
+    leaf) components — e.g. the FAR-591 D5 Runners page — map to a tuple of
+    owning views so every static testid of the tab surface is registered, not
+    just the layout's. The status strip of the Runners page
+    (``components/runners/RunnerStatusStrip.vue``) renders on both tabs and is
+    part of each tab's page surface, so it is listed with both.
+
+    A detail page that renders shared components owns those components' static
+    testids too, so they are listed alongside the page view — e.g. the run
+    detail page (``/runs/:id``, ``RunDetailView.vue``) surfaces
+    ``shared/JsonViewer.vue``, ``shared/ErrorAlert.vue`` and
+    ``hitl/HitlGateCard.vue``, whose shipped testids are part of its surface.
+    Components that render children own those children's testids as well —
+    ``hitl/HitlGateCard.vue`` embeds ``HitlBriefing.vue``, so its briefing
+    surface is part of every route that renders the gate card.
+
+    Every whole-page view that gates its content behind the plan entitlement
+    surface (``components/FeatureGate.vue``, which embeds ``LockIcon.vue``)
+    owns the gate's static testids — ``feature-gate`` / ``feature-gate-disabled``
+    / ``feature-gate-lock`` / ``lock-icon`` — just like the FilterBar search
+    surface. The gate wraps the page content, so a newly shipped control on the
+    entitlement card would otherwise stay invisible to Remy's docs indexer and
+    to ``/api/v1/manifest`` on every gated route.
+
+    A page header with an action slot owns the ``PageHeader`` right-slot
+    surface: the shared ``components/shared/PageHeader.vue`` strips only render
+    its static ``page-header-right`` testid when the owning view passes a
+    ``#right`` slot, so those routes list the component alongside the page view
+    and register ``page-header-right`` in their elements inventory.
+
+    A page whose ``FilterBar`` receives a ``search`` prop owns the search-bar
+    surface too: ``components/shared/FilterBar.vue`` only ships its static
+    ``filter-bar-search`` / ``filter-bar-search-wrapper`` testids when ``search``
+    is configured, so those routes list the component and register the search
+    surface in their elements inventory.
+
+    A page that renders the shared ``components/shared/JsonViewer.vue``
+    (an expanded audit payload, a system-config entry value, a feedback
+    correction proposal, a run-output diff leg, or a raw inferred schema) owns
+    its static testids — ``json-viewer`` and the toolbar / string-toggle
+    controls — because the viewer is part of the page surface whenever it is
+    shown. Likewise ``/remy`` embeds ``components/analytics/AnalyticsChart.vue``
+    through ``RemyChat.vue`` for analytics-chart turns, so the chart surface
+    (``analytics-chart`` / ``analytics-chart-canvas`` / ``analytics-chart-empty``)
+    is registered on the route.
+
+    A page whose ``ErrorAlert`` receives a dismiss (``on-dismiss`` plus a
+    ``dismissLabel`` — the shared ``components/shared/ErrorAlert.vue`` only
+    ships ``error-alert-dismiss`` when both are configured) owns the dismiss
+    surface: the hitl-review claim-failure banner (``/settings/hitl-review``)
+    passes both, and the org product-analytics error strip surfaces it through
+    ``components/product-analytics/ProductAnalyticsSettings.vue`` ->
+    ``components/product-analytics/ProductAnalyticsError.vue``
+    (``/admin/org``), so those routes list the components and register
+    ``error-alert-dismiss`` in their elements inventory.
+    """
+    elements = _load_elements()
+    for route, view_rel in OWNED_PAGES.items():
+        view_rels = view_rel if isinstance(view_rel, (tuple, list)) else (view_rel,)
+        documented = {item.get("testid") for item in elements.get(route, [])}
+        missing = sorted(
+            {
+                testid
+                for view_rel in view_rels
+                for testid in (
+                    t
+                    for match in _TESTID_LITERAL.findall((REPO_ROOT / view_rel).read_text(encoding="utf-8"))
+                    for t in match
+                    if t
+                )
+            }
+            - documented
+        )
+        assert not missing, (
+            f"static data-testids in {', '.join(view_rels)} are missing from the product map "
+            f"elements for {route} (invisible to Remy's docs indexer / /api/v1/manifest):\n"
+            + "\n".join(f"  {t}" for t in missing)
+        )
+
+
+OWNED_PAGES = {
+    "/": (
+        "frontend/src/views/DashboardView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+        "frontend/src/components/onboarding/OnboardingBanner.vue",
+        "frontend/src/components/onboarding/SpotlightOverlay.vue",
+        "frontend/src/components/DashboardNotificationsPanel.vue",
+    ),
+    "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
+    "/oauth/authorize": "frontend/src/views/OAuthConsentView.vue",
+    "/admin/audit": (
+        "frontend/src/views/AdminAuditView.vue",
+        "frontend/src/components/shared/JsonViewer.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/connectors": (
+        "frontend/src/views/AdminConnectorsView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/costs": (
+        "frontend/src/views/AdminCostBreakdownView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/costs/controls": (
+        "frontend/src/views/AdminCostControlsView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/costs/components": (
+        "frontend/src/views/CostComponentsView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/costs/limits": (
+        "frontend/src/views/AdminSpendLimitsView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/errors": (
+        "frontend/src/views/AdminErrorsView.vue",
+        "frontend/src/components/shared/FilterBar.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/errors/:id": (
+        "frontend/src/views/AdminErrorDetailView.vue",
+        "frontend/src/components/shared/JsonViewer.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/system/orgs": "frontend/src/views/AdminSystemOrgsView.vue",
+    "/admin/feature-flags": (
+        "frontend/src/views/AdminFeatureFlagsView.vue",
+        "frontend/src/components/shared/FilterBar.vue",
+    ),
+    "/admin/housekeeping": (
+        "frontend/src/views/AdminHousekeepingView.vue",
+        "frontend/src/components/DbCapacityBanner.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+    ),
+    "/admin/notification-delivery": (
+        "frontend/src/views/AdminNotificationDeliveryLogView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/remy": (
+        "frontend/src/views/AdminRemyView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/runners/profiles": (
+        "frontend/src/views/AdminRunnersView.vue",
+        "frontend/src/views/runners/RunnersProfilesTab.vue",
+        "frontend/src/components/runners/RunnerStatusStrip.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/runners/concurrency": (
+        "frontend/src/views/AdminRunnersView.vue",
+        "frontend/src/views/runners/RunnersConcurrencyTab.vue",
+        "frontend/src/components/runners/RunnerStatusStrip.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/runners/profiles/new": "frontend/src/views/environment-profiles/EnvironmentProfileForm.vue",
+    "/admin/runners/profiles/:id/edit": "frontend/src/views/environment-profiles/EnvironmentProfileForm.vue",
+    "/admin/run-retention": (
+        "frontend/src/views/AdminRunRetentionView.vue",
+        "frontend/src/components/DbCapacityBanner.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/system/config": (
+        "frontend/src/views/AdminSystemConfigView.vue",
+        "frontend/src/components/shared/JsonViewer.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/users": (
+        "frontend/src/views/AdminUsersView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/views": (
+        "frontend/src/views/AdminViewsView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/node-categories": (
+        "frontend/src/views/AdminNodeCategoriesView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/org": (
+        "frontend/src/views/AdminOrgSettingsView.vue",
+        "frontend/src/components/product-analytics/ProductAnalyticsSettings.vue",
+        "frontend/src/components/product-analytics/ProductAnalyticsError.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/plugins": (
+        "frontend/src/views/AdminPluginsView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/library/collections/:id": "frontend/src/views/CollectionDetailView.vue",
+    "/library/:id/create-pipeline": "frontend/src/views/LibraryPipelineWizard.vue",
+    "/composites/:id/editor": "frontend/src/views/pipeline/CompositeEditorView.vue",
+    "/pipelines/:id/editor": (
+        "frontend/src/views/PipelineEditorView.vue",
+        "frontend/src/components/pipeline/SandboxCommandsEditor.vue",
+    ),
+    "/runs": (
+        "frontend/src/views/RunsListView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+        "frontend/src/components/shared/FilterBar.vue",
+    ),
+    "/runs/:id": (
+        "frontend/src/views/RunDetailView.vue",
+        "frontend/src/components/shared/JsonViewer.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
+        "frontend/src/components/hitl/HitlGateCard.vue",
+        "frontend/src/components/HitlBriefing.vue",
+    ),
+    "/settings/email": (
+        "frontend/src/views/SettingsEmailView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/settings/error-forwarders": (
+        "frontend/src/views/SettingsErrorForwardersView.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/settings/monitoring": (
+        "frontend/src/views/SettingsMonitorConfigView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/settings/hitl-review": (
+        "frontend/src/views/SettingsHitlReviewView.vue",
+        "frontend/src/components/shared/FilterBar.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
+        "frontend/src/components/hitl/HitlGateCard.vue",
+        "frontend/src/components/HitlBriefing.vue",
+    ),
+    "/settings/guardrails": "frontend/src/views/SettingsGuardrailsView.vue",
+    "/settings/mcp": (
+        "frontend/src/views/SettingsMcpView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/settings/observability": (
+        "frontend/src/views/SettingsObservabilityView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/settings/sso": (
+        "frontend/src/views/SettingsSsoView.vue",
+        "frontend/src/components/SsoProviderForm.vue",
+        "frontend/src/components/shared/JsonViewer.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/settings/teams": (
+        "frontend/src/views/SettingsTeamsView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/settings/triggers": (
+        "frontend/src/views/SettingsTriggersView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/settings/rate-limits": (
+        "frontend/src/views/SettingsRateLimitsView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/settings/runtime-config": (
+        "frontend/src/views/SettingsRuntimeConfigView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/settings/license": "frontend/src/views/SettingsLicenseView.vue",
+    "/settings/remy": "frontend/src/views/UserRemySkillsView.vue",
+    "/admin/model-backends": (
+        "frontend/src/views/AdminModelBackendsView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/my-profile": (
+        "frontend/src/views/MyProfileView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/admin/parameter-schemas": "frontend/src/views/ParameterSchemasView.vue",
+    "/admin/product-analytics": (
+        "frontend/src/views/AdminProductAnalyticsView.vue",
+        "frontend/src/components/product-analytics/ProductAnalyticsConsentPrompt.vue",
+    ),
+    "/library": (
+        "frontend/src/views/LibraryView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+        "frontend/src/components/shared/FilterBar.vue",
+    ),
+    "/library/collections/new": "frontend/src/views/CollectionCreateView.vue",
+    "/lifecycle-maps/:id": (
+        "frontend/src/views/lifecycle-map/LifecycleMapView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+        "frontend/src/components/lifecycle-map/LifecycleMapRenderer.vue",
+    ),
+    "/lifecycle-maps/:id/editor": "frontend/src/views/lifecycle-map/LifecycleMapEditorView.vue",
+    "/pipelines": (
+        "frontend/src/views/PipelineListView.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+        "frontend/src/components/shared/FilterBar.vue",
+        "frontend/src/components/pipelines/FolderTree.vue",
+    ),
+    "/remy": (
+        "frontend/src/views/RemyOnlyView.vue",
+        "frontend/src/components/remy/RemyChat.vue",
+        "frontend/src/components/analytics/AnalyticsChart.vue",
+    ),
+    "/schemas": (
+        "frontend/src/views/SchemaListView.vue",
+        "frontend/src/components/pipelines/FolderTree.vue",
+    ),
+    "/analytics": "frontend/src/views/AnalyticsView.vue",
+    "/evals/editor": (
+        "frontend/src/views/EvalEditorView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/evals/proposals": (
+        "frontend/src/views/EvalProposalsQueueView.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/feedback/inbox": (
+        "frontend/src/views/FeedbackInboxView.vue",
+        "frontend/src/components/shared/JsonViewer.vue",
+    ),
+    "/lifecycle-maps": (
+        "frontend/src/views/lifecycle-map/LifecycleMapList.vue",
+        "frontend/src/components/shared/PageHeader.vue",
+        "frontend/src/components/shared/FilterBar.vue",
+    ),
+    "/notifications": "frontend/src/views/NotificationsPage.vue",
+    "/onboarding": "frontend/src/views/OnboardingWizard.vue",
+    "/pipelines/copy": (
+        "frontend/src/views/CopyPipelineWizard.vue",
+        "frontend/src/components/shared/FilterBar.vue",
+    ),
+    "/runs/diff": (
+        "frontend/src/views/AgentOutputDiffView.vue",
+        "frontend/src/components/shared/JsonViewer.vue",
+    ),
+    "/schemas/editor/:id": (
+        "frontend/src/views/SchemaEditorView.vue",
+        "frontend/src/components/shared/FilterBar.vue",
+        "frontend/src/components/FeatureGate.vue",
+        "frontend/src/components/LockIcon.vue",
+    ),
+    "/schemas/infer": (
+        "frontend/src/views/SchemaInferenceView.vue",
+        "frontend/src/components/shared/JsonViewer.vue",
+    ),
+    "/setup/model-backend/:id": "frontend/src/views/setup/ModelBackendSetupView.vue",
+    "/variants/compare": (
+        "frontend/src/views/VariantCompareView.vue",
+        "frontend/src/components/shared/JsonViewer.vue",
+    ),
+    "/variants/compare/:batchId": (
+        "frontend/src/views/VariantBatchCompareView.vue",
+        "frontend/src/components/shared/JsonViewer.vue",
+    ),
+}
+
+
+@functools.cache
+def _route_closure(route: str) -> frozenset[Path]:
+    """The owning views of ``route`` plus every ``.vue`` they import transitively.
+
+    A route's product surface is not just its whole-page view: shared components
+    (``PageHeader``, ``FilterBar``, ``FeatureGate``/``LockIcon``, ``JsonViewer``,
+    ``ErrorAlert``, per-tab leaves) render on the page and their static testids
+    belong to it. This closure is what ``test_registered_elements_render_on_their_route``
+    scans, mirroring exactly the components ``OWNED_PAGES`` pins for the reverse
+    testid-coverage guard.
+    """
+    seen: set[Path] = set()
+    owned = OWNED_PAGES[route]
+    owned_files = owned if isinstance(owned, (tuple, list)) else (owned,)
+    stack = [REPO_ROOT / rel for rel in owned_files]
+    while stack:
+        path = stack.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for module in re.findall(r"from\s+['\"]([^'\"]+\.vue)['\"]", text):
+            if module.startswith("@/"):
+                candidate = REPO_ROOT / "frontend" / "src" / module[2:]
+            elif module.startswith(("./", "../")):
+                candidate = (path.parent / module).resolve()
+            else:
+                continue
+            if candidate.is_file():
+                stack.append(candidate)
+    return frozenset(seen)
+
+
+def test_registered_elements_render_on_their_route():
+    """No registered element is a phantom on its own route.
+
+    ``test_element_testids_exist_in_frontend`` proves a documented testid exists
+    SOMEWHERE in the frontend and ``test_mapped_route_elements_cover_owning_view_testids``
+    proves the owning views' testids are registered -- but neither guards the
+    "wrong route" drift direction: a testid registered on a route whose owning-view
+    closure never renders it makes the product map advertise a surface the page
+    never ships, so Remy's ``search_documentation`` indexer and ``/api/v1/manifest``
+    point a reader at a `data-testid` that can never match. The 2026-09-13 walk found
+    exactly that on ``/admin/my-profile``: ``force-change-password-sign-out`` was
+    documented there while its only render site is the app-level forced-password-gate
+    (``frontend/src/views/ForceChangePasswordView.vue`` mounted by ``App.vue``), not the
+    profile page, which never shipped the button.
+
+    Each registered testid must appear as a quoted literal somewhere in the route's
+    owning-view closure text. A quoted-literal match (rather than the static form
+    matcher only) deliberately covers dynamic ``:data-testid`` bindings whose branch
+    values are still literal strings shipped in the template -- e.g.
+    ``admin-users-copy-password`` / ``admin-users-invite-copy-url`` under
+    ``credentialKind === 'invite' ? ... : ...`` -- so those legitimately dynamic
+    surfaces stay findable instead of being flagged.
+    """
+    elements = _load_elements()
+    missing: dict[str, list[str]] = {}
+    for route in sorted(OWNED_PAGES):
+        closure_text = "".join(p.read_text(encoding="utf-8") for p in _route_closure(route))
+        for item in elements.get(route, []):
+            testid = item.get("testid")
+            if testid is None:
+                continue
+            if not re.search(rf"['\"`]{re.escape(testid)}['\"`]", closure_text):
+                missing.setdefault(route, []).append(testid)
+    assert not missing, (
+        "registered elements that never render on their route (the product map "
+        "advertises a surface the page does not ship; drop or re-home the element):\n"
+        + "\n".join(f"  {route} -> {', '.join(testids)}" for route, testids in sorted(missing.items()))
+    )
+
+
+def test_every_non_auth_router_route_is_mapped():
+    named = _named_routes()
+    manifest_names = {
+        entry["name"] for entry in _load_manifest()["routes"].values() if isinstance(entry, dict) and entry.get("name")
+    }
+    uncovered = sorted(
+        name
+        for name, info in named.items()
+        if name not in manifest_names and name not in NON_PRODUCT_ROUTES and info["renders"]
+    )
+    assert not uncovered, (
+        "frontend router pages with no product-map entry:\n"
+        + "\n".join(f"  {name}" for name in uncovered)
+        + "\nAdd each page to frontend/src/manifest.yaml or to NON_PRODUCT_ROUTES if it is auth/public/dev-only."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Navigation sidebar config stays aligned with the product map.
+#
+# ``config/navigation.ts`` drives the sidebar entirely from the manifest: each
+# sidebar-linked route resolves an icon + ``labelKey`` through ``routeConfigMap``.
+# A route missing from that map falls back to a generic icon and a
+# ``nav.<name>`` label key that no locale defines — the sidebar then renders
+# the literal "nav.<name>" string. Every icon must also resolve in
+# ``components/SvgIcon.vue``'s ``iconMap`` (unknown names render a generic
+# placeholder with a console warning).
+# ---------------------------------------------------------------------------
+
+
+def _route_config_entries() -> dict[str, tuple[str, str]]:
+    """Map sidebar route name -> (icon, labelKey) from ``navigation.ts``."""
+    text = NAVIGATION_PATH.read_text(encoding="utf-8")
+    block = text.split("const routeConfigMap", 1)[1].split("const groupLabelKeyMap", 1)[0]
+    entries: dict[str, tuple[str, str]] = {}
+    for key, icon, label_key in re.findall(
+        r"^\s{2}['\"]?([A-Za-z][\w-]*)['\"]?:\s*\{[^}]*icon: '([^']+)'[^}]*labelKey: '([^']+)'",
+        block,
+        re.MULTILINE,
+    ):
+        entries[key] = (icon, label_key)
+    return entries
+
+
+def _svg_icon_map_keys() -> frozenset[str]:
+    text = SVG_ICON_PATH.read_text(encoding="utf-8")
+    body = text.split("const iconMap: Record<string, unknown> = {", 1)[1].split("};", 1)[0]
+    keys = set(re.findall(r"^\s{2}([A-Za-z0-9]+)(?::[^,\n]*)?,\s*$", body, re.MULTILINE))
+    return frozenset(keys)
+
+
+def _resolve_locale_path(obj: object, key: str) -> bool:
+    current = obj
+    for part in key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return True
+
+
+def _parse_js_object_text(text: str) -> dict:
+    """Parse a JS object literal (double-quoted keys, primitive values) to a dict."""
+
+    def _skip_ws(index: int) -> int:
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        return index
+
+    def _parse(index: int) -> tuple[object, int]:
+        index = _skip_ws(index)
+        char = text[index]
+        if char == "{":
+            index += 1
+            obj: dict = {}
+            while True:
+                index = _skip_ws(index)
+                if text[index] == "}":
+                    return obj, index + 1
+                if not text.startswith('"', index):
+                    raise AssertionError(f"expected quoted key near {text[index : index + 40]!r}")
+                end = index + 1
+                while end < len(text) and text[end] != '"':
+                    end += 1
+                key = text[index + 1 : end]
+                index = _skip_ws(end + 1)
+                if text[index] != ":":
+                    raise AssertionError(f"expected ':' after key {key!r}")
+                value, index = _parse(index + 1)
+                obj[key] = value
+                index = _skip_ws(index)
+                if text[index] == ",":
+                    index += 1
+        elif char == '"':
+            end = index + 1
+            while end < len(text):
+                if text[end] == "\\":
+                    end += 2
+                    continue
+                if text[end] == '"':
+                    break
+                end += 1
+            return text[index + 1 : end], end + 1
+        else:
+            end = index
+            while end < len(text) and text[end] not in ",} \t\r\n":
+                end += 1
+            return text[index:end], end
+        return obj, index
+
+    start = text.find("{")
+    obj, _ = _parse(start)
+    assert isinstance(obj, dict), "locale JS file must export an object literal"
+    return obj
+
+
+def _load_locale_object() -> dict:
+    return _parse_js_object_text(LOCALE_PATH.read_text(encoding="utf-8"))
+
+
+def test_sidebar_routes_have_navigation_icon_and_label():
+    routes = _load_manifest()["routes"]
+    config = _route_config_entries()
+    uncovered = {
+        path: entry["name"]
+        for path, entry in routes.items()
+        if isinstance(entry, dict)
+        and entry.get("sidebar_group")
+        and entry.get("type") != "detail_page"
+        and entry.get("name") not in config
+    }
+    assert not uncovered, (
+        "sidebar-linked manifest routes missing a routeConfigMap icon/labelKey "
+        "(nav falls back to a generic icon and an unresolved 'nav.<name>' label):\n"
+        + "\n".join(f"  {path} -> {name}" for path, name in sorted(uncovered.items()))
+    )
+
+
+def test_navigation_config_keys_resolve_to_manifest_routes():
+    manifest_names = {
+        entry["name"] for entry in _load_manifest()["routes"].values() if isinstance(entry, dict) and entry.get("name")
+    }
+    stale = sorted(set(_route_config_entries()) - manifest_names)
+    assert not stale, (
+        "routeConfigMap entries with no corresponding manifest route (dead sidebar config):\n"
+        + "\n".join(f"  {name}" for name in stale)
+    )
+
+
+def test_navigation_label_keys_resolve_in_default_locale():
+    locale = _load_locale_object()
+    unresolved = {
+        name: label_key
+        for name, (_icon, label_key) in _route_config_entries().items()
+        if not _resolve_locale_path(locale, label_key)
+    }
+    manifest = _load_manifest()
+    for group_id, group in manifest.get("sidebar_groups", {}).items():
+        if not isinstance(group, dict):
+            continue
+        label_key = group.get("labelKey")
+        if not label_key:
+            continue
+        if not _resolve_locale_path(locale, label_key):
+            unresolved[f"sidebar_group:{group_id}"] = label_key
+    assert not unresolved, (
+        "sidebar labelKeys that resolve to nothing in locales/en-US.js "
+        "(the sidebar would render the literal key string):\n"
+        + "\n".join(f"  {name} -> {key}" for name, key in sorted(unresolved.items()))
+    )
+
+
+def test_navigation_icons_resolve_in_svg_icon_map():
+    icon_map = _svg_icon_map_keys()
+    unknown = {name: icon for name, (icon, _label_key) in _route_config_entries().items() if icon not in icon_map}
+    assert not unknown, (
+        "routeConfigMap icons missing from SvgIcon.vue's iconMap "
+        "(the sidebar renders a generic placeholder for these):\n"
+        + "\n".join(f"  {name} -> {icon}" for name, icon in sorted(unknown.items()))
+    )

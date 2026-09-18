@@ -1,0 +1,82 @@
+import {
+  getAuthHeaders,
+  attemptTokenRefresh,
+  clearAccessToken,
+  exitToLogin,
+} from '../lib/api/auth'
+import { formatApiError } from '../lib/api/formatError'
+
+const BASE = ''
+
+interface ApiOptions {
+  headers?: Record<string, string>
+  signal?: AbortSignal
+}
+
+const REQUEST_TIMEOUT_MS = 30000
+
+async function requestWorker(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  // A caller-supplied signal (e.g. a drag-save abort) must also cancel the
+  // request, not just the local timeout controller.
+  const onCallerAbort = () => controller.abort()
+  if (options?.signal) {
+    // A signal already aborted before the request starts never fires its
+    // listener, so abort up-front to avoid a hung request.
+    if (options.signal.aborted) controller.abort()
+    else options.signal.addEventListener('abort', onCallerAbort)
+  }
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
+      ...options?.headers,
+    }
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      signal: controller.signal,
+      headers,
+      body: body != null ? JSON.stringify(body) : undefined,
+      credentials: 'include',
+    })
+    return res
+  } finally {
+    if (options?.signal) options.signal.removeEventListener('abort', onCallerAbort)
+    clearTimeout(timer)
+  }
+}
+
+async function request<T>(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<T> {
+  let res = await requestWorker(method, path, body, options)
+
+  if (res.status === 401) {
+    const idempotent = method === 'GET' || method === 'HEAD'
+    const refreshed = await attemptTokenRefresh()
+    if (refreshed && idempotent) {
+      res = await requestWorker(method, path, body, options)
+    }
+    if (!refreshed || (idempotent && res.status === 401)) {
+      clearAccessToken()
+      exitToLogin()
+      throw new Error('Session expired. Please log in again.')
+    }
+  }
+
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(formatApiError(detail) || `Request failed: ${res.status}`)
+  }
+  if (res.status === 204) return undefined as T
+  return res.json()
+}
+
+export function useApi() {
+  return {
+    get: <T>(path: string, options?: ApiOptions) => request<T>('GET', path, undefined, options),
+    post: <T>(path: string, body?: unknown, options?: ApiOptions) => request<T>('POST', path, body, options),
+    put: <T>(path: string, body?: unknown, options?: ApiOptions) => request<T>('PUT', path, body, options),
+    patch: <T>(path: string, body?: unknown, options?: ApiOptions) => request<T>('PATCH', path, body, options),
+    delete: <T>(path: string, options?: ApiOptions) => request<T>('DELETE', path, undefined, options),
+  }
+}

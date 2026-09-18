@@ -1,0 +1,15 @@
+rules:
+  - id: bare-except-around-json-call
+    patterns:
+      - pattern-inside: |
+          try:
+            ...
+          except Exception:
+            ...
+      - pattern: |
+          $X.json()
+    message: "`.json()` call inside bare `except Exception:` — narrow the exception type (e.g. `except (json.JSONDecodeError, KeyError):` or `except httpx.HTTPError:`)"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

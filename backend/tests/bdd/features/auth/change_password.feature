@@ -1,0 +1,50 @@
+Feature: Password Change
+  As a logged-in user
+  I want to change my password
+  So that I can maintain account security
+
+  Scenario: Successful password change
+    Given I am authenticated in org "acme"
+    When I change my password from "correct-horse-battery" to "new-strong-password-42"
+    Then the response status is 200
+    And the response says "Password changed successfully"
+
+  Scenario: Wrong current password is rejected
+    Given I am authenticated in org "acme"
+    When I change my password from "wrong-password-42" to "new-strong-password-42"
+    Then the response status is 400
+    And the error mentions "incorrect"
+
+  Scenario: Reusing the current password is rejected
+    Given I am authenticated in org "acme"
+    When I change my password from "correct-horse-battery" to "correct-horse-battery"
+    Then the response status is 400
+    And the error mentions "different"
+
+  Scenario: Low-entropy new password is rejected
+    Given I am authenticated in org "acme"
+    When I change my password from "correct-horse-battery" to "11111111"
+    Then the response status is 422
+    And the error mentions "entropy"
+
+  Scenario: SSO user without local password cannot change password
+    Given I am authenticated in org "acme"
+    When I attempt to change my password without a local password set
+    Then the response status is 400
+
+  Scenario: Password change invalidates existing sessions
+    Given I am authenticated in org "acme"
+    When I change my password from "correct-horse-battery" to "new-strong-password-42"
+    Then all token families for my user are blacklisted
+
+  Scenario: Password change is recorded in the audit trail
+    Given I am authenticated in org "acme"
+    When I change my password from "correct-horse-battery" to "new-strong-password-42"
+    Then the password change is recorded in the audit trail
+
+  Scenario: Forced password change clears the admin-reset flag in the same transaction
+    Given I am authenticated in org "acme"
+    And a forced password change is pending for my account
+    When I change my password from "correct-horse-battery" to "new-strong-password-42"
+    Then the response status is 200
+    And the admin-reset must_change_password flag is cleared for my account

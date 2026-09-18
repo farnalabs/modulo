@@ -1,0 +1,210 @@
+﻿repos:
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.3
+    hooks:
+      - id: bandit
+        args: [-r, backend/src/, -ll, -x, backend/src/modulo/model_backends/stub/]
+        pass_filenames: false
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (locked backend environment)
+        entry: uv --directory backend run --no-sync ruff check --fix .
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: ruff-format
+        name: ruff format (locked backend environment)
+        entry: uv --directory backend run --no-sync ruff format .
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: mypy
+        name: mypy (locked backend environment)
+        entry: uv --directory backend run --no-sync mypy --strict --ignore-missing-imports src/
+        language: system
+        files: ^backend/src/
+        pass_filenames: false
+        stages: [manual]
+      - id: check-migration-heads
+        name: check migration number/revision collisions
+        entry: uv run --project backend --no-sync python scripts/run_check_migration_heads.py
+        language: system
+        files: ^backend/src/modulo/db/migrations/versions/.*\.py$
+        pass_filenames: false
+      - id: semgrep
+        name: semgrep
+        entry: uv run --project backend --no-sync python scripts/run_semgrep.py
+        language: system
+        files: ^backend/src/
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: vulture
+        name: vulture (dead code gate)
+        entry: uv run --project backend --no-sync python scripts/run_vulture.py
+        language: system
+        types: [python]
+        files: ^backend/src/
+        pass_filenames: false
+        stages: [pre-commit]
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.3
+    hooks:
+      - id: gitleaks
+        args: ['--verbose']
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: no-commit-to-branch
+        args: [--branch, main]
+
+  - repo: https://github.com/pypa/pip-audit
+    rev: v2.10.1
+    hooks:
+      - id: pip-audit
+        name: pip-audit (backend)
+        args:
+          - backend/
+        files: ^backend/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+        stages: [manual]
+
+  - repo: local
+    hooks:
+      - id: import-linter
+        name: import-linter
+        entry: uv --directory backend run --no-sync lint-imports
+        language: system
+        files: ^backend/src/
+        pass_filenames: false
+      - id: generate-api-types
+        name: Generate API types from OpenAPI schema
+        entry: uv run --project backend --no-sync python scripts/run_generate_api_types.py
+        language: system
+        files: ^backend/src/
+        pass_filenames: false
+        stages: [manual]
+      - id: eslint
+        name: ESLint
+        entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py lint
+        language: system
+        files: \.(vue|ts|js)$
+        pass_filenames: false
+      - id: vue-tsc
+        name: vue-tsc type check
+        entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
+        language: system
+        files: \.(vue|ts)$
+        pass_filenames: false
+        stages: [manual]
+      - id: check-c1-chars
+        name: check C1 control characters in workflow files
+        entry: uv run --project backend --no-sync python scripts/run_check_c1_chars.py
+        language: system
+        files: ^\\.github/workflows/.*\\.yml$
+        pass_filenames: false
+
+      - id: check-utf8
+        name: check UTF-8 encoding (no corrupted files)
+        entry: uv run --project backend --no-sync python scripts/run_check_utf8_encoding.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: run-changed-tests
+        name: run tests for changed test files
+        entry: uv run --project backend --no-sync python scripts/run_changed_tests.py
+        language: system
+        files: ^backend/tests/.*\.py$
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: check-uv-lock
+        name: check uv lockfile freshness
+        entry: uv run --project backend --no-sync python scripts/run_check_uv_lock.py
+        language: system
+        files: ^backend/pyproject\.toml$
+        pass_filenames: false
+      - id: validate-translations
+        name: validate sidebar nav translation keys
+        entry: uv run --project backend --no-sync python scripts/run_validate_translations.py
+        language: system
+        files: ^frontend/src/(config/navigation\.ts|locales/en-US\.js)$
+        pass_filenames: false
+      # TEMPORARY (FAR-588 / ADR 029 D3): forbids the retired "sandbox agent" /
+      # "external agent" user-facing terms in locales + views/components.
+      # Remove this hook (and scripts/run_check_vocabulary_sweep.py) at GA.
+      - id: check-vocabulary-sweep
+        name: forbid retired sandbox/external agent vocabulary (remove at GA)
+        entry: uv run --project backend --no-sync python scripts/run_check_vocabulary_sweep.py
+        language: system
+        files: ^frontend/src/(locales/.*\.js|views/.*\.vue|components/.*\.vue)$
+        pass_filenames: false
+      - id: validate-pipeline-configs
+        name: validate pipeline configs (agent_prompt, timeout_seconds, template_id)
+        entry: uv run --directory backend --no-sync python ../scripts/validate_pipeline_configs.py
+        language: system
+        files: ^(backend/src/modulo/core/pipeline_engine/node_runner\.py|backend/src/modulo/api/mcp_server\.py|scripts/validate_pipeline_configs\.py)$
+        pass_filenames: false
+
+  # CI-parity pre-push gate: mirrors key CI checks so a red-PR push is caught
+  # locally before the CI round-trip. Tests are NOT included — CI's
+  # "Test (Backend)" job runs the full suite properly; a pre-push best-guess
+  # subset duplicates CI, costs minutes, and can fail on files unrelated to the
+  # change. Install: pre-commit install --hook-type pre-push (see CONTRIBUTING.md).
+  - repo: local
+    hooks:
+      # EXACT `Lint (Backend)` mypy invocation (ci.yml backend-lint job,
+      # working-directory: backend):  uv run --no-build --no-sync mypy src/modulo/
+      # NOT `--strict --ignore-missing-imports` — those flags change what mypy
+      # reports and mask failures CI doesn't (and vice versa). See the
+      # "Diagnose CI failures with the EXACT CI command" lesson.
+      - id: prepush-mypy
+        name: prepush mypy (exact CI Lint Backend command)
+        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/modulo/**/*.py" -- uv --directory backend run --no-build --no-sync mypy src/modulo/
+        language: system
+        files: ^backend/src/
+        pass_filenames: false
+        stages: [pre-push]
+      # EXACT frontend type-check invocation (ci.yml frontend job):
+      #   pnpm run type-check    (frontend/package.json: "vue-tsc --noEmit")
+      # run_frontend_npm.py runs `pnpm run type-check` in frontend/ — same command.
+      - id: prepush-vue-tsc
+        name: prepush vue-tsc (exact CI type-check command)
+        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "frontend/src/**" -- uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
+        language: system
+        files: \.(vue|ts)$
+        pass_filenames: false
+        stages: [pre-push]
+      # Local equivalent of CI's schema-freshness job: regenerate to a temp
+      # file and fail if it differs from the committed schema.ts (never touches it).
+      - id: prepush-schema-freshness
+        name: prepush schema freshness (openapi-typescript@7.13.0 --check)
+        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/**/*.py" -- uv run --project backend --no-sync python scripts/run_generate_api_types.py --check
+        language: system
+        files: ^(backend/src/.+\.py$)
+        pass_filenames: false
+        stages: [pre-push]
+      - id: prepush-merge-conflict-check
+        name: prepush merge-conflict-with-main check
+        entry: uv run --project backend --no-sync python scripts/run_check_merge_conflict.py
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        files: '\.(sh|bash|zsh|env)$'

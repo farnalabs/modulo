@@ -1,0 +1,13 @@
+rules:
+  - id: test-login-field-username
+    patterns:
+      - pattern-either:
+          - pattern: |
+              {"username": $VAL, "password": $PW}
+          - pattern: |
+              {'username': $VAL, 'password': $PW}
+    message: "Login payload uses 'username' but FastAPI expects 'email'. Use {\"email\": \"...\", \"password\": \"...\"}"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/tests/**"]

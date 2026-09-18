@@ -1,0 +1,35 @@
+rules:
+  - id: sensitive-data-in-log
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $LOGGER.$LEVEL("...", token, ...)
+          - pattern: |
+              $LOGGER.$LEVEL("...", secret, ...)
+          - pattern: |
+              $LOGGER.$LEVEL("...", password, ...)
+          - pattern: |
+              $LOGGER.$LEVEL("...", credential, ...)
+          - pattern: |
+              $LOGGER.$LEVEL("...", bearer, ...)
+          - pattern: |
+              $LOGGER.$LEVEL(..., f"...{token}...", ...)
+          - pattern: |
+              $LOGGER.$LEVEL(..., f"...{secret}...", ...)
+          - pattern: |
+              $LOGGER.$LEVEL(..., f"...{password}...", ...)
+          - pattern: |
+              $LOGGER.$LEVEL(..., f"...{credential}...", ...)
+          - pattern: |
+              $LOGGER.$LEVEL(..., f"...{bearer}...", ...)
+      - metavariable-regex:
+          metavariable: $LOGGER
+          regex: ^(logger|log|_log|_logger|LOG)$
+      - metavariable-regex:
+          metavariable: $LEVEL
+          regex: ^(debug|info|warning|error|critical|exception)$
+    message: "Potential sensitive data (token, secret, password, credential, bearer) logged in plaintext."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

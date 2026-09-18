@@ -1,0 +1,1 @@
+export { SentryMonitorBackend } from './sentry'

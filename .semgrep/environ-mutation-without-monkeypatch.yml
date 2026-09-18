@@ -1,0 +1,17 @@
+﻿rules:
+  - id: environ-mutation-without-monkeypatch
+    patterns:
+      - pattern-either:
+          - pattern: os.environ[$KEY] = $VAL
+          - pattern: os.environ.pop($KEY)
+          - pattern: os.environ.__setitem__($KEY, $VAL)
+          - pattern: os.environ.__delitem__($KEY)
+      - pattern-not-inside: |
+          monkeypatch.setenv(...)
+      - pattern-not-inside: |
+          monkeypatch.delenv(...)
+    message: "Direct os.environ mutation in tests — use `monkeypatch.setenv()` / `monkeypatch.delenv()` which automatically restore original values on teardown."
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/tests/**"]

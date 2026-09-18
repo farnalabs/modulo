@@ -1,0 +1,6 @@
+
+test_*.db
+
+# Local artifact-store root (default Settings): <backend>/.data/artifacts
+# (modulo.core.artifacts.store default). Test runs write here; never commit it.
+.data/

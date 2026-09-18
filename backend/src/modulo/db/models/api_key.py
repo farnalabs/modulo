@@ -1,0 +1,34 @@
+import uuid
+from datetime import datetime
+
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy.orm import Mapped, mapped_column
+
+from modulo.db.models.base import OrgScoped
+
+
+class OrgApiKey(OrgScoped):
+    __tablename__ = "org_api_keys"
+    __table_args__ = (
+        CheckConstraint("role IN ('operator', 'runner')", name="ck_org_api_keys_role"),
+        CheckConstraint("scope IN ('org', 'user')", name="ck_org_api_keys_scope"),
+        UniqueConstraint("lookup_prefix", name="uq_org_api_keys_lookup_prefix"),
+    )
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    lookup_prefix: Mapped[str] = mapped_column(String(8), nullable=False)
+    hashed_secret: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    # FAR-620: caller scope. 'org' = org-level caller (historical default);
+    # 'user' = per-user key that operates as its creator's identity and may
+    # reach caller-scoped (``.self``) MCP tools. IMMUTABLE post-mint — the
+    # update paths never accept a scope payload.
+    scope: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
+    team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete="SET NULL"))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

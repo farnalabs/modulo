@@ -1,0 +1,160 @@
+import { toDate } from '../lib/formatDate'
+import { isTerminalStatus } from '../constants/runStatuses'
+
+export function runStatusBadgeClass(status: string): string {
+  const map: Record<string, string> = {
+    complete: 'bg-success/10 text-success',
+    failed: 'bg-destructive/10 text-destructive',
+    stalled: 'bg-destructive/10 text-destructive',
+    budget_exceeded: 'bg-destructive/10 text-destructive',
+    compensation_failed: 'bg-destructive/10 text-destructive',
+    router_no_match: 'bg-warning/10 text-warning',
+    running: 'bg-primary/10 text-primary',
+    pending: 'bg-muted text-muted-foreground',
+    awaiting_human: 'bg-warning/10 text-warning',
+    hitl_parked: 'bg-warning/10 text-warning',
+    cancelled: 'bg-muted text-muted-foreground',
+    eval_failed: 'bg-destructive/10 text-destructive',
+    claimed: 'bg-warning/10 text-warning',
+    unknown: 'bg-muted text-muted-foreground',
+  }
+  return map[status] ?? 'bg-muted text-muted-foreground'
+}
+
+/**
+ * Human-readable label for a run status (e.g. `compensation_failed` →
+ * "compensation failed"). Surfaced run statuses were previously rendered as the
+ * raw snake_case value with a CSS `capitalize`, which produced
+ * "Compensation_failed" for multi-word statuses. Pair this with the `capitalize`
+ * class so the first word is capitalized (e.g. "Compensation failed").
+ */
+const RUN_STATUS_LABELS: Record<string, string> = {
+  compensation_failed: 'compensation failed',
+  router_no_match: 'router no match',
+  awaiting_human: 'awaiting human',
+  hitl_parked: 'parked',
+  budget_exceeded: 'budget exceeded',
+  cost_ceiling_exceeded: 'cost ceiling exceeded',
+  eval_failed: 'eval failed',
+}
+
+export function runStatusLabel(status: string | null | undefined): string {
+  if (status == null) return ''
+  if (RUN_STATUS_LABELS[status]) return RUN_STATUS_LABELS[status]
+  return status.replaceAll('_', ' ')
+}
+
+/**
+ * Full explanatory description for a run status, surfaced as a hover tooltip
+ * and accessible name on the status badge. Looked up in the locale's
+ * `statusDescriptions` section (mirroring the `errorCodeDescriptions` pattern
+ * for error codes); falls back to the short label when the locale has no
+ * description for the status, so the accessible name is never erased for
+ * statuses the locale doesn't yet describe.
+ */
+export function runStatusDescription(status: string | null | undefined, t: (key: string) => string): string {
+  if (status == null) return ''
+  const key = `statusDescriptions.${status}`
+  const translated = t(key)
+  return translated === key ? runStatusLabel(status) : translated
+}
+
+const triggerTypeLabelKeys: Record<string, string> = {
+  manual: 'common.trigger_types.manual',
+  webhook: 'common.trigger_types.webhook',
+  cron: 'common.trigger_types.cron',
+  polling: 'common.trigger_types.polling',
+  agent_signal: 'common.trigger_types.agent_signal',
+  ongoing: 'common.trigger_types.ongoing',
+  correction: 'common.trigger_types.correction',
+  slack_app_mention: 'common.trigger_types.slack_app_mention',
+  rerun: 'common.trigger_types.rerun',
+}
+
+export function triggerTypeLabel(type: string | null | undefined, t: (key: string) => string): string {
+  if (!type) return '—'
+  const key = triggerTypeLabelKeys[type]
+  return key ? t(key) : type
+}
+
+export function formatRunDate(dateStr: string | null): string {
+  if (!dateStr) return '—'
+  const d = toDate(dateStr)
+  if (!d) return dateStr
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+/**
+ * Seconds elapsed since the run's last heartbeat, or null when there is no
+ * heartbeat to measure (no heartbeat_at, terminal run, or invalid timestamp).
+ * Shared by the runs list and run detail views so the age computation and the
+ * stale threshold never drift apart.
+ */
+export const HEARTBEAT_STALE_AFTER_SECONDS = 60
+
+export function heartbeatAgeSeconds(
+  heartbeatAt: string | null | undefined,
+  status: string,
+  nowMs: number,
+): number | null {
+  if (!heartbeatAt) return null
+  if (isTerminalStatus(status)) return null
+  const parsed = new Date(heartbeatAt) // nosemgrep: new-date-without-guard
+  if (Number.isNaN(parsed.getTime())) return null
+  return Math.max(0, Math.floor((nowMs - parsed.getTime()) / 1000))
+}
+
+export function isHeartbeatStale(age: number | null): boolean {
+  return age != null && age > HEARTBEAT_STALE_AFTER_SECONDS
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+/**
+ * Humanized heartbeat age (FAR-624). Single shared formatter so the runs list
+ * and run detail never drift: "just now" for <10s, seconds below a minute,
+ * then zero-padded compound units ("3m 05s ago", "2h 05m ago", "1d 3h ago").
+ * Strings are composed from locale keys (passed via `t`) so the humanized age
+ * stays translatable, matching how the sibling `triggerTypeLabel` /
+ * `runStatusLabel` formatters resolve their copy.
+ */
+export function formatHeartbeatAge(age: number | null, t: (key: string, named?: Record<string, unknown>) => string): string {
+  if (age == null) return '—'
+  if (age < 10) return t('common.heartbeat.just_now')
+  if (age < 60) return t('common.heartbeat.seconds_ago', { s: age })
+  const seconds = age % 60
+  const totalMinutes = Math.floor(age / 60)
+  const days = Math.floor(age / 86400)
+  const hours = Math.floor((age % 86400) / 3600)
+  if (days >= 1) return t('common.heartbeat.days_hours_ago', { d: days, h: hours })
+  if (totalMinutes >= 60) return t('common.heartbeat.hours_minutes_ago', { h: hours, m: pad2(totalMinutes % 60) })
+  return t('common.heartbeat.minutes_seconds_ago', { m: totalMinutes, s: pad2(seconds) })
+}
+
+/** Human-readable label for a dotted run error code (e.g. `agent.stall` →
+ * "Agent stalled"), looked up in the locale's `errorCodes` section. Falls back
+ * to the locale's `errorCodes._unknown` label when the code has no entry. */
+export function errorCodeLabel(code: string | null | undefined, t: (key: string) => string): string {
+  if (!code) return '—'
+  const key = `errorCodes.${code}`
+  const translated = t(key)
+  return translated === key ? t('errorCodes._unknown') : translated
+}
+
+/** Full explanatory description for a dotted run error code (e.g. `agent.stall`
+ * → "The worker claimed the run but never dispatched a node; it was recovered
+ * by re-dispatch."), looked up in the locale's `errorCodeDescriptions` section.
+ * Falls back to the short label when no description entry exists. */
+export function errorCodeDescription(code: string | null | undefined, t: (key: string) => string): string {
+  if (!code) return ''
+  const key = `errorCodeDescriptions.${code}`
+  const translated = t(key)
+  return translated === key ? errorCodeLabel(code, t) : translated
+}

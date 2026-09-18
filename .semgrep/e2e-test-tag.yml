@@ -1,0 +1,12 @@
+rules:
+  - id: e2e-test-missing-tag
+    patterns:
+      - pattern-either:
+          - pattern: test($NAME, ...)
+          - pattern: test.describe($NAME, ...)
+      - pattern-not-regex: \btag\s*[=:]
+    message: "Every Playwright test must have at least one tag (e.g. @regression, @smoke). Add { tag: '@regression' } to the test() or test.describe() call."
+    languages: [typescript, javascript]
+    severity: ERROR
+    paths:
+      include: ["**/tests/e2e/*.spec.ts"]

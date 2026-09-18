@@ -1,0 +1,9 @@
+rules:
+  - id: output-get-fallback-parent
+    patterns:
+      - pattern: $DICT.get($FIELD, $DICT)
+    message: "output.get(field, output) silently validates the entire dataset when field is missing — check field in output explicitly"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

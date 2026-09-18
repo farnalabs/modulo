@@ -1,0 +1,266 @@
+[importlinter]
+root_package = modulo
+include_external_packages = True
+
+[importlinter:contract:api-does-not-import-langgraph-directly]
+name = API layer uses pipeline_engine, not LangGraph directly
+type = forbidden
+source_modules =
+    modulo.api
+forbidden_modules =
+    langgraph
+ignore_imports =
+    modulo.api.main -> modulo.core.pipeline_engine.modulo_saver
+    modulo.api.routes.runs -> modulo.core.dispatch
+    modulo.api.routes.runs -> modulo.core.trigger_engine
+    modulo.api.routes.hitl -> modulo.core.pipeline_engine.executor
+    modulo.api.routes.webhooks -> modulo.core.dispatch
+    modulo.api.routes.webhooks -> modulo.core.trigger_engine
+    modulo.api.routes.triggers -> modulo.core.cron_helpers
+    modulo.api.routes.triggers -> modulo.core.trigger_engine
+    modulo.api.mcp_server -> modulo.core.cron_helpers
+    # FAR-733: cron_helpers now imports pipeline_engine.executor (for the shared
+    # _retry_after_policy matcher used by _should_redispatch_nodeless). executor
+    # pulls langgraph, so every API seam that reaches cron_helpers (health,
+    # triggers, mcp_server, mcp_server->trigger_streak) would otherwise transit
+    # langgraph. cron_helpers is a sanctioned core seam the API already whitelists
+    # above, so whitelist the single contaminated edge at the cron_helpers boundary
+    # rather than every API entry path.
+    modulo.core.cron_helpers -> modulo.core.pipeline_engine.executor
+    modulo.api.mcp_server -> modulo.core.dispatch
+    modulo.api.routes.pipelines -> modulo.core.reports.quality_report
+    # Admin fernet-rotation is a cross-org system operation: it must run on the
+    # modulo_system (BYPASSRLS) session factory so the org-scoped rls policies on
+    # secrets/connector_instances/model_backends/notification_endpoints do not
+    # fail-closed to zero rows. Same exempt seam category as triggers/webhooks ->
+    # cron_helpers/dispatch above (admin API drives the cross-org system worker
+    # machinery).
+    modulo.api.routes.admin_rotation -> modulo.core.saq_worker
+
+[importlinter:contract:connectors-do-not-import-api]
+name = Connectors layer is independent of API
+type = forbidden
+source_modules =
+    modulo.connectors
+forbidden_modules =
+    modulo.api
+    modulo.auth
+
+[importlinter:contract:core-does-not-import-modulo-cloud]
+name = Core is zero-coupled to modulo-cloud
+type = forbidden
+source_modules =
+    modulo.core
+    modulo.api
+    modulo.connectors
+forbidden_modules =
+    modulo_cloud
+
+[importlinter:contract:otel-bridge-is-standalone]
+name = OTel bridge does not import core business logic
+type = forbidden
+source_modules =
+    modulo.otel_bridge
+forbidden_modules =
+    modulo.core.pipeline_engine
+    modulo.core.hitl_manager
+    modulo.core.eval_engine
+
+[importlinter:contract:core-does-not-import-api]
+name = Core layer never sees FastAPI
+type = forbidden
+source_modules =
+    modulo.core
+forbidden_modules =
+    modulo.api
+ignore_imports =
+    modulo.core.feature_flags -> modulo.api.dependencies
+    modulo.core.logging_config -> modulo.api.dependencies
+    modulo.core.dispatch -> modulo.api.dependencies
+
+[importlinter:contract:db-does-not-import-core]
+name = DB layer has no business logic imports
+type = forbidden
+source_modules =
+    modulo.db
+forbidden_modules =
+    modulo.core
+    modulo.api
+ignore_imports =
+    # FAR-523 trigger-delivery bootstrap: the shared trigger/org resolver in
+    # db.crud.trigger raises the engine's TriggerNotFoundError (same
+    # exception-mapping category as the pipeline_snapshot -> core.exceptions
+    # seam below — db exposes the read, core owns the exception type).
+    modulo.db.crud.trigger -> modulo.core.trigger_engine
+    modulo.db.crud.pipeline_snapshot -> modulo.core.exceptions
+    modulo.db.crud.run -> modulo.core.exceptions
+    modulo.db.settings_resolver -> modulo.core.exceptions
+    modulo.db.crud.pipeline_snapshot -> modulo.core.composite_engine.expander
+    modulo.db.crud.sso_provider -> modulo.core.audit_logger
+    modulo.db.crud.pipeline -> modulo.core.audit_logger
+    modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.audit_logger
+    modulo.db.session -> modulo.core.audit_logger.append_only
+    # FAR-208 guardrails: the ingestion-edge interception lives in create_run
+    # (the single chokepoint for all run-creation dispatch paths), so the DB
+    # layer is the ONLY caller of the core guardrail pass. The mapping is a
+    # thin DTO conversion (to_engine_definition); all guardrail logic stays in
+    # core.
+    modulo.db.crud.run -> modulo.core.guardrails
+    modulo.db.crud.run -> modulo.core.eval_engine
+    # FAR-213 run-termination compensation: the guardrail-blocked terminalization
+    # seam lives in create_run (it writes the blocked_partial summary AFTER the
+    # terminal status write). Same cross-boundary category as the FAR-208
+    # guardrail exemption above — compensation orchestration stays in core;
+    # create_run only invokes it.
+    modulo.db.crud.run -> modulo.core.guardrails.compensation
+    # FAR-223 item 10 — snapshot creation serializes the pipeline's guardrail
+    # rows into ``guardrail_pins_json`` (thin DTO conversion via
+    # ``serialize_guardrail_pin``); same cross-boundary category as the run.py
+    # guardrail exemption above.
+    modulo.db.crud.pipeline_snapshot -> modulo.core.guardrails
+    # FAR-189 — the shared fenced terminal write (update_run_status / the fenced
+    # variant / transition_run / request_cancellation) invokes the run-outcome
+    # classifier inline, so every terminalizer that funnels through db.crud.run
+    # persists a classification record. NOT every terminalizer funnels through
+    # the hook: the raw-SQL writers (cron_helpers dispatcher_reconcile / stale-
+    # run sweeps, saq_hooks._mark_run_failed, pipeline_execution) are covered by
+    # the wired periodic backfill sweep instead (cron_helpers' dispatcher_reconcile
+    # -> classify.reconcile_missing_classifications, every 60s). Same
+    # cross-boundary wiring category as the audit_logger / composite_engine
+    # exceptions above: db.crud.run exposes the terminal write, classify.py is
+    # the pure decision function.
+    modulo.db.crud.run -> modulo.core.pipeline_engine.classify
+    # FAR-795: the create-time journey hydration write consults the per-org
+    # agent-mint budget (consume_agent_mint_budget) before minting agent-sourced
+    # journey rows, so the budget cap is enforced at the create path too. The
+    # db layer only invokes the pure budget-check function in the same
+    # session/transaction as the mint; all budget-statement semantics live in
+    # core.runtime_config.mint_budget (same narrow cross-boundary category as the
+    # classify.py / audit_logger / composite_engine exceptions above).
+    modulo.db.crud.run -> modulo.core.runtime_config.mint_budget
+    # FAR-583: the run_node_outputs store write raises DualWriteError
+    # fail-closed out of the DB layer; the failure orchestration (terminalize
+    # + the aggregated error event) lives entirely in core and may NOT be
+    # imported by the DB layer (no cross-boundary import remains after the
+    # B2a switch/counter cleanup removed the last one).
+    # FAR-402 P6 — the snapshot diff exposes a deterministic impact/scoring
+    # oracle (``compute_port_change_impact`` / ``check_port_change_breaking``);
+    # pipeline_impact is the PURE decision function, db.crud.pipeline_snapshot_versioning
+    # only invokes it (same cross-boundary wiring category as the classify.py /
+    # audit_logger exceptions above).
+    modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.pipeline_impact
+    # FAR-535 — the demo auto-login gate (kill switch + demo-org slug/role
+    # constants) lives in modulo.core.demo as the neutral surface shared by the
+    # auth route and this boot seed. The seed only READS the constants/config
+    # helper (no core business logic flows into db), the same narrow
+    # cross-boundary category as the pure-decision-function exemptions above.
+    modulo.db.seed_demo -> modulo.core.demo
+
+[importlinter:contract:connectors-do-not-import-core]
+name = Connectors don't reach into core
+type = forbidden
+source_modules =
+    modulo.connectors
+forbidden_modules =
+    modulo.core
+ignore_imports =
+    # Shell resolves workspace sessions via the DB layer.
+    modulo.connectors.shell -> modulo.db.session
+    # FAR-587: shell's hub-resolution guard maps the hub's typed
+    # ProviderNotConfiguredError to the connector's fail-soft ValueError
+    # contract - a single exception-type import (no core behaviour flows in).
+    modulo.connectors.shell -> modulo.core.runtime_provider
+    # The REST connector (FAR-408) binds its SSRF + output-injection port at the
+    # composition root (connector_hub) and never imports ``modulo.core`` directly;
+    # this contract enforces that the connector stays decoupled. Any attempt to
+    # pull ``modulo.core`` into ``modulo.connectors.rest`` must fail here.
+    # User/org-supplied base_url SSRF validation: the singleton guard lives in
+    # modulo.core.ssrf. Every base_url-bearing connector imports it directly to
+    # validate the egress target before building the httpx client (FAR-SSRF).
+    # This is a deliberate, narrow exception for a shared security primitive —
+    # the connectors stay decoupled from all other core business logic. The
+    # guard honors SSRF_ALLOW_PRIVATE_RANGES so self-hosted targets remain
+    # reachable when the operator opts in.
+    modulo.connectors.gitea -> modulo.core.ssrf
+    modulo.connectors.gitlab -> modulo.core.ssrf
+    modulo.connectors.jira -> modulo.core.ssrf
+    modulo.connectors.youtrack -> modulo.core.ssrf
+    modulo.connectors.sonarqube -> modulo.core.ssrf
+    modulo.connectors.teamcity -> modulo.core.ssrf
+    modulo.connectors.trivy -> modulo.core.ssrf
+    modulo.connectors.onepassword -> modulo.core.ssrf
+    modulo.connectors.sentry -> modulo.core.ssrf
+    modulo.connectors.azure_key_vault -> modulo.core.ssrf
+    modulo.connectors.azure_pipelines -> modulo.core.ssrf
+    modulo.connectors.azure_repos -> modulo.core.ssrf
+    modulo.connectors.confluence -> modulo.core.ssrf
+    modulo.connectors.grafana -> modulo.core.ssrf
+    modulo.connectors.jenkins -> modulo.core.ssrf
+    modulo.connectors.n8n -> modulo.core.ssrf
+    # FAR-512: github / slack / linear / rest now pin their validated IP via the
+    # shared SSRF security primitive (modulo.core.ssrf) just like the other
+    # base_url-bearing connectors above — the same narrow exception for a shared
+    # security primitive, keeping the connectors decoupled from all other core
+    # business logic. github/slack/linear/rest pin the validated address onto the
+    # transport (closing the DNS-rebinding window) instead of only re-validating.
+    modulo.connectors.github -> modulo.core.ssrf
+    modulo.connectors.linear -> modulo.core.ssrf
+    modulo.connectors.rest -> modulo.core.ssrf
+    modulo.connectors.slack -> modulo.core.ssrf
+    # The GitLab CI runner takes its base_url from tenant connector config
+    # (connector_hub passes config['base_url'] straight through), so it is on the
+    # same external trust boundary as the connectors above and needs the guard.
+    modulo.connectors.ci_runner.gitlab_ci -> modulo.core.ssrf
+    # FAR-526B: the GitHub Actions CI runner pins the hardcoded api.github.com via
+    # the shared SSRF primitive, and the GitHub/Trello ticket-tracker connectors
+    # pin their base_url host. Same narrow exception for the shared security
+    # primitive as the other base_url-bearing connectors.
+    modulo.connectors.ci_runner.github_actions -> modulo.core.ssrf
+    modulo.connectors.ticket_tracker.github -> modulo.core.ssrf
+    modulo.connectors.ticket_tracker.trello -> modulo.core.ssrf
+    # FAR-526C: EVERY connector (including the fixed-vendor-host ones below) now
+    # builds its client through the pinned transport, so the whole connector
+    # egress surface imports the shared SSRF security primitive. Same narrow
+    # exception as the base_url-bearing connectors above: the connectors stay
+    # decoupled from all other core business logic; only the shared security
+    # primitive is imported.
+    modulo.connectors.asana -> modulo.core.ssrf
+    modulo.connectors.bitbucket -> modulo.core.ssrf
+    modulo.connectors.buildkite -> modulo.core.ssrf
+    modulo.connectors.circleci -> modulo.core.ssrf
+    modulo.connectors.codeclimate -> modulo.core.ssrf
+    modulo.connectors.datadog -> modulo.core.ssrf
+    modulo.connectors.discord -> modulo.core.ssrf
+    modulo.connectors.dropbox_paper -> modulo.core.ssrf
+    modulo.connectors.monday -> modulo.core.ssrf
+    modulo.connectors.microsoft_teams -> modulo.core.ssrf
+    modulo.connectors.notion -> modulo.core.ssrf
+    modulo.connectors.npm -> modulo.core.ssrf
+    modulo.connectors.opsgenie -> modulo.core.ssrf
+    modulo.connectors.pagerduty -> modulo.core.ssrf
+    modulo.connectors.pypi -> modulo.core.ssrf
+    modulo.connectors.sharepoint -> modulo.core.ssrf
+    modulo.connectors.shortcut -> modulo.core.ssrf
+    modulo.connectors.snyk -> modulo.core.ssrf
+    modulo.connectors.trello -> modulo.core.ssrf
+
+[importlinter:contract:no-concrete-runtime-provider-imports]
+name = Concrete runtime providers are only imported inside core/runtime_provider (FAR-587)
+type = forbidden
+source_modules =
+    modulo
+forbidden_modules =
+    modulo.core.runtime_provider.docker
+    modulo.core.runtime_provider.e2b
+    modulo.core.runtime_provider.local
+    modulo.core.runtime_provider.local_docker
+ignore_imports =
+    # The factory itself wires the concrete providers (build_hub lazy imports).
+    modulo.core.runtime_provider -> modulo.core.runtime_provider.docker
+    modulo.core.runtime_provider -> modulo.core.runtime_provider.e2b
+    modulo.core.runtime_provider -> modulo.core.runtime_provider.local
+    modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.docker
+    modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.e2b
+    # The deprecated local_docker adapter (ADR 003) delegates to the canonical
+    # Docker provider; it stays inside the package and is out of D2 scope.
+    modulo.core.runtime_provider.local_docker -> modulo.core.runtime_provider.docker

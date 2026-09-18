@@ -1,0 +1,17 @@
+Business Source License 1.1
+
+This package is part of Modulo and is licensed under the Business Source
+License 1.1 in the repository root (`../LICENSE`). The controlling license
+parameters are:
+
+Licensor: Farna Labs Ltd
+Additional Use Grant: Production use, including personal, internal, and
+commercial use, is permitted except offering a paid hosted or managed service
+to third parties where that service provides substantially the same
+functionality as Modulo.
+Change Date: 2029-07-12 for this distribution; each version changes three years
+after its first public release.
+Change License: Apache License, Version 2.0
+
+The complete license text is available at:
+https://github.com/farnalabs/modulo/blob/main/LICENSE

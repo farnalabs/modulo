@@ -1,0 +1,10 @@
+rules:
+  - id: empty-catch-block-ts
+    patterns:
+      - pattern: |
+          catch { }
+    message: "Empty catch block silently swallows errors — at minimum log with console.warn(err)"
+    languages: [typescript, javascript]
+    severity: ERROR
+    paths:
+      include: ["**/frontend/src/**", "**/tests/e2e/**"]
