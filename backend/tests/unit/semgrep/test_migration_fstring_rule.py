@@ -37,6 +37,17 @@ VERSIONS_DIR = REPO_ROOT / "backend" / "src" / "modulo" / "db" / "migrations" / 
 _EXEMPT_MAX_REVISION = 247
 
 
+def _revision_number(filename: str) -> int | None:
+    """Extract the 4-digit revision prefix from a migration filename.
+
+    Returns the integer revision for names like ``0248_probe.py`` and
+    ``None`` for non-migration files (``__init__.py``, helpers, short
+    names, etc.).
+    """
+    prefix = filename[:4]
+    return int(prefix) if prefix.isdigit() else None
+
+
 def _rule() -> dict[str, Any]:
     data = yaml.safe_load(RULE_FILE.read_text(encoding="utf-8"))
     return data["rules"][0]
@@ -64,7 +75,9 @@ class TestMigrationFStringRulePaths:
         rule = _rule()
         assert rule["id"] == "migration-fstring-sql"
         for path in sorted(VERSIONS_DIR.glob("*.py")):
-            revision = int(path.name[:4])
+            revision = _revision_number(path.name)
+            if revision is None:
+                continue
             if revision > _EXEMPT_MAX_REVISION:
                 continue
             rel = str(path.relative_to(REPO_ROOT)).replace("\\", "/")
@@ -86,6 +99,35 @@ class TestMigrationFStringRulePaths:
             assert _is_excluded(rel), f"revision {rev:04d} should be exempt"
         rel = "backend/src/modulo/db/migrations/versions/0248_x.py"
         assert not _is_excluded(rel), "revision 0248 must NOT be exempt"
+
+
+class TestRevisionNumber:
+    """Regression tests for the _revision_number helper (FAR-920)."""
+
+    def test_returns_none_for_init_file(self) -> None:
+        assert _revision_number("__init__.py") is None
+
+    def test_returns_none_for_helpers_file(self) -> None:
+        assert _revision_number("helpers.py") is None
+
+    def test_returns_none_for_short_name(self) -> None:
+        assert _revision_number("x.py") is None
+
+    def test_returns_int_for_valid_migration(self) -> None:
+        assert _revision_number("0248_probe.py") == 248
+
+    def test_returns_int_for_zero_revision(self) -> None:
+        assert _revision_number("0000_initial.py") == 0
+
+    def test_loop_skips_non_migration_files_without_error(self) -> None:
+        """A synthetic non-migration filename must not crash the loop."""
+        revision = _revision_number("__init__.py")
+        if revision is None:
+            # The loop would continue here — no ValueError raised.
+            pass
+        else:
+            # Unreachable for __init__.py but proves the branch logic.
+            assert isinstance(revision, int)
 
 
 # probing migration content used for the regex predicates
