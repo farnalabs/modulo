@@ -1038,6 +1038,7 @@ def test_js_inline_block_comment_only_not_counted():
 # FAR-962 end-to-end: real git diff through the unpatched code path
 # ---------------------------------------------------------------------------
 _GIT = shutil.which("git") or "git"
+_GIT_TIMEOUT_SECS = 60
 
 
 def _git(repo: Path, env: dict[str, str], *args: str) -> None:
@@ -1048,6 +1049,7 @@ def _git(repo: Path, env: dict[str, str], *args: str) -> None:
         capture_output=True,
         text=True,
         env=env,
+        timeout=_GIT_TIMEOUT_SECS,
     )
 
 
