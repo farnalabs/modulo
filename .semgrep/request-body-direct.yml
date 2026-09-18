@@ -1,8 +1,0 @@
-rules:
-  - id: request-body-direct
-    patterns:
-      - pattern: request.json()
-      - pattern: request.form()
-    message: "Use Pydantic body model instead of raw request.json() or request.form()"
-    languages: [python]
-    severity: WARNING
