@@ -2147,7 +2147,11 @@ export default {
       "org_id": "Org ID",
       "exporting_data": "Exporting data...",
       "export_ready": "Export ready",
-      "this_action_cannot_be_undone": "This action cannot be undone."
+      "this_action_cannot_be_undone": "This action cannot be undone.",
+      "community_objects": "Community Library",
+      "community_objects_description": "Control access to the community library — browse, install, and community-sourced agent execution.",
+      "community_objects_toggle": "Community objects enabled",
+      "community_objects_toggle_hint": "When disabled, community library browsing, installation, and community-sourced agent execution are blocked."
     },
     "OnboardingWizard": {
       "wire_pipeline": "Wire Pipeline",

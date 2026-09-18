@@ -93,6 +93,35 @@
       <!-- Product Analytics -->
       <ProductAnalyticsSettings />
 
+      <!-- Community Objects -->
+      <SectionCard
+        :title="$t('views.AdminOrgSettingsView.community_objects')"
+        :description="$t('views.AdminOrgSettingsView.community_objects_description')"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-medium">{{ $t('views.AdminOrgSettingsView.community_objects_toggle') }}</p>
+            <p class="text-xs text-muted-foreground">{{ $t('views.AdminOrgSettingsView.community_objects_toggle_hint') }}</p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            :aria-checked="communityObjectsEnabled"
+            :disabled="communityObjectsSaving"
+            data-testid="community-objects-toggle"
+            class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            :class="communityObjectsEnabled ? 'bg-primary' : 'bg-input'"
+            @click="toggleCommunityObjects"
+          >
+            <span
+              class="pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform"
+              :class="communityObjectsEnabled ? 'translate-x-5' : 'translate-x-0'"
+            />
+          </button>
+        </div>
+        <div v-if="communityObjectsError" class="mt-2 text-xs text-destructive">{{ communityObjectsError }}</div>
+      </SectionCard>
+
       <!-- Delete Organization -->
       <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive/80">
         <Button type="button" severity="danger" class="h-8 px-2.5" @click="deleteDialogOpen = true">
@@ -213,6 +242,41 @@ const confirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
 
+const communityObjectsEnabled = ref(true)
+const communityObjectsSaving = ref(false)
+const communityObjectsError = ref<string | null>(null)
+
+async function loadCommunityObjects() {
+  try {
+    const resp = await (api as any).GET('/api/v1/admin/org/community-objects')
+    if (!resp.error && resp.data) {
+      communityObjectsEnabled.value = resp.data.community_objects_enabled ?? true
+    }
+  } catch {
+    // fail-open: default is enabled
+  }
+}
+
+async function toggleCommunityObjects() {
+  communityObjectsSaving.value = true
+  communityObjectsError.value = null
+  try {
+    const newVal = !communityObjectsEnabled.value
+    const resp = await (api as any).PUT('/api/v1/admin/org/community-objects', {
+      body: { community_objects_enabled: newVal },
+    })
+    if (resp.error) {
+      communityObjectsError.value = formatApiError(resp.error)
+    } else {
+      communityObjectsEnabled.value = newVal
+    }
+  } catch (e: unknown) {
+    communityObjectsError.value = formatApiError(e)
+  } finally {
+    communityObjectsSaving.value = false
+  }
+}
+
 function formatDate(dateStr: string): string {
   if (!dateStr) return 'N/A'
   const d = new Date(dateStr)
@@ -278,4 +342,5 @@ async function confirmDelete() {
 }
 
 planStore.fetchPlan()
+loadCommunityObjects()
 </script>

@@ -13,6 +13,7 @@ Usage::
 """
 
 from modulo.core.runtime_config.org_flags import (
+    FLAG_COMMUNITY_OBJECTS_ENABLED,
     FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
     clear_org_flag_cache,
     is_org_flag_enabled,
@@ -30,6 +31,7 @@ from modulo.core.runtime_config.store import (
 
 __all__ = [
     "DEFAULT_VALUES",
+    "FLAG_COMMUNITY_OBJECTS_ENABLED",
     "FLAG_WORK_ITEM_AGENT_MINTING_ENABLED",
     "HOT_RELOADABLE_KEYS",
     "KNOWN_KEYS",
