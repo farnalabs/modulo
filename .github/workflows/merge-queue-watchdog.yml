@@ -1,0 +1,142 @@
+name: "Merge: Queue Watchdog"
+
+# FAR-963: Standalone watchdog that cancels stale merge-queue runs and warns
+# when the queue is stalled. Lives OUTSIDE the merge-queue concurrency group
+# so it can always run — even when a stuck run holds the merge-queue lock.
+#
+# The old "Cancel stale stuck runs" step inside merge-queue.yml's queue job
+# was chicken-and-egg: the queue job cannot start while the lock is held by
+# a stuck run, so the sweep never fires. This watchdog fixes that by running
+# in its own concurrency scope.
+
+on:
+  schedule:
+    # Off-boundary minutes dodge the scheduler sampling that drops round-boundary
+    # crons on high-activity repos (FAR-492). Intentionally offset from
+    # merge-queue.yml's own schedule (7,22,37,52) so the two don't pile on the
+    # same runner.
+    - cron: '5,20,35,50 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: merge-queue-watchdog
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  sweep:
+    name: Cancel stale stuck runs + stall warning
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 2
+    steps:
+      - name: Cancel stale stuck merge-queue runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "=== Merge-queue watchdog: sweeping for stuck runs ==="
+          NOW=$(date -u +%s)
+          CUTOFF=$((NOW - 600))  # 10 minutes
+
+          # List in-progress runs of merge-queue.yml (explicit workflow, never
+          # a wildcard). Exclude the watchdog's own run if somehow matched.
+          IN_PROGRESS=$(gh run list \
+            --workflow merge-queue.yml \
+            --status in_progress \
+            --limit 10 \
+            --json databaseId,createdAt \
+            2>/dev/null || echo "[]")
+
+          echo "$IN_PROGRESS" | jq -c '.[]' 2>/dev/null | while IFS= read -r item; do
+            RUN_ID=$(echo "$item" | jq -r '.databaseId')
+            CREATED=$(echo "$item" | jq -r '.createdAt // empty')
+
+            [ -z "$CREATED" ] && continue
+
+            # Parse ISO-8601 to epoch (works on GNU date + macOS)
+            CREATED_TS=$(date -u -d "$CREATED" +%s 2>/dev/null || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$CREATED" +%s 2>/dev/null || echo "$NOW")
+
+            if [ "$CREATED_TS" -ge "$CUTOFF" ]; then
+              echo "  Run #$RUN_ID is younger than 10 min — skipping."
+              continue
+            fi
+
+            # Check for jobs that never got a runner (started_at == null).
+            # This is the deadlock signature: the run is in_progress but its
+            # jobs are still queued with no runner assigned.
+            UNSTARTED=$(gh api \
+              "repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs" \
+              --jq '[.jobs[] | select(.started_at == null)] | length' \
+              2>/dev/null || echo "0")
+
+            if [ "$UNSTARTED" -gt 0 ]; then
+              echo "  Run #$RUN_ID has $UNSTARTED unstarted job(s) for >10 min — cancelling."
+              gh run cancel "$RUN_ID" --repo "${{ github.repository }}" 2>/dev/null \
+                && echo "  Cancelled run #$RUN_ID." \
+                || echo "  Cancel of #$RUN_ID failed (ignoring)."
+            else
+              echo "  Run #$RUN_ID has no unstarted jobs — leaving it."
+            fi
+          done
+
+          echo "Stuck-run sweep complete."
+
+      - name: Warn if queue appears stalled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # Emit a ::warning:: when the most recent successful merge-queue run
+          # is older than 30 minutes. This makes stalls visible in the Actions
+          # UI without requiring someone to watch the dashboard.
+          NOW=$(date -u +%s)
+          STALE_CUTOFF=$((NOW - 1800))  # 30 minutes ago
+
+          if [ "$STALE_CUTOFF" -eq 0 ]; then
+            echo "::warning::Could not compute staleness cutoff — skipping stall check."
+            exit 0
+          fi
+
+          LAST_SUCCESS=$(gh run list \
+            --workflow merge-queue.yml \
+            --status completed \
+            --limit 10 \
+            --json conclusion,updatedAt \
+            --jq '[.[] | select(.conclusion == "success")] | .[0].updatedAt // empty' \
+            2>/dev/null || echo "")
+
+          if [ -z "$LAST_SUCCESS" ]; then
+            echo "::warning::No successful merge-queue run found in recent history — queue may be stalled."
+            exit 0
+          fi
+
+          LAST_TS=$(date -u -d "$LAST_SUCCESS" +%s 2>/dev/null \
+            || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$LAST_SUCCESS" +%s 2>/dev/null || echo "$STALE_CUTOFF")
+
+          if [ "$LAST_TS" -lt "$STALE_CUTOFF" ]; then
+            AGE_MIN=$(( (NOW - LAST_TS) / 60 ))
+            echo "::warning::Merge queue stall detected: last successful run was $(( (NOW - LAST_TS) / 60 ))+ minutes ago ($LAST_SUCCESS). Manual intervention may be needed."
+            # Mirror to the branch-fixer webhook if configured (same HMAC
+            # pattern as merge-queue.yml conflict/failure notifications).
+            if [ -n "${MODULO_BRANCH_FIXER_WEBHOOK_URL:-}" ] && [ -n "${MODULO_BRANCH_FIXER_HMAC_SECRET:-}" ]; then
+              TIMESTAMP=$(date +%s)
+              BODY=$(jq -n \
+                --arg repo "${{ github.repository }}" \
+                --arg phase "merge-queue-stall" \
+                --arg lastSuccess "$LAST_SUCCESS" \
+                --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+                '{repository: $repo, phase: $phase, lastSuccess: $lastSuccess, runUrl: $run_url}')
+              PAYLOAD="${TIMESTAMP}.${BODY}"
+              HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$MODULO_BRANCH_FIXER_HMAC_SECRET" | sed 's/^.* //')
+              curl -s -X POST "$MODULO_BRANCH_FIXER_WEBHOOK_URL" \
+                -H "Content-Type: application/json" \
+                -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+                -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+                -d "$BODY" 2>/dev/null || true
+            fi
+          else
+            echo "Last successful merge-queue run was $(( (NOW - LAST_TS) / 60 )) minutes ago — queue is healthy."
+          fi
