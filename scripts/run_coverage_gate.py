@@ -996,8 +996,12 @@ def evaluate(
         else:
             reason = ""
     elif rc == 0:
-        passed = True
-        reason = ""
+        # diff-cover exited 0 but produced no parseable coverage line.  The
+        # no-changed-lines case returned above, so reaching here means the
+        # output was unparseable (a diff-cover output/protocol change, or
+        # truncated output).  Fail closed rather than silently passing.
+        passed = False
+        reason = f"diff-cover exited 0 but produced no parseable coverage result for {language}"
     elif _THRESHOLD_NOT_MET_RE.search(output):
         passed = False
         reason = f"coverage below threshold {fail_under}%"

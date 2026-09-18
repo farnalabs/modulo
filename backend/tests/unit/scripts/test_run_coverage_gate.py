@@ -184,6 +184,39 @@ def test_evaluate_no_changed_lines_fails(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# diff-cover exits 0 with unparseable output → FAIL closed (FAR-992)
+# ---------------------------------------------------------------------------
+def test_evaluate_unparseable_output_fails_closed(tmp_path):
+    """diff-cover exits 0 but emits no parseable coverage line → fail closed.
+
+    Regression for the latent false-pass: an rc=0 whose output carries neither
+    a ``Coverage: <pct>%`` line nor the 'no changed lines' marker silently
+    passed the gate.  It must now fail with a distinct reason.
+    """
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+
+    unparseable = "-------------\nDiff Coverage\nDiff: origin/main...HEAD, staged and unstaged changes\n-------------\n"
+
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={"src/main.py": 20}),
+        patch.object(mod, "_run_diff_cover", return_value=(0, unparseable)),
+        patch.object(mod, "_get_diff_cover_json", return_value=None),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+
+    assert result.skipped is False
+    assert result.passed is False
+    assert result.actual_pct is None
+    assert "no parseable coverage result" in result.skip_reason.lower()
+
+
+# ---------------------------------------------------------------------------
 # Coverage above threshold → pass
 # ---------------------------------------------------------------------------
 def test_evaluate_above_threshold_passes(tmp_path):
