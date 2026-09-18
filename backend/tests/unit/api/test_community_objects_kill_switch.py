@@ -6,6 +6,7 @@ Verifies:
 3. The flag read is fail-open (errors leave community objects enabled).
 """
 
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -124,3 +125,41 @@ class TestCommunityObjectsFlagFailOpen:
         result = await _community_objects_enabled(session, "org-id")
         assert result is True
         assert mock_flag is not None
+
+
+class TestCommunityObjectsFlagOwnsTransaction:
+    """Regression: the flag read must not leave an implicit transaction open.
+
+    ``read_org_flag`` issues a SELECT (SQLAlchemy autobegin). The install
+    route then opens ``async with session.begin()`` on the same session; a
+    pre-existing transaction there raises ``InvalidRequestError: A transaction
+    is already begun on this Session``, surfaced to the client as a 503.
+    """
+
+    @pytest.mark.asyncio
+    async def test_read_leaves_session_transaction_free(self) -> None:
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from modulo.api.routes.community_library import _community_objects_enabled
+
+        async def _autobegin_read(session, org_id, flag_name, *, default):
+            # A real SELECT autobegins a transaction, exactly like read_org_flag.
+            await session.execute(text("SELECT 1"))
+            return default
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as session:
+                with patch(
+                    "modulo.api.routes.community_library.read_org_flag",
+                    new=_autobegin_read,
+                ):
+                    assert await _community_objects_enabled(session, uuid.uuid4()) is True
+                assert session.in_transaction() is False
+                # The install route's own transaction can now begin cleanly.
+                async with session.begin():
+                    await session.execute(text("SELECT 1"))
+        finally:
+            await engine.dispose()
