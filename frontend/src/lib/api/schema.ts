@@ -9444,6 +9444,8 @@ export interface components {
             template_id: string | null;
             /** Agent Commands */
             agent_commands?: string[] | null;
+            /** Schema Profile */
+            schema_profile?: ("verbatim" | "provider-strict" | "runtime-sdk") | null;
         };
         /** AgentListResponse */
         AgentListResponse: {
@@ -9516,6 +9518,8 @@ export interface components {
             template_id: string | null;
             /** Agent Commands */
             agent_commands: string[] | null;
+            /** Schema Profile */
+            schema_profile?: string | null;
             /**
              * Created By
              * Format: uuid
@@ -9568,6 +9572,8 @@ export interface components {
             template_id: string | null;
             /** Agent Commands */
             agent_commands?: string[] | null;
+            /** Schema Profile */
+            schema_profile?: ("verbatim" | "provider-strict" | "runtime-sdk") | null;
         };
         /** AnalyseBundleRequest */
         AnalyseBundleRequest: {
@@ -14984,6 +14990,8 @@ export interface components {
             output_schema_json?: {
                 [key: string]: unknown;
             } | null;
+            /** Schema Profile */
+            schema_profile?: ("verbatim" | "provider-strict" | "runtime-sdk") | null;
             /** Description */
             description?: string | null;
             /**
@@ -15076,6 +15084,10 @@ export interface components {
             edges: components["schemas"]["PipelineGraphEdge"][];
             /** Validation Issues */
             validation_issues?: components["schemas"]["GraphValidationIssue"][];
+            /** Schema Translation Report */
+            schema_translation_report?: {
+                [key: string]: unknown;
+            }[];
         };
         /** PipelineGraphUpdate */
         PipelineGraphUpdate: {
@@ -23944,6 +23956,7 @@ export interface operations {
     get_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_get: {
         parameters: {
             query?: {
+                include_schema_warnings?: boolean;
                 _fresh?: boolean;
             };
             header?: never;

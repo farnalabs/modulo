@@ -60,6 +60,7 @@ def _make_agent(history: list | None = None) -> MagicMock:
     a.library_id = None
     a.required_environment_capabilities = []
     a.template_id = None
+    a.schema_profile = None
     a.created_by = _USER_ID
     a.created_at = _NOW
     a.updated_at = _NOW
@@ -232,6 +233,7 @@ class TestRollback:
         agent_after.library_id = None
         agent_after.required_environment_capabilities = []
         agent_after.template_id = None
+        agent_after.schema_profile = None
         agent_after.created_by = _USER_ID
         agent_after.created_at = _NOW
         agent_after.updated_at = _NOW

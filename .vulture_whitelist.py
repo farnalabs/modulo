@@ -82,6 +82,9 @@ __all__ = [
     # tests/unit/graph_validator/test_edges_and_sandbox_validation.py (FAR-410); the validate
     # path uses _check_node_send_budget_bindings, so vulture cannot see a prod call site.
     "_check_node_send_budget",
+    # FAR-900: RenderResult.skip_reason is read by callers/tests but vulture
+    # cannot resolve dataclass attribute reads.
+    "skip_reason",
     # FAR-802: managed workspace inputs — save-time validator wired into production
     # via GraphValidator._check_sandbox_managed_inputs (graph_validator/__init__.py),
     # api/routes/pipelines.py._validate_sandbox_agent_node, and

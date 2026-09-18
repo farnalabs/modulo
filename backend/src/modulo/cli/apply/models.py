@@ -282,6 +282,10 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     context_files: dict[str, str] | None = None
     timeout_seconds: int | None = Field(default=None, ge=60, le=604800)
     output_schema_json: dict[str, Any] | None = None
+    # FAR-900: node-level schema translation profile (API PipelineGraphNode twin).
+    # Absent/None = verbatim. Declared here so the CLI does not reject a saved
+    # graph that sets it; value rules are enforced by the real API node model.
+    schema_profile: Literal["verbatim", "provider-strict", "runtime-sdk"] | None = None
     description: str | None = Field(default=None, max_length=2000)
     stall_timeout_seconds: int | None = Field(default=None, ge=60, le=604800)
     enable_heartbeat: bool = True

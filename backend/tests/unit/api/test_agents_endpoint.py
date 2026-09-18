@@ -63,6 +63,7 @@ def _make_agent() -> MagicMock:
     a.account_id = uuid.uuid4()
     a.required_environment_capabilities = []
     a.template_id = None
+    a.schema_profile = None
     a.created_at = _NOW
     a.updated_at = _NOW
     return a
@@ -518,3 +519,41 @@ def test_rollback_prompt_foreign_org_returns_404(client: TestClient) -> None:
             json={},
         )
     assert resp.status_code == 404
+
+
+# ── FAR-900: schema_profile persists through agent creation ────────────────
+
+
+def test_create_agent_schema_profile_persists(client: TestClient) -> None:
+    """FIX 1 regression: POST with schema_profile='provider-strict' must
+    pass it through to the CRUD layer and persist it.  The old code accepted
+    schema_profile on AgentCreate but never forwarded it to create_agent(),
+    so the DB row always had schema_profile=None."""
+    agent = _make_agent()
+    agent.schema_profile = "provider-strict"
+    body = {**_AGENT_BODY, "schema_profile": "provider-strict"}
+    with (
+        patch("modulo.api.routes.agents.create_agent", return_value=agent) as mock_create,
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.post("/api/v1/agents", json=body)
+    assert resp.status_code == 201
+    assert resp.json()["schema_profile"] == "provider-strict"
+    # Verify the CRUD was called with schema_profile
+    _, kwargs = mock_create.call_args
+    assert kwargs.get("schema_profile") == "provider-strict"
+
+
+def test_create_agent_schema_profile_none_by_default(client: TestClient) -> None:
+    """Absent schema_profile on POST defaults to None (verbatim)."""
+    agent = _make_agent()
+    agent.schema_profile = None
+    with (
+        patch("modulo.api.routes.agents.create_agent", return_value=agent) as mock_create,
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.post("/api/v1/agents", json=_AGENT_BODY)
+    assert resp.status_code == 201
+    assert resp.json()["schema_profile"] is None
+    _, kwargs = mock_create.call_args
+    assert kwargs.get("schema_profile") is None

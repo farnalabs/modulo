@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -68,6 +69,7 @@ from modulo.core.reports.quality_report import (
 from modulo.core.run_context.autonomy import (
     autonomy_change_payload,
 )
+from modulo.core.schema_registry.rendering import SchemaProfile
 from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
 from modulo.core.team_visibility import (
     connector_team_mismatch_detail,
@@ -824,6 +826,11 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         default=None,
         description="Inline JSON Schema defining the node's output shape.",
     )
+    # FAR-900: node-level schema translation profile.  Absent/None = verbatim
+    # (identity, no translation).  "provider-strict" strips unsupported keywords
+    # for the target provider; "runtime-sdk" renders for the runtime's form.
+    # NO graph migration: the field is optional and defaults to verbatim.
+    schema_profile: SchemaProfile | None = None
     description: str | None = Field(default=None, max_length=2000)
     # FAR-306: opt-in stall detectors for sandbox_agent nodes. The heartbeat
     # (connection liveness) is enabled by default; the log-growth / stdout-delta
@@ -1346,6 +1353,119 @@ class PipelineGraphUpdate(BaseModel):
 
 class PipelineGraphResponse(PipelineGraphUpdate):
     validation_issues: list[GraphValidationIssue] = Field(default_factory=list)
+    # FAR-900: per-node schema translation warnings emitted at design time.
+    # Each entry: {node_id, keyword, path, message} — only populated for nodes
+    # with a schema_profile that would strip keywords.
+    schema_translation_report: list[dict[str, Any]] = Field(default_factory=list)
+
+
+async def _resolve_node_providers(
+    session: AsyncSession,
+    nodes: list[dict[str, Any]],
+    *,
+    organisation_id: uuid.UUID,
+) -> dict[str, str]:
+    """Map graph node id → its agent's model-backend provider (FAR-900).
+
+    The design-time ``schema_translation_report`` needs the target provider to
+    compute the provider-specific strip set.  The provider lives on the node's
+    Agent → ModelBackend, so resolve it here (only when the opt-in
+    ``include_schema_warnings`` flag is set).  Nodes with no agent/backend are
+    simply absent from the mapping and fall back to advisory-only warnings.
+    """
+    agent_ids: set[uuid.UUID] = set()
+    for node in nodes:
+        raw_agent = node.get("agent_id")
+        if raw_agent is None:
+            continue
+        try:
+            agent_ids.add(uuid.UUID(str(raw_agent)))
+        except (ValueError, TypeError):
+            continue
+    if not agent_ids:
+        return {}
+
+    agents = (
+        (
+            await session.execute(
+                select(Agent).where(
+                    Agent.id.in_(agent_ids),
+                    Agent.organisation_id == organisation_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    backend_ids = {a.model_backend_id for a in agents if a.model_backend_id is not None}
+    backend_provider: dict[uuid.UUID, str] = {}
+    if backend_ids:
+        backends = (
+            (
+                await session.execute(
+                    select(ModelBackend).where(
+                        ModelBackend.id.in_(backend_ids),
+                        ModelBackend.organisation_id == organisation_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        backend_provider = {b.id: b.provider for b in backends}
+
+    agent_provider = {a.id: backend_provider.get(a.model_backend_id) for a in agents if a.model_backend_id is not None}
+    providers: dict[str, str] = {}
+    for node in nodes:
+        raw_node_id = node.get("id")
+        raw_agent = node.get("agent_id")
+        if raw_node_id is None or raw_agent is None:
+            continue
+        try:
+            agent_uuid = uuid.UUID(str(raw_agent))
+        except (ValueError, TypeError):
+            continue
+        provider = agent_provider.get(agent_uuid)
+        if provider:
+            providers[str(raw_node_id)] = provider
+    return providers
+
+
+def _build_schema_translation_report(
+    nodes: list[PipelineGraphNode],
+    provider_by_node: Mapping[str, str | None] | None = None,
+) -> list[dict[str, Any]]:
+    """Compute per-node schema translation warnings for the graph response.
+
+    Only processes nodes with a non-verbatim ``schema_profile`` and an
+    ``output_schema_json``.  ``provider_by_node`` supplies each node's target
+    provider (resolved from its agent's model backend) so provider-specific
+    strips appear in the report alongside the always-advisory ones; a missing
+    entry degrades to advisory-only warnings.  Returns a list of warning dicts
+    suitable for inclusion in the ``PipelineGraphResponse``.
+    """
+    from modulo.core.schema_registry.rendering import preview_strip_warnings
+
+    providers = provider_by_node or {}
+    report: list[dict[str, Any]] = []
+    for node in nodes:
+        profile = getattr(node, "schema_profile", None)
+        if not profile or profile == "verbatim":
+            continue
+        schema = getattr(node, "output_schema_json", None)
+        if not isinstance(schema, dict):
+            continue
+        warnings = preview_strip_warnings(schema, profile, providers.get(str(node.id)))
+        report.extend(
+            {
+                "node_id": str(node.id),
+                "keyword": w.keyword,
+                "path": w.path,
+                "message": w.message,
+            }
+            for w in warnings
+        )
+    return report
 
 
 def _graph_response(
@@ -1353,6 +1473,9 @@ def _graph_response(
     edges: list[Any],
     *,
     validation_issues: list[GraphValidationIssue] | None = None,
+    schema_translation_report: list[dict[str, Any]] | None = None,
+    include_schema_warnings: bool = False,
+    provider_by_node: Mapping[str, str | None] | None = None,
 ) -> PipelineGraphResponse:
     """Serialise stored graph data into a validated response.
 
@@ -1509,10 +1632,19 @@ def _graph_response(
     # per-node/per-edge validation already performed above, and fallback
     # nodes constructed via ``model_construct`` (no Pydantic field validation)
     # would fail re-validation here.
+    # FAR-900: compute schema_translation_report only when opt-in flag is set
+    # or when an explicit report was provided (e.g. from a write path).
+    if schema_translation_report is not None:
+        report = schema_translation_report
+    elif include_schema_warnings:
+        report = _build_schema_translation_report(valid_nodes, provider_by_node)
+    else:
+        report = []
     return PipelineGraphResponse.model_construct(
         nodes=valid_nodes,
         edges=valid_edges,
         validation_issues=issues,
+        schema_translation_report=report,
     )
 
 
@@ -1912,18 +2044,36 @@ async def get_pipeline_graph_endpoint(
     # any_credential: declarative apply (FAR-681) fetches current graphs to
     # hash against declared state with mk_ org API keys.
     principal: TenantPrincipal = require_permission_any_credential("pipeline.graph.read"),
+    # FAR-900: opt-in schema_translation_report computation (expensive for
+    # large graphs).  Defaults to false; set to true to receive per-node
+    # schema translation warnings in the response.
+    include_schema_warnings: Annotated[bool, Query()] = False,
 ) -> PipelineGraphResponse:
+    node_providers: dict[str, str] = {}
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
             graph = await get_pipeline_graph(session, pipeline_id)
+            if graph is not None and include_schema_warnings:
+                # FAR-900: resolve each node's provider so the design-time
+                # report includes provider-specific strips (not just advisory).
+                node_providers = await _resolve_node_providers(
+                    session,
+                    graph[0],
+                    organisation_id=principal.organisation_id,
+                )
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     nodes, edges = graph
-    return _graph_response(nodes, edges)
+    return _graph_response(
+        nodes,
+        edges,
+        include_schema_warnings=include_schema_warnings,
+        provider_by_node=node_providers,
+    )
 
 
 def _prepare_graph_write(

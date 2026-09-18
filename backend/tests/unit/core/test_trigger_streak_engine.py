@@ -351,9 +351,10 @@ class TestMigrationBackfillGrace:
         # 0243_remove_organisations_audit_drift, and 0245_drop_organisations_created_by_fk (PR #559)
         # chains on top of 0244_pipeline_stdout_retention_config, and 0246_sso_join_gate (FAR-855)
         # chains on top of 0245_drop_organisations_created_by_fk, and 0247_sso_presets (FAR-853)
-        # chains on top of 0246_sso_join_gate, so it is now the single linear
+        # chains on top of 0246_sso_join_gate, and 0248_agent_schema_profile (FAR-900)
+        # chains on top of 0247_sso_presets, so it is now the single linear
         # head of the chain.
-        assert heads == ["0247_sso_presets"], f"expected a single head, got {heads}"
+        assert heads == ["0248_agent_schema_profile"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

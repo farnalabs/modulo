@@ -770,6 +770,14 @@ def _propagate_output_schema(
         for node in flat_nodes:
             if node.get("id") in exit_id_set:
                 node.setdefault("output_schema_json", output_schema_json)
+    # FAR-900: also propagate schema_profile to exit sub-nodes so the
+    # translation pass applies to the composite's declared output shape.
+    schema_profile = composite_node.get("schema_profile")
+    if schema_profile is not None and exit_ids:
+        exit_id_set = set(exit_ids)
+        for node in flat_nodes:
+            if node.get("id") in exit_id_set:
+                node.setdefault("schema_profile", schema_profile)
 
 
 async def expand_composites_in_graph(

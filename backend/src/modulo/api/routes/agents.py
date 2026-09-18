@@ -24,6 +24,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.prompt_optimizer import OptimizationFailedError, PromptOptimizer
+from modulo.core.schema_registry.rendering import SchemaProfile
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.agent import (
     add_prompt_version,
@@ -99,6 +100,8 @@ class AgentCreate(BaseModel):
     required_environment_capabilities: list[str]
     template_id: str | None
     agent_commands: list[str] | None = Field(default=None)
+    # FAR-900: Agent-level default schema_profile.  Absent/None = verbatim.
+    schema_profile: SchemaProfile | None = None
 
 
 class AgentUpdate(BaseModel):
@@ -116,6 +119,8 @@ class AgentUpdate(BaseModel):
     required_environment_capabilities: list[str]
     template_id: str | None
     agent_commands: list[str] | None = Field(default=None)
+    # FAR-900: Agent-level default schema_profile.
+    schema_profile: SchemaProfile | None = None
 
 
 class AgentResponse(BaseModel):
@@ -141,6 +146,8 @@ class AgentResponse(BaseModel):
     required_environment_capabilities: list[str]
     template_id: uuid.UUID | None
     agent_commands: list[str] | None
+    # FAR-900: Agent-level default schema_profile.  NULL = verbatim.
+    schema_profile: str | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
@@ -360,6 +367,7 @@ async def create_agent_endpoint(
                 library_id=req.library_id,
                 prompt_always_visible=req.prompt_always_visible,
                 required_environment_capabilities=req.required_environment_capabilities,
+                schema_profile=req.schema_profile,
             )
     except IntegrityError:
         _log.exception("agents.create_agent_endpoint")

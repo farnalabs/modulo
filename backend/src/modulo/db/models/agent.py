@@ -20,6 +20,11 @@ from modulo.db.models.base import OrgScoped
 # Repeated column type (S1192): JSON with PostgreSQL JSONB variant.
 _JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
 
+# FAR-900: valid schema_profile values — MUST match get_args(SchemaProfile) from
+# modulo.core.schema_registry.rendering.  Kept static here because the DB layer
+# must not import core (import-linter contract).  A test asserts consistency.
+_VALID_SCHEMA_PROFILES = ("verbatim", "provider-strict", "runtime-sdk")
+
 
 class Agent(OrgScoped):
     __tablename__ = "agents"
@@ -46,6 +51,11 @@ class Agent(OrgScoped):
         ),
         CheckConstraint("token_budget IS NULL OR token_budget > 0", name="ck_agents_token_budget"),
         CheckConstraint("max_input_length IS NULL OR max_input_length > 0", name="ck_agents_max_input_length"),
+        # FAR-900: schema_profile must be one of the valid literal values.
+        CheckConstraint(
+            "schema_profile IS NULL OR schema_profile IN ('verbatim', 'provider-strict', 'runtime-sdk')",
+            name="ck_agents_schema_profile",
+        ),
     )
 
     is_executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -85,3 +95,6 @@ class Agent(OrgScoped):
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    # FAR-900: Agent-level default schema_profile.  NULL = verbatim (identity).
+    # Node-level schema_profile overrides this; absent on both = verbatim.
+    schema_profile: Mapped[str | None] = mapped_column(String(30), nullable=True, default=None)
