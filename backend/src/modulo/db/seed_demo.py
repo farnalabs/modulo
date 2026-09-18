@@ -430,7 +430,12 @@ async def _get_or_create_pipeline(
     description: str,
     graph_nodes: list[dict[str, object]],
 ) -> Pipeline:
-    """Idempotently create a pipeline by (org, name)."""
+    """Idempotent create-or-converge a pipeline by (org, name).
+
+    When the row already exists, converges ``description`` and
+    ``graph_nodes_json`` to the current spec without touching identity
+    fields.  The write is a no-op when the row already matches.
+    """
     result = await session.execute(select(Pipeline).where(Pipeline.organisation_id == org.id, Pipeline.name == name))
     pipeline = result.scalar_one_or_none()
     if pipeline is None:
@@ -461,6 +466,17 @@ async def _get_or_create_pipeline(
             _log.info("demo_seed.pipeline_recovered_after_conflict", extra={"pipeline_name": name})
         else:
             _log.info("demo_seed.pipeline_created", extra={"pipeline_name": name})
+    else:
+        # Converge spec-owned fields on existing rows.
+        changed = False
+        if pipeline.description != description:
+            pipeline.description = description
+            changed = True
+        if pipeline.graph_nodes_json != graph_nodes:
+            pipeline.graph_nodes_json = graph_nodes
+            changed = True
+        if changed:
+            _log.info("demo_seed.pipeline_converged", extra={"pipeline_name": name})
     return pipeline
 
 
@@ -470,7 +486,11 @@ async def _get_or_create_snapshot(
     pipeline: Pipeline,
     graph_json: dict[str, object],
 ) -> PipelineSnapshot:
-    """Idempotently create a snapshot v1 for a pipeline."""
+    """Idempotent create-or-converge a snapshot v1 for a pipeline.
+
+    When the row already exists, converges ``graph_json`` to the current
+    spec.  The write is a no-op when the row already matches.
+    """
     result = await session.execute(
         select(PipelineSnapshot).where(
             PipelineSnapshot.pipeline_id == pipeline.id,
@@ -507,6 +527,9 @@ async def _get_or_create_snapshot(
             _log.info("demo_seed.snapshot_recovered_after_conflict", extra={"pipeline_id": str(pipeline.id)})
         else:
             _log.info("demo_seed.snapshot_created", extra={"snapshot_id": str(snapshot.id)})
+    elif snapshot.graph_json != graph_json:
+        snapshot.graph_json = graph_json
+        _log.info("demo_seed.snapshot_converged", extra={"pipeline_id": str(pipeline.id)})
     return snapshot
 
 
@@ -549,6 +572,8 @@ async def _seed_demo_pipeline_and_runs(
 
     # Deterministic, idempotent runs: fixed run_numbers with per-number
     # existence checks. Spread over 14 days with mixed statuses.
+    # Existing runs have their display fields converged and missing
+    # RunDailyFact rows backfilled.
     for (
         run_number,
         status,
@@ -560,9 +585,79 @@ async def _seed_demo_pipeline_and_runs(
         hours_into_day,
     ) in _DEMO_RUN_SPECS:
         existing_result = await session.execute(
-            select(Run.id).where(Run.organisation_id == org.id, Run.run_number == run_number)
+            select(Run).where(Run.organisation_id == org.id, Run.run_number == run_number)
         )
-        if existing_result.scalar_one_or_none() is not None:
+        existing_run = existing_result.scalar_one_or_none()
+        if existing_run is not None:
+            # Converge display fields on existing runs (never touch identity).
+            if pipeline_name not in pipeline_lookup:
+                continue
+            pipeline, snapshot = pipeline_lookup[pipeline_name]
+            started = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
+                days=days_ago, hours=-hours_into_day
+            )
+            duration_minutes = {
+                "PR Review & Triage": 4,
+                "Release Notes Generator": 8,
+                "Docs Sync": 5,
+                DEMO_PIPELINE_NAME: 3,
+            }.get(pipeline_name, 4)
+            completed = started + timedelta(minutes=duration_minutes)
+            changed = False
+            for attr, val in (
+                ("status", status),
+                ("total_tokens", total_tokens),
+                ("total_cost_usd", Decimal(str(total_cost_usd))),
+                ("started_at", started),
+                ("completed_at", completed if status != "awaiting_human" else None),
+                ("pipeline_id", pipeline.id),
+                ("snapshot_id", snapshot.id),
+                ("error_detail", "Demo sample failure — no real work was performed." if status == "failed" else None),
+                ("error_code", "DEMO_SAMPLE" if status == "failed" else None),
+            ):
+                if getattr(existing_run, attr) != val:
+                    setattr(existing_run, attr, val)
+                    changed = True
+            if changed:
+                _log.info("demo_seed.run_converged", extra={"run_number": run_number})
+
+            # Backfill missing RunDailyFact for this run.
+            fact_result = await session.execute(
+                select(RunDailyFact.id).where(RunDailyFact.run_id == existing_run.id).limit(1)
+            )
+            if fact_result.scalar_one_or_none() is None:
+                try:
+                    async with session.begin_nested():
+                        # nosemgrep: raw-status-complete — seed script, not routing code.
+                        is_terminal = status in ("complete", "failed")
+                        fact = RunDailyFact(
+                            organisation_id=org.id,
+                            run_id=existing_run.id,
+                            run_date=started.date(),
+                            pipeline_id=pipeline.id,
+                            pipeline_name=pipeline_name,
+                            trigger_type=trigger_type,
+                            status=status,
+                            total_cost_usd=Decimal(str(total_cost_usd)),
+                            total_tokens=total_tokens,
+                            duration_ms=(int((completed - started).total_seconds() * 1000) if is_terminal else None),
+                            run_number=run_number,
+                            started_at=started,
+                            completed_at=completed if is_terminal else None,
+                        )
+                        session.add(fact)
+                        await session.flush()
+                except IntegrityError:
+                    _log.info(
+                        "demo_seed.daily_fact_recovered_after_conflict",
+                        extra={"run_number": run_number},
+                    )
+                except Exception as exc:
+                    _log.warning(
+                        "demo_seed.daily_fact_write_failed run=%s: %s",
+                        existing_run.id,
+                        _safe_exc_text(exc),
+                    )
             continue
 
         if pipeline_name not in pipeline_lookup:
@@ -674,35 +769,49 @@ async def _seed_demo_agents(session: AsyncSession, org: Organisation, account: A
     """Idempotent demo agents (FAR-977).
 
     Race-safe: savepoint + IntegrityError recovery on the (org, name) key.
+    Existing rows are converged to the current spec (description,
+    prompt_template).
     """
     for spec in _DEMO_AGENT_SPECS:
         name = str(spec["name"])
         result = await session.execute(select(Agent).where(Agent.organisation_id == org.id, Agent.name == name))
-        if result.scalar_one_or_none() is not None:
-            continue
-        agent = Agent(
-            organisation_id=org.id,
-            name=name,
-            description=str(spec["description"]),
-            prompt_template=str(spec["prompt_template"]),
-            account_id=account.id,
-            is_executable=True,
-            prompt_version_history=[],
-            connector_type_refs=[],
-            required_environment_capabilities=[],
-            retry_policy={},
-        )
-        try:
-            async with session.begin_nested():
-                session.add(agent)
-                await session.flush()
-        except IntegrityError:
-            result = await session.execute(select(Agent).where(Agent.organisation_id == org.id, Agent.name == name))
-            if result.scalar_one_or_none() is None:
-                raise
-            _log.info("demo_seed.agent_recovered_after_conflict", extra={"agent_name": name})
+        agent = result.scalar_one_or_none()
+        if agent is None:
+            agent = Agent(
+                organisation_id=org.id,
+                name=name,
+                description=str(spec["description"]),
+                prompt_template=str(spec["prompt_template"]),
+                account_id=account.id,
+                is_executable=True,
+                prompt_version_history=[],
+                connector_type_refs=[],
+                required_environment_capabilities=[],
+                retry_policy={},
+            )
+            try:
+                async with session.begin_nested():
+                    session.add(agent)
+                    await session.flush()
+            except IntegrityError:
+                result = await session.execute(select(Agent).where(Agent.organisation_id == org.id, Agent.name == name))
+                agent = result.scalar_one_or_none()
+                if agent is None:
+                    raise
+                _log.info("demo_seed.agent_recovered_after_conflict", extra={"agent_name": name})
+            else:
+                _log.info("demo_seed.agent_created", extra={"agent_name": name})
         else:
-            _log.info("demo_seed.agent_created", extra={"agent_name": name})
+            # Converge spec-owned fields on existing rows.
+            changed = False
+            if agent.description != str(spec["description"]):
+                agent.description = str(spec["description"])
+                changed = True
+            if agent.prompt_template != str(spec["prompt_template"]):
+                agent.prompt_template = str(spec["prompt_template"])
+                changed = True
+            if changed:
+                _log.info("demo_seed.agent_converged", extra={"agent_name": name})
 
 
 async def _seed_demo_triggers(
@@ -714,7 +823,8 @@ async def _seed_demo_triggers(
     """Idempotent demo triggers: a webhook (PR events) and a cron (daily release notes).
 
     Race-safe: savepoint + IntegrityError recovery on the (pipeline, trigger_type,
-    config) key. Triggers are linked to existing pipelines.
+    config) key. Triggers are linked to existing pipelines.  Existing rows are
+    converged to the current spec (config_json).
     """
     # Webhook trigger on PR Review & Triage pipeline.
     pr_pipeline, _ = pipeline_lookup["PR Review & Triage"]
@@ -725,19 +835,21 @@ async def _seed_demo_triggers(
             Trigger.trigger_type == "webhook",
         )
     )
-    if webhook_result.scalar_one_or_none() is None:
+    existing_webhook = webhook_result.scalar_one_or_none()
+    webhook_config = {
+        # No HMAC secret: the demo webhook is intentionally public-run-creation
+        # (ADR 017). The demo viewer cannot trigger runs — the endpoint is
+        # gated on the unguessable trigger id and the viewer role is read-only.
+        "events": ["pull_request"],
+        "payload_mapping": {},
+    }
+    if existing_webhook is None:
         trigger = Trigger(
             organisation_id=org.id,
             pipeline_id=pr_pipeline.id,
             trigger_type="webhook",
             active=True,
-            config_json={
-                # Intentional non-secret placeholder for the read-only
-                # demo — not a leaked credential.
-                "secret": "demo-webhook-secret",
-                "events": ["pull_request"],
-                "payload_mapping": {},
-            },
+            config_json=webhook_config,
             account_id=account.id,
         )
         try:
@@ -748,6 +860,9 @@ async def _seed_demo_triggers(
             _log.info("demo_seed.webhook_trigger_recovered", extra={"org_id": str(org.id)})
         else:
             _log.info("demo_seed.webhook_trigger_created", extra={"trigger_id": str(trigger.id)})
+    elif existing_webhook.config_json != webhook_config:
+        existing_webhook.config_json = webhook_config
+        _log.info("demo_seed.webhook_trigger_converged", extra={"org_id": str(org.id)})
 
     # Cron trigger on Release Notes Generator pipeline.
     rn_pipeline, _ = pipeline_lookup["Release Notes Generator"]
@@ -758,7 +873,9 @@ async def _seed_demo_triggers(
             Trigger.trigger_type == "cron",
         )
     )
-    if cron_result.scalar_one_or_none() is None:
+    existing_cron = cron_result.scalar_one_or_none()
+    cron_config = {"description": "Weekly release notes generation"}
+    if existing_cron is None:
         trigger = Trigger(
             organisation_id=org.id,
             pipeline_id=rn_pipeline.id,
@@ -766,7 +883,7 @@ async def _seed_demo_triggers(
             active=True,
             cron_expression="0 9 * * 1",
             cron_timezone="UTC",
-            config_json={"description": "Weekly release notes generation"},
+            config_json=cron_config,
             account_id=account.id,
         )
         try:
@@ -777,6 +894,9 @@ async def _seed_demo_triggers(
             _log.info("demo_seed.cron_trigger_recovered", extra={"org_id": str(org.id)})
         else:
             _log.info("demo_seed.cron_trigger_created", extra={"trigger_id": str(trigger.id)})
+    elif existing_cron.config_json != cron_config:
+        existing_cron.config_json = cron_config
+        _log.info("demo_seed.cron_trigger_converged", extra={"org_id": str(org.id)})
 
 
 async def _select_demo_org(session: AsyncSession) -> Organisation | None:
@@ -1022,7 +1142,8 @@ async def _seed_demo_schemas(session: AsyncSession, org: Organisation, account: 
     Race-safe across multi-instance boots like the org/account/membership
     inserts: each insert runs in a savepoint; a concurrent boot that already
     committed the natural key only rolls back that savepoint, and the seed
-    adopts the winner row and continues.
+    adopts the winner row and continues.  Existing rows are converged to the
+    current spec (description + SchemaVersion definition_json).
     """
     for spec in _DEMO_SCHEMA_SPECS:
         result = await session.execute(
@@ -1052,6 +1173,10 @@ async def _seed_demo_schemas(session: AsyncSession, org: Organisation, account: 
                 _log.info("demo_seed.schema_recovered_after_conflict", extra={"schema_name": spec["name"]})
             else:
                 _log.info("demo_seed.schema_created", extra={"schema_name": spec["name"]})
+        elif schema.description != str(spec["description"]):
+            schema.description = str(spec["description"])
+            _log.info("demo_seed.schema_converged", extra={"schema_name": spec["name"]})
+
         version_result = await session.execute(
             select(SchemaVersion).where(
                 SchemaVersion.schema_id == schema.id,
@@ -1059,7 +1184,16 @@ async def _seed_demo_schemas(session: AsyncSession, org: Organisation, account: 
                 SchemaVersion.organisation_id == org.id,
             )
         )
-        if version_result.scalar_one_or_none() is not None:
+        existing_version = version_result.scalar_one_or_none()
+        if existing_version is not None:
+            # Converge definition_json on existing published versions.
+            desired_def = spec["definition"]
+            if existing_version.definition_json != desired_def:
+                existing_version.definition_json = desired_def  # type: ignore[assignment]
+                _log.info(
+                    "demo_seed.schema_version_converged",
+                    extra={"schema_name": spec["name"], "version": "v1"},
+                )
             continue
         try:
             # Savepoint: same multi-boot protection for the version row.

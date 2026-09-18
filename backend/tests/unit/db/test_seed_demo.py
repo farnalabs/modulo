@@ -21,6 +21,7 @@ parameters (which embed the demo account's bcrypt password hash).
 import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import func, select
@@ -943,3 +944,482 @@ def test_seed_failure_log_and_print_never_leak_bind_parameters(
     # Still diagnosable: exception type + message survive the sanitization.
     assert "IntegrityError" in combined
     assert "demo_seed.failed" in log_text
+
+
+# ---------------------------------------------------------------------------
+# Convergence tests (FAR-977 Part 2): exercise the update-existing-row paths.
+# Each test modifies an entity after the first seed, re-seeds, and verifies
+# the seed converged the row to the current spec.
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_converges_pipeline_description_and_graph(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pipeline description and graph_nodes_json are converged to the spec."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    pipeline = (await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))).scalar_one()
+    # Mutate description + graph away from spec.
+    pipeline.description = "stale description"
+    pipeline.graph_nodes_json = [{"id": "stale"}]
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged = (
+        await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))
+    ).scalar_one()
+    assert converged.description == "Demo sample pipeline — read-only demo data (FAR-535)."
+    # graph_nodes_json is the 4-node demo pipeline graph.
+    assert len(converged.graph_nodes_json) == 4  # type: ignore[arg-type]
+
+
+async def test_seed_converges_snapshot_graph_json(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PipelineSnapshot graph_json is converged to the current pipeline spec."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    pipeline = (await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))).scalar_one()
+    snapshot = (
+        await session.execute(
+            select(PipelineSnapshot).where(
+                PipelineSnapshot.pipeline_id == pipeline.id,
+                PipelineSnapshot.snapshot_version == 1,
+            )
+        )
+    ).scalar_one()
+    snapshot.graph_json = {"nodes": [], "edges": []}
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged_snapshot = (
+        await session.execute(
+            select(PipelineSnapshot).where(
+                PipelineSnapshot.pipeline_id == pipeline.id,
+                PipelineSnapshot.snapshot_version == 1,
+            )
+        )
+    ).scalar_one()
+    assert converged_snapshot.graph_json != {"nodes": [], "edges": []}
+    assert len(converged_snapshot.graph_json["nodes"]) == 4  # type: ignore[index]
+
+
+async def test_seed_converges_schema_description_and_definition(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Schema description and SchemaVersion definition_json are converged."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    schema = (await session.execute(select(Schema).where(Schema.name == "Demo Intake"))).scalar_one()
+    schema.description = "stale schema desc"
+    version = (
+        await session.execute(
+            select(SchemaVersion).where(
+                SchemaVersion.schema_id == schema.id,
+                SchemaVersion.version == "v1",
+            )
+        )
+    ).scalar_one()
+    version.definition_json = {"type": "object", "properties": {}}
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged = (await session.execute(select(Schema).where(Schema.name == "Demo Intake"))).scalar_one()
+    assert converged.description == "Demo sample: intake payload"
+    converged_version = (
+        await session.execute(
+            select(SchemaVersion).where(
+                SchemaVersion.schema_id == converged.id,
+                SchemaVersion.version == "v1",
+            )
+        )
+    ).scalar_one()
+    assert converged_version.definition_json == {
+        "type": "object",
+        "properties": {"title": {"type": "string"}, "summary": {"type": "string"}},
+        "required": ["title"],
+    }
+
+
+async def test_seed_converges_agent_description_and_prompt(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Agent description and prompt_template are converged to spec."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    agent = (await session.execute(select(Agent).where(Agent.name == "AI Code Reviewer"))).scalar_one()
+    agent.description = "stale agent desc"
+    agent.prompt_template = "stale prompt"
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged = (await session.execute(select(Agent).where(Agent.name == "AI Code Reviewer"))).scalar_one()
+    assert "Analyses code changes" in converged.description
+    assert "code reviewer" in converged.prompt_template
+
+
+async def test_seed_converges_trigger_config_json(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Trigger config_json is converged to the current spec."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    webhook_trigger = (await session.execute(select(Trigger).where(Trigger.trigger_type == "webhook"))).scalar_one()
+    webhook_trigger.config_json = {"stale": True}
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged = (await session.execute(select(Trigger).where(Trigger.trigger_type == "webhook"))).scalar_one()
+    assert converged.config_json == {
+        "events": ["pull_request"],
+        "payload_mapping": {},
+    }
+
+
+async def test_seed_converges_cron_trigger_config_json(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cron trigger config_json is converged to the current spec."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    cron_trigger = (await session.execute(select(Trigger).where(Trigger.trigger_type == "cron"))).scalar_one()
+    cron_trigger.config_json = {"stale": True}
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged = (await session.execute(select(Trigger).where(Trigger.trigger_type == "cron"))).scalar_one()
+    assert converged.config_json == {"description": "Weekly release notes generation"}
+
+
+async def test_seed_backfills_missing_daily_fact_for_existing_run(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing RunDailyFact for an existing run is backfilled on re-seed."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
+    # Delete the daily fact for run 1.
+    fact = (await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == run.id))).scalar_one()
+    await session.delete(fact)
+    await session.commit()
+
+    # Verify it's gone.
+    assert await _count(session, RunDailyFact) == 19
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    # The fact should be backfilled.
+    assert await _count(session, RunDailyFact) == 20
+    backfilled = (await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == run.id))).scalar_one()
+    assert backfilled.status == "complete"
+    assert backfilled.run_number == 1
+
+
+async def test_seed_converges_run_display_fields(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing runs' display fields are converged to the spec."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
+    # Mutate display fields away from spec — use valid status values.
+    run.status = "failed"
+    run.total_tokens = 0
+    run.total_cost_usd = Decimal(0)
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
+    assert converged.status == "complete"
+    assert converged.total_tokens == 1840
+    assert converged.total_cost_usd == Decimal("0.0042")
+
+
+async def test_seed_logs_convergence(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Re-seeding with changed entities logs convergence events."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    # Mutate pipeline to trigger convergence.
+    pipeline = (await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))).scalar_one()
+    pipeline.description = "stale"
+    await session.commit()
+
+    with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged_msgs = [r for r in caplog.records if "converged" in r.getMessage()]
+    assert len(converged_msgs) >= 1
+
+
+async def test_seed_does_not_touch_non_demo_org(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Convergence only affects the demo org, never a second org."""
+    other_account = Account(
+        email="other@example.com",
+        display_name="Other",
+        password_hash=hash_password("other-passphrase-123"),
+        auth_provider="local",
+        active=True,
+    )
+    other_org = Organisation(name="Other", slug="other", settings_json={})
+    session.add(other_account)
+    session.add(other_org)
+    await session.flush()
+    other_pipeline = Pipeline(
+        organisation_id=other_org.id,
+        name="Other Pipeline",
+        description="original",
+        account_id=other_account.id,
+        visibility="org",
+        graph_nodes_json=[],
+        default_autonomy_level="manual_approval",
+    )
+    session.add(other_pipeline)
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    other = (await session.execute(select(Pipeline).where(Pipeline.name == "Other Pipeline"))).scalar_one()
+    assert other.description == "original"
+
+
+async def test_seed_converges_pipeline_idempotent_on_second_run(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Second seed with no mutations only logs time-dependent run convergence, not entity convergence."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        await _run_seed(session, monkeypatch, _demo_settings())
+
+    # Only run_converged (timestamps drift) should appear — no pipeline/snapshot/schema/agent/trigger convergence.
+    entity_converged = [
+        r for r in caplog.records if "converged" in r.getMessage() and "run_converged" not in r.getMessage()
+    ]
+    assert not entity_converged
+
+
+# ---------------------------------------------------------------------------
+# Exception handler coverage: exercise the best-effort try/except paths.
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_run_outputs_write_failure_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When replace_run_node_outputs raises, the seed logs a warning and continues."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    # The function is lazily imported inside seed_demo, so we mock it at its
+    # source module path.
+    async def _explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("node outputs write exploded")
+
+    monkeypatch.setattr(
+        "modulo.db.crud.run_node_outputs.replace_run_node_outputs",
+        _explode,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        # Delete a run to force fresh creation through the node-outputs path.
+        run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
+        await session.delete(run)
+        await session.commit()
+
+        await _run_seed(session, monkeypatch, _demo_settings())
+
+    warnings = [r for r in caplog.records if "run_outputs_write_failed" in r.getMessage()]
+    assert warnings, "Expected run_outputs_write_failed warning"
+
+
+async def test_seed_daily_fact_integrity_error_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When RunDailyFact insert hits IntegrityError, the seed logs and continues."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    # Force the daily-fact insert path to raise IntegrityError by making
+    # the session.flush raise when RunDailyFact is pending.
+    real_flush = session.flush
+
+    async def _fact_integrity_flush() -> None:
+        pending_types = {type(obj) for obj in session.new}
+        if RunDailyFact in pending_types:
+            raise IntegrityError("simulated PK conflict", None, Exception("uq_conflict"))
+        return await real_flush()
+
+    session.flush = _fact_integrity_flush  # type: ignore[method-assign]
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            # Delete all daily facts so the seed tries to re-create them.
+            facts = list((await session.execute(select(RunDailyFact))).scalars())
+            for f in facts:
+                await session.delete(f)
+            await session.commit()
+
+            await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        session.flush = real_flush  # type: ignore[method-assign]
+
+    recovered = [r for r in caplog.records if "daily_fact_recovered_after_conflict" in r.getMessage()]
+    assert recovered, "Expected daily_fact_recovered_after_conflict log"
+
+
+async def test_seed_daily_fact_generic_exception_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When RunDailyFact creation raises a non-IntegrityError, it's logged and swallowed."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    real_flush = session.flush
+
+    async def _fact_generic_flush() -> None:
+        pending_types = {type(obj) for obj in session.new}
+        if RunDailyFact in pending_types:
+            raise RuntimeError("daily fact write exploded")
+        return await real_flush()
+
+    session.flush = _fact_generic_flush  # type: ignore[method-assign]
+    try:
+        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+            facts = list((await session.execute(select(RunDailyFact))).scalars())
+            for f in facts:
+                await session.delete(f)
+            await session.commit()
+
+            await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        session.flush = real_flush  # type: ignore[method-assign]
+
+    warnings = [r for r in caplog.records if "daily_fact_write_failed" in r.getMessage()]
+    assert warnings, "Expected daily_fact_write_failed warning"
+
+
+# ---------------------------------------------------------------------------
+# Lines 662, 666: unknown-pipeline skip in the new-run creation path.
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_skips_run_for_unknown_pipeline(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A run spec referencing a pipeline not in the lookup is skipped with a warning."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    original_specs = seed_demo_module._DEMO_RUN_SPECS
+    # Inject a spec with an unknown pipeline name.
+    augmented = [
+        *original_specs,
+        (99, "complete", "manual", "Nonexistent Pipeline", 100, 0.001, 0, 1),
+    ]
+    monkeypatch.setattr(seed_demo_module, "_DEMO_RUN_SPECS", augmented)
+    try:
+        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+            await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        monkeypatch.setattr(seed_demo_module, "_DEMO_RUN_SPECS", original_specs)
+
+    warnings = [r for r in caplog.records if "run_spec_unknown_pipeline" in r.getMessage()]
+    assert warnings, "Expected run_spec_unknown_pipeline warning"
+    # The unknown-pipeline run must not have been created.
+    assert await _count(session, Run) == 20
+
+
+# ---------------------------------------------------------------------------
+# Lines 754-757: daily-fact handlers in the NEW-run creation path.
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_new_run_daily_fact_integrity_error_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When a newly created run's daily-fact insert hits IntegrityError, it's logged and swallowed."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    # Delete run 1 so re-seed must create it fresh, then make the daily-fact
+    # flush raise IntegrityError to hit lines 754-755.
+    real_flush = session.flush
+
+    async def _fact_integrity_flush() -> None:
+        pending_types = {type(obj) for obj in session.new}
+        if RunDailyFact in pending_types:
+            raise IntegrityError("simulated PK conflict", None, Exception("uq_conflict"))
+        return await real_flush()
+
+    session.flush = _fact_integrity_flush  # type: ignore[method-assign]
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
+            await session.delete(run)
+            await session.commit()
+
+            await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        session.flush = real_flush  # type: ignore[method-assign]
+
+    recovered = [r for r in caplog.records if "daily_fact_recovered_after_conflict" in r.getMessage()]
+    assert recovered, "Expected daily_fact_recovered_after_conflict log for new-run path"
+
+
+async def test_seed_new_run_daily_fact_generic_exception_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When a newly created run's daily-fact write raises a generic error, it's logged and swallowed."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    real_flush = session.flush
+
+    async def _fact_generic_flush() -> None:
+        pending_types = {type(obj) for obj in session.new}
+        if RunDailyFact in pending_types:
+            raise RuntimeError("daily fact write exploded")
+        return await real_flush()
+
+    session.flush = _fact_generic_flush  # type: ignore[method-assign]
+    try:
+        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+            run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
+            await session.delete(run)
+            await session.commit()
+
+            await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        session.flush = real_flush  # type: ignore[method-assign]
+
+    warnings = [r for r in caplog.records if "daily_fact_write_failed" in r.getMessage()]
+    assert warnings, "Expected daily_fact_write_failed warning for new-run path"
+
+
+# ---------------------------------------------------------------------------
+# Line 1009: team-membership IntegrityError handler.
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_team_membership_integrity_error_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When a team-membership insert hits IntegrityError, the seed logs and continues."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    real_flush = session.flush
+
+    async def _membership_integrity_flush() -> None:
+        pending_types = {type(obj) for obj in session.new}
+        if TeamMembership in pending_types:
+            raise IntegrityError("simulated team membership conflict", None, Exception("uq"))
+        return await real_flush()
+
+    session.flush = _membership_integrity_flush  # type: ignore[method-assign]
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            # Delete the team membership so the seed tries to re-create it.
+            membership = (await session.execute(select(TeamMembership))).scalar_one()
+            await session.delete(membership)
+            await session.commit()
+
+            await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        session.flush = real_flush  # type: ignore[method-assign]
+
+    recovered = [r for r in caplog.records if "team_membership_recovered_after_conflict" in r.getMessage()]
+    assert recovered, "Expected team_membership_recovered_after_conflict log"
