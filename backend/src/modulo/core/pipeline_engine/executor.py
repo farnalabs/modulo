@@ -2443,12 +2443,19 @@ class PipelineExecutor:
             agent_granted_connector_types,
             compute_run_fetch_scope,
         )
-        from modulo.core.runtime_config import FLAG_COMMUNITY_OBJECTS_ENABLED, is_org_flag_enabled
+        from modulo.core.runtime_config import FLAG_COMMUNITY_OBJECTS_ENABLED, read_org_flag
         from modulo.db.models.agent import Agent
         from modulo.db.models.collection_install import CollectionInstall
 
-        # FAR-959: check the org-level community objects kill switch.
-        community_objects_on = await is_org_flag_enabled(session, org_id, FLAG_COMMUNITY_OBJECTS_ENABLED)
+        # FAR-959: check the org-level community objects kill switch. This flag
+        # defaults ON, so read it fail-open: an absent flag or a DB read error
+        # must leave community objects enabled (the primary FAR-764 default-deny
+        # grant gate below still applies regardless of this switch).
+        try:
+            community_objects_on = await read_org_flag(session, org_id, FLAG_COMMUNITY_OBJECTS_ENABLED, default=True)
+        except Exception:
+            _log.exception("executor.community_objects_flag_read_failed", extra={"org_id": str(org_id)})
+            community_objects_on = True
 
         agent_ids = _connector_scope_agent_ids(graph_json)
         grants: dict[str, set[str]] = {}
