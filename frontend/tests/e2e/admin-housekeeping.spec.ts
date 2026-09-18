@@ -1,14 +1,25 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginForSystemRoute } from './setup/fixtures'
 
 test.describe('Admin Housekeeping', { tag: "@regression" }, () => {
-  // FAR-938 gates the SYSTEM sidebar group (and every route in it) on the
-  // is_system_admin JWT claim. No e2e identity holds that claim, so the
-  // router guard redirects this route to the dashboard. Rendering is covered
-  // by AdminHousekeepingView.spec.ts at the unit level.
-  test('redirects a non-system-admin away from the Housekeeping page', { tag: "@regression" }, async ({ page, env }) => {
-    await loginAsAdmin(page, env)
+  test('renders the Housekeeping page', { tag: "@regression" }, async ({ page, env }) => {
+    const systemAdmin = await loginForSystemRoute(page, env)
     await page.goto('/admin/housekeeping')
-    await expect(page).toHaveURL(/\/$/)
-    await expect(page.locator('h1')).toContainText('Dashboard')
+    if (!systemAdmin) {
+      // FAR-938: the SYSTEM sidebar group is system-admin-only. The staging/prod
+      // e2e identity is a regular org admin, so the router guard redirects to '/'.
+      await expect(page).toHaveURL(/\/$/)
+      await expect(page.locator('h1')).toContainText('Dashboard')
+      return
+    }
+    await expect(page).toHaveURL(/\/admin\/housekeeping$/)
+    await expect(page.locator('h1')).toContainText('Housekeeping')
+    await expect(page.getByTestId('hk-refresh')).toBeVisible()
+    await expect(page.getByTestId('hk-checkpoint-retention')).toBeVisible()
+    if (env.name === 'local') {
+      await expect(page.getByTestId('hk-empty')).toBeVisible()
+      await expect(page.getByText('All Clean!')).toBeVisible()
+      await expect(page.getByTestId('hk-ckpt-max-age')).toBeVisible()
+      await expect(page.getByTestId('hk-ckpt-purge')).toBeVisible()
+    }
   })
 })
