@@ -45,6 +45,11 @@ _NOLOGIN_ROLE: str = "role_nologin_example"
 
 _BREAK_GLASS_COLS = ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
 
+# Shared invalid role names used across parametrisation fixtures — must stay
+# in one place so the lists cannot drift apart.
+_INVALID_ROLE_NAMES: list[str] = ["bad;role", "bad role", "Bad-Case"]
+_INVALID_ROLE_IDS: list[str] = ["semicolon", "space", "uppercase-dash"]
+
 
 def _params(query: str) -> list[str]:
     """Extract the bound parameters from an asyncpg query (``$1`` etc.)."""
@@ -481,8 +486,8 @@ class TestApplyAccountsAllowList:
 
     @pytest.mark.parametrize(
         "bad_name",
-        ["bad;role", "bad role", "Bad-Case"],
-        ids=["semicolon", "space", "uppercase-dash"],
+        _INVALID_ROLE_NAMES,
+        ids=_INVALID_ROLE_IDS,
     )
     async def test_rejects_invalid_role_name_before_execute(self, bad_name: str) -> None:
         """Defence-in-depth: invalid role name raises before any DDL reaches the connection."""
@@ -542,8 +547,8 @@ class TestGrantBreakGlass:
 
     @pytest.mark.parametrize(
         "bad_name",
-        ["bad;role", "bad role", "Bad-Case"],
-        ids=["semicolon", "space", "uppercase-dash"],
+        _INVALID_ROLE_NAMES,
+        ids=_INVALID_ROLE_IDS,
     )
     async def test_rejects_invalid_role_name_before_execute(self, bad_name: str) -> None:
         """Defence-in-depth: invalid role name raises before any DDL reaches the connection."""
