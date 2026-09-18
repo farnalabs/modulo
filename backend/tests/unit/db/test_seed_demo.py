@@ -38,7 +38,10 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.schema import Schema, SchemaVersion
+from modulo.db.models.team import Team
+from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 from modulo.db.seed_demo import seed_demo, seed_demo_runtime
 from modulo.settings import Settings
@@ -136,8 +139,8 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, Organisation) == 1
     assert await _count(session, Account) == 1
     assert await _count(session, OrgMembership) == 1
-    # FAR-977: expanded to 5 schemas (GitHub PR, Linear Issue, Release Notes,
-    # Code Review Result, plus the original Demo Intake + Demo Report).
+    # FAR-977: expanded to 5 schemas (Demo Intake, Demo Report,
+    # GitHub Pull Request, Linear Issue, Release Notes).
     assert await _count(session, Schema) == 5
     assert await _count(session, SchemaVersion) == 5
     # FAR-977: 4 pipelines (original + PR Review & Triage + Release Notes Generator + Docs Sync).
@@ -146,18 +149,11 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     # FAR-977: 20 runs spread over 14 days.
     assert await _count(session, Run) == 20
     # FAR-977: team + membership.
-    from modulo.db.models.team import Team
-    from modulo.db.models.team_membership import TeamMembership
-
     assert await _count(session, Team) == 1
     assert await _count(session, TeamMembership) == 1
     # FAR-977: 2 agents.
-    from modulo.db.models.agent import Agent
-
     assert await _count(session, Agent) == 2
     # FAR-977: 2 triggers (webhook + cron).
-    from modulo.db.models.trigger import Trigger
-
     assert await _count(session, Trigger) == 2
 
     org = (await _orgs(session))[0]
@@ -198,6 +194,11 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "pipelines": await _count(session, Pipeline),
         "snapshots": await _count(session, PipelineSnapshot),
         "runs": await _count(session, Run),
+        "teams": await _count(session, Team),
+        "team_memberships": await _count(session, TeamMembership),
+        "agents": await _count(session, Agent),
+        "triggers": await _count(session, Trigger),
+        "run_daily_facts": await _count(session, RunDailyFact),
     }
 
     await _run_seed(session, monkeypatch, _demo_settings())
@@ -211,6 +212,11 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "pipelines": await _count(session, Pipeline),
         "snapshots": await _count(session, PipelineSnapshot),
         "runs": await _count(session, Run),
+        "teams": await _count(session, Team),
+        "team_memberships": await _count(session, TeamMembership),
+        "agents": await _count(session, Agent),
+        "triggers": await _count(session, Trigger),
+        "run_daily_facts": await _count(session, RunDailyFact),
     }
     assert counts_second == counts_first
     # FAR-977: 20 runs in the expanded seed.
@@ -294,6 +300,31 @@ async def test_seed_scopes_entities_to_demo_org_with_second_org_present(
         (await session.execute(select(OrgMembership).where(OrgMembership.account_id == demo_account.id))).scalars()
     )
     assert {membership.organisation_id for membership in demo_memberships} == {demo_org.id}
+
+    # FAR-977: verify scoping for expanded entity types.
+    agents = list((await session.execute(select(Agent))).scalars())
+    assert agents, "seed must create demo agents"
+    assert {a.organisation_id for a in agents} == {demo_org.id}
+
+    triggers = list((await session.execute(select(Trigger))).scalars())
+    assert triggers, "seed must create demo triggers"
+    assert {t.organisation_id for t in triggers} == {demo_org.id}
+
+    teams = list((await session.execute(select(Team))).scalars())
+    assert teams, "seed must create demo team"
+    assert {t.organisation_id for t in teams} == {demo_org.id}
+
+    team_memberships = list((await session.execute(select(TeamMembership))).scalars())
+    assert team_memberships, "seed must create demo team membership"
+    assert {tm.organisation_id for tm in team_memberships} == {demo_org.id}
+
+    daily_facts = list((await session.execute(select(RunDailyFact))).scalars())
+    assert daily_facts, "seed must create run daily facts"
+    assert {f.organisation_id for f in daily_facts} == {demo_org.id}
+
+    snapshots = list((await session.execute(select(PipelineSnapshot))).scalars())
+    assert snapshots, "seed must create pipeline snapshots"
+    assert {s.organisation_id for s in snapshots} == {demo_org.id}
 
 
 async def test_seed_logs_previous_role_on_drift_reset(

@@ -16,11 +16,11 @@ Creates (idempotently, NO Alembic migrations):
   every route via ``require_permission``; the seed also forces the role BACK to
   viewer if it drifted, and forces ``is_system_admin`` off),
 * a ``Demo Engineering`` team with the demo user as a viewer member,
-* 4 published schemas with realistic JSON Schema definitions (GitHub PR,
-  Linear issue, release notes, code review result),
+* 5 published schemas with realistic JSON Schema definitions (Demo Intake,
+  Demo Report, GitHub Pull Request, Linear Issue, Release Notes),
 * 4 named pipelines with multi-node graphs (PR Review & Triage, Release
   Notes Generator, Docs Sync, plus the original Demo Governance Pipeline),
-* ~18 synthetic terminal runs spread over 14 days (mixed statuses:
+* 20 synthetic terminal runs spread over 14 days (mixed statuses:
   complete/failed/awaiting_human), realistic tokens/costs/durations,
 * 2 agents with realistic prompts and I/O schema references,
 * a webhook trigger (GitHub PR events) and a cron trigger (daily release
@@ -506,11 +506,16 @@ async def _get_or_create_snapshot(
     return snapshot
 
 
-async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation, account: Account) -> None:
+async def _seed_demo_pipeline_and_runs(
+    session: AsyncSession, org: Organisation, account: Account
+) -> dict[str, tuple[Pipeline, PipelineSnapshot]]:
     """Seed all demo pipelines, their snapshots, and expanded runs + daily facts.
 
     Race-safe across multi-instance boots: each insert runs in a savepoint with
     IntegrityError recovery on its natural key.
+
+    Returns the pipeline/snapshot lookup so callers (trigger seeding) can reuse it
+    instead of re-querying.
     """
     # Build pipeline lookup: name -> (pipeline, snapshot)
     pipeline_lookup: dict[str, tuple[Pipeline, PipelineSnapshot]] = {}
@@ -556,6 +561,12 @@ async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation,
         if existing_result.scalar_one_or_none() is not None:
             continue
 
+        if pipeline_name not in pipeline_lookup:
+            _log.warning(
+                "demo_seed.run_spec_unknown_pipeline",
+                extra={"pipeline_name": pipeline_name, "run_number": run_number},
+            )
+            continue
         pipeline, snapshot = pipeline_lookup[pipeline_name]
         started = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
             days=days_ago, hours=-hours_into_day
@@ -622,6 +633,10 @@ async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation,
             # Write RunDailyFact for analytics (best-effort, own savepoint).
             try:
                 async with session.begin_nested():
+                    # Mirror the Run row: non-terminal statuses have no
+                    # completed_at / duration_ms.
+                    # nosemgrep: raw-status-complete — seed script, not routing code.
+                    is_terminal = status in ("complete", "failed")
                     fact = RunDailyFact(
                         organisation_id=org.id,
                         run_id=run.id,
@@ -632,10 +647,10 @@ async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation,
                         status=status,
                         total_cost_usd=Decimal(str(total_cost_usd)),
                         total_tokens=total_tokens,
-                        duration_ms=int((completed - started).total_seconds() * 1000) if completed else None,
+                        duration_ms=(int((completed - started).total_seconds() * 1000) if is_terminal else None),
                         run_number=run_number,
                         started_at=started,
-                        completed_at=completed,
+                        completed_at=completed if is_terminal else None,
                     )
                     session.add(fact)
                     await session.flush()
@@ -647,6 +662,8 @@ async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation,
                     run.id,
                     _safe_exc_text(exc),
                 )
+
+    return pipeline_lookup
 
 
 async def _seed_demo_agents(session: AsyncSession, org: Organisation, account: Account) -> None:
@@ -711,6 +728,8 @@ async def _seed_demo_triggers(
             trigger_type="webhook",
             active=True,
             config_json={
+                # Intentional non-secret placeholder for the read-only
+                # demo — not a leaked credential.
                 "secret": "demo-webhook-secret",
                 "events": ["pull_request"],
                 "payload_mapping": {},
@@ -1124,21 +1143,7 @@ async def seed_demo(session: AsyncSession) -> str | None:
     await _seed_demo_schemas(session, org, account)
     await _seed_demo_agents(session, org, account)
     # Pipelines + runs + daily facts (returns lookup for triggers).
-    await _seed_demo_pipeline_and_runs(session, org, account)
-    # Triggers depend on pipelines existing — build the lookup from the DB.
-    pipeline_lookup: dict[str, tuple[Pipeline, PipelineSnapshot]] = {}
-    for name in [DEMO_PIPELINE_NAME] + [str(p["name"]) for p in _DEMO_PIPELINES]:
-        p_result = await session.execute(
-            select(Pipeline).where(Pipeline.organisation_id == org.id, Pipeline.name == name)
-        )
-        p = p_result.scalar_one()
-        s_result = await session.execute(
-            select(PipelineSnapshot).where(
-                PipelineSnapshot.pipeline_id == p.id,
-                PipelineSnapshot.snapshot_version == 1,
-            )
-        )
-        pipeline_lookup[name] = (p, s_result.scalar_one())
+    pipeline_lookup = await _seed_demo_pipeline_and_runs(session, org, account)
     await _seed_demo_triggers(session, org, account, pipeline_lookup)
 
     return f"org={DEMO_ORG_SLUG} user={email}"
