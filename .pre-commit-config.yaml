@@ -101,7 +101,7 @@
         entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py lint
         language: system
         files: \.(vue|ts|js)$
-        pass_filenames: false
+        pass_filenames: true
       - id: vue-tsc
         name: vue-tsc type check
         entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check

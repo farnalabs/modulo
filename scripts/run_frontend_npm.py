@@ -12,6 +12,12 @@ Behaviour is identical on all platforms:
   - fails when both pnpm and npm are missing or the script fails
   - exits 0 without running anything when the script is absent from
     frontend/package.json
+
+Extra arguments (``<args>``) are forwarded to the pnpm script.  This is
+used by the ESLint pre-commit hook: ``pass_filenames: true`` makes
+pre-commit append the staged filenames, and this script forwards them to
+``pnpm run lint`` so only the changed files are linted instead of the
+entire ``src/`` directory.
 """
 
 from __future__ import annotations
@@ -39,11 +45,12 @@ def find_package_manager() -> str | None:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print(f"usage: {Path(__file__).name} <script>", file=sys.stderr)
+    if len(sys.argv) < 2:
+        print(f"usage: {Path(__file__).name} <script> [extra-args...]", file=sys.stderr)
         return 2
 
     script = sys.argv[1]
+    extra_args = sys.argv[2:]
 
     if not _SCRIPT_NAME_RE.match(script):
         print(f"{Path(__file__).name}: invalid script name {script!r}", file=sys.stderr)
@@ -66,6 +73,26 @@ def main() -> int:
     if pm is None:
         print(f"{Path(__file__).name}: neither pnpm nor npm found on PATH", file=sys.stderr)
         return 1
+
+    # When extra_args are present (filenames from pre-commit with
+    # pass_filenames: true), we cannot use "pnpm run lint" because its
+    # script hardcodes `eslint src` — extra filenames would be additive,
+    # not a replacement.  Instead, run eslint directly with just the staged
+    # files.  The eslint flat config (eslint.config.mjs) applies to any
+    # file path, so this works identically to the full-directory lint.
+    if extra_args:
+        eslint_bin = FRONTEND_DIR / "node_modules" / ".bin" / "eslint"
+        if not eslint_bin.is_file():
+            # Fallback: use npx (slower but always available)
+            eslint_cmd = ["npx", "eslint"]
+        else:
+            if sys.platform == "win32":
+                eslint_cmd = ["cmd.exe", "/c", str(eslint_bin)]
+            else:
+                eslint_cmd = [str(eslint_bin)]
+        cmd = [*eslint_cmd, "--cache", "--cache-location", ".cache/eslint", *extra_args]
+        result = subprocess.run(cmd, cwd=FRONTEND_DIR, check=False)
+        return result.returncode
 
     if sys.platform == "win32":
         # CreateProcess cannot execute .cmd/.bat shims directly (WinError 193);
