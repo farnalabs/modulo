@@ -23956,6 +23956,7 @@ export interface operations {
     get_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_get: {
         parameters: {
             query?: {
+                include_schema_warnings?: boolean;
                 _fresh?: boolean;
             };
             header?: never;
