@@ -77,6 +77,7 @@ def _demo_settings(*, enabled: bool = True, user: str = _DEMO_EMAIL, password: s
         modulo_demo_enabled=enabled,
         modulo_demo_user=user,
         modulo_demo_password=password,
+        modulo_multi_org_enabled=True,
     )
 
 
