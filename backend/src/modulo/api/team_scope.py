@@ -162,12 +162,30 @@ async def resolve_trigger_run_team_scope(
 
 
 # The team-scoped resource set (ADR 017 DECISION 2, extended by ADR 038).
-# ``runs`` is deliberately absent from the path-param resolvers: it has
-# ``owner_team_id`` but no ``visibility`` column and strict org RLS, so it
-# stays on the org-role floor only (RLS parity). ``eval_suite_run`` and
-# ``journey`` are derived entities (ADR 038 Decision §5) that stay on the
-# org-role floor — their parent's team gate controls access.  The
-# trigger_run body resolver is wired separately via
+#
+# ── Registry contract (FAR-950) ──────────────────────────────────────────
+# Every SQLAlchemy model with BOTH ``owner_team_id`` and ``visibility`` MUST
+# appear here, keyed by its ``__tablename__``.  Models with ``owner_team_id``
+# but NO ``visibility`` (runs, eval_suite_run, journey) are intentionally
+# absent — they stay on the org-role floor because access derives from their
+# parent entity (ADR 038 Decision §5).
+#
+# CI enforces this via ``tests/architecture/test_team_scope_wiring.py``:
+#   • model → registry key mapping convention: key == __tablename__
+#   • allowlist (no-visibility models) must be explicit with one-line reasons
+#   • adding a model with owner_team_id + visibility without a resolver FAILS
+#
+# When adding a new team-scoped model:
+#   1. Add the resolver here (resolve_<name>_team_scope = team_scope_resolver(...))
+#   2. Add it to TEAM_SCOPED_RESOLVERS keyed by __tablename__
+#   3. The test picks it up automatically from the model's columns
+# ─────────────────────────────────────────────────────────────────────────
+#
+# ``runs`` is deliberately absent: it has ``owner_team_id`` but no
+# ``visibility`` column and strict org RLS, so it stays on the org-role floor
+# only (RLS parity). ``eval_suite_run`` and ``journey`` are derived entities
+# (ADR 038 Decision §5) that stay on the org-role floor — their parent's team
+# gate controls access.  The trigger_run body resolver is wired separately via
 # ``require_team_membership_or_admin_any_credential``.
 TEAM_SCOPED_RESOLVERS: dict[str, TeamScopeProvider] = {
     "pipelines": resolve_pipeline_team_scope,
