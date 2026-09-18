@@ -23,7 +23,9 @@ Gate semantics (fail-closed):
   Use ``--allow-missing-reports`` for local runs where you may not have
   every report.
 - **No changed production lines** → SKIP, exit 0.  A test-only or docs-only
-  diff has no production files once the exclusions are applied.
+  diff has no production files once the exclusions are applied.  A diff that
+  only adds comments, docstrings, or blank lines also skips — only
+  executable changed lines enter the coverage denominator (FAR-962).
 - **Changed production lines, but no coverage data for them** → FAIL,
   exit 1.  If production lines changed but diff-cover cannot match them to
   the coverage report (the report does not contain those files at all), every
@@ -57,6 +59,7 @@ Usage (CI)::
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import json
 import os
@@ -64,6 +67,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -128,6 +132,13 @@ _COVERAGE_LINE_RE = re.compile(r"Coverage:\s*(\d+(?:\.\d+)?)\s*%")
 _THRESHOLD_NOT_MET_RE = re.compile(r"Failure\. Coverage is below", re.IGNORECASE)
 _DIFF_COVER_TOTAL_RE = re.compile(r"Total:\s*(\d+)\s+line", re.IGNORECASE)
 
+# Matches a standalone Python string literal (triple-quoted or single/double
+# quoted) with no other code around it.  Used to exclude docstrings and bare
+# strings from the executable-line count (coverage.py does not instrument them).
+_PYTHON_STRING_LITERAL_RE = re.compile(
+    r"""^\s*(?:('{3}|"{3})[\s\S]*\1|('{1}|"{1})[^\n]*\2)\s*$"""
+)
+
 # ``git diff`` filter and language pathspecs for changed-file discovery.
 _DIFF_FILTER = "--diff-filter=ACM"
 _EXTENSIONS: dict[str, tuple[str, ...]] = {
@@ -185,6 +196,183 @@ def _is_excluded(path: str) -> bool:
     return any(fnmatch(path, pattern) for pattern in _EXCLUDE_PATTERNS)
 
 
+# ---------------------------------------------------------------------------
+# Executable-line detection — used to exclude non-executable changed lines
+# (comments, docstrings, blank lines) from the coverage denominator.
+# ---------------------------------------------------------------------------
+
+def _is_executable_python_line(line: str) -> bool:
+    """Return True if a Python line is an executable statement.
+
+    Uses ``ast.parse`` to distinguish real statements from comments,
+    docstrings, and blank lines.  Lines that are syntactically non-executable
+    (comment-only, string-only, blank) are excluded so they do not inflate
+    the coverage denominator.
+
+    Standalone string literals (e.g. ``'docstring'``) are treated as
+    non-executable because coverage.py does not instrument them — they are
+    data, not control flow.  Strings inside assignments, calls, or
+    expressions ARE executable and are counted.
+
+    This is a *single-line* predicate: it cannot see across lines, so body
+    lines inside a multi-line docstring (which are not independently
+    parseable and hit the lenient fallback below) would be counted as
+    executable.  Filter a whole file's added lines with
+    :func:`_iter_executable_python_lines` to track triple-quote state.
+
+    The function is lenient on parse failure — lines that cannot be parsed
+    are counted as executable to avoid under-counting.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    # Standalone string literals (docstrings, bare strings) are not
+    # instrumented by coverage.py.  Detect by checking if the entire
+    # stripped line is a string literal (starts and ends with matching
+    # quotes, no other code around it).
+    if _PYTHON_STRING_LITERAL_RE.fullmatch(stripped):
+        return False
+    try:
+        tree = ast.parse(stripped, mode="eval")
+        return True
+    except SyntaxError:
+        try:
+            tree = ast.parse(stripped, mode="exec")
+            return bool(tree.body)
+        except SyntaxError:
+            return True
+
+
+def _js_strip_line_comment(line: str) -> str:
+    """Strip a trailing ``//`` comment and surrounding whitespace.
+
+    Heuristic: a ``//`` inside a string literal is not distinguished, which
+    is acceptable for the coverage gate's purpose of excluding clearly
+    non-executable lines.
+    """
+    return re.sub(r"//[^\n]*$", "", line).strip()
+
+
+def _is_executable_js_line(line: str) -> bool:
+    """Return True if a single JS/TS line carries executable code.
+
+    Removes blank lines, a trailing ``//`` comment, and a complete inline
+    ``/* ... */`` block comment.  A block comment that *opens* on this line
+    and closes on a later line is handled by
+    :func:`_iter_executable_js_lines`, which tracks block-comment state
+    across the added lines; this single-line predicate treats such a line as
+    non-executable unless it carries code before the ``/*``.
+
+    This is a heuristic — it does not handle every edge case (e.g. ``//``
+    inside a string literal), but it is correct for the vast majority of
+    real-world diffs and sufficient for the coverage gate's purpose of
+    excluding clearly non-executable lines.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    start = stripped.find("/*")
+    if start != -1:
+        end = stripped.find("*/", start + 2)
+        stripped = stripped[:start] + stripped[end + 2 :] if end != -1 else stripped[:start]
+    return bool(_js_strip_line_comment(stripped))
+
+
+def _py_multiline_opener(line: str) -> tuple[int, str] | None:
+    """Return ``(index, delimiter)`` for an unclosed triple-quote in *line*.
+
+    Scans left to right, skipping single-line strings and ``#`` comments, so
+    a ``\"\"\"`` inside a comment or a normal string is not mistaken for a
+    docstring opener.  Returns ``None`` when the line opens no multi-line
+    string (or closes it on the same line).  Escape sequences are honoured
+    inside short strings; triple-quoted strings are assumed not to contain
+    an escaped delimiter.
+    """
+    i = 0
+    n = len(line)
+    while i < n:
+        if line[i] == "#":
+            return None
+        if line.startswith("'''", i) or line.startswith('"""', i):
+            quote = line[i : i + 3]
+            close = line.find(quote, i + 3)
+            if close == -1:
+                return i, quote
+            i = close + 3
+            continue
+        if line[i] in ("'", '"'):
+            quote = line[i]
+            i += 1
+            while i < n:
+                if line[i] == "\\":
+                    i += 2
+                    continue
+                if line[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        i += 1
+    return None
+
+
+def _iter_executable_python_lines(lines: Iterable[str]) -> Iterator[str]:
+    """Yield the added Python *lines* that are executable statements.
+
+    Tracks triple-quoted string state across lines so the body and closing
+    delimiter of a multi-line docstring are not counted as executable even
+    though, taken in isolation, they are not parseable statements.
+    """
+    delimiter: str | None = None
+    for line in lines:
+        if delimiter is not None:
+            if delimiter in line:
+                delimiter = None
+            continue
+        opener = _py_multiline_opener(line)
+        if opener is not None:
+            index, quote = opener
+            prefix = line[:index].strip().strip("rbfuRBFU").strip()
+            if not prefix:
+                # A bare string literal (docstring): the opening line itself
+                # is data, not a statement.
+                delimiter = quote
+                continue
+        if not _is_executable_python_line(line):
+            continue
+        if opener is not None:
+            delimiter = opener[1]
+        yield line
+
+
+def _iter_executable_js_lines(lines: Iterable[str]) -> Iterator[str]:
+    """Yield the added JS/TS *lines* that carry executable code.
+
+    Tracks ``/* ... */`` block-comment state across lines so JSDoc
+    continuation lines and the closing ``*/`` are not counted as
+    executable.
+    """
+    in_block = False
+    for line in lines:
+        if in_block:
+            end = line.find("*/")
+            if end == -1:
+                continue
+            in_block = False
+            rest = line[end + 2 :]
+            if _js_strip_line_comment(rest):
+                yield rest
+            continue
+        start = line.find("/*")
+        if start != -1 and line.find("*/", start + 2) == -1:
+            in_block = True
+            if _js_strip_line_comment(line[:start]):
+                yield line
+            continue
+        if _is_executable_js_line(line):
+            yield line
+
+
 def _safe_repo_path(value: str) -> str | None:
     """Constrain a repo-relative path to a safe character set.
 
@@ -219,10 +407,14 @@ def _diff_range(compare_branch: str) -> str:
 
 
 def _count_added_lines(diff_range: str, filepath: str) -> int:
-    """Count non-blank lines added to *filepath* within *diff_range*.
+    """Count executable non-blank lines added to *filepath* within *diff_range*.
 
     Both arguments are regex fullmatch-bounded before they reach
     ``subprocess`` (resolves pythonsecurity:S8705).
+
+    Only executable lines (statements, assignments, control flow, etc.) are
+    counted.  Comments, docstrings, and blank lines are excluded so they do
+    not inflate the coverage denominator (FAR-962).
     """
     safe_range = _safe_repo_path(diff_range)
     safe_path = _safe_repo_path(filepath)
@@ -240,19 +432,32 @@ def _count_added_lines(diff_range: str, filepath: str) -> int:
         return 0
     if result.returncode != 0:
         return 0
-    return sum(
-        1
+
+    # Determine language from extension for executable-line filtering.
+    is_python = filepath.endswith(".py")
+    is_js = any(filepath.endswith(ext) for ext in (".ts", ".tsx", ".js", ".jsx", ".vue"))
+
+    added = [
+        diff_line[1:]
         for diff_line in result.stdout.splitlines()
-        if diff_line.startswith("+") and not diff_line.startswith("+++") and diff_line[1:].strip()
-    )
+        if diff_line.startswith("+") and not diff_line.startswith("+++")
+    ]
+    if is_python:
+        return sum(1 for _ in _iter_executable_python_lines(added))
+    if is_js:
+        return sum(1 for _ in _iter_executable_js_lines(added))
+    return sum(1 for content in added if content.strip())
 
 
 def _get_changed_production_files(compare_branch: str, language: str) -> dict[str, int]:
-    """Return {filepath: non_blank_line_count} for changed production files.
+    """Return {filepath: executable_line_count} for changed production files.
 
     Diffs ``<compare_branch>...HEAD`` (three-dot / merge-base, matching
-    diff-cover) to find changed files, then counts non-blank added lines per
-    file.  Files matching the exclusion patterns are skipped.  Returns an empty
+    diff-cover) to find changed files, then counts executable added lines per
+    file.  Non-executable lines (comments, docstrings, blank lines) are
+    excluded so they do not inflate the coverage denominator (FAR-962).
+    Deleted lines are excluded by ``--diff-filter=ACM``.
+    Files matching the exclusion patterns are skipped.  Returns an empty
     dict when the range is invalid or the diff fails.
     """
     pathspecs = _EXTENSIONS.get(language)
@@ -545,13 +750,13 @@ def evaluate(
     report is a gate failure — the upstream job or artifact download broke.
     When True (local convenience), a missing report is a skip.
 
-    The gate detects unmeasured files by comparing the non-blank changed
-    production lines (from ``git diff``) against the production-only lines
-    diff-cover measured.  Lines it did not measure count as 0% coverage, and
-    the numerator and denominator always come from the same production-only
-    file set.
+    The gate detects unmeasured files by comparing the executable changed
+    production lines (from ``git diff``, excluding comments/docstrings/blanks)
+    against the production-only lines diff-cover measured.  Lines it did not
+    measure count as 0% coverage, and the numerator and denominator always
+    come from the same production-only file set.
     """
-    # --- Get changed production files and count non-blank lines ---
+    # --- Get changed production files and count executable added lines ---
     changed_files = _get_changed_production_files(compare_branch, language)
     changed_lines = sum(changed_files.values())
 
