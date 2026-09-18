@@ -176,6 +176,7 @@ def _make_admin_client(session: AsyncMock | None = None) -> Generator[TestClient
         patch("modulo.api.routes.dashboard._get_cached_dashboard", new=AsyncMock(return_value=None)),
         patch("modulo.api.routes.dashboard._set_cached_dashboard", new=AsyncMock()),
     ):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
 
