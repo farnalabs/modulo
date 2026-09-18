@@ -202,7 +202,7 @@ class TestProviderStrict:
 
     def test_emits_per_keyword_warnings(self, schema_with_unsupported: dict[str, Any]) -> None:
         result = render_for_profile(schema_with_unsupported, "provider-strict", "openai")
-        assert len(result.warnings) > 0
+        assert result.warnings
         # Each warning has keyword, path, message
         for w in result.warnings:
             assert w.keyword
@@ -325,9 +325,11 @@ class TestFallback:
         # No crash, no raise
 
     def test_none_like_input(self) -> None:
-        # A non-dict input is treated as empty
-        render_for_profile({"not_a_dict": "value"}, "provider-strict", "openai")
-        # Should not raise
+        # A dict that doesn't look like a JSON Schema should not crash
+        # the renderer — verify it returns a valid, non-skipped result.
+        result = render_for_profile({"not_a_dict": "value"}, "provider-strict", "openai")
+        assert result.skipped is False
+        assert isinstance(result.schema, dict)
 
     def test_translation_error_falls_back(self) -> None:
         """Simulate an internal error during translation — should fall back to verbatim."""
@@ -570,7 +572,7 @@ class TestPreviewStripWarnings:
 
     def test_provider_strict_emits_warnings(self, schema_with_unsupported: dict[str, Any]) -> None:
         warnings = preview_strip_warnings(schema_with_unsupported, "provider-strict", "openai")
-        assert len(warnings) > 0
+        assert warnings
         keywords = {w.keyword for w in warnings}
         # OpenAI strips these from the fixture schema
         assert "title" in keywords
