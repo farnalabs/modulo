@@ -31,6 +31,7 @@ import modulo.db.seed_demo as seed_demo_module
 from modulo.auth.passwords import hash_password, verify_password
 from modulo.core.demo import DEMO_ORG_SLUG
 from modulo.db.models.account import Account
+from modulo.db.models.agent import Agent
 from modulo.db.models.base import Base
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
@@ -38,6 +39,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.schema import Schema, SchemaVersion
+from modulo.db.models.trigger import Trigger
 from modulo.db.seed_demo import seed_demo, seed_demo_runtime
 from modulo.settings import Settings
 
@@ -56,6 +58,11 @@ _SEED_TABLES = {
     "pipelines",
     "pipeline_snapshots",
     "runs",
+    "teams",
+    "team_memberships",
+    "agents",
+    "triggers",
+    "run_daily_facts",
 }
 
 
@@ -129,11 +136,29 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, Organisation) == 1
     assert await _count(session, Account) == 1
     assert await _count(session, OrgMembership) == 1
-    assert await _count(session, Schema) == 2
-    assert await _count(session, SchemaVersion) == 2
-    assert await _count(session, Pipeline) == 1
-    assert await _count(session, PipelineSnapshot) == 1
-    assert await _count(session, Run) == 2
+    # FAR-977: expanded to 5 schemas (GitHub PR, Linear Issue, Release Notes,
+    # Code Review Result, plus the original Demo Intake + Demo Report).
+    assert await _count(session, Schema) == 5
+    assert await _count(session, SchemaVersion) == 5
+    # FAR-977: 4 pipelines (original + PR Review & Triage + Release Notes Generator + Docs Sync).
+    assert await _count(session, Pipeline) == 4
+    assert await _count(session, PipelineSnapshot) == 4
+    # FAR-977: 20 runs spread over 14 days.
+    assert await _count(session, Run) == 20
+    # FAR-977: team + membership.
+    from modulo.db.models.team import Team
+    from modulo.db.models.team_membership import TeamMembership
+
+    assert await _count(session, Team) == 1
+    assert await _count(session, TeamMembership) == 1
+    # FAR-977: 2 agents.
+    from modulo.db.models.agent import Agent
+
+    assert await _count(session, Agent) == 2
+    # FAR-977: 2 triggers (webhook + cron).
+    from modulo.db.models.trigger import Trigger
+
+    assert await _count(session, Trigger) == 2
 
     org = (await _orgs(session))[0]
     assert org.slug == DEMO_ORG_SLUG
@@ -152,11 +177,14 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     published_versions = list(
         (await session.execute(select(SchemaVersion).where(SchemaVersion.published.is_(True)))).scalars()
     )
-    assert len(published_versions) == 2
+    assert len(published_versions) == 5
 
     runs = list((await session.execute(select(Run))).scalars())
-    assert {run.run_number for run in runs} == {1, 2}
-    assert {run.status for run in runs} == {"complete", "failed"}
+    assert len(runs) == 20
+    statuses = {run.status for run in runs}
+    assert "complete" in statuses
+    assert "failed" in statuses
+    assert "awaiting_human" in statuses
 
 
 async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -185,7 +213,8 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "runs": await _count(session, Run),
     }
     assert counts_second == counts_first
-    assert counts_second["runs"] == 2
+    # FAR-977: 20 runs in the expanded seed.
+    assert counts_second["runs"] == 20
 
 
 async def test_seed_restamps_password_on_rotation(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -340,7 +369,7 @@ async def test_seed_demo_runtime_uses_provided_session_factory(monkeypatch: pyte
         async with maker() as check:
             assert await _count(check, Organisation) == 1
             assert await _count(check, Account) == 1
-            assert await _count(check, Run) == 2
+            assert await _count(check, Run) == 20
 
         summary_again = await seed_demo_runtime(session_factory=maker)
 
@@ -348,7 +377,7 @@ async def test_seed_demo_runtime_uses_provided_session_factory(monkeypatch: pyte
         async with maker() as check:
             assert await _count(check, Organisation) == 1
             assert await _count(check, Account) == 1
-            assert await _count(check, Run) == 2
+            assert await _count(check, Run) == 20
     finally:
         await eng.dispose()
 
@@ -518,6 +547,8 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
         pytest.param(Pipeline, Pipeline, id="pipeline"),
         pytest.param(PipelineSnapshot, PipelineSnapshot, id="snapshot"),
         pytest.param(Run, Run, id="run"),
+        pytest.param(Agent, Agent, id="agent"),
+        pytest.param(Trigger, Trigger, id="trigger"),
     ],
 )
 async def test_seed_sample_data_inserts_recover_after_conflict(
