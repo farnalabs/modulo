@@ -1,12 +1,23 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin, loginForSystemRoute } from './setup/fixtures'
 
 test.describe('Settings License', { tag: "@regression" }, () => {
   test('renders the License page', { tag: "@regression" }, async ({ page, env }) => {
-    await loginAsAdmin(page, env)
-    await page.route('**/api/v1/admin/license*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ has_license: true, tier: 'team', features: ['sso', 'audit_log', 'custom_roles'], expires_at: '2026-06-01T10:00:00Z', org_id: 'org1' }) })
-    })
+    const systemAdmin = await loginForSystemRoute(page, env)
+    if (env.name === 'local') {
+      // Registered after login so it is not shadowed by setupLocalMockApi's
+      // catch-all (Playwright matches the last registered route first).
+      await page.route('**/api/v1/admin/license*', (route) => {
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ has_license: true, tier: 'team', features: ['sso', 'audit_log', 'custom_roles'], expires_at: '2026-06-01T10:00:00Z', org_id: 'org1' }) })
+      })
+    }
     await page.goto('/settings/license')
+    if (!systemAdmin) {
+      // FAR-938: the SYSTEM sidebar group is system-admin-only. The staging/prod
+      // e2e identity is a regular org admin, so the router guard redirects to '/'.
+      await expect(page).toHaveURL(/\/$/)
+      await expect(page.locator('h1')).toContainText('Dashboard')
+      return
+    }
     await expect(page.locator('h1')).toContainText('License')
     await expect(page.getByTestId('license-title')).toBeVisible()
   })

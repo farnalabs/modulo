@@ -1,9 +1,16 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginForSystemRoute } from './setup/fixtures'
 
 test.describe('Admin Housekeeping', { tag: "@regression" }, () => {
   test('renders the Housekeeping page', { tag: "@regression" }, async ({ page, env }) => {
-    await loginAsAdmin(page, env)
+    const systemAdmin = await loginForSystemRoute(page, env)
     await page.goto('/admin/housekeeping')
+    if (!systemAdmin) {
+      // FAR-938: the SYSTEM sidebar group is system-admin-only. The staging/prod
+      // e2e identity is a regular org admin, so the router guard redirects to '/'.
+      await expect(page).toHaveURL(/\/$/)
+      await expect(page.locator('h1')).toContainText('Dashboard')
+      return
+    }
     await expect(page).toHaveURL(/\/admin\/housekeeping$/)
     await expect(page.locator('h1')).toContainText('Housekeeping')
     await expect(page.getByTestId('hk-refresh')).toBeVisible()

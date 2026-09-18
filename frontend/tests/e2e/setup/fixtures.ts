@@ -98,3 +98,47 @@ export async function loginAsAdmin(page: Page, env: TestEnv) {
     localStorage.setItem('modulo_refresh_token', refresh)
   }, [MOCK_ACCESS_TOKEN, MOCK_REFRESH_TOKEN])
 }
+
+function b64url(input: unknown): string {
+  return Buffer.from(JSON.stringify(input)).toString('base64url')
+}
+
+/**
+ * Mint a real JWT whose payload marks the principal as a system admin
+ * (is_system_admin + org_role admin). The local mock login token is not a JWT,
+ * so the router guard cannot read the claim off it.
+ */
+export function systemAdminJwt(): string {
+  const header = b64url({ alg: 'HS256', typ: 'JWT' })
+  const now = Math.floor(Date.now() / 1000)
+  const payload = b64url({
+    sub: '1',
+    email: 'admin@example.com',
+    name: 'Admin',
+    org_role: 'admin',
+    is_system_admin: true,
+    iat: now,
+    exp: now + 3600,
+  })
+  return `${header}.${payload}.mocked-signature`
+}
+
+/**
+ * Log in for a route in the SYSTEM sidebar group. FAR-938 makes the whole
+ * group system-admin-only (UI + router).
+ *
+ * Returns true when the target can actually render such a route. The local
+ * target uses the mock API and swaps in a system-admin JWT (same approach as
+ * remy-only.spec.ts). Staging/prod authenticate with the real E2E_ADMIN_EMAIL
+ * identity, which is a regular org admin — there is no in-product way to grant
+ * is_system_admin — so the router guard redirects SYSTEM routes to the
+ * dashboard and this returns false.
+ */
+export async function loginForSystemRoute(page: Page, env: TestEnv): Promise<boolean> {
+  await loginAsAdmin(page, env)
+  if (env.name !== 'local') return false
+  await page.evaluate((token) => {
+    localStorage.setItem('modulo_access_token', token)
+  }, systemAdminJwt())
+  return true
+}
