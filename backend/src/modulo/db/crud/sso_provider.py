@@ -315,6 +315,12 @@ async def update_provider(
     apply_updates(provider, filtered)
 
     await session.flush()
+    # TimestampMixin.updated_at uses onupdate=current_timestamp() (a SQL
+    # expression), so the ORM expires the column after flush and never fetches
+    # the server-generated value. Refresh the row so callers that serialise it
+    # (_provider_response) read a populated `updated_at` instead of raising a
+    # pydantic ValidationError -> HTTP 422 "Data validation failed.".
+    await session.refresh(provider)
 
     try:
         await append_audit_event(
@@ -382,6 +388,9 @@ async def toggle_provider(
         return None
     provider.enabled = not provider.enabled
     await session.flush()
+    # See update_provider: refresh the onupdate-generated updated_at so the
+    # endpoint can serialise the row without a pydantic ValidationError.
+    await session.refresh(provider)
 
     try:
         await append_audit_event(
