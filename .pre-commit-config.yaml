@@ -5,6 +5,7 @@
       - id: bandit
         args: [-r, backend/src/, -ll, -x, backend/src/modulo/model_backends/stub/]
         pass_filenames: false
+        stages: [pre-commit]
 
   - repo: local
     hooks:
@@ -14,12 +15,14 @@
         language: system
         types: [python]
         pass_filenames: false
+        stages: [pre-commit]
       - id: ruff-format
         name: ruff format (locked backend environment)
         entry: uv --directory backend run --no-sync ruff format .
         language: system
         types: [python]
         pass_filenames: false
+        stages: [pre-commit]
       - id: mypy
         name: mypy (locked backend environment)
         entry: uv --directory backend run --no-sync mypy --strict --ignore-missing-imports src/
@@ -39,6 +42,7 @@
         language: system
         files: ^backend/src/
         pass_filenames: false
+        stages: [pre-commit]
       - id: vulture
         name: vulture (dead code gate)
         entry: uv run --project backend --no-sync python scripts/run_vulture.py
@@ -46,6 +50,7 @@
         types: [python]
         files: ^backend/src/
         pass_filenames: false
+        stages: [pre-commit]
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.18.3
@@ -116,6 +121,7 @@
         entry: uv run --project backend --no-sync python scripts/run_check_utf8_encoding.py
         language: system
         pass_filenames: false
+        stages: [pre-commit]
       - id: run-changed-tests
         name: run tests for changed test files
         entry: uv run --project backend --no-sync python scripts/run_changed_tests.py
@@ -165,7 +171,7 @@
       # "Diagnose CI failures with the EXACT CI command" lesson.
       - id: prepush-mypy
         name: prepush mypy (exact CI Lint Backend command)
-        entry: uv --directory backend run --no-build --no-sync mypy src/modulo/
+        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/modulo/**/*.py" -- uv --directory backend run --no-build --no-sync mypy src/modulo/
         language: system
         files: ^backend/src/
         pass_filenames: false
@@ -175,7 +181,7 @@
       # run_frontend_npm.py runs `pnpm run type-check` in frontend/ — same command.
       - id: prepush-vue-tsc
         name: prepush vue-tsc (exact CI type-check command)
-        entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
+        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "frontend/src/**" -- uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
         language: system
         files: \.(vue|ts)$
         pass_filenames: false
@@ -184,7 +190,7 @@
       # file and fail if it differs from the committed schema.ts (never touches it).
       - id: prepush-schema-freshness
         name: prepush schema freshness (openapi-typescript@7.13.0 --check)
-        entry: uv run --project backend --no-sync python scripts/run_generate_api_types.py --check
+        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/**/*.py" -- uv run --project backend --no-sync python scripts/run_generate_api_types.py --check
         language: system
         files: ^(backend/src/.+\.py$)
         pass_filenames: false
