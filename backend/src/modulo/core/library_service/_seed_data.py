@@ -954,6 +954,7 @@ _PR_TEMPLATE_NODES = [
         "node_type": "manual",
         "label": "Review Gate",
         "position": {"x": 950, "y": 100},
+        "output_schema_json": {"type": "object", "description": "Review decision with optional comments."},
     },
     {
         "id": "pr-poster",
@@ -1015,6 +1016,7 @@ _RELEASE_TEMPLATE_NODES = [
         "node_type": "manual",
         "label": "Release Gate",
         "position": {"x": 950, "y": 100},
+        "output_schema_json": {"type": "object", "description": "Release approval decision with optional comments."},
     },
     {
         "id": "tag-creator",
@@ -1087,6 +1089,7 @@ _INCIDENT_TEMPLATE_NODES = [
         "node_type": "manual",
         "label": "Verification Gate",
         "position": {"x": 1250, "y": 100},
+        "output_schema_json": {"type": "object", "description": "Verification decision with optional comments."},
     },
     {
         "id": "postmortem-generator",
@@ -1465,6 +1468,10 @@ _MODULO_PRIMITIVES.extend(
                         "node_type": "manual",
                         "label": "Review Gate",
                         "position": {"x": 350, "y": 100},
+                        "output_schema_json": {
+                            "type": "object",
+                            "description": "Review decision with optional comments.",
+                        },
                     },
                 ],
                 "edges": [
@@ -1582,6 +1589,10 @@ _MODULO_PRIMITIVES.extend(
                         "node_type": "manual",
                         "label": "Review Gate",
                         "position": {"x": 350, "y": 100},
+                        "output_schema_json": {
+                            "type": "object",
+                            "description": "Review decision with optional comments.",
+                        },
                     },
                 ],
                 "edges": [
@@ -1806,8 +1817,12 @@ _MODULO_PRIMITIVES.extend(
                     {
                         "id": "hitl-gate",
                         "node_type": "manual",
-                        "label": "Triage Review Gate",
+                        "label": "Review Gate",
                         "position": {"x": 350, "y": 100},
+                        "output_schema_json": {
+                            "type": "object",
+                            "description": "Review decision with optional comments.",
+                        },
                     },
                 ],
                 "edges": [
@@ -1943,6 +1958,10 @@ _MODULO_PRIMITIVES.extend(
                         "node_type": "manual",
                         "label": "Compliance Review Gate",
                         "position": {"x": 350, "y": 100},
+                        "output_schema_json": {
+                            "type": "object",
+                            "description": "Compliance review decision.",
+                        },
                     },
                 ],
                 "edges": [

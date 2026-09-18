@@ -836,6 +836,41 @@ def _preserve_omitted_gate_config(
     return old_by_key.get(key)
 
 
+class ManualNodeOutputSchemaError(Exception):
+    """Raised when a manual node is persisted without an output schema.
+
+    Manual nodes MUST carry either ``output_schema_id`` or
+    ``output_schema_pin`` so the run-time executor knows what output shape
+    to expect.  Storing a manual node without one is a data-integrity
+    violation (FAR-889).
+    """
+
+    def __init__(self, node_id: str) -> None:
+        self.node_id = node_id
+        super().__init__(f"Manual node '{node_id}' requires an output schema (output_schema_id or output_schema_pin)")
+
+
+def _enforce_manual_node_output_schemas(nodes: list[dict[str, Any]]) -> None:
+    """Reject manual nodes that lack an output schema at write time.
+
+    This is the write-path guard for FAR-889.  It catches the case where a
+    template, library primitive, or direct graph update tries to persist a
+    manual node without any of ``output_schema_id``, ``output_schema_pin``,
+    or ``output_schema_json``.
+    """
+    for node in nodes:
+        if node.get("node_type") != "manual":
+            continue
+        has_output = (
+            node.get("output_schema_id") is not None
+            or node.get("output_schema_pin") is not None
+            or node.get("output_schema_json") is not None
+        )
+        if not has_output:
+            raw_id = node.get("id")
+            raise ManualNodeOutputSchemaError(str(raw_id) if raw_id is not None else "unknown")
+
+
 async def replace_pipeline_graph(
     session: AsyncSession,
     *,
@@ -946,6 +981,9 @@ async def replace_pipeline_graph(
             resource_id=pipeline_id,
             payload_json=build_gate_diff_payload(diff, caller_type),
         )
+
+    # FAR-889: reject manual nodes without output schemas at write time.
+    _enforce_manual_node_output_schemas(nodes)
 
     pipeline.graph_nodes_json = nodes
     await session.execute(delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
