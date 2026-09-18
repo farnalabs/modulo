@@ -130,6 +130,16 @@ jobs:
         # enforcement actually gates merges.
         shell: bash
         run: uv run --no-build --no-sync pytest tests/architecture/ -q --tb=short --timeout=120 -p no:warnings -n auto
+      - name: Run connector contract tests
+        # The connector contract suite drives each connector (filesystem,
+        # REST, shell, npm, pypi) against a real in-process HTTP server or
+        # a recorded VCR cassette — no Docker and no external network, so
+        # it is safe for this job. It lives outside tests/unit, tests/bdd
+        # and tests/integration, so no workflow collected it and it could
+        # regress silently. Run it here alongside the other non-Docker
+        # suites.
+        shell: bash
+        run: uv run --no-build --no-sync pytest tests/connectors/ -q --tb=short --timeout=180 -p no:warnings
       - name: Run email settings BDD scenarios
         # The admin email-settings BDD feature file is self-contained (no
         # browser/live app), so it runs here rather than only in the unit
