@@ -3322,12 +3322,10 @@ def _resolve_schema_profile(node_def: dict[str, Any]) -> "SchemaProfile | None":
     1. **Node-level** ``schema_profile`` — embedded in the snapshot
        ``graph_json`` node dict (e.g. set by composite-engine expansion or
        a per-node override).
-    2. **Agent-level default** — ``Agent.schema_profile`` (the DB column).
-       ``_apply_agent_fields`` in ``pipeline_snapshot.py`` does NOT embed
-       this field into the node dict, so it is unreachable at node-execution
-       time without an async DB query.  Until that embedding is added, the
-       agent-level default cannot be resolved here — falls through to
-       ``None`` (verbatim).
+    2. **Agent-level default** — ``Agent.schema_profile`` embedded into the
+       snapshot node dict by ``_apply_agent_fields`` (pipeline_snapshot.py).
+       The node dict carries both values; node-level is already present via
+       ``setdefault`` so it is never overwritten.
     3. ``None`` → the caller treats it as ``"verbatim"`` (identity).
 
     Returns ``None`` when no override is set (caller defaults to verbatim).
@@ -3335,18 +3333,6 @@ def _resolve_schema_profile(node_def: dict[str, Any]) -> "SchemaProfile | None":
     profile = node_def.get("schema_profile")
     if profile in _VALID_SCHEMA_PROFILES:
         return profile  # type: ignore[no-any-return]  # validated against _VALID_SCHEMA_PROFILES
-    # TODO(FAR-900): Agent-level schema_profile default.
-    # _apply_agent_fields() (pipeline_snapshot.py:77) embeds token_budget,
-    # prompt_template, model_backend_id, agent_commands, parameter_schema_id
-    # — but NOT schema_profile.  The Agent model has a schema_profile column
-    # (String(30), nullable, default=None) added by migration 0248, yet the
-    # snapshot node dict never carries it.  Resolving the agent-level default
-    # here would require an async DB lookup (the Agent row is not available in
-    # the synchronous make_node_fn closure), which would add latency to every
-    # node invocation.  The correct fix is to extend _apply_agent_fields to
-    # embed schema_profile into the snapshot graph_json node dict, so the
-    # resolution above captures it without a runtime query.  Until then, the
-    # agent-level default is unreachable at this call site.
     return None
 
 

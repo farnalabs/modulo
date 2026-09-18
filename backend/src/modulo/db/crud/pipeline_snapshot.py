@@ -85,8 +85,11 @@ def _apply_agent_fields(node: dict[str, Any], agent: Agent) -> uuid.UUID | None:
         node["agent_commands"] = agent.agent_commands
     if agent.parameter_schema_id is not None:
         node["parameter_schema_id"] = str(agent.parameter_schema_id)
-        return agent.parameter_schema_id
-    return None
+    # FAR-900: embed the agent-level schema_profile default so
+    # _resolve_schema_profile in node_runner can read it without a DB query.
+    if getattr(agent, "schema_profile", None) is not None:
+        node.setdefault("schema_profile", agent.schema_profile)
+    return agent.parameter_schema_id if agent.parameter_schema_id is not None else None
 
 
 async def _materialize_agent_fields(
