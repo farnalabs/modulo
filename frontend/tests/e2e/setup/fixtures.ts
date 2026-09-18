@@ -1,6 +1,7 @@
 import { test as base, expect, type Page } from '@playwright/test'
 import { startCoverage, stopCoverage } from './coverage'
 import { getTestEnv, type TestEnv } from './env'
+import { loginThroughUi } from './login'
 
 export const test = base.extend<{ env: TestEnv }>({
   env: async ({}, use) => {
@@ -114,12 +115,7 @@ export async function openLoginForm(page: Page, env: TestEnv): Promise<void> {
 
 export async function loginAsAdmin(page: Page, env: TestEnv) {
   if (env.name !== 'local') {
-
-    await openLoginForm(page, env)
-    await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
-    await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)
-    await page.click('button[type="submit"]')
-    await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 60000 })
+    await loginThroughUi(page, env)
     return
   }
 
