@@ -157,11 +157,11 @@
         files: ^(backend/src/modulo/core/pipeline_engine/node_runner\.py|backend/src/modulo/api/mcp_server\.py|scripts/validate_pipeline_configs\.py)$
         pass_filenames: false
 
-  # CI-parity pre-push gate: mirrors the commands the PR CI actually runs, so a
-  # red-PR push is caught locally before the CI round-trip (the PR Reviewer
-  # mostly CHANGES_REQUESTED on "CI red at PR time": Test Backend 67, Integration
-  # 33, BDD 20, Lint Backend 18, Schema freshness 15, migration heads 12).
-  # Install: pre-commit install --hook-type pre-push (see CONTRIBUTING.md).
+  # CI-parity pre-push gate: mirrors key CI checks so a red-PR push is caught
+  # locally before the CI round-trip. Tests are NOT included — CI's
+  # "Test (Backend)" job runs the full suite properly; a pre-push best-guess
+  # subset duplicates CI, costs minutes, and can fail on files unrelated to the
+  # change. Install: pre-commit install --hook-type pre-push (see CONTRIBUTING.md).
   - repo: local
     hooks:
       # EXACT `Lint (Backend)` mypy invocation (ci.yml backend-lint job,
@@ -193,16 +193,6 @@
         entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/**/*.py" -- uv run --project backend --no-sync python scripts/run_generate_api_types.py --check
         language: system
         files: ^(backend/src/.+\.py$)
-        pass_filenames: false
-        stages: [pre-push]
-      # Fast best-guess affected-tests gate: the changed test files plus candidate
-      # test files for changed source modules — NOT the full suite. The full
-      # backend unit suite runs in CI's "Test (Backend)" job.
-      - id: prepush-affected-tests
-        name: prepush affected tests (changed tests + best-guess for changed source)
-        entry: uv run --project backend --no-sync python scripts/run_affected_tests.py
-        language: system
-        files: ^backend/(src|tests)/.*\.py$
         pass_filenames: false
         stages: [pre-push]
       - id: prepush-merge-conflict-check
