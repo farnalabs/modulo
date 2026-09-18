@@ -1755,6 +1755,9 @@ jobs:
           E2E_NO_WEBSERVER: "true"
           E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
           E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
+          # E2E admin's org slug; used only when the instance is multi-org
+          # (login-context returns multi_org=true and /login shows a slug step).
+          E2E_ORG_SLUG: default
         # No failure masking: a broken deploy must not ship green, so test
         # failures hard-fail the run. Artifacts still upload (step below is
         # `if: always()`).

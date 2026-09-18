@@ -1,5 +1,6 @@
 <template>
-  <LoginView v-if="!isAuthenticated" />
+  <router-view v-if="showsPublicRouteView" />
+  <LoginView v-else-if="!isAuthenticated" />
   <ForceChangePasswordView v-else-if="passwordChangeRequired" />
   <RemyOnlyView v-else-if="isBareRoute" />
   <AppLayout v-else />
@@ -33,6 +34,17 @@ const passwordChangeRequired = useMustChangePassword()
 
 // Routes flagged meta.bare (e.g. /remy) render without the AppLayout chrome.
 const isBareRoute = computed(() => route.meta.bare === true)
+
+// Public routes that must render through <router-view> rather than the
+// default LoginView fallback. An unauthenticated visitor to /login/:slug
+// (per-org login, FAR-863), /accept-invite, or the SSO/OAuth callbacks would
+// otherwise always see LoginView — on a multi-org instance that re-renders the
+// slug step forever, so the credential form is unreachable. The bare /login
+// route keeps rendering LoginView directly.
+const ROUTE_VIEW_PUBLIC_ROUTES = ['org-login', 'accept-invite', 'oauth-authorize', 'auth-callback']
+const showsPublicRouteView = computed(
+  () => !isAuthenticated.value && ROUTE_VIEW_PUBLIC_ROUTES.includes(route.name as string),
+)
 
 useWebVitals()
 

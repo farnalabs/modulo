@@ -80,6 +80,39 @@ export async function setupLocalMockApi(page: Page) {
   })
 }
 
+/**
+ * Advance past the multi-org slug-entry step (if present) so the
+ * email/password credential form is on screen. Single-org instances render the
+ * credential form directly on /login and this is a no-op. Must be called after
+ * navigating to /login.
+ */
+export async function completeLoginForm(page: Page, env: TestEnv): Promise<void> {
+  const slugInput = page.getByTestId('login-org-slug')
+  const emailInput = page.locator(env.credentials.loginFormEmailSelector)
+
+  await Promise.race([
+    slugInput.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {}),
+    emailInput.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {}),
+  ])
+
+  if (await slugInput.isVisible()) {
+    await slugInput.fill(env.orgSlug)
+    await page.getByTestId('login-org-entry-submit').click()
+    await emailInput.waitFor({ state: 'visible', timeout: 30000 })
+  }
+}
+
+/**
+ * Navigate to the login page and ensure the credential form is ready to fill.
+ * Use this instead of a bare `page.goto('/login')` whenever the test is about
+ * to enter credentials, so the suite works on both single-org and multi-org
+ * targets.
+ */
+export async function openLoginForm(page: Page, env: TestEnv): Promise<void> {
+  await page.goto('/login')
+  await completeLoginForm(page, env)
+}
+
 export async function loginAsAdmin(page: Page, env: TestEnv) {
   if (env.name !== 'local') {
     await loginThroughUi(page, env)
