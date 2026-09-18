@@ -645,3 +645,75 @@ describe('SettingsSsoView — provisioning modes and allowed_domains', () => {
     expect(wrapper.find('[data-testid="sso-unrestricted-locked-notice"]').exists()).toBe(true)
   })
 })
+
+describe('SettingsSsoView — row click opens edit (FAR-974 #2)', () => {
+  it('clicking the provider row opens the edit form', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
+    expect(row.exists()).toBe(true)
+    await row.trigger('click')
+    await nextTick()
+
+    // The edit form should be visible
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+    expect((wrapper.find('#ssoproviderform-field-9').element as HTMLInputElement).value).toBe('Acme SSO')
+  })
+
+  it('clicking the toggle does NOT open the edit form', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    const toggle = wrapper.find('[data-testid="settings-sso-toggle"]')
+    await toggle.trigger('click')
+    await nextTick()
+
+    // The edit form should NOT be visible (toggle does its own action)
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(false)
+  })
+
+  it('clicking the edit button opens the edit form (not double-open)', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    const editBtn = wrapper.find('[data-testid="settings-sso-edit"]')
+    await editBtn.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+  })
+
+  it('the row has cursor-pointer and role=button for keyboard accessibility', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
+    expect(row.classes()).toContain('cursor-pointer')
+    expect(row.attributes('role')).toBe('button')
+    expect(row.attributes('tabindex')).toBe('0')
+  })
+
+  it('pressing Enter on the focused row opens the edit form', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
+    await row.trigger('keydown.enter')
+    await nextTick()
+
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+  })
+
+  it('the client id wraps (has break-all class) for long values', async () => {
+    const longId = '58956475964-h1abfg0lve1cedab4ouhesg4fc7l20g3.apps.googleusercontent.com'
+    ;(api.GET as Mock).mockResolvedValue({ data: [provider({ client_id: longId })], error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+
+    expect(wrapper.text()).toContain(longId)
+    // The text container should have break-all to allow wrapping
+    const textEl = wrapper.find('.break-all')
+    expect(textEl.exists()).toBe(true)
+  })
+})
