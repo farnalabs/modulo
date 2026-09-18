@@ -304,6 +304,19 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > accumulation, default 30 and custom `days` windows, and the 1..365
 > `days` bound. `/trends` was already covered by `hitl_trends.feature`.
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-18):** closed `feat-core-ssrf`'s "No BDD
+> feature files" gap (`core/ssrf.md`). Registered `security/ssrf_guard.feature`
+> into the executing BDD suite from the new `steps/test_ssrf_guard.py`,
+> driving the real `modulo.core.ssrf` seams network-free — literal-IP
+> fail-closed blocking (loopback / private / link-local metadata / CGNAT /
+> Aliyun metadata / current-network), pre-DNS syntax rejection (scheme,
+> userinfo, hostname, port, non-canonical IP literals), sync + async
+> validation with the any-blocked and empty-resolution fail-closed semantics,
+> the global + tenant-scoped allowlists with the non-negotiable floor,
+> `resolve_pinned_ip`'s original-hostname / full-IP-set target shape, the
+> pinned transport's `UnpinnedHostError` refusal, and the pinned-client
+> `transport`-kwarg rejection. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
