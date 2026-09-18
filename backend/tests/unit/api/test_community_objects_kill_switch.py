@@ -57,7 +57,7 @@ class TestCommunityObjectsGateListCommunity:
         principal.organisation_id = "00000000-0000-0000-0000-000000000001"
 
         result = await list_community(session, principal)
-        assert result["items"] == []
+        assert not result["items"]
         assert result["total"] == 0
         assert mock_flag is not None
 

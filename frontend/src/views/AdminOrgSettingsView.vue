@@ -248,7 +248,7 @@ const communityObjectsError = ref<string | null>(null)
 
 async function loadCommunityObjects() {
   try {
-    const resp = await (api as any).GET('/api/v1/admin/org/community-objects')
+    const resp = await api.GET('/api/v1/admin/org/community-objects')
     if (!resp.error && resp.data) {
       communityObjectsEnabled.value = resp.data.community_objects_enabled ?? true
     }
@@ -262,7 +262,7 @@ async function toggleCommunityObjects() {
   communityObjectsError.value = null
   try {
     const newVal = !communityObjectsEnabled.value
-    const resp = await (api as any).PUT('/api/v1/admin/org/community-objects', {
+    const resp = await api.PUT('/api/v1/admin/org/community-objects', {
       body: { community_objects_enabled: newVal },
     })
     if (resp.error) {
