@@ -31,13 +31,18 @@ import modulo.db.seed_demo as seed_demo_module
 from modulo.auth.passwords import hash_password, verify_password
 from modulo.core.demo import DEMO_ORG_SLUG
 from modulo.db.models.account import Account
+from modulo.db.models.agent import Agent
 from modulo.db.models.base import Base
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.schema import Schema, SchemaVersion
+from modulo.db.models.team import Team
+from modulo.db.models.team_membership import TeamMembership
+from modulo.db.models.trigger import Trigger
 from modulo.db.seed_demo import seed_demo, seed_demo_runtime
 from modulo.settings import Settings
 
@@ -56,6 +61,11 @@ _SEED_TABLES = {
     "pipelines",
     "pipeline_snapshots",
     "runs",
+    "teams",
+    "team_memberships",
+    "agents",
+    "triggers",
+    "run_daily_facts",
 }
 
 
@@ -129,11 +139,22 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, Organisation) == 1
     assert await _count(session, Account) == 1
     assert await _count(session, OrgMembership) == 1
-    assert await _count(session, Schema) == 2
-    assert await _count(session, SchemaVersion) == 2
-    assert await _count(session, Pipeline) == 1
-    assert await _count(session, PipelineSnapshot) == 1
-    assert await _count(session, Run) == 2
+    # FAR-977: expanded to 5 schemas (Demo Intake, Demo Report,
+    # GitHub Pull Request, Linear Issue, Release Notes).
+    assert await _count(session, Schema) == 5
+    assert await _count(session, SchemaVersion) == 5
+    # FAR-977: 4 pipelines (original + PR Review & Triage + Release Notes Generator + Docs Sync).
+    assert await _count(session, Pipeline) == 4
+    assert await _count(session, PipelineSnapshot) == 4
+    # FAR-977: 20 runs spread over 14 days.
+    assert await _count(session, Run) == 20
+    # FAR-977: team + membership.
+    assert await _count(session, Team) == 1
+    assert await _count(session, TeamMembership) == 1
+    # FAR-977: 2 agents.
+    assert await _count(session, Agent) == 2
+    # FAR-977: 2 triggers (webhook + cron).
+    assert await _count(session, Trigger) == 2
 
     org = (await _orgs(session))[0]
     assert org.slug == DEMO_ORG_SLUG
@@ -152,11 +173,41 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     published_versions = list(
         (await session.execute(select(SchemaVersion).where(SchemaVersion.published.is_(True)))).scalars()
     )
-    assert len(published_versions) == 2
+    assert len(published_versions) == 5
 
     runs = list((await session.execute(select(Run))).scalars())
-    assert {run.run_number for run in runs} == {1, 2}
-    assert {run.status for run in runs} == {"complete", "failed"}
+    assert len(runs) == 20
+    statuses = {run.status for run in runs}
+    assert "complete" in statuses
+    assert "failed" in statuses
+    assert "awaiting_human" in statuses
+
+    # FAR-977: awaiting_human daily-fact parity — non-terminal runs must NOT
+    # fabricate completed_at / duration_ms.  Deleting the is_terminal gating in
+    # seed_demo.py must cause these assertions to fail.
+    awaiting_run = (
+        await session.execute(select(Run).where(Run.status == "awaiting_human", Run.run_number == 6))
+    ).scalar_one()
+    awaiting_fact = (
+        await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == awaiting_run.id))
+    ).scalar_one()
+    assert awaiting_fact.completed_at is None, "non-terminal fact must not fabricate completed_at"
+    assert awaiting_fact.duration_ms is None, "non-terminal fact must not fabricate duration_ms"
+
+    # Discriminating check: a TERMINAL run's fact must carry non-null values
+    # that match the Run row, so the assertion isn't vacuously all-None.
+    terminal_run = (
+        await session.execute(select(Run).where(Run.status == "complete", Run.run_number == 1))
+    ).scalar_one()
+    terminal_fact = (
+        await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == terminal_run.id))
+    ).scalar_one()
+    assert terminal_fact.completed_at is not None, "terminal fact must have completed_at"
+    assert terminal_fact.duration_ms is not None, "terminal fact must have duration_ms"
+    assert terminal_fact.completed_at == terminal_run.completed_at
+    assert terminal_fact.duration_ms == int(
+        (terminal_run.completed_at - terminal_run.started_at).total_seconds() * 1000
+    )
 
 
 async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -170,6 +221,11 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "pipelines": await _count(session, Pipeline),
         "snapshots": await _count(session, PipelineSnapshot),
         "runs": await _count(session, Run),
+        "teams": await _count(session, Team),
+        "team_memberships": await _count(session, TeamMembership),
+        "agents": await _count(session, Agent),
+        "triggers": await _count(session, Trigger),
+        "run_daily_facts": await _count(session, RunDailyFact),
     }
 
     await _run_seed(session, monkeypatch, _demo_settings())
@@ -183,9 +239,15 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "pipelines": await _count(session, Pipeline),
         "snapshots": await _count(session, PipelineSnapshot),
         "runs": await _count(session, Run),
+        "teams": await _count(session, Team),
+        "team_memberships": await _count(session, TeamMembership),
+        "agents": await _count(session, Agent),
+        "triggers": await _count(session, Trigger),
+        "run_daily_facts": await _count(session, RunDailyFact),
     }
     assert counts_second == counts_first
-    assert counts_second["runs"] == 2
+    # FAR-977: 20 runs in the expanded seed.
+    assert counts_second["runs"] == 20
 
 
 async def test_seed_restamps_password_on_rotation(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,6 +328,31 @@ async def test_seed_scopes_entities_to_demo_org_with_second_org_present(
     )
     assert {membership.organisation_id for membership in demo_memberships} == {demo_org.id}
 
+    # FAR-977: verify scoping for expanded entity types.
+    agents = list((await session.execute(select(Agent))).scalars())
+    assert agents, "seed must create demo agents"
+    assert {a.organisation_id for a in agents} == {demo_org.id}
+
+    triggers = list((await session.execute(select(Trigger))).scalars())
+    assert triggers, "seed must create demo triggers"
+    assert {t.organisation_id for t in triggers} == {demo_org.id}
+
+    teams = list((await session.execute(select(Team))).scalars())
+    assert teams, "seed must create demo team"
+    assert {t.organisation_id for t in teams} == {demo_org.id}
+
+    team_memberships = list((await session.execute(select(TeamMembership))).scalars())
+    assert team_memberships, "seed must create demo team membership"
+    assert {tm.organisation_id for tm in team_memberships} == {demo_org.id}
+
+    daily_facts = list((await session.execute(select(RunDailyFact))).scalars())
+    assert daily_facts, "seed must create run daily facts"
+    assert {f.organisation_id for f in daily_facts} == {demo_org.id}
+
+    snapshots = list((await session.execute(select(PipelineSnapshot))).scalars())
+    assert snapshots, "seed must create pipeline snapshots"
+    assert {s.organisation_id for s in snapshots} == {demo_org.id}
+
 
 async def test_seed_logs_previous_role_on_drift_reset(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -340,7 +427,7 @@ async def test_seed_demo_runtime_uses_provided_session_factory(monkeypatch: pyte
         async with maker() as check:
             assert await _count(check, Organisation) == 1
             assert await _count(check, Account) == 1
-            assert await _count(check, Run) == 2
+            assert await _count(check, Run) == 20
 
         summary_again = await seed_demo_runtime(session_factory=maker)
 
@@ -348,7 +435,7 @@ async def test_seed_demo_runtime_uses_provided_session_factory(monkeypatch: pyte
         async with maker() as check:
             assert await _count(check, Organisation) == 1
             assert await _count(check, Account) == 1
-            assert await _count(check, Run) == 2
+            assert await _count(check, Run) == 20
     finally:
         await eng.dispose()
 
@@ -424,6 +511,63 @@ class _FlakyFlush:
     async def _intercepted(self) -> object:
         if any(isinstance(obj, self._entity) for obj in self._session.new):
             raise IntegrityError("simulated concurrent duplicate", None, Exception("uq_conflict"))
+        return await self._real_flush()
+
+    def install(self) -> None:
+        self._session.flush = self._intercepted  # type: ignore[method-assign]
+
+    def uninstall(self) -> None:
+        self._session.flush = self._real_flush  # type: ignore[method-assign]
+
+
+class _HideAllChecks:
+    """Hide EVERY existence/recovery SELECT for ``entity`` from the seed.
+
+    Unlike :class:`_HideCheckOnce`, the interception never burns out, so the
+    post-IntegrityError recovery re-select also misses. That drives the seed's
+    defensive ``if winner is None: raise`` branch — the path taken when a
+    concurrent boot deletes the winner between the failed insert and the
+    recovery lookup.
+    """
+
+    def __init__(self, session: AsyncSession, entity: type) -> None:
+        self._session = session
+        self._entity = entity
+        self._real_execute = session.execute
+
+    def _is_check(self, stmt: object) -> bool:
+        descriptions = getattr(stmt, "column_descriptions", None)
+        if not descriptions:
+            return False
+        return descriptions[0].get("entity") is self._entity
+
+    async def _intercepted(self, stmt: object, *args: object) -> object:
+        if self._is_check(stmt):
+            return _EmptyResult()
+        return await self._real_execute(stmt, *args)  # type: ignore[arg-type]
+
+    def install(self) -> None:
+        self._session.execute = self._intercepted  # type: ignore[method-assign]
+
+    def uninstall(self) -> None:
+        self._session.execute = self._real_execute  # type: ignore[method-assign]
+
+
+class _ExplodingFlush:
+    """Raise a non-IntegrityError once when persisting an ``entity`` row.
+
+    Exercises the seed's broad ``except Exception`` swallow path, distinct from
+    the IntegrityError recovery path the other flush helper drives.
+    """
+
+    def __init__(self, session: AsyncSession, entity: type) -> None:
+        self._session = session
+        self._entity = entity
+        self._real_flush = session.flush
+
+    async def _intercepted(self) -> object:
+        if any(isinstance(obj, self._entity) for obj in self._session.new):
+            raise RuntimeError("simulated unexpected write failure")
         return await self._real_flush()
 
     def install(self) -> None:
@@ -518,6 +662,10 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
         pytest.param(Pipeline, Pipeline, id="pipeline"),
         pytest.param(PipelineSnapshot, PipelineSnapshot, id="snapshot"),
         pytest.param(Run, Run, id="run"),
+        pytest.param(Agent, Agent, id="agent"),
+        pytest.param(Trigger, Trigger, id="trigger"),
+        pytest.param(Team, Team, id="team"),
+        pytest.param(TeamMembership, TeamMembership, id="team-membership"),
     ],
 )
 async def test_seed_sample_data_inserts_recover_after_conflict(
@@ -549,6 +697,125 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
 
     assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
     assert await _count(session, count_model) == counts_before
+
+
+@pytest.mark.parametrize("entity", [Pipeline, PipelineSnapshot, Run, Agent, Team])
+async def test_seed_reraises_when_recovery_finds_no_winner(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, entity: type
+) -> None:
+    """Recovery re-raises the IntegrityError when the winner vanished too.
+
+    The savepoint rolls back the losing insert, then the recovery re-select
+    (hidden here) comes back empty — a second concurrent boot deleted the
+    winner in the window between the two. The seed must surface the original
+    failure rather than continue with a missing row.
+    """
+    hide = _HideAllChecks(session, entity)
+    flaky = _FlakyFlush(session, entity)
+    hide.install()
+    flaky.install()
+    try:
+        with pytest.raises(IntegrityError, match="simulated concurrent duplicate"):
+            await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+        hide.uninstall()
+
+
+async def test_seed_run_spec_unknown_pipeline_is_skipped(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A run spec naming a pipeline absent from the lookup warns and skips."""
+    extra_spec = (999, "complete", "manual", "Nonexistent Pipeline", 100, 0.001, 0, 1)
+    monkeypatch.setattr(seed_demo_module, "_DEMO_RUN_SPECS", [*seed_demo_module._DEMO_RUN_SPECS, extra_spec])
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        summary = await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, Run) == 20
+    assert any(record.getMessage() == "demo_seed.run_spec_unknown_pipeline" for record in caplog.records)
+
+
+async def test_seed_run_node_output_failure_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A best-effort node-output write failure must not abort the run insert."""
+    calls: list[str] = []
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        calls.append("called")
+        raise RuntimeError("simulated node-output write failure")
+
+    monkeypatch.setattr("modulo.db.crud.run_node_outputs.replace_run_node_outputs", _explode)
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        summary = await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert calls, "seed must attempt to write node outputs"
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, Run) == 20
+    assert any(record.getMessage().startswith("demo_seed.run_outputs_write_failed") for record in caplog.records)
+
+
+async def test_seed_daily_fact_integrity_conflict_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A RunDailyFact unique conflict is swallowed; the Run rows still land."""
+    flaky = _FlakyFlush(session, RunDailyFact)
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, Run) == 20
+    assert await _count(session, RunDailyFact) == 0
+    assert any(record.getMessage() == "demo_seed.daily_fact_recovered_after_conflict" for record in caplog.records)
+
+
+async def test_seed_daily_fact_generic_failure_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A non-unique RunDailyFact write failure is swallowed, not fatal."""
+    exploding = _ExplodingFlush(session, RunDailyFact)
+    exploding.install()
+    try:
+        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        exploding.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, Run) == 20
+    assert await _count(session, RunDailyFact) == 0
+    assert any(record.getMessage().startswith("demo_seed.daily_fact_write_failed") for record in caplog.records)
+
+
+async def test_seed_cron_trigger_recovers_after_conflict(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The cron trigger's savepoint recovery path is exercised on conflict."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    cron = (await session.execute(select(Trigger).where(Trigger.trigger_type == "cron"))).scalar_one()
+    await session.delete(cron)
+    await session.commit()
+
+    flaky = _FlakyFlush(session, Trigger)
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    # The webhook trigger already exists, so only the deleted cron hits the
+    # insert -> conflict -> recovery-log branch.
+    assert await _count(session, Trigger) == 1
+    assert any(record.getMessage() == "demo_seed.cron_trigger_recovered" for record in caplog.records)
 
 
 async def test_seed_stray_membership_warning_ignores_soft_deleted_orgs(

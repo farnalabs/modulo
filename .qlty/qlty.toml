@@ -1,0 +1,116 @@
+# Qlty configuration for farnalabs/modulo.
+#
+# Checked in so Qlty Cloud uses a deterministic config instead of
+# auto-generating a temporary one on every analysis. See
+# https://docs.qlty.sh/cli/analysis-configuration for the reference.
+#
+# Why semgrep is disabled below: the Qlty semgrep plugin's driver hardcodes
+# `semgrep --config .semgrep.yaml`, but this repository keeps its Semgrep rules
+# in the `.semgrep/` directory (and `.semgrepignore`). There is no root
+# `.semgrep.yaml`, so the plugin errors with "unable to find a config; path
+# `.semgrep.yaml` does not exist" and Qlty reports the build as errored.
+# Semgrep is already run with the correct `--config=.semgrep/` invocation in
+# `.github/workflows/ci.yml` and via the pre-commit hook
+# (`scripts/run_semgrep.py`), so disabling the Qlty plugin does not remove
+# coverage.
+
+config_version = "0"
+
+exclude_patterns = [
+  "*_min.*",
+  "*-min.*",
+  "*.min.*",
+  "**/.yarn/**",
+  "**/*.d.ts",
+  "**/assets/**",
+  "**/bower_components/**",
+  "**/build/**",
+  "**/cache/**",
+  "**/config/**",
+  "**/db/**",
+  "**/deps/**",
+  "**/dist/**",
+  "**/extern/**",
+  "**/external/**",
+  "**/generated/**",
+  "**/Godeps/**",
+  "**/gradlew/**",
+  "**/mvnw/**",
+  "**/node_modules/**",
+  "**/protos/**",
+  "**/seed/**",
+  "**/target/**",
+  "**/templates/**",
+  "**/testdata/**",
+  "**/vendor/**",
+]
+
+test_patterns = [
+  "**/test/**",
+  "**/spec/**",
+  "**/*.test.*",
+  "**/*.spec.*",
+  "**/*_test.*",
+  "**/*_spec.*",
+  "**/test_*.*",
+  "**/spec_*.*",
+]
+
+[smells]
+mode = "comment"
+
+[[source]]
+name = "default"
+default = true
+
+
+[[plugin]]
+name = "actionlint"
+
+[[plugin]]
+name = "bandit"
+
+[[plugin]]
+name = "eslint"
+package_file = "frontend/package.json"
+package_filters = ["eslint"]
+
+[[plugin]]
+name = "gitleaks"
+
+[[plugin]]
+name = "hadolint"
+
+[[plugin]]
+name = "osv-scanner"
+
+[[plugin]]
+name = "radarlint-iac"
+mode = "monitor"
+
+[[plugin]]
+name = "radarlint-python"
+mode = "comment"
+
+[[plugin]]
+name = "ripgrep"
+mode = "comment"
+
+[[plugin]]
+name = "ruff"
+
+# Disabled: driver hardcodes `--config .semgrep.yaml`, which this repository
+# does not have (rules live in `.semgrep/`). See the note at the top of this
+# file. Semantic security scanning is covered by CI and the pre-commit hook.
+[[plugin]]
+name = "semgrep"
+mode = "disabled"
+
+[[plugin]]
+name = "shellcheck"
+
+[[plugin]]
+name = "trufflehog"
+
+[[plugin]]
+name = "zizmor"

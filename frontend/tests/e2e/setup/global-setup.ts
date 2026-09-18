@@ -1,5 +1,6 @@
 import { type FullConfig, chromium } from '@playwright/test'
 import { getTarget, getBaseUrl, getTestEnv } from './env'
+import { completeLoginForm } from './fixtures'
 import { seedTargetEnvironment } from './seeder'
 
 // A deploy rollout always restarts machines, so the public endpoint can take a
@@ -57,7 +58,7 @@ async function globalSetup(_config: FullConfig) {
   const page = await browser.newPage()
 
   await page.goto(baseURL + '/login')
-  await page.waitForSelector('button[type="submit"]', { timeout: 30000 })
+  await completeLoginForm(page, env)
   await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
   await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)
   await page.click('button[type="submit"]')

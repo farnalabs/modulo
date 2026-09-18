@@ -1,8 +1,8 @@
-import { test, expect } from './setup/fixtures'
+import { test, expect, openLoginForm } from './setup/fixtures'
 
 test.describe('Login Flow', () => {
-  test('shows login form fields', { tag: "@regression" }, async ({ page }) => {
-    await page.goto('/login', { timeout: 60000 })
+  test('shows login form fields', { tag: "@regression" }, async ({ page, env }) => {
+    await openLoginForm(page, env)
 
     await expect(page.locator('h1')).toBeVisible()
 
@@ -23,7 +23,7 @@ test.describe('Login Flow', () => {
       })
     }
 
-    await page.goto('/login')
+    await openLoginForm(page, env)
 
     await page.fill(env.credentials.loginFormEmailSelector, 'wrong@example.com')
     await page.fill(env.credentials.loginFormPasswordSelector, 'thisiswrong')
@@ -84,7 +84,7 @@ test.describe('Login Flow', () => {
       })
     }
 
-    await page.goto('/login')
+    await openLoginForm(page, env)
 
     await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
     await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)
