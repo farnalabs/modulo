@@ -3354,15 +3354,16 @@ async def _invoke_node_model(
 
     When *output_schema_json* is truthy and the backend declares
     ``supports_native_structured_output``, the schema is rendered for the
-    target profile (FAR-900) and forwarded to the provider's native
-    structured-output decoding path.  An empty dict ``{}`` is treated as
-    "no schema" (truthiness guard).  Before dispatch, FIX 6 bounds-checks
-    the RENDERED schema (size, depth, external ``$ref``) and falls back to
-    no native structured output when the check fails.
+    target profile (FAR-900) and the RENDERED schema is forwarded to the
+    provider's native structured-output decoding path (so translation actually
+    takes effect).  An empty dict ``{}`` is treated as "no schema" (truthiness
+    guard).  Before dispatch the rendered schema is bounds-checked (size,
+    depth, external ``$ref``); if it fails (e.g. ``$ref`` inlining amplified
+    it past a limit) the raw schema is sent when IT passes bounds, otherwise
+    no native structured output is requested.
 
-    Best-effort: if rendering fails or returns nothing, falls back to
-    ``verbatim`` (the raw schema) and continues — the node must never fail
-    because of translation.
+    Best-effort: if rendering fails, falls back to the raw schema and
+    continues — the node must never fail because of translation.
     """
     from modulo.core.pipeline_engine.decorator import get_model_backend_hub
 
@@ -3383,11 +3384,10 @@ async def _invoke_node_model(
     if output_schema_json and backend.supports_native_structured_output:
         effective_profile: SchemaProfile = schema_profile or "verbatim"
         provider_id = _extract_provider_id(backend)
-        # FIX 7: bounds-check the RAW schema BEFORE rendering to bound the
-        # amplification window (inlining can make the rendered schema larger
-        # than the input).  Decide native-structured-output viability from
-        # the ORIGINAL schema so schemas that qualify before rendering are
-        # not silently disqualified after.
+        # Bounds-check the RAW schema as the fallback: rendering inlines
+        # ``$ref``s and can amplify a schema past the limits, in which case we
+        # send the raw schema (which the provider resolves itself) rather than
+        # silently dropping native structured output.
         raw_ok, _raw_reason = _is_safe_schema(output_schema_json)
         try:
             rendered = render_for_profile(output_schema_json, effective_profile, provider_id)
@@ -3409,20 +3409,24 @@ async def _invoke_node_model(
                 exc_info=True,
             )
             schema_to_check = output_schema_json
-        # FIX 7: If the raw schema passed bounds, use it for the provider
-        # (the provider resolves $ref itself).  If only the rendered schema
-        # passes, prefer it.  If neither passes, no native structured output.
-        if raw_ok:
+        # FAR-900: the RENDERED schema is what must reach the provider —
+        # otherwise provider-strict keyword stripping never takes effect and
+        # the translation layer is a runtime no-op.  Bounds-check the rendered
+        # copy (inlining can amplify a schema past the size/depth limits).  If
+        # the rendered schema fails bounds (or rendering raised), fall back to
+        # the raw schema when IT passes bounds — the provider resolves $ref
+        # itself, so this preserves the pre-FAR-900 behaviour.  If neither
+        # passes, send no native schema.
+        rendered_ok, rendered_reason = _is_safe_schema(schema_to_check)
+        if rendered_ok:
+            invoke_kwargs["output_schema"] = schema_to_check
+        elif raw_ok:
             invoke_kwargs["output_schema"] = output_schema_json
         else:
-            ok, reason = _is_safe_schema(schema_to_check)
-            if ok:
-                invoke_kwargs["output_schema"] = schema_to_check
-            else:
-                _log.warning(
-                    "node_model.schema_bounds_rejected",
-                    extra={"node_id": node_id, "reason": reason},
-                )
+            _log.warning(
+                "node_model.schema_bounds_rejected",
+                extra={"node_id": node_id, "reason": rendered_reason},
+            )
     response = await backend.invoke(messages, **invoke_kwargs)
 
     content = response.content if hasattr(response, "content") else str(response)

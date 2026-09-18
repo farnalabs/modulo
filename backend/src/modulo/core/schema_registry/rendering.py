@@ -177,8 +177,11 @@ _PROVIDER_UNSUPPORTED: dict[str, frozenset[str]] = {
     ),
 }
 
-# Keywords that are always advisory (stripped in provider-strict regardless
-# of provider if the provider's set does not already include them).
+# Keywords that are always advisory: stripped for EVERY provider under
+# provider-strict, even providers that accept them.  This is deliberate — the
+# profile optimises for the strictest common denominator so an agent schema
+# behaves identically across backends.  Keywords that only SOME providers
+# reject live in the per-provider ``_PROVIDER_UNSUPPORTED`` sets instead.
 _ADVISORY_KEYWORDS = frozenset({"default", "examples", "title", "description", "format"})
 
 # Keywords that are NEVER stripped in provider-strict mode (structural)

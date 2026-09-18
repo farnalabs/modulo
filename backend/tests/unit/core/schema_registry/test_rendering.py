@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -832,6 +833,93 @@ class TestSchemaTranslationReportGating:
         resp = _graph_response([node_dict], [], include_schema_warnings=True)
         # With include_schema_warnings=True, the report should be populated
         assert resp.schema_translation_report
+
+    def test_graph_response_uses_provider_specific_strips(self) -> None:
+        """A resolved provider makes provider-specific keywords (OpenAI's
+        ``pattern``) appear in the report, not just advisory keywords."""
+        from modulo.api.routes.pipelines import PipelineGraphNode, _graph_response
+
+        node = PipelineGraphNode(
+            id=uuid.uuid4(),
+            agent_id=uuid.uuid4(),
+            position={"x": 0, "y": 0},
+            schema_profile="provider-strict",
+            output_schema_json={
+                "type": "object",
+                "properties": {"x": {"type": "string", "pattern": "^[a-z]+$"}},
+            },
+        )
+        resp = _graph_response(
+            [node.model_dump(mode="json")],
+            [],
+            include_schema_warnings=True,
+            provider_by_node={str(node.id): "openai"},
+        )
+        keywords = {w["keyword"] for w in resp.schema_translation_report}
+        assert "pattern" in keywords
+
+    def test_graph_response_without_provider_omits_provider_specific_strips(self) -> None:
+        """Without a resolved provider, only always-advisory keywords are
+        reported — ``pattern`` is provider-specific and must be absent."""
+        from modulo.api.routes.pipelines import PipelineGraphNode, _graph_response
+
+        node = PipelineGraphNode(
+            id=uuid.uuid4(),
+            agent_id=uuid.uuid4(),
+            position={"x": 0, "y": 0},
+            schema_profile="provider-strict",
+            output_schema_json={
+                "type": "object",
+                "properties": {"x": {"type": "string", "pattern": "^[a-z]+$", "default": "foo"}},
+            },
+        )
+        resp = _graph_response(
+            [node.model_dump(mode="json")],
+            [],
+            include_schema_warnings=True,
+        )
+        keywords = {w["keyword"] for w in resp.schema_translation_report}
+        assert "default" in keywords
+        assert "pattern" not in keywords
+
+    async def test_resolve_node_providers_maps_agent_backend(self) -> None:
+        """_resolve_node_providers resolves node → agent → backend provider."""
+        from modulo.api.routes.pipelines import _resolve_node_providers
+
+        agent_id = uuid.uuid4()
+        backend_id = uuid.uuid4()
+        agents = [SimpleNamespace(id=agent_id, model_backend_id=backend_id)]
+        backends = [SimpleNamespace(id=backend_id, provider="openai")]
+        session = _FakeExecuteSession([agents, backends])
+        nodes = [
+            {"id": "n1", "agent_id": str(agent_id)},
+            {"id": "n2", "agent_id": None},
+        ]
+        result = await _resolve_node_providers(session, nodes, organisation_id=uuid.uuid4())
+        assert result == {"n1": "openai"}
+
+
+class _FakeScalarResult:
+    """Minimal stand-in for SQLAlchemy's ``Result`` in unit tests."""
+
+    def __init__(self, items: list[Any]) -> None:
+        self._items = items
+
+    def scalars(self) -> _FakeScalarResult:
+        return self
+
+    def all(self) -> list[Any]:
+        return list(self._items)
+
+
+class _FakeExecuteSession:
+    """Returns queued ``execute()`` results in order."""
+
+    def __init__(self, batches: list[list[Any]]) -> None:
+        self._batches = list(batches)
+
+    async def execute(self, *_args: Any, **_kwargs: Any) -> _FakeScalarResult:
+        return _FakeScalarResult(self._batches.pop(0))
 
 
 # ---------------------------------------------------------------------------

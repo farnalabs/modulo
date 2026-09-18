@@ -2,9 +2,10 @@
 
 Verifies that:
 - _invoke_node_model passes the RENDERED schema (not raw) when schema_profile != verbatim
+- A rendered schema that fails bounds falls back to the raw schema when IT passes bounds
 - Profile resolves: node-level → agent-level default → verbatim
 - _apply_agent_fields embeds the agent's schema_profile into the snapshot node dict
-- Render failure falls back to verbatim and the node still runs (never raises)
+- Render failure falls back to the raw schema and the node still runs (never raises)
 - verbatim still passes the raw schema unchanged (no regression)
 """
 
@@ -59,9 +60,8 @@ class TestSchemaRenderingDispatch:
     """FAR-900: _invoke_node_model renders the output schema for the target provider."""
 
     async def test_provider_strict_renders_schema_for_openai(self) -> None:
-        """FIX 7: When the raw schema passes bounds, the raw schema is sent
-        to the provider (the provider resolves $ref itself).  The rendered
-        schema is computed but not forwarded.
+        """The RENDERED schema (OpenAI-unsupported ``pattern``/``default``
+        stripped) is forwarded to the provider — not the raw schema.
         """
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
@@ -85,8 +85,16 @@ class TestSchemaRenderingDispatch:
                 schema_profile="provider-strict",
             )
         assert len(backend.calls) == 1
-        # FIX 7: raw schema passes bounds → raw schema is forwarded
-        assert backend.calls[0]["output_schema"] is schema
+        forwarded = backend.calls[0]["output_schema"]
+        # The translated schema reaches the provider, not the raw identity.
+        assert forwarded is not schema
+        assert forwarded == {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+        # Mutation-safety: the caller's raw schema is untouched.
+        assert schema["properties"]["name"]["pattern"] == "^[a-z]+$"
 
     async def test_verbatim_passes_raw_schema_unchanged(self) -> None:
         """When schema_profile is verbatim (or None), the raw schema is passed through."""
@@ -156,12 +164,13 @@ class TestSchemaRenderingDispatch:
         assert backend.calls[0]["output_schema"] == schema
 
     async def test_skipped_render_still_passes_rendered_schema(self) -> None:
-        """When render_for_profile returns skipped=True, the rendered schema
-        is still forwarded (the skip is logged, not rejected).
+        """When rendering is skipped (e.g. an abstract ``$ref``-only schema),
+        the (unchanged, copied) rendered schema is still forwarded — the skip
+        is logged, not treated as a failure.
         """
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
-        schema: dict[str, Any] = {"type": "object", "properties": {"n": {"type": "string"}}}
+        schema: dict[str, Any] = {"$ref": "#/$defs/Foo", "$defs": {"Foo": {"type": "string"}}}
         with patch(
             "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
@@ -174,8 +183,10 @@ class TestSchemaRenderingDispatch:
                 schema_profile="provider-strict",
             )
         assert len(backend.calls) == 1
-        # The schema is present (it was rendered, even if warnings were emitted)
-        assert "output_schema" in backend.calls[0]
+        forwarded = backend.calls[0]["output_schema"]
+        # Skipped rendering returned a copy of the raw schema — forwarded as-is.
+        assert forwarded == schema
+        assert forwarded is not schema
 
 
 # ---------------------------------------------------------------------------
@@ -263,11 +274,10 @@ class TestExtractProviderId:
 
 
 class TestBoundsAfterRendering:
-    """FIX 7: raw schema passes bounds → raw is sent to provider."""
+    """The RENDERED schema is bounds-checked before dispatch (and forwarded)."""
 
     async def test_bounds_check_applied_to_rendered_schema(self) -> None:
-        """FIX 7: A raw schema that passes bounds is forwarded to the backend
-        (provider resolves $ref itself)."""
+        """The rendered schema is forwarded once it passes bounds."""
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
         schema = {
@@ -285,8 +295,10 @@ class TestBoundsAfterRendering:
                 output_schema_json=schema,
                 schema_profile="provider-strict",
             )
-        # FIX 7: raw passes bounds → raw is forwarded
-        assert backend.calls[0]["output_schema"] is schema
+        forwarded = backend.calls[0]["output_schema"]
+        # OpenAI does not accept "minimum" — the rendered schema strips it.
+        assert forwarded is not schema
+        assert forwarded["properties"]["x"] == {"type": "integer"}
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +310,8 @@ class TestMakeNodeFnSchemaProfile:
     """FAR-900: schema_profile flows through make_node_fn to _invoke_node_model."""
 
     async def test_node_def_schema_profile_is_resolved(self) -> None:
-        """FIX 7: When the raw schema passes bounds, the raw schema is forwarded."""
+        """The node-level schema_profile is resolved and the RENDERED schema
+        reaches the provider through make_node_fn."""
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
         schema = {
@@ -326,8 +339,9 @@ class TestMakeNodeFnSchemaProfile:
         ):
             result = await fn(state)
         assert result["artifacts"][0]["status"] == "completed"
-        # FIX 7: raw passes bounds → raw schema forwarded
-        assert backend.calls[0]["output_schema"] is schema
+        forwarded = backend.calls[0]["output_schema"]
+        assert forwarded is not schema
+        assert forwarded["properties"]["name"] == {"type": "string"}
 
     async def test_node_def_without_profile_uses_verbatim(self) -> None:
         """When node_def has no schema_profile, verbatim is used (raw schema forwarded)."""
@@ -483,7 +497,8 @@ class TestAgentDefaultDispatchIntegration:
     comes from the agent default (not just the node-level override)."""
 
     async def test_agent_default_profile_renders_schema(self) -> None:
-        """FIX 7: When the raw schema passes bounds, the raw schema is forwarded."""
+        """The RENDERED schema is forwarded when the profile comes from the
+        agent default (not just a node-level override)."""
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
         schema = {
@@ -513,18 +528,19 @@ class TestAgentDefaultDispatchIntegration:
         ):
             result = await fn(state)
         assert result["artifacts"][0]["status"] == "completed"
-        # FIX 7: raw passes bounds → raw schema forwarded
-        assert backend.calls[0]["output_schema"] is schema
+        forwarded = backend.calls[0]["output_schema"]
+        assert forwarded is not schema
+        assert forwarded["properties"]["result"] == {"type": "string"}
 
 
 # ---------------------------------------------------------------------------
-# Tests: FIX 7 — bounds-check ordering + amplification window
+# Tests: bounds-check ordering + amplification window
 # ---------------------------------------------------------------------------
 
 
 class TestBoundsCheckOrdering:
-    """FIX 7: raw schema is bounds-checked BEFORE rendering to bound the
-    amplification window; if raw passes, raw is sent to the provider."""
+    """The rendered schema is preferred; the raw schema is the fallback when
+    rendering (e.g. ``$ref`` inlining) amplifies it past the bounds."""
 
     async def test_raw_safe_rendered_unsafe_sends_raw(self) -> None:
         """When the raw schema passes bounds but the rendered schema does not
