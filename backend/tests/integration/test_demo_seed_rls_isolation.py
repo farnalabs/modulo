@@ -33,6 +33,10 @@ async def test_demo_seed_org_isolation_under_rls(db_engine: AsyncEngine, monkeyp
     monkeypatch.setenv("MODULO_DEMO_ENABLED", "1")
     monkeypatch.setenv("MODULO_DEMO_USER", _DEMO_EMAIL)
     monkeypatch.setenv("MODULO_DEMO_PASSWORD", _DEMO_PASSWORD)
+    # ADR 005 / FAR-929: the demo seed creates a second org (slug "demo"), so it
+    # is a deliberate no-op unless the multi-org capability is opted into. This
+    # test exercises the multi-org demo-org isolation boundary, so enable it.
+    monkeypatch.setenv("MODULO_MULTI_ORG_ENABLED", "1")
     get_settings.cache_clear()
 
     role = f"test_demo_rls_{uuid.uuid4().hex[:8]}"
