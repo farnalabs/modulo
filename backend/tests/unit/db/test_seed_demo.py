@@ -182,6 +182,33 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert "failed" in statuses
     assert "awaiting_human" in statuses
 
+    # FAR-977: awaiting_human daily-fact parity — non-terminal runs must NOT
+    # fabricate completed_at / duration_ms.  Deleting the is_terminal gating in
+    # seed_demo.py must cause these assertions to fail.
+    awaiting_run = (
+        await session.execute(select(Run).where(Run.status == "awaiting_human", Run.run_number == 6))
+    ).scalar_one()
+    awaiting_fact = (
+        await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == awaiting_run.id))
+    ).scalar_one()
+    assert awaiting_fact.completed_at is None, "non-terminal fact must not fabricate completed_at"
+    assert awaiting_fact.duration_ms is None, "non-terminal fact must not fabricate duration_ms"
+
+    # Discriminating check: a TERMINAL run's fact must carry non-null values
+    # that match the Run row, so the assertion isn't vacuously all-None.
+    terminal_run = (
+        await session.execute(select(Run).where(Run.status == "complete", Run.run_number == 1))
+    ).scalar_one()
+    terminal_fact = (
+        await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == terminal_run.id))
+    ).scalar_one()
+    assert terminal_fact.completed_at is not None, "terminal fact must have completed_at"
+    assert terminal_fact.duration_ms is not None, "terminal fact must have duration_ms"
+    assert terminal_fact.completed_at == terminal_run.completed_at
+    assert terminal_fact.duration_ms == int(
+        (terminal_run.completed_at - terminal_run.started_at).total_seconds() * 1000
+    )
+
 
 async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     await _run_seed(session, monkeypatch, _demo_settings())
