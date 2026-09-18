@@ -10,6 +10,16 @@ org-role-floor-only because access derives from their parent entity.
 
 Convention: the resolver key is the model's ``__tablename__`` (e.g.
 ``Pipeline.__tablename__ == "pipelines"`` maps to key ``"pipelines"``).
+
+When adding a new team-scoped model:
+
+1. Add the resolver to ``modulo.api.team_scope`` (``resolve_<name>_team_scope``).
+2. Add it to ``TEAM_SCOPED_RESOLVERS`` keyed by ``__tablename__``.
+3. The tests below pick it up automatically from the model's columns.
+
+Models with ``owner_team_id`` and no ``visibility`` must instead be added to
+``MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY`` with a one-line reason;
+``test_every_owner_team_model_is_accounted_for`` fails either way.
 """
 
 from __future__ import annotations
@@ -135,20 +145,26 @@ class TestTeamScopeWiring:
             f"TEAM_SCOPED_RESOLVERS mismatch:\n  unexpected: {actual - expected}\n  missing: {expected - actual}"
         )
 
-    def test_cross_check_adr018_team_scope_test(self) -> None:
-        """The ADR-018 introspection test's TEAM_SCOPED_RESOLVERS set must agree.
+    def test_every_owner_team_model_is_accounted_for(self) -> None:
+        """Every model with ``owner_team_id`` is team-scoped or explicitly allowlisted.
 
-        test_team_scope_dependencies.py has a hard-coded
-        ``test_team_scoped_set_matches_adr`` that pins the same set.  This test
-        verifies that the two are consistent — if one changes, the other must
-        too.
+        Closes the observability gap left by the two tests above: a future
+        model carrying ``owner_team_id`` and no ``visibility`` that is added to
+        neither structure would otherwise stay on the org-role floor silently.
+        This makes that omission a test failure (not a security gap — the
+        org-role floor still applies — but a missing-decision gap).
         """
-        # Re-import to ensure both tests see the same snapshot.  We compare
-        # KEYS only (a module reload creates new function objects that fail
-        # identity-based equality).
-        import importlib
+        from modulo.db.models import Base
 
-        import modulo.api.team_scope as ts
-
-        importlib.reload(ts)
-        assert set(ts.TEAM_SCOPED_RESOLVERS) == set(TEAM_SCOPED_RESOLVERS)
+        allowlisted = {model.__tablename__ for model, _reason in MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY}
+        accounted_for = set(TEAM_SCOPED_RESOLVERS) | allowlisted
+        missing: list[str] = []
+        for mapper in Base.registry.mappers:
+            model = mapper.class_
+            columns = {c.key for c in mapper.column_attrs}
+            if "owner_team_id" in columns and model.__tablename__ not in accounted_for:
+                missing.append(f"{model.__name__} (tablename={model.__tablename__!r})")
+        assert not missing, (
+            "Models with owner_team_id that are in neither TEAM_SCOPED_RESOLVERS nor "
+            "MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY:\n" + "\n".join(missing)
+        )
