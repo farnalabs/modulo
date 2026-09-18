@@ -6,6 +6,7 @@ const mockManifest = vi.hoisted(() => ({
     monitor: { label: 'MONITOR', order: 2, default_expanded: true, labelKey: 'components.SidebarNav.group_monitor' },
     configure: { label: 'CONFIGURE', order: 3, default_expanded: false, labelKey: 'components.SidebarNav.group_configure' },
     admin: { label: 'ADMIN', order: 4, default_expanded: false, labelKey: 'components.SidebarNav.group_admin' },
+    system: { label: 'SYSTEM', order: 5, default_expanded: false, labelKey: 'components.SidebarNav.group_system', system_admin_only: true },
   },
   routes: {
     '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'core', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
@@ -38,18 +39,23 @@ const mockManifest = vi.hoisted(() => ({
     '/admin/costs': { name: 'admin-costs', breadcrumb: 'Costs', sidebar_group: 'configure', sidebar_order: 12, type: 'page', required_tier: 'team', required_roles: ['admin'], required_permissions: null, exact: true },
     '/admin/costs/limits': { name: 'admin-costs-limits', breadcrumb: 'Spend Limits', sidebar_group: null, sidebar_order: null, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/admin/costs/controls': { name: 'admin-costs-controls', breadcrumb: 'Cost Controls', sidebar_group: null, sidebar_order: null, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
-    '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'admin', sidebar_order: 1, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'system', sidebar_order: 1, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/teams': { name: 'settings-teams', breadcrumb: 'Teams', sidebar_group: 'admin', sidebar_order: 2, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/sso': { name: 'settings-sso', breadcrumb: 'SSO', sidebar_group: 'admin', sidebar_order: 3, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/hitl-review': { name: 'settings-hitl-review', breadcrumb: 'HITL Review', sidebar_group: 'admin', sidebar_order: 4, type: 'page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'private_preview' },
-    '/settings/error-forwarders': { name: 'settings-error-forwarders', breadcrumb: 'Error Forwarders', sidebar_group: 'admin', sidebar_order: 5, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
-    '/settings/email': { name: 'settings-email', breadcrumb: 'Email', sidebar_group: 'admin', sidebar_order: 6, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/settings/error-forwarders': { name: 'settings-error-forwarders', breadcrumb: 'Error Forwarders', sidebar_group: 'system', sidebar_order: 2, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/settings/email': { name: 'settings-email', breadcrumb: 'Email', sidebar_group: 'system', sidebar_order: 3, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/admin/remy': { name: 'admin-remy', breadcrumb: 'Remy Config', sidebar_group: 'admin', sidebar_order: 7, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/remy': { name: 'settings-remy', breadcrumb: 'Remy Skills', sidebar_group: 'admin', sidebar_order: 8, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
     '/admin/users': { name: 'admin-users', breadcrumb: 'Users', sidebar_group: 'admin', sidebar_order: 9, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/admin/org': { name: 'admin-org', breadcrumb: 'Org Settings', sidebar_group: 'admin', sidebar_order: 10, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/admin/audit': { name: 'admin-audit', breadcrumb: 'Audit Log', sidebar_group: 'admin', sidebar_order: 11, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
-    '/admin/housekeeping': { name: 'admin-housekeeping', breadcrumb: 'Housekeeping', sidebar_group: 'admin', sidebar_order: 13, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/admin/housekeeping': { name: 'admin-housekeeping', breadcrumb: 'Housekeeping', sidebar_group: 'system', sidebar_order: 6, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/admin/feature-flags': { name: 'admin-feature-flags', breadcrumb: 'Feature Flags', sidebar_group: 'system', sidebar_order: 4, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/admin/run-retention': { name: 'admin-run-retention', breadcrumb: 'Run Retention', sidebar_group: 'system', sidebar_order: 5, type: 'page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/settings/runtime-config-sys': { name: 'settings-runtime-config', breadcrumb: 'Runtime Config', sidebar_group: 'system', sidebar_order: 7, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/settings/rate-limits-sys': { name: 'settings-rate-limits', breadcrumb: 'Rate Limits', sidebar_group: 'system', sidebar_order: 8, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/settings/observability-sys': { name: 'settings-observability', breadcrumb: 'Observability', sidebar_group: 'system', sidebar_order: 9, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/feedback/inbox': { name: 'feedback-inbox', breadcrumb: 'Feedback Inbox', sidebar_group: 'admin', sidebar_order: 14, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
     '/admin/my-profile': { name: 'my-profile', breadcrumb: 'My Profile', sidebar_group: null, sidebar_order: null, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
   },
@@ -59,7 +65,7 @@ vi.mock('@/manifest.yaml', () => ({
   default: mockManifest,
 }))
 
-import { getNavGroups, canSeeItem, isNavItemVisible } from '../config/navigation'
+import { getNavGroups, canSeeItem, isNavItemVisible, getVisibleNavGroups } from '../config/navigation'
 const navGroups = getNavGroups()
 import type { NavItem, NavVisibilityContext } from '../config/navigation'
 
@@ -83,9 +89,9 @@ describe('navigation.ts', () => {
   }
 
   it('populates sidebar groups from manifest', () => {
-    expect(navGroups).toHaveLength(4)
+    expect(navGroups).toHaveLength(5)
     const groupIds = navGroups.map((g) => g.id)
-    expect(groupIds).toEqual(['core', 'monitor', 'configure', 'admin'])
+    expect(groupIds).toEqual(['core', 'monitor', 'configure', 'admin', 'system'])
   })
 
   it('sets defaultCollapsed based on default_expanded', () => {
@@ -104,6 +110,7 @@ describe('navigation.ts', () => {
     expect(navGroups[1].id).toBe('monitor')
     expect(navGroups[2].id).toBe('configure')
     expect(navGroups[3].id).toBe('admin')
+    expect(navGroups[4].id).toBe('system')
   })
 
   it('items within groups are sorted by sidebar_order', () => {
@@ -362,11 +369,33 @@ describe('navigation.ts', () => {
     expect(configure.items.some(i => i.to === '/admin/costs')).toBe(true)
   })
 
-  it('admin group contains license, users, remy, system etc', () => {
+  it('admin group contains users, remy etc (license moved to system)', () => {
     const admin = navGroups.find((g) => g.id === 'admin')!
     expect(admin.items.length).toBeGreaterThanOrEqual(5)
-    expect(admin.items.some(i => i.to === '/settings/license')).toBe(true)
     expect(admin.items.some(i => i.to === '/admin/users')).toBe(true)
     expect(admin.items.some(i => i.to === '/admin/remy')).toBe(true)
+  })
+
+  it('system group has systemAdminOnly set', () => {
+    const system = navGroups.find((g) => g.id === 'system')!
+    expect(system.systemAdminOnly).toBe(true)
+  })
+
+  it('system group contains license, housekeeping, feature-flags, etc', () => {
+    const system = navGroups.find((g) => g.id === 'system')!
+    expect(system.items.some(i => i.to === '/settings/license')).toBe(true)
+    expect(system.items.some(i => i.to === '/admin/housekeeping')).toBe(true)
+    expect(system.items.some(i => i.to === '/admin/feature-flags')).toBe(true)
+    expect(system.items.some(i => i.to === '/admin/run-retention')).toBe(true)
+  })
+
+  it('getVisibleNavGroups excludes system group for non-system-admin', () => {
+    const groups = getVisibleNavGroups(visibilityContext({ isSystemAdmin: false }))
+    expect(groups.find((g: any) => g.id === 'system')).toBeUndefined()
+  })
+
+  it('getVisibleNavGroups includes system group for system-admin', () => {
+    const groups = getVisibleNavGroups(visibilityContext({ isSystemAdmin: true }))
+    expect(groups.find((g: any) => g.id === 'system')).toBeDefined()
   })
 })

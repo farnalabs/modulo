@@ -39,6 +39,7 @@ interface ManifestEntry {
 }
 
 const manifestRoutes = (manifest as { routes?: Record<string, ManifestEntry> })?.routes ?? {}
+const manifestSidebarGroups = (manifest as { sidebar_groups?: Record<string, { system_admin_only?: boolean }> })?.sidebar_groups ?? {}
 const manifestByName = new Map<string, ManifestEntry & { path: string }>()
 const manifestPathToName = new Map<string, string>()
 for (const [path, entry] of Object.entries(manifestRoutes)) {
@@ -461,7 +462,7 @@ const router = createRouter({
       path: '/admin/housekeeping',
       name: 'admin-housekeeping',
       component: AdminHousekeepingView,
-      meta: { requiresSystemAdmin: false, breadcrumb: 'Housekeeping', testid: 'admin-housekeeping' },
+      meta: { breadcrumb: 'Housekeeping', testid: 'admin-housekeeping' },
     },
     {
       path: '/admin/environments',
@@ -669,6 +670,18 @@ export function hydrateManifestMeta(to: Parameters<Parameters<typeof router.befo
   to.meta.parent = entry.parent
     ? (manifestPathToName.get(entry.parent) ?? entry.parent)
     : undefined
+
+  // FAR-938: derive requiresSystemAdmin from the manifest sidebar_groups so
+  // it can never drift between the router and the sidebar filter.
+  const routePath = (entry as unknown as { path?: string }).path
+    ?? manifestByName.get(routeName)?.path
+  if (routePath) {
+    const routeEntry = manifestRoutes[routePath] as unknown as { sidebar_group?: string } | undefined
+    const groupId = routeEntry?.sidebar_group
+    if (groupId && manifestSidebarGroups[groupId]?.system_admin_only) {
+      to.meta.requiresSystemAdmin = true
+    }
+  }
 }
 
 /**
