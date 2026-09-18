@@ -189,6 +189,16 @@ def main() -> int:
     # `uv run` is a redundant but harmless double hop that guarantees semgrep
     # executes with the locked backend environment.
     env = {k: v for k, v in os.environ.items() if k not in _GIT_STATE_ENV}
+    # Resource bounds prevent OOM on machines with limited free memory.
+    # --jobs 1: single-threaded to cap RSS (semgrep-core spawns per-core workers
+    #   that each load the full rule set; 8 workers × 845 files × 64 rules
+    #   exhausts 16 GB on this machine).
+    # --max-memory 2048: hard cap at 2 GB; semgrep exits gracefully instead of
+    #   the OS OOM-killer taking the process (and potentially other agents).
+    # --timeout 120: per-file timeout; prevents a single pathological file from
+    #   blocking the whole hook indefinitely.
+    # CI (Linux, Ubicloud 2-core) runs the full scan without these bounds and
+    # has more headroom — the bounds here are a LOCAL-ONLY safety net.
     cmd = [
         "uv",
         "run",
@@ -199,6 +209,12 @@ def main() -> int:
         "scan",
         "--config=.semgrep/",
         "--error",
+        "--jobs",
+        "1",
+        "--max-memory",
+        "2048",
+        "--timeout",
+        "120",
         "--baseline-commit=HEAD",
         "backend/src/",
     ]

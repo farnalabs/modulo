@@ -100,8 +100,12 @@
         name: ESLint
         entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py lint
         language: system
-        files: \.(vue|ts|js)$
-        pass_filenames: false
+        # Match only frontend/src, mirroring the CI lint command `eslint src`
+        # (frontend/package.json).  A repo-wide pattern would also match docs
+        # examples and frontend/tests, which carry pre-existing no-console
+        # violations the CI lint gate does not enforce.
+        files: ^frontend/src/.*\.(vue|ts|js)$
+        pass_filenames: true
       - id: vue-tsc
         name: vue-tsc type check
         entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
