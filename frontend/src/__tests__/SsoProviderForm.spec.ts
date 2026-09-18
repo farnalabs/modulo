@@ -210,6 +210,51 @@ describe('SsoProviderForm — domain paste support (FAR-974 #3)', () => {
     expect(lastEmit.allowed_domains).toEqual(['foo.com', 'bar.org', 'baz.net'])
   })
 
+  it('keeps the valid prefix when a pasted batch hits an invalid entry', async () => {
+    const data = makeData({ auto_provision: true, allowed_domains: [] })
+    const wrapper = mountForm(data)
+    await nextTick()
+
+    await wrapper.find('[data-testid="sso-mode-domains"]').setValue(true)
+    await nextTick()
+
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    await input.trigger('paste', {
+      clipboardData: { getData: () => 'valid.com, invalid@@, valid2.com' },
+    } as unknown as ClipboardEvent)
+    await nextTick()
+
+    // The batch aborts at the invalid entry, but the valid prefix must still be
+    // committed and the validation error surfaced. Without the prefix commit
+    // this test fails because no update:data is emitted at all.
+    const emitted = wrapper.emitted('update:data')!
+    const lastEmit = emitted[emitted.length - 1][0] as SsoFormState
+    expect(lastEmit.allowed_domains).toEqual(['valid.com'])
+    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
+  })
+
+  it('retains every valid domain preceding an invalid pasted entry', async () => {
+    const data = makeData({ auto_provision: true, allowed_domains: [] })
+    const wrapper = mountForm(data)
+    await nextTick()
+
+    await wrapper.find('[data-testid="sso-mode-domains"]').setValue(true)
+    await nextTick()
+
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    await input.trigger('paste', {
+      clipboardData: { getData: () => 'one.example.com, two.example.com, bad@@' },
+    } as unknown as ClipboardEvent)
+    await nextTick()
+
+    // Both valid domains precede the invalid entry, so both must survive: a
+    // per-part emit reading stale props would keep only the last one.
+    const emitted = wrapper.emitted('update:data')!
+    const lastEmit = emitted[emitted.length - 1][0] as SsoFormState
+    expect(lastEmit.allowed_domains).toEqual(['one.example.com', 'two.example.com'])
+    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
+  })
+
   it('the domain helper text mentions paste support and case-insensitive matching', async () => {
     const data = makeData({ auto_provision: true, allowed_domains: [] })
     const wrapper = mountForm(data)
