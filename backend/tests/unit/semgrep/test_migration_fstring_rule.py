@@ -37,6 +37,17 @@ VERSIONS_DIR = REPO_ROOT / "backend" / "src" / "modulo" / "db" / "migrations" / 
 _EXEMPT_MAX_REVISION = 247
 
 
+def _revision_number(filename: str) -> int | None:
+    """Extract the 4-digit revision prefix from a migration filename.
+
+    Returns the integer revision for names like ``0248_probe.py`` and
+    ``None`` for non-migration files (``__init__.py``, helpers, short
+    names, etc.).
+    """
+    prefix = filename[:4]
+    return int(prefix) if prefix.isdigit() else None
+
+
 def _rule() -> dict[str, Any]:
     data = yaml.safe_load(RULE_FILE.read_text(encoding="utf-8"))
     return data["rules"][0]
@@ -53,6 +64,23 @@ def _is_included(rel_path: str) -> bool:
     return any(glob.globmatch(rel_path, pattern, flags=glob.GLOBSTAR) for pattern in rule["paths"]["include"])
 
 
+def _exempt_window_violation(path: Path) -> str | None:
+    """Return a violation message when an at-or-below-cutoff migration path is not exempt, else None (skip).
+
+    This is the per-file decision extracted from the loop in
+    ``test_every_historical_migration_is_exempt`` so it can be unit-tested
+    directly with synthetic paths (no filesystem needed — ``Path.relative_to``
+    works on non-existent paths).
+    """
+    revision = _revision_number(path.name)
+    if revision is None or revision > _EXEMPT_MAX_REVISION:
+        return None
+    rel = str(path.relative_to(REPO_ROOT)).replace("\\", "/")
+    if not _is_excluded(rel):
+        return f"{path.name} (revision {revision:04d}) is not covered by the exclude cutoff"
+    return None
+
+
 class TestMigrationFStringRulePaths:
     def test_every_historical_migration_is_exempt(self) -> None:
         """All existing files at-or-below the rule's frozen cutoff are exempts.
@@ -64,11 +92,7 @@ class TestMigrationFStringRulePaths:
         rule = _rule()
         assert rule["id"] == "migration-fstring-sql"
         for path in sorted(VERSIONS_DIR.glob("*.py")):
-            revision = int(path.name[:4])
-            if revision > _EXEMPT_MAX_REVISION:
-                continue
-            rel = str(path.relative_to(REPO_ROOT)).replace("\\", "/")
-            assert _is_excluded(rel), f"{path.name} (revision {revision:04d}) is not covered by the exclude cutoff"
+            assert _exempt_window_violation(path) is None, f"{path.name} should be exempt"
 
     def test_a_new_migration_is_not_exempt_but_in_scope(self) -> None:
         """The window ends at the frozen cutoff: the next revision is scanned."""
@@ -86,6 +110,48 @@ class TestMigrationFStringRulePaths:
             assert _is_excluded(rel), f"revision {rev:04d} should be exempt"
         rel = "backend/src/modulo/db/migrations/versions/0248_x.py"
         assert not _is_excluded(rel), "revision 0248 must NOT be exempt"
+
+
+class TestExemptWindowViolation:
+    """Tests for the _exempt_window_violation helper (FAR-920)."""
+
+    def test_non_migration_name_skips_without_error(self) -> None:
+        """A non-migration path (revision=None) skips — returns None."""
+        assert _exempt_window_violation(VERSIONS_DIR / "__init__.py") is None
+
+    def test_historical_migration_is_exempt(self) -> None:
+        """A migration at-or-below the cutoff is exempt — returns None."""
+        assert _exempt_window_violation(VERSIONS_DIR / "0001_initial.py") is None
+
+    def test_post_cutoff_non_excluded_path_violates(self) -> None:
+        """A migration within the cutoff window but not matched by the exclude globs fires a violation.
+
+        ``0100probe.py`` extracts revision 100 (within the 0-247 window) but
+        lacks the underscore separator required by the ``01??_*.py`` glob, so
+        ``_is_excluded`` returns False and the violation path fires.
+        """
+        result = _exempt_window_violation(VERSIONS_DIR / "0100probe.py")
+        assert result is not None
+        assert "0100probe.py" in result
+
+
+class TestRevisionNumber:
+    """Regression tests for the _revision_number helper (FAR-920)."""
+
+    def test_returns_none_for_init_file(self) -> None:
+        assert _revision_number("__init__.py") is None
+
+    def test_returns_none_for_helpers_file(self) -> None:
+        assert _revision_number("helpers.py") is None
+
+    def test_returns_none_for_short_name(self) -> None:
+        assert _revision_number("x.py") is None
+
+    def test_returns_int_for_valid_migration(self) -> None:
+        assert _revision_number("0248_probe.py") == 248
+
+    def test_returns_int_for_zero_revision(self) -> None:
+        assert _revision_number("0000_initial.py") == 0
 
 
 # probing migration content used for the regex predicates

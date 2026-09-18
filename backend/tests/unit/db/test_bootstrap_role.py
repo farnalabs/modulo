@@ -45,6 +45,11 @@ _NOLOGIN_ROLE: str = "role_nologin_example"
 
 _BREAK_GLASS_COLS = ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
 
+# Shared invalid role names used across parametrisation fixtures — must stay
+# in one place so the lists cannot drift apart.
+_INVALID_ROLE_NAMES: list[str] = ["bad;role", "bad role", "Bad-Case"]
+_INVALID_ROLE_IDS: list[str] = ["semicolon", "space", "uppercase-dash"]
+
 
 def _params(query: str) -> list[str]:
     """Extract the bound parameters from an asyncpg query (``$1`` etc.)."""
@@ -479,6 +484,18 @@ class TestApplyAccountsAllowList:
         await _apply_accounts_allow_list(conn, "modulo_app")
         assert not any("GRANT UPDATE" in q for q in conn.executed)
 
+    @pytest.mark.parametrize(
+        "bad_name",
+        _INVALID_ROLE_NAMES,
+        ids=_INVALID_ROLE_IDS,
+    )
+    async def test_rejects_invalid_role_name_before_execute(self, bad_name: str) -> None:
+        """Defence-in-depth: invalid role name raises before any DDL reaches the connection."""
+        conn = _FakeConn(tables={"accounts"}, columns={"accounts": {"email"}})
+        with pytest.raises(ValueError, match="Invalid role identifier"):
+            await _apply_accounts_allow_list(conn, bad_name)
+        assert not conn.executed
+
 
 # ---------------------------------------------------------------------------
 # _grant_break_glass
@@ -528,6 +545,18 @@ class TestGrantBreakGlass:
         assert not any("GRANT SELECT" in q and "public." in q for q in conn.executed)
         assert any("GRANT USAGE ON ALL SEQUENCES" in q for q in conn.executed)
 
+    @pytest.mark.parametrize(
+        "bad_name",
+        _INVALID_ROLE_NAMES,
+        ids=_INVALID_ROLE_IDS,
+    )
+    async def test_rejects_invalid_role_name_before_execute(self, bad_name: str) -> None:
+        """Defence-in-depth: invalid role name raises before any DDL reaches the connection."""
+        conn = _FakeConn(tables={"accounts"})
+        with pytest.raises(ValueError, match="Invalid role identifier"):
+            await _grant_break_glass(conn, bad_name)
+        assert not conn.executed
+
 
 # ---------------------------------------------------------------------------
 # _grant_function_execute
@@ -548,6 +577,23 @@ class TestGrantFunctionExecute:
         conn.function_exists = False
         await _grant_function_execute(conn, "modulo_app", "modulo_breakglass")
         assert not any("GRANT EXECUTE" in q for q in conn.executed)
+
+    @pytest.mark.parametrize(
+        ("bad_app", "bad_bg"),
+        [
+            ("bad;role", "modulo_breakglass"),
+            ("modulo_app", "bad;role"),
+            ("bad role", "bad role"),
+            ("Bad-Case", "Bad-Case"),
+        ],
+        ids=["semicolon-app", "semicolon-bg", "space-both", "uppercase-dash-both"],
+    )
+    async def test_rejects_invalid_role_names_before_execute(self, bad_app: str, bad_bg: str) -> None:
+        """Defence-in-depth: invalid role names raise before any DDL reaches the connection."""
+        conn = _FakeConn()
+        with pytest.raises(ValueError, match="Invalid role identifier"):
+            await _grant_function_execute(conn, bad_app, bad_bg)
+        assert not conn.executed
 
 
 # ---------------------------------------------------------------------------
