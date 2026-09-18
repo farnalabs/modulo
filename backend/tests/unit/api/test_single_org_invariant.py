@@ -268,6 +268,38 @@ async def test_login_context_single_org_when_disabled() -> None:
 
 
 @pytest.mark.asyncio
+async def test_login_context_single_org_with_one_org_when_disabled() -> None:
+    """GET /api/v1/auth/login-context reports the sole org when disabled.
+
+    When multi-org is disabled and exactly one login-active org exists, the
+    response must still carry that org's ``slug``/``name`` so the frontend can
+    auto-skip the org picker and bind the session to the only org.  The
+    zero/multiple case is covered by
+    ``test_login_context_single_org_when_disabled``.
+    """
+    settings = _make_settings()
+    assert settings.modulo_multi_org_enabled is False
+    mock_session = _make_session()
+
+    mock_org = SimpleNamespace(slug="org-a", name="Org A")
+    mock_session.execute.return_value.scalars.return_value.all.return_value = [mock_org]
+
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    app.dependency_overrides[get_plan_context] = _make_plan
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/v1/auth/login-context")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["multi_org"] is False
+        assert data["org"] == {"slug": "org-a", "name": "Org A"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_login_context_single_org_enabled_preserves_existing() -> None:
     """GET /api/v1/auth/login-context preserves existing multi-org logic when enabled."""
     settings = _make_settings(modulo_multi_org_enabled=True)
