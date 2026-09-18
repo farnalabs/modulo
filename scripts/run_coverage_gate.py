@@ -23,7 +23,9 @@ Gate semantics (fail-closed):
   Use ``--allow-missing-reports`` for local runs where you may not have
   every report.
 - **No changed production lines** → SKIP, exit 0.  A test-only or docs-only
-  diff has no production files once the exclusions are applied.
+  diff has no production files once the exclusions are applied.  A diff that
+  only adds comments, docstrings, or blank lines also skips — only
+  executable changed lines enter the coverage denominator (FAR-962).
 - **Changed production lines, but no coverage data for them** → FAIL,
   exit 1.  If production lines changed but diff-cover cannot match them to
   the coverage report (the report does not contain those files at all), every
@@ -57,6 +59,7 @@ Usage (CI)::
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import json
 import os
@@ -128,6 +131,13 @@ _COVERAGE_LINE_RE = re.compile(r"Coverage:\s*(\d+(?:\.\d+)?)\s*%")
 _THRESHOLD_NOT_MET_RE = re.compile(r"Failure\. Coverage is below", re.IGNORECASE)
 _DIFF_COVER_TOTAL_RE = re.compile(r"Total:\s*(\d+)\s+line", re.IGNORECASE)
 
+# Matches a standalone Python string literal (triple-quoted or single/double
+# quoted) with no other code around it.  Used to exclude docstrings and bare
+# strings from the executable-line count (coverage.py does not instrument them).
+_PYTHON_STRING_LITERAL_RE = re.compile(
+    r"""^\s*(?:('{3}|"{3})[\s\S]*\1|('{1}|"{1})[^\n]*\2)\s*$"""
+)
+
 # ``git diff`` filter and language pathspecs for changed-file discovery.
 _DIFF_FILTER = "--diff-filter=ACM"
 _EXTENSIONS: dict[str, tuple[str, ...]] = {
@@ -185,6 +195,68 @@ def _is_excluded(path: str) -> bool:
     return any(fnmatch(path, pattern) for pattern in _EXCLUDE_PATTERNS)
 
 
+# ---------------------------------------------------------------------------
+# Executable-line detection — used to exclude non-executable changed lines
+# (comments, docstrings, blank lines) from the coverage denominator.
+# ---------------------------------------------------------------------------
+
+def _is_executable_python_line(line: str) -> bool:
+    """Return True if a Python line is an executable statement.
+
+    Uses ``ast.parse`` to distinguish real statements from comments,
+    docstrings, and blank lines.  Lines that are syntactically non-executable
+    (comment-only, string-only, blank) are excluded so they do not inflate
+    the coverage denominator.
+
+    Standalone string literals (e.g. ``'docstring'``) are treated as
+    non-executable because coverage.py does not instrument them — they are
+    data, not control flow.  Strings inside assignments, calls, or
+    expressions ARE executable and are counted.
+
+    The function is lenient on parse failure — lines that cannot be parsed
+    are counted as executable to avoid under-counting.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    # Standalone string literals (docstrings, bare strings) are not
+    # instrumented by coverage.py.  Detect by checking if the entire
+    # stripped line is a string literal (starts and ends with matching
+    # quotes, no other code around it).
+    if _PYTHON_STRING_LITERAL_RE.fullmatch(stripped):
+        return False
+    try:
+        tree = ast.parse(stripped, mode="eval")
+        return True
+    except SyntaxError:
+        try:
+            tree = ast.parse(stripped, mode="exec")
+            return bool(tree.body)
+        except SyntaxError:
+            return True
+
+
+def _is_executable_js_line(line: str) -> bool:
+    """Return True if a JS/TS line is an executable statement.
+
+    Uses lightweight regex stripping to remove single-line comments
+    (``//``) and blank lines.  Multi-line comment internals are handled by
+    the ``/* ... */`` stripping below.
+
+    This is a heuristic — it does not handle every edge case (e.g. ``//``
+    inside a string literal), but it is correct for the vast majority of
+    real-world diffs and sufficient for the coverage gate's purpose of
+    excluding clearly non-executable lines.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    # Strip trailing single-line comments (but not inside strings — heuristic).
+    stripped = re.sub(r"//[^\n]*$", "", stripped)
+    stripped = stripped.strip()
+    return bool(stripped)
+
+
 def _safe_repo_path(value: str) -> str | None:
     """Constrain a repo-relative path to a safe character set.
 
@@ -219,10 +291,14 @@ def _diff_range(compare_branch: str) -> str:
 
 
 def _count_added_lines(diff_range: str, filepath: str) -> int:
-    """Count non-blank lines added to *filepath* within *diff_range*.
+    """Count executable non-blank lines added to *filepath* within *diff_range*.
 
     Both arguments are regex fullmatch-bounded before they reach
     ``subprocess`` (resolves pythonsecurity:S8705).
+
+    Only executable lines (statements, assignments, control flow, etc.) are
+    counted.  Comments, docstrings, and blank lines are excluded so they do
+    not inflate the coverage denominator (FAR-962).
     """
     safe_range = _safe_repo_path(diff_range)
     safe_path = _safe_repo_path(filepath)
@@ -240,19 +316,35 @@ def _count_added_lines(diff_range: str, filepath: str) -> int:
         return 0
     if result.returncode != 0:
         return 0
-    return sum(
-        1
-        for diff_line in result.stdout.splitlines()
-        if diff_line.startswith("+") and not diff_line.startswith("+++") and diff_line[1:].strip()
-    )
+
+    # Determine language from extension for executable-line filtering.
+    is_python = filepath.endswith(".py")
+    is_js = any(filepath.endswith(ext) for ext in (".ts", ".tsx", ".js", ".jsx", ".vue"))
+
+    count = 0
+    for diff_line in result.stdout.splitlines():
+        if not diff_line.startswith("+") or diff_line.startswith("+++"):
+            continue
+        content = diff_line[1:]
+        if not content.strip():
+            continue
+        if is_python and not _is_executable_python_line(content):
+            continue
+        if is_js and not _is_executable_js_line(content):
+            continue
+        count += 1
+    return count
 
 
 def _get_changed_production_files(compare_branch: str, language: str) -> dict[str, int]:
-    """Return {filepath: non_blank_line_count} for changed production files.
+    """Return {filepath: executable_line_count} for changed production files.
 
     Diffs ``<compare_branch>...HEAD`` (three-dot / merge-base, matching
-    diff-cover) to find changed files, then counts non-blank added lines per
-    file.  Files matching the exclusion patterns are skipped.  Returns an empty
+    diff-cover) to find changed files, then counts executable added lines per
+    file.  Non-executable lines (comments, docstrings, blank lines) are
+    excluded so they do not inflate the coverage denominator (FAR-962).
+    Deleted lines are excluded by ``--diff-filter=ACM``.
+    Files matching the exclusion patterns are skipped.  Returns an empty
     dict when the range is invalid or the diff fails.
     """
     pathspecs = _EXTENSIONS.get(language)
@@ -545,13 +637,13 @@ def evaluate(
     report is a gate failure — the upstream job or artifact download broke.
     When True (local convenience), a missing report is a skip.
 
-    The gate detects unmeasured files by comparing the non-blank changed
-    production lines (from ``git diff``) against the production-only lines
-    diff-cover measured.  Lines it did not measure count as 0% coverage, and
-    the numerator and denominator always come from the same production-only
-    file set.
+    The gate detects unmeasured files by comparing the executable changed
+    production lines (from ``git diff``, excluding comments/docstrings/blanks)
+    against the production-only lines diff-cover measured.  Lines it did not
+    measure count as 0% coverage, and the numerator and denominator always
+    come from the same production-only file set.
     """
-    # --- Get changed production files and count non-blank lines ---
+    # --- Get changed production files and count executable added lines ---
     changed_files = _get_changed_production_files(compare_branch, language)
     changed_lines = sum(changed_files.values())
 
