@@ -120,7 +120,7 @@
           :value="data.client_secret"
           type="password"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          :placeholder="props.isEdit ? $t('components.SsoProviderForm.secret_masked_placeholder') : $t('components.SsoProviderForm.leave_blank_to_keep_existing')"
+          :placeholder="props.isEdit ? $t('components.SsoProviderForm.secret_masked_placeholder') : $t('components.SsoProviderForm.enter_client_secret_placeholder')"
           @input="
             emitUpdate({
               ...data,

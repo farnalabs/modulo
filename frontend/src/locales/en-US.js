@@ -3637,6 +3637,7 @@ export default {
       "provider_type": "Provider Type",
       "client_secret": "Client Secret",
       "discovery_url": "Discovery URL",
+      "enter_client_secret_placeholder": "Enter client secret",
       "leave_blank_to_keep_existing": "Leave blank to keep existing",
       "secret_masked_placeholder": "\u2022\u2022\u2022\u2022\u2022\u2022",
       "openid_profile_email": "openid, profile, email",
