@@ -87,19 +87,13 @@ services:
       - ./backend/src:/app/src
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
     depends_on:
       - backend
     ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend/src:/app/src
-    environment:
-      # Auto-login with the admin user seeded by MODULO_USERS below.
-      - VITE_AUTO_LOGIN_USERNAME=admin
-      - VITE_AUTO_LOGIN_PASSWORD=admin
-      - VITE_API_URL=http://backend:8000
-      - VITE_DEMO_MODE=true
+      - "5173:80"
 
 volumes:
   pgdata:
