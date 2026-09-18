@@ -87,6 +87,8 @@ jobs:
       - name: Warn if queue appears stalled
         env:
           GH_TOKEN: ${{ github.token }}
+          MODULO_BRANCH_FIXER_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          MODULO_BRANCH_FIXER_HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
         shell: bash
         run: |
           # Emit a ::warning:: when the most recent successful merge-queue run
