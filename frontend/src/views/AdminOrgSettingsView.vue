@@ -103,22 +103,14 @@
             <p class="text-sm font-medium">{{ $t('views.AdminOrgSettingsView.community_objects_toggle') }}</p>
             <p class="text-xs text-muted-foreground">{{ $t('views.AdminOrgSettingsView.community_objects_toggle_hint') }}</p>
           </div>
-          <button
-            type="button"
-            role="switch"
-            :aria-checked="communityObjectsEnabled"
-            :aria-label="$t('views.AdminOrgSettingsView.community_objects_toggle')"
+          <ToggleSwitch
+            :checked="communityObjectsEnabled"
             :disabled="communityObjectsSaving"
+            :toggling="communityObjectsSaving"
+            :label="$t('views.AdminOrgSettingsView.community_objects_toggle')"
             data-testid="community-objects-toggle"
-            class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-            :class="communityObjectsEnabled ? 'bg-primary' : 'bg-input'"
-            @click="toggleCommunityObjects"
-          >
-            <span
-              class="pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform"
-              :class="communityObjectsEnabled ? 'translate-x-5' : 'translate-x-0'"
-            />
-          </button>
+            @toggle="toggleCommunityObjects"
+          />
         </div>
         <div v-if="communityObjectsError" class="mt-2 text-xs text-destructive">{{ communityObjectsError }}</div>
       </SectionCard>
@@ -176,6 +168,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
+import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
 import ProductAnalyticsSettings from '../components/product-analytics/ProductAnalyticsSettings.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -258,18 +251,17 @@ async function loadCommunityObjects() {
   }
 }
 
-async function toggleCommunityObjects() {
+async function toggleCommunityObjects(next: boolean) {
   communityObjectsSaving.value = true
   communityObjectsError.value = null
   try {
-    const newVal = !communityObjectsEnabled.value
     const resp = await api.PUT('/api/v1/admin/org/community-objects', {
-      body: { community_objects_enabled: newVal },
+      body: { community_objects_enabled: next },
     })
     if (resp.error) {
       communityObjectsError.value = formatApiError(resp.error)
     } else {
-      communityObjectsEnabled.value = newVal
+      communityObjectsEnabled.value = next
     }
   } catch (e: unknown) {
     communityObjectsError.value = formatApiError(e)
