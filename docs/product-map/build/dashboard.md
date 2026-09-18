@@ -12,6 +12,8 @@ unit-tests:
   - backend/tests/unit/api/test_view_endpoint.py
 bdd:
   - backend/tests/bdd/features/dashboard/hitl_trends.feature
+  - backend/tests/bdd/features/dashboard/dashboard_summary.feature
+  - backend/tests/bdd/features/dashboard/daily_run_counts.feature
   - backend/tests/bdd/features/views/views.feature
   - backend/tests/bdd/steps/test_views.py
 depends-on:
@@ -50,13 +52,25 @@ org/`days` to keep the landing page fast.
 
 ## Known Gaps
 
-- **No BDD for `/summary` / `/trends` / `/daily-run-counts`** — the dashboard
-  surfaces are unit-tested only; the only dashboard BDD is `hitl_trends.feature`.
 - **Eval pass rate is derived from non-guardrail eval results** — guardrail evals are
   deliberately excluded from the ratio (`non_guardrail_eval_results_clause`), so the
   headline pass rate does not reflect guardrail-blocked runs.
 
 ## QA History
+- 2026-09-18: **improve-architecture (product-map walk)** — closed the "No BDD for
+  `/summary` / `/trends` / `/daily-run-counts`" gap: registered
+  `dashboard/dashboard_summary.feature` (+ colocated steps
+  `features/dashboard/test_dashboard_summary_steps.py`) and
+  `dashboard/daily_run_counts.feature` (+ colocated steps
+  `features/dashboard/test_daily_run_counts_steps.py`) into the executing BDD
+  suite, driving the real `dashboard_summary` /
+  `daily_run_counts` route handlers (mock-session dispatch on SQL text) — summary
+  widget shape, per-team metrics, eval pass-rate detail, 7-day trend, config
+  warnings, idle folding of `pending`/`claimed` into `idle` with single-counted
+  `total_runs`, the additive `days` `period` block, and the 1..90 `days` bound; plus
+  day/status-keyed daily counts, cross-status accumulation, default 30 and custom
+  `days` windows, and the 1..365 `days` bound. Removed the tracked known gap;
+  `/trends` was already covered by `hitl_trends.feature`.
 - 2026-09-15: **improve-architecture (product-map walk)** — closed the dashboard
   notifications-panel product-map gap: the `DashboardNotificationsPanel.vue` paging
   controls ship static `data-testid`s (`panel-prev-page` / `panel-next-page`) on the
