@@ -423,6 +423,19 @@ describe('SsoProviderForm', () => {
     expect(last.allowed_domains).toEqual(['modulo.run'])
   })
 
+  it('does not re-emit a pending domain already in the allowlist on blur (FAR-974 #4)', async () => {
+    const wrapper = mountForm(makeData({ auto_provision: true, allowed_domains: ['example.com'] }))
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+
+    // Normalises to example.com, which is already allowlisted — blur commits
+    // silently (clears the input) instead of emitting a duplicate.
+    await input.setValue('Example.COM')
+    await input.trigger('blur')
+    await nextTick()
+
+    expect(wrapper.emitted('update:data') ?? []).toHaveLength(0)
+  })
+
   it('commits pending domain before submit (FAR-974 #4 regression)', async () => {
     const Harness = defineComponent({
       components: { SsoProviderForm },
@@ -519,6 +532,67 @@ describe('SsoProviderForm', () => {
 
     const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
     expect(payload.allowed_domains).toEqual(['existing.com', 'example.com', 'mail.example.com', 'test.org'])
+  })
+
+  it('batch-adds comma-separated domains on a real paste event (FAR-974 #3)', async () => {
+    // jsdom has no ClipboardEvent constructor, so dispatch a plain Event and
+    // attach a clipboardData stub — exactly what the handler reads.
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['existing.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: `
+        <SsoProviderForm :data="data" :saving="false" submit-label="Save"
+          saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />`,
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: { getData: () => 'example.com, mail.example.com' },
+    })
+    input.element.dispatchEvent(pasteEvent)
+    await nextTick()
+
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['existing.com', 'example.com', 'mail.example.com'])
+    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(false)
+  })
+
+  it('surfaces an error when a pasted list contains an invalid domain (FAR-974 #3)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['existing.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: `
+        <SsoProviderForm :data="data" :saving="false" submit-label="Save"
+          saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />`,
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: { getData: () => 'example.com, not-a-domain' },
+    })
+    input.element.dispatchEvent(pasteEvent)
+    await nextTick()
+
+    // The valid prefix was added before the invalid entry aborted the batch.
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['existing.com', 'example.com'])
+    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
   })
 
   // ── Fix #5: secret placeholder and hint ──────────────────────────

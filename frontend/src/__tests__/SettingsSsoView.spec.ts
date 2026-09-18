@@ -369,6 +369,22 @@ describe('SettingsSsoView — toggle provider', () => {
     expect(opts.params.path.provider_id).toBe('sso-1')
   })
 
+  it('toggles from the keyboard (Enter and Space) without opening the edit form', async () => {
+    ;(api.PUT as Mock).mockResolvedValue({ data: provider({ enabled: false }), error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+
+    const toggle = wrapper.find('[data-testid="settings-sso-toggle"]')
+    await toggle.trigger('keydown.enter')
+    await nextTick()
+    await toggle.trigger('keydown.space')
+    await nextTick()
+
+    expect(api.PUT).toHaveBeenCalledTimes(2)
+    // The .stop modifier keeps the row's keydown handler from opening edit.
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(false)
+  })
+
   it('a successful toggle refetches and flips the switch visually', async () => {
     // toggleProvider refetches on success (FAR-608) instead of writing into
     // the readonly vue-query proxy — simulate the server toggling the state.
@@ -700,6 +716,17 @@ describe('SettingsSsoView — row click opens edit (FAR-974 #2)', () => {
 
     const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
     await row.trigger('keydown.enter')
+    await nextTick()
+
+    expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
+  })
+
+  it('pressing Space on the focused row opens the edit form', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    const row = wrapper.find('[data-testid="settings-sso-provider-row"]')
+    await row.trigger('keydown.space')
     await nextTick()
 
     expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(true)
