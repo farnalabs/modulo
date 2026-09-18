@@ -683,6 +683,7 @@ async def _provision_workspace(
         org_id=org_id,
         run_id=run_id,
         node_id=node_id,
+        provider=route.provider_type,
     )
     if attempt_key is None:
         raise SupersededNodeError(
@@ -712,6 +713,7 @@ async def _provision_workspace(
         org_id=org_id,
         run_id=run_id,
         attempt_key=attempt_key,
+        provider=route.provider_type,
     )
 
     for raw_path, raw_content in context_files.items():
@@ -746,6 +748,7 @@ async def _resolve_sandbox_envs_with_script_setup(
     attempt_key: str,
     sandbox_timeout: int,
     input_json: str,
+    provider: str,
 ) -> tuple[dict[str, str], bool]:
     """Resolve sandbox env vars and perform script-mode pre-run setup.
 
@@ -803,6 +806,7 @@ async def _resolve_sandbox_envs_with_script_setup(
             org_id=org_id,
             run_id=run_id,
             attempt_key=attempt_key,
+            provider=provider,
         )
         script_lease_claimed = True
         _emit_script_span_event(
@@ -1243,6 +1247,7 @@ async def run_bundled_runner_node(
             attempt_key=attempt_key,
             sandbox_timeout=sandbox_timeout,
             input_json=input_json,
+            provider=route.provider_type,
         )
 
         effective_command = rendered_agent_command

@@ -1597,7 +1597,12 @@ async def test_sandbox_secret_ref_resolver_error_returns_none(caplog, monkeypatc
 
 async def test_acquire_dispatch_marker_unparseable_org_falls_back_to_token_key():
     key = await nr._sandbox_acquire_dispatch_marker(
-        session_factory=lambda: _FakeSession(), claim_lease="tok", org_id="bad-org", run_id=_RUN_ID, node_id="n1"
+        session_factory=lambda: _FakeSession(),
+        claim_lease="tok",
+        org_id="bad-org",
+        run_id=_RUN_ID,
+        node_id="n1",
+        provider="e2b",
     )
     assert key.startswith(f"run:{_RUN_ID}:node:n1:")
     assert key != f"run:{_RUN_ID}:node:n1:claim-unknown"
@@ -1605,7 +1610,12 @@ async def test_acquire_dispatch_marker_unparseable_org_falls_back_to_token_key()
 
 async def test_acquire_dispatch_marker_org_none_falls_back_to_token_key():
     key = await nr._sandbox_acquire_dispatch_marker(
-        session_factory=lambda: _FakeSession(), claim_lease="tok", org_id="", run_id=_RUN_ID, node_id="n1"
+        session_factory=lambda: _FakeSession(),
+        claim_lease="tok",
+        org_id="",
+        run_id=_RUN_ID,
+        node_id="n1",
+        provider="e2b",
     )
     assert key == f"run:{_RUN_ID}:node:n1:{nr._claim_token_attempt_suffix('tok')}"
 
@@ -1620,7 +1630,12 @@ async def test_acquire_dispatch_marker_update_denied_returns_none():
         return r
 
     key = await nr._sandbox_acquire_dispatch_marker(
-        session_factory=lambda: _FakeSession(_route), claim_lease="tok", org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1"
+        session_factory=lambda: _FakeSession(_route),
+        claim_lease="tok",
+        org_id=_ORG_ID,
+        run_id=_RUN_ID,
+        node_id="n1",
+        provider="e2b",
     )
     assert key is None
 
@@ -1634,6 +1649,7 @@ async def test_store_dispatch_marker_sandbox_unparseable_org_noop():
         org_id="bad",
         run_id=_RUN_ID,
         attempt_key=None,
+        provider="e2b",
     )
     assert not session.executed
 
@@ -1641,7 +1657,12 @@ async def test_store_dispatch_marker_sandbox_unparseable_org_noop():
 async def test_store_script_lease_unparseable_org_noop():
     session = _FakeSession()
     await nr._sandbox_store_script_lease(
-        session_factory=lambda: session, claim_lease="tok", org_id="bad", run_id=_RUN_ID, attempt_key=None
+        session_factory=lambda: session,
+        claim_lease="tok",
+        org_id="bad",
+        run_id=_RUN_ID,
+        attempt_key=None,
+        provider="e2b",
     )
     assert not session.executed
 

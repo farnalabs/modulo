@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 import modulo.core.runner_capacity as _rc
 from modulo.core.runner_capacity import (
+    RUNNER_PROVIDER_DOCKER,
     RunnerCapacityDeniedError,
     acquire_runner_dispatch_slot,
     build_dispatch_marker,
@@ -318,7 +319,12 @@ async def test_gate_flag_off_absent_key_is_no_gate(
     for _ in range(6):
         run_id = await _seed_run(db_engine, org_id, pipe, snap)
         slot = await acquire_runner_dispatch_slot(
-            factory, org_id=org_id, run_id=str(run_id), claim_token=f"tok-{run_id.hex[:12]}", node_id="n1"
+            factory,
+            org_id=org_id,
+            run_id=str(run_id),
+            claim_token=f"tok-{run_id.hex[:12]}",
+            node_id="n1",
+            provider=RUNNER_PROVIDER_DOCKER,
         )
         assert slot.status == "acquired"
 
@@ -355,7 +361,12 @@ async def test_gate_flag_on_default_caps_docker_tier_only(
     fifth = await _seed_run(db_engine, org_id, pipe, snap)
     with pytest.raises(RunnerCapacityDeniedError, match="at capacity"):
         await acquire_runner_dispatch_slot(
-            factory, org_id=org_id, run_id=str(fifth), claim_token=f"tok-{fifth.hex[:12]}", node_id="n1"
+            factory,
+            org_id=org_id,
+            run_id=str(fifth),
+            claim_token=f"tok-{fifth.hex[:12]}",
+            node_id="n1",
+            provider=RUNNER_PROVIDER_DOCKER,
         )
 
     # A 6th E2B dispatch is NOT denied (the default bucket is Docker-tier only).
@@ -409,7 +420,12 @@ async def test_abandoned_awaiting_human_holds_no_slot(
 
     new_run = await _seed_run(db_engine, org_id, pipe, snap)
     slot = await acquire_runner_dispatch_slot(
-        factory, org_id=org_id, run_id=str(new_run), claim_token=f"tok-{new_run.hex[:12]}", node_id="n1"
+        factory,
+        org_id=org_id,
+        run_id=str(new_run),
+        claim_token=f"tok-{new_run.hex[:12]}",
+        node_id="n1",
+        provider=RUNNER_PROVIDER_DOCKER,
     )
     assert slot.status == "acquired", "an abandoned awaiting_human run must hold no slot"
 
@@ -440,7 +456,12 @@ async def test_hitl_tombstone_is_written_and_capacity_neutral(
     # The tombstoned parked run holds no slot → a new dispatch acquires.
     new_run = await _seed_run(db_engine, org_id, pipe, snap)
     slot = await acquire_runner_dispatch_slot(
-        factory, org_id=org_id, run_id=str(new_run), claim_token=f"tok-{new_run.hex[:12]}", node_id="n1"
+        factory,
+        org_id=org_id,
+        run_id=str(new_run),
+        claim_token=f"tok-{new_run.hex[:12]}",
+        node_id="n1",
+        provider=RUNNER_PROVIDER_DOCKER,
     )
     assert slot.status == "acquired"
 
@@ -474,7 +495,12 @@ async def test_gate_contention_returns_retryable_within_lock_timeout(
         started = time.monotonic()
         with pytest.raises(RunnerCapacityDeniedError, match=r"degraded|capacity"):
             await acquire_runner_dispatch_slot(
-                factory, org_id=org_id, run_id=str(run_id), claim_token=f"tok-{run_id.hex[:12]}", node_id="n1"
+                factory,
+                org_id=org_id,
+                run_id=str(run_id),
+                claim_token=f"tok-{run_id.hex[:12]}",
+                node_id="n1",
+                provider=RUNNER_PROVIDER_DOCKER,
             )
         elapsed = time.monotonic() - started
         assert elapsed < 5.0, "the gate must degrade within the lock window, not hang"
@@ -776,7 +802,12 @@ async def test_gate_two_org_isolation(
     run_b = await _seed_run(db_engine, org_b, pipe_b, snap_b)
 
     slot = await acquire_runner_dispatch_slot(
-        factory, org_id=org_b, run_id=str(run_b), claim_token=f"tok-{run_b.hex[:12]}", node_id="n1"
+        factory,
+        org_id=org_b,
+        run_id=str(run_b),
+        claim_token=f"tok-{run_b.hex[:12]}",
+        node_id="n1",
+        provider=RUNNER_PROVIDER_DOCKER,
     )
     assert slot.status == "acquired", "org B must be admitted while org A sits at ITS OWN cap"
 
@@ -904,7 +935,12 @@ async def test_gate_flag_off_population_and_tombstone_are_pre_d8(
     other = await _seed_run(db_engine, org_id, pipe, snap)
     with pytest.raises(RunnerCapacityDeniedError, match="at capacity"):
         await acquire_runner_dispatch_slot(
-            factory, org_id=org_id, run_id=str(other), claim_token=f"tok-{other.hex[:12]}", node_id="n1"
+            factory,
+            org_id=org_id,
+            run_id=str(other),
+            claim_token=f"tok-{other.hex[:12]}",
+            node_id="n1",
+            provider=RUNNER_PROVIDER_DOCKER,
         )
 
     # Flag-off tombstone is a NO-OP: the marker survives the park untouched.
@@ -941,7 +977,12 @@ async def test_count_tombstone_exclusion_matches_state_field_precisely(
     denied = await _seed_run(db_engine, org_id, pipe, snap)
     with pytest.raises(RunnerCapacityDeniedError, match="at capacity"):
         await acquire_runner_dispatch_slot(
-            factory, org_id=org_id, run_id=str(denied), claim_token=f"tok-{denied.hex[:12]}", node_id="n1"
+            factory,
+            org_id=org_id,
+            run_id=str(denied),
+            claim_token=f"tok-{denied.hex[:12]}",
+            node_id="n1",
+            provider=RUNNER_PROVIDER_DOCKER,
         )
 
     # Swap the TRICKY marker for a REAL tombstone → capacity-neutral (the
@@ -954,7 +995,12 @@ async def test_count_tombstone_exclusion_matches_state_field_precisely(
             {"marker": tombstone, "rid": str(tricky_run)},
         )
     slot = await acquire_runner_dispatch_slot(
-        factory, org_id=org_id, run_id=str(denied), claim_token=f"tok-{denied.hex[:12]}", node_id="n1"
+        factory,
+        org_id=org_id,
+        run_id=str(denied),
+        claim_token=f"tok-{denied.hex[:12]}",
+        node_id="n1",
+        provider=RUNNER_PROVIDER_DOCKER,
     )
     assert slot.status == "acquired"
 

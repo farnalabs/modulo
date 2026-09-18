@@ -420,4 +420,5 @@ async def test_best_effort_marker_cancellation_reraises():
             org_id=_ORG_ID,
             run_id="run-open",
             node_id="n1",
+            provider="e2b",
         )

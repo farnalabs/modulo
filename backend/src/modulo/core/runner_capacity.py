@@ -161,20 +161,23 @@ HOST_RESOURCE_PROVIDERS: frozenset[str] = frozenset({RUNNER_PROVIDER_DOCKER, RUN
 # whose attempt key merely contains the literal.
 
 
-def build_dispatch_marker(attempt_key: str, provider: str | None = None) -> str:
+def build_dispatch_marker(attempt_key: str, provider: str) -> str:
     """The structured ``runs.sandbox_dispatch_state`` dispatch marker (D8 shape).
 
     Base shape (unchanged, fence-compatible — ``_script_lease_probe_ok`` /
     ``rollback_thresholds`` / ``dispatcher_reconcile`` read only
     ``state``/``attempt_key``): ``{"state": "dispatching", "attempt_key": …}``.
     The D8 gate adds ``"provider"`` (``runner_docker`` | ``e2b`` | ``local``)
-    and ``"written_at"`` for every gated tier. A tier-less marker (provider
-    omitted — the Bundled Runner path's call shape) counts as Docker-tier.
+    and ``"written_at"`` for every tier.  ``provider`` is REQUIRED — every
+    call site must pass its value explicitly so the type-checker enforces
+    correct attribution (FAR-995).
     """
-    marker: dict[str, Any] = {"state": MARKER_STATE_DISPATCHING, "attempt_key": attempt_key}
-    if provider:
-        marker["provider"] = provider
-        marker["written_at"] = datetime.now(UTC).isoformat()
+    marker: dict[str, Any] = {
+        "state": MARKER_STATE_DISPATCHING,
+        "attempt_key": attempt_key,
+        "provider": provider,
+        "written_at": datetime.now(UTC).isoformat(),
+    }
     return json.dumps(marker)
 
 
@@ -379,7 +382,7 @@ async def acquire_runner_dispatch_slot(
     run_id: str,
     claim_token: str | None,
     node_id: str,
-    provider: str | None = None,
+    provider: str,
 ) -> RunnerDispatchSlot:
     """The atomic runner dispatch gate (D8) — check and reserve in ONE transaction.
 
@@ -415,13 +418,11 @@ async def acquire_runner_dispatch_slot(
     settings = get_settings()
     lock_timeout_ms = settings.runner_capacity_lock_timeout_ms
     flag_on = settings.runner_capacity_gate_enabled
-    # Tier attribution normalisation: a tier-less caller (provider omitted)
-    # attributes to the Docker tier — EXACTLY matching the count body's SQL
-    # attribution (``COALESCE(provider_key, 'runner_docker')``), so the skip
-    # condition below can never admit a dispatch the count will count. An
-    # UNKNOWN provider value (e.g. a future tier) is likewise skipped by the
-    # Docker-tier default gate — the host-resource count does not count it.
-    provider = provider or RUNNER_PROVIDER_DOCKER
+    # Tier attribution: ``provider`` is REQUIRED (FAR-995) — every call site
+    # must pass its value explicitly so the type-checker enforces correct
+    # attribution.  An UNKNOWN provider value (e.g. a future tier) is skipped
+    # by the Docker-tier default gate — the host-resource count does not count
+    # it.
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     try:
