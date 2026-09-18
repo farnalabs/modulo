@@ -289,6 +289,21 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > (`accepted` / `hmac_failed` / `deduplicated` / `event_type_not_accepted` /
 > `parse_failed` / `concurrency_limit_reached` / `rate_limited`).
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-18):** closed `feat-dashboard`'s "No BDD for
+> `/summary` / `/trends` / `/daily-run-counts`" gap
+> (`build/dashboard.md`). Registered `dashboard/dashboard_summary.feature`
+> and `dashboard/daily_run_counts.feature` into the executing BDD suite from
+> the colocated `features/dashboard/test_dashboard_summary_steps.py` /
+> `test_daily_run_counts_steps.py`, driving the real `dashboard_summary` and
+> `daily_run_counts` route handlers (mock-session dispatch on SQL text):
+> summary widget shape, per-team metrics, eval pass-rate detail, 7-day trend,
+> config warnings, idle folding of `pending`/`claimed` into `idle` with
+> single-counted `total_runs`, the additive `days` `period` block, and the
+> 1..90 `days` bound; day/status-keyed daily counts, cross-status
+> accumulation, default 30 and custom `days` windows, and the 1..365
+> `days` bound. `/trends` was already covered by `hitl_trends.feature`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
