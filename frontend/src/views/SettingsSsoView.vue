@@ -41,32 +41,39 @@
           <div
             v-for="provider in providers"
             :key="provider.id"
-            class="card"
+            class="card cursor-pointer transition-colors hover:bg-accent/30"
+            role="button"
+            tabindex="0"
+            :aria-label="$t('views.SettingsSsoView.edit_provider')"
+            data-testid="settings-sso-provider-row"
+            @click="openEditForm(provider)"
+            @keydown.enter.prevent="openEditForm(provider)"
+            @keydown.space.prevent="openEditForm(provider)"
           >
             <div class="flex items-center justify-between p-4">
-              <div class="flex items-center gap-3">
+              <div class="flex min-w-0 items-center gap-3">
                 <div
-                  class="flex h-10 w-10 items-center justify-center rounded-lg text-sm font-bold"
+                  class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-bold"
                   :class="provider.provider_type === 'oidc' ? 'badge badge-context-blue' : 'badge badge-context-amber'"
                 >
                   {{ provider.provider_type === 'oidc' ? 'O' : 'S' }}
                 </div>
-                <div>
+                <div class="min-w-0">
                   <p class="font-medium">{{ provider.name }}</p>
-                  <p class="text-sm text-muted-foreground">
+                  <p class="break-all text-sm text-muted-foreground">
                     {{ provider.provider_type.toUpperCase() }}
                     <span v-if="provider.client_id" class="ml-2">&middot; {{ provider.client_id }}</span>
                     <span v-if="provider.entity_id" class="ml-2">&middot; {{ provider.entity_id }}</span>
                   </p>
                 </div>
               </div>
-              <div class="flex items-center gap-2">
+              <div class="flex shrink-0 items-center gap-2" @click.stop @keydown.stop>
                 <button type="button"
                   :disabled="testingId === provider.id"
                   class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
                   data-testid="settings-sso-test"
                   :title="$t('views.SettingsSsoView.test')"
-                  @click="testConnection(provider.id)"
+                  @click.stop="testConnection(provider.id)"
                 >
                   {{ testingId === provider.id ? $t('views.SettingsSsoView.testing') : $t('views.SettingsSsoView.test') }}
                 </button>
@@ -75,7 +82,7 @@
                   data-testid="settings-sso-edit"
                   :aria-label="$t('views.SettingsSsoView.edit_provider')"
                   :title="$t('views.SettingsSsoView.edit_provider')"
-                  @click="openEditForm(provider)"
+                  @click.stop="openEditForm(provider)"
                 >
                   <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
@@ -89,9 +96,9 @@
                   role="switch"
                   :aria-checked="provider.enabled"
                   :class="{ 'opacity-50 pointer-events-none': togglingId === provider.id }"
-                  @click.prevent.stop="toggleProvider(provider)"
-                  @keydown.enter.prevent.stop="toggleProvider(provider)"
-                  @keydown.space.prevent.stop="toggleProvider(provider)"
+                  @click.stop.prevent="toggleProvider(provider)"
+                  @keydown.enter.stop.prevent="toggleProvider(provider)"
+                  @keydown.space.stop.prevent="toggleProvider(provider)"
                 >
                   <div
                     class="h-6 w-11 rounded-full transition-colors"
@@ -107,7 +114,7 @@
               </div>
             </div>
 
-            <div v-if="editProviderId === provider.id" class="border-t p-4">
+            <div v-if="editProviderId === provider.id" class="border-t p-4" @click.stop @keydown.stop>
               <SsoProviderForm
                 :data="formData"
                 :saving="saving"
@@ -117,13 +124,14 @@
                 :presets="presets"
                 :callback-url="editProviderCallbackUrl"
                 :unrestricted-provisioning-available="unrestrictedProvisioningAvailable"
+                :is-edit="true"
                 @update:data="onFormUpdate($event)"
                 @submit="updateProvider"
                 @cancel="closeEditForm"
               />
             </div>
 
-            <div v-if="deleteConfirmProviderId === provider.id" class="border-t border-destructive/50 bg-destructive/10 p-4">
+            <div v-if="deleteConfirmProviderId === provider.id" class="border-t border-destructive/50 bg-destructive/10 p-4" @click.stop @keydown.stop>
               <p class="text-sm font-medium text-destructive">{{ $t('views.SettingsSsoView.delete_confirm', { name: provider.name }) }}</p>
               <p class="mt-1 text-sm text-destructive/80">{{ $t('views.SettingsSsoView.delete_warning') }}</p>
               <div class="mt-3 flex items-center gap-2">
@@ -141,7 +149,7 @@
               <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
             </div>
 
-            <div v-if="testResultProviderId === provider.id" class="border-t p-4">
+            <div v-if="testResultProviderId === provider.id" class="border-t p-4" @click.stop @keydown.stop>
                 <div
                   class="rounded-lg p-3 text-sm"
                   :class="testResult?.success ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'"

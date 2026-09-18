@@ -28,6 +28,7 @@ from modulo.core.library_service.community import (
     list_community_entries,
 )
 from modulo.core.library_sync import LibraryClient, get_cached_manifest
+from modulo.core.runtime_config import FLAG_COMMUNITY_OBJECTS_ENABLED, read_org_flag
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
@@ -36,6 +37,27 @@ router = APIRouter(prefix="/api/v1/libraries/community", tags=["community-librar
 _log = logging.getLogger(__name__)
 
 _CODE_COMMUNITY_LIBRARY_INSTALL = "community_library.install"
+
+
+async def _community_objects_enabled(session: AsyncSession, org_id: UUID) -> bool:
+    """Fail-open: if the flag read fails, community objects stay enabled.
+
+    ``read_org_flag`` issues a SELECT, which autobegins a transaction on the
+    session. The install route then opens its own ``async with
+    session.begin()`` on the same session; an already-open implicit
+    transaction makes that raise ``InvalidRequestError: A transaction is
+    already begun on this Session`` (surfaced to the client as a 503). Own the
+    read's transaction here so the session is left transaction-free for the
+    caller.
+    """
+    try:
+        if session.in_transaction():
+            return await read_org_flag(session, org_id, FLAG_COMMUNITY_OBJECTS_ENABLED, default=True)
+        async with session.begin():
+            return await read_org_flag(session, org_id, FLAG_COMMUNITY_OBJECTS_ENABLED, default=True)
+    except Exception:
+        _log.exception("community_library.flag_read_failed")
+        return True
 
 
 class InstallRequest(BaseModel):
@@ -48,6 +70,11 @@ async def list_community(
     principal: TenantPrincipal = require_permission("library.search"),
 ) -> dict[str, Any]:
     """List synced community entries, fail-open to an empty list."""
+    if not await _community_objects_enabled(session, principal.organisation_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Community library is disabled by the organisation administrator.",
+        )
     items: list[dict[str, Any]] = []
     synced_at: str | None = None
     try:
@@ -98,6 +125,11 @@ async def get_entry(
     _principal: TenantPrincipal = require_permission("library.search"),
 ) -> dict[str, Any]:
     """Return a single community entry, including its parsed blob content."""
+    if not await _community_objects_enabled(session, _principal.organisation_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Community library is disabled by the organisation administrator.",
+        )
     try:
         entry = await get_community_entry(session, entry_id)
     except (ValueError, KeyError):
@@ -128,6 +160,11 @@ async def install(
     principal: TenantPrincipal = require_permission("library.copy"),
 ) -> LibraryPrimitiveResponse:
     """Install a community entry into the calling organisation."""
+    if not await _community_objects_enabled(session, principal.organisation_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Community library is disabled by the organisation administrator.",
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

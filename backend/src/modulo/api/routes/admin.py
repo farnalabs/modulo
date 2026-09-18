@@ -46,6 +46,7 @@ from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.core.lifecycle_map.journeys import dismiss_journey, restore_journey
 from modulo.core.runtime_config import (
+    FLAG_COMMUNITY_OBJECTS_ENABLED,
     FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
     read_org_flag,
     set_org_flag,
@@ -3889,6 +3890,100 @@ async def admin_update_work_item_agent_minting(
         },
     )
     return WorkItemAgentMintingResponse(work_item_agent_minting_enabled=req.work_item_agent_minting_enabled)
+
+
+# ── Org Community-Objects Kill Switch (FAR-959) ───────────────────────────
+# Org self-service route: principal's own org only, admin-role-gated.
+# The flag lives in ``Organisation.settings_json`` under
+# ``community_objects_enabled`` and defaults to True (behaviour unchanged).
+# When disabled, community browse/list, community install, and
+# community-sourced agent execution are all blocked.
+
+
+class CommunityObjectsResponse(BaseModel):
+    """Public admin response for the community-objects kill-switch flag."""
+
+    community_objects_enabled: bool = True
+
+
+class UpdateCommunityObjectsRequest(BaseModel):
+    # StrictBool: reject pydantic's truthiness coercion — a kill-switch must
+    # only ever be toggled explicitly.
+    community_objects_enabled: StrictBool
+
+
+@router.get("/org/community-objects")
+async def admin_get_community_objects(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> CommunityObjectsResponse:
+    async def _do_read() -> Any:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            return await read_org_flag(
+                session,
+                current_user.organisation_id,
+                FLAG_COMMUNITY_OBJECTS_ENABLED,
+                default=True,
+            )
+
+    enabled = await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_read,
+        detail_admin="Only admin users can view community objects setting",
+    )
+    return CommunityObjectsResponse(community_objects_enabled=enabled)
+
+
+@router.put("/org/community-objects", status_code=status.HTTP_200_OK)
+async def admin_update_community_objects(
+    req: UpdateCommunityObjectsRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> CommunityObjectsResponse:
+    async def _do_write() -> None:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            try:
+                await set_org_flag(
+                    session,
+                    current_user.organisation_id,
+                    FLAG_COMMUNITY_OBJECTS_ENABLED,
+                    req.community_objects_enabled,
+                )
+            except LookupError:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=MSG_ORGANISATION_NOT_FOUND,
+                ) from None
+            except IntegrityError:
+                logger.exception("admin.admin_update_community_objects")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=MSG_RESOURCE_ALREADY_EXISTS,
+                ) from None
+
+    await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_write,
+        detail_admin="Only admin users can update community objects setting",
+    )
+    await _record_org_audit(
+        session,
+        current_user,
+        "org.community_objects_updated",
+        {"community_objects_enabled": req.community_objects_enabled},
+    )
+    logger.info(
+        "community_objects.updated",
+        extra={
+            "org_id": str(current_user.organisation_id),
+            "community_objects_enabled": req.community_objects_enabled,
+        },
+    )
+    return CommunityObjectsResponse(community_objects_enabled=req.community_objects_enabled)
 
 
 # ── Org Run Concurrency Limit ──────────────────────────────────────────────

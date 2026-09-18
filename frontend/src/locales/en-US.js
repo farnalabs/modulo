@@ -2147,7 +2147,11 @@ export default {
       "org_id": "Org ID",
       "exporting_data": "Exporting data...",
       "export_ready": "Export ready",
-      "this_action_cannot_be_undone": "This action cannot be undone."
+      "this_action_cannot_be_undone": "This action cannot be undone.",
+      "community_objects": "Community Library",
+      "community_objects_description": "Control access to the community library — browse, install, and community-sourced agent execution.",
+      "community_objects_toggle": "Community objects enabled",
+      "community_objects_toggle_hint": "When disabled, community library browsing, installation, and community-sourced agent execution are blocked."
     },
     "OnboardingWizard": {
       "wire_pipeline": "Wire Pipeline",
@@ -3634,6 +3638,7 @@ export default {
       "client_secret": "Client Secret",
       "discovery_url": "Discovery URL",
       "leave_blank_to_keep_existing": "Leave blank to keep existing",
+      "secret_masked_placeholder": "\u2022\u2022\u2022\u2022\u2022\u2022",
       "openid_profile_email": "openid, profile, email",
       "oidc_label": "OpenID Connect (OIDC)",
       "saml_label": "SAML 2.0",
@@ -3659,7 +3664,7 @@ export default {
       "mode_unrestricted_warning": "DANGEROUS: Every IdP account could join this organisation. This is safe only when the instance sits on a trusted network — it is dangerous the moment it is internet-reachable.",
       "mode_unrestricted_locked": "This provider still auto-provisions anyone who authenticates. The unrestricted option is not available on your plan and no allowed domains are configured, so choose Invitation only or Email domain allowlist to change this.",
       "allowed_domains": "Allowed Domains",
-      "allowed_domains_help": "Add bare domains (e.g. example.com). Matching is exact — to allow subdomains, list each one explicitly.",
+      "allowed_domains_help": "Add one domain at a time and press Enter, or paste a comma- or space-separated list. Matching ignores case — subdomains are not included automatically, so list each one explicitly (e.g. example.com, mail.example.com).",
       "domain_placeholder": "e.g. example.com",
       "domain_remove": "Remove {domain}",
       "domain_invalid": "Provide a bare domain like example.com — no {'@'}, URL scheme, path, or wildcard",

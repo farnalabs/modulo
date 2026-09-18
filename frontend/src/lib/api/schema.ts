@@ -628,6 +628,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/community-objects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Get Community Objects */
+        get: operations["admin_get_community_objects_api_v1_admin_org_community_objects_get"];
+        /** Admin Update Community Objects */
+        put: operations["admin_update_community_objects_api_v1_admin_org_community_objects_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/org/run-concurrency": {
         parameters: {
             query?: never;
@@ -10425,6 +10443,17 @@ export interface components {
             /** Page Size */
             page_size: number;
         };
+        /**
+         * CommunityObjectsResponse
+         * @description Public admin response for the community-objects kill-switch flag.
+         */
+        CommunityObjectsResponse: {
+            /**
+             * Community Objects Enabled
+             * @default true
+             */
+            community_objects_enabled: boolean;
+        };
         /** CompareEvalsRequest */
         CompareEvalsRequest: {
             /**
@@ -18092,6 +18121,11 @@ export interface components {
              */
             page_context?: string | null;
         };
+        /** UpdateCommunityObjectsRequest */
+        UpdateCommunityObjectsRequest: {
+            /** Community Objects Enabled */
+            community_objects_enabled: boolean;
+        };
         /** UpdateCostControlsRequest */
         UpdateCostControlsRequest: {
             /** Budget */
@@ -20400,6 +20434,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkItemAgentMintingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_get_community_objects_api_v1_admin_org_community_objects_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommunityObjectsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_update_community_objects_api_v1_admin_org_community_objects_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCommunityObjectsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommunityObjectsResponse"];
                 };
             };
             /** @description Validation Error */

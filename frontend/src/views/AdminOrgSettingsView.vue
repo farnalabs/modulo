@@ -93,6 +93,28 @@
       <!-- Product Analytics -->
       <ProductAnalyticsSettings />
 
+      <!-- Community Objects -->
+      <SectionCard
+        :title="$t('views.AdminOrgSettingsView.community_objects')"
+        :description="$t('views.AdminOrgSettingsView.community_objects_description')"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-medium">{{ $t('views.AdminOrgSettingsView.community_objects_toggle') }}</p>
+            <p class="text-xs text-muted-foreground">{{ $t('views.AdminOrgSettingsView.community_objects_toggle_hint') }}</p>
+          </div>
+          <ToggleSwitch
+            :checked="communityObjectsEnabled"
+            :disabled="communityObjectsSaving"
+            :toggling="communityObjectsSaving"
+            :label="$t('views.AdminOrgSettingsView.community_objects_toggle')"
+            data-testid="community-objects-toggle"
+            @toggle="toggleCommunityObjects"
+          />
+        </div>
+        <div v-if="communityObjectsError" class="mt-2 text-xs text-destructive">{{ communityObjectsError }}</div>
+      </SectionCard>
+
       <!-- Delete Organization -->
       <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive/80">
         <Button type="button" severity="danger" class="h-8 px-2.5" @click="deleteDialogOpen = true">
@@ -146,6 +168,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
+import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
 import ProductAnalyticsSettings from '../components/product-analytics/ProductAnalyticsSettings.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -213,6 +236,40 @@ const confirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
 
+const communityObjectsEnabled = ref(true)
+const communityObjectsSaving = ref(false)
+const communityObjectsError = ref<string | null>(null)
+
+async function loadCommunityObjects() {
+  try {
+    const resp = await api.GET('/api/v1/admin/org/community-objects')
+    if (!resp.error && resp.data) {
+      communityObjectsEnabled.value = resp.data.community_objects_enabled ?? true
+    }
+  } catch {
+    // fail-open: default is enabled
+  }
+}
+
+async function toggleCommunityObjects(next: boolean) {
+  communityObjectsSaving.value = true
+  communityObjectsError.value = null
+  try {
+    const resp = await api.PUT('/api/v1/admin/org/community-objects', {
+      body: { community_objects_enabled: next },
+    })
+    if (resp.error) {
+      communityObjectsError.value = formatApiError(resp.error)
+    } else {
+      communityObjectsEnabled.value = next
+    }
+  } catch (e: unknown) {
+    communityObjectsError.value = formatApiError(e)
+  } finally {
+    communityObjectsSaving.value = false
+  }
+}
+
 function formatDate(dateStr: string): string {
   if (!dateStr) return 'N/A'
   const d = new Date(dateStr)
@@ -278,4 +335,5 @@ async function confirmDelete() {
 }
 
 planStore.fetchPlan()
+loadCommunityObjects()
 </script>

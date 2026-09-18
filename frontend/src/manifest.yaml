@@ -1715,6 +1715,9 @@ elements:
       - testid: product-analytics-toggle
         type: element
         dynamic_testid: false
+      - testid: community-objects-toggle
+        type: element
+        dynamic_testid: false
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
@@ -4221,6 +4224,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: lock-icon
+        type: element
+        dynamic_testid: false
+      - testid: settings-sso-provider-row
         type: element
         dynamic_testid: false
       - testid: settings-sso-add-provider
