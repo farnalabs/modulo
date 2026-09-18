@@ -184,6 +184,39 @@ def test_evaluate_no_changed_lines_fails(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# diff-cover exits 0 with unparseable output → FAIL closed (FAR-992)
+# ---------------------------------------------------------------------------
+def test_evaluate_unparseable_output_fails_closed(tmp_path):
+    """diff-cover exits 0 but emits no parseable coverage line → fail closed.
+
+    Regression for the latent false-pass: an rc=0 whose output carries neither
+    a ``Coverage: <pct>%`` line nor the 'no changed lines' marker silently
+    passed the gate.  It must now fail with a distinct reason.
+    """
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+
+    unparseable = "-------------\nDiff Coverage\nDiff: origin/main...HEAD, staged and unstaged changes\n-------------\n"
+
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={"src/main.py": 20}),
+        patch.object(mod, "_run_diff_cover", return_value=(0, unparseable)),
+        patch.object(mod, "_get_diff_cover_json", return_value=None),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+
+    assert result.skipped is False
+    assert result.passed is False
+    assert result.actual_pct is None
+    assert "no parseable coverage result" in result.skip_reason.lower()
+
+
+# ---------------------------------------------------------------------------
 # Coverage above threshold → pass
 # ---------------------------------------------------------------------------
 def test_evaluate_above_threshold_passes(tmp_path):
@@ -1007,6 +1040,42 @@ def test_multiline_docstring_assignment_still_counted():
     assert count == 2  # x = """ and y = 2
 
 
+def test_iter_executable_python_lines_skips_bracket_continuations():
+    """Entries added inside a collection literal are not statements.
+
+    Regression: a PR that only added data entries to a module-level list
+    (e.g. new seed templates) counted every entry line as executable, so the
+    coverage gate charged them as unmeasured 0% lines and failed a diff with
+    no coverable code.
+    """
+    lines = [
+        '    {"b": 2},',
+        "    {",
+        '        "c": 3,',
+        "    },",
+    ]
+    # The collection was opened before this added block (depth 1).
+    assert not list(mod._iter_executable_python_lines(lines, initial_depth=1))
+
+
+def test_iter_executable_python_lines_counts_statement_starts():
+    """A multi-line statement counts once, at its start; body lines do not."""
+    lines = [
+        "resolved_node: dict[str, Any] = {",
+        '    "id": x,',
+        "}",
+        'if resolved_node["node_type"] == "manual":',
+        "    resolved_node['a'] = 1",
+        "resolved_nodes.append(resolved_node)",
+    ]
+    assert list(mod._iter_executable_python_lines(lines)) == [
+        "resolved_node: dict[str, Any] = {",
+        'if resolved_node["node_type"] == "manual":',
+        "    resolved_node['a'] = 1",
+        "resolved_nodes.append(resolved_node)",
+    ]
+
+
 def test_js_block_comment_body_lines_not_counted():
     """JSDoc ``/* ... */`` continuation lines are not executable."""
     js_diff = """+++ b/src/app.ts
@@ -1127,6 +1196,36 @@ def test_evaluate_docstring_only_diff_skips_via_real_git_diff(tmp_path):
         f'def f():\n    """Summary.\n{body}    """\n    return 1\n',
         encoding="utf-8",
     )
+    _commit_on_feature(repo, env)
+
+    with patch.object(mod, "REPO_ROOT", repo):
+        changed = mod._get_changed_production_files("main", "Python")
+        result = mod.evaluate(
+            language="Python",
+            report_path=None,
+            compare_branch="main",
+            fail_under=90,
+        )
+
+    assert changed == {}
+    assert result.skipped is True
+    assert result.passed is True
+
+
+def test_evaluate_data_only_collection_diff_skips_via_real_git_diff(tmp_path):
+    """A real diff adding entries inside an existing list yields zero executable lines.
+
+    Exercises the bracket-state tracker end-to-end (real ``git diff``,
+    unpatched ``_get_changed_production_files``/``_count_added_lines``): the
+    added entries continue a literal opened before the hunk, so a pre-fix
+    count would treat them as executable and fail the gate.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _init_repo(repo, 'DATA = [\n    {"a": 1},\n]\n')
+    entries = "".join(f'    {{"entry_{i}": {i}}},\n' for i in range(12))
+    feature_content = f'DATA = [\n    {{"a": 1}},\n{entries}]\n'
+    (repo / "src" / "module.py").write_text(feature_content, encoding="utf-8")
     _commit_on_feature(repo, env)
 
     with patch.object(mod, "REPO_ROOT", repo):

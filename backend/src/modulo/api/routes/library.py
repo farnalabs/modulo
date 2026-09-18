@@ -90,6 +90,7 @@ from modulo.db.crud.library_primitive import (
 )
 from modulo.db.crud.pipeline import (
     create_pipeline,
+    enforce_manual_node_output_schemas,
     get_pipeline,
 )
 from modulo.db.crud.rating import (
@@ -1597,7 +1598,11 @@ def _convert_template_nodes(
         if agent_index is not None and agent_index < len(agents):
             pipeline_node["template_agent"] = agents[agent_index]
         if node.get("node_type") == "manual":
+            # FAR-889: carry every output-schema form through to the pipeline
+            # node so the write-path guard accepts template manual gates.
             pipeline_node["output_schema_id"] = node.get("output_schema_id")
+            pipeline_node["output_schema_pin"] = node.get("output_schema_pin")
+            pipeline_node["output_schema_json"] = node.get("output_schema_json")
 
         pipeline_nodes.append(pipeline_node)
     return pipeline_nodes
@@ -1721,6 +1726,8 @@ async def create_pipeline_from_template_endpoint(
                 description=description,
                 run_context_defaults={"library_source_id": str(primitive_id), "library_template_name": primitive.name},
             )
+            # FAR-889: reject manual nodes without output schemas at write time.
+            enforce_manual_node_output_schemas(graph_nodes)
             pipeline.graph_nodes_json = graph_nodes
             _add_pipeline_edges(session, principal.organisation_id, pipeline, edges)
             await session.flush()

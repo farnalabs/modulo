@@ -192,6 +192,7 @@ async def _apply_accounts_allow_list(conn: asyncpg.Connection, app_user: str) ->
     deliberately NOT writable by modulo_app (deliverable (A) posture: only
     direct-DB / SECURITY DEFINER writes can create a break-glass row).
     """
+    _validate_identifier(app_user)
     if not await _table_exists(conn, "accounts"):
         return
     # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
@@ -213,6 +214,7 @@ async def _grant_break_glass(conn: asyncpg.Connection, bg_user: str) -> None:
     triage must be able to read the migration state (permission denied there
     blocked a live break-glass diagnostic on prod, 2026-09-03).
     """
+    _validate_identifier(bg_user)
     select_tables = ("org_memberships", "token_families", "org_api_keys", "organisations", "alembic_version")
     existing_select = [t for t in select_tables if await _table_exists(conn, t)]
     if existing_select:
@@ -237,6 +239,8 @@ async def _grant_break_glass(conn: asyncpg.Connection, bg_user: str) -> None:
 
 async def _grant_function_execute(conn: asyncpg.Connection, app_user: str, bg_user: str) -> None:
     """Idempotently re-apply the SECURITY DEFINER EXECUTE grants."""
+    _validate_identifier(app_user)
+    _validate_identifier(bg_user)
     func_oid = await conn.fetchval(
         "SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)') IS NOT NULL"
     )

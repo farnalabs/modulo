@@ -12,6 +12,8 @@ unit-tests:
 bdd:
   - backend/tests/bdd/features/auth/sso_oidc.feature
   - backend/tests/bdd/features/auth/sso_saml.feature
+  - backend/tests/bdd/features/auth/jwt_auth_crypto.feature
+  - backend/tests/bdd/features/auth/jwt_security.feature
 depends-on: []
 status: covered
 ---
@@ -43,11 +45,26 @@ authenticated API route through `auth/dependencies.py`.
 
 ## Known Gaps
 
-- **No standalone BDD feature file** — JWT behaviour is covered by unit tests only;
-  the token flows behind SSO are exercised via the `sso_oidc` / `sso_saml` features.
+None acknowledged: the token-utility contract (mint/decode, purpose isolation,
+rotation propagation, claim-token scoping) is now locked by the executing
+`jwt_auth_crypto.feature` BDD surface (added 2026-09-18) driving the real
+`modulo.auth.jwt` seams, and the API-level login/refresh/logout/tamper flows are
+covered by `jwt_security.feature`.
 
 ## QA History
 
+- 2026-09-18: **improve-architecture (product-map walk)** — closed the
+  "No standalone BDD feature file" gap. Registered
+  `auth/jwt_auth_crypto.feature` into the executing BDD suite from the new
+  `steps/test_jwt_auth_crypto.py`, driving the real `modulo.auth.jwt` seams
+  network-free and DB-free: access-token mint/decode round-trip (identity, role,
+  tenant org, `client_kind`), wrong-secret / tampered-signature / expired /
+  `alg=none` / missing-subject rejections, the purpose-isolation matrix (access /
+  `ws` / `refresh` accepted only under their own purpose, the `refresh_access_token`
+  rotation seam refusing a `ws` token), refresh-rotation propagation of identity +
+  credential class into the new access token, `decode_claim_token` HITL-gate
+  run/gate scoping with a wrong-gate refusal, and the legacy no-`client_kind`
+  token decoding as `browser`. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-08-25: **improve-architecture (product-map walk)** — entry added to close the
   dangling `depends-on: feat-auth-jwt-auth` edge in `teams/org-entity.md`. Behaviours
   re-verified against `auth/jwt.py` and `backend/tests/unit/auth/test_jwt.py`. Status:

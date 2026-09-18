@@ -317,6 +317,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `resolve_pinned_ip`'s original-hostname / full-IP-set target shape, the
 > pinned transport's `UnpinnedHostError` refusal, and the pinned-client
 > `transport`-kwarg rejection. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-18):** closed `feat-auth-jwt-auth`'s "No standalone
+> BDD feature file" gap (`auth/jwt-auth.md`). Registered
+> `auth/jwt_auth_crypto.feature` into the executing BDD suite from the new
+> `steps/test_jwt_auth_crypto.py`, driving the real `modulo.auth.jwt` seams
+> network-free and DB-free — access-token mint/decode round-trip (identity, role,
+> tenant org, `client_kind`), wrong-secret / tampered-signature / expired /
+> `alg=none` / missing-subject rejections, the purpose-isolation matrix (access /
+> `ws` / `refresh` accepted only under their own purpose, the
+> `refresh_access_token` rotation seam refusing a `ws` token), refresh-rotation
+> propagation of identity + credential class into the new access token,
+> `decode_claim_token` HITL-gate run/gate scoping with a wrong-gate refusal, and
+> the legacy no-`client_kind` token decoding as `browser`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
