@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from modulo.db import seed_demo as seed_demo_module
 from modulo.db.models.account import Account
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -88,7 +89,10 @@ async def test_demo_seed_org_isolation_under_rls(db_engine: AsyncEngine, monkeyp
             run_numbers = {row[0] for row in (await conn.execute(text("SELECT run_number FROM runs"))).fetchall()}
         assert "Demo Governance Pipeline" in pipeline_names
         assert "Other Org Pipeline" not in pipeline_names
-        assert run_numbers == {1, 2}
+        # Derive the expected set from the seed's run specs so the assertion
+        # tracks the demo data rather than hard-coding the original two runs.
+        expected_run_numbers = {spec[0] for spec in seed_demo_module._DEMO_RUN_SPECS}
+        assert run_numbers == expected_run_numbers
 
         # Enforcement 2: other-org context sees NONE of the demo rows.
         async with db_engine.connect() as conn, conn.begin():
