@@ -40,9 +40,21 @@ _CODE_COMMUNITY_LIBRARY_INSTALL = "community_library.install"
 
 
 async def _community_objects_enabled(session: AsyncSession, org_id: UUID) -> bool:
-    """Fail-open: if the flag read fails, community objects stay enabled."""
+    """Fail-open: if the flag read fails, community objects stay enabled.
+
+    ``read_org_flag`` issues a SELECT, which autobegins a transaction on the
+    session. The install route then opens its own ``async with
+    session.begin()`` on the same session; an already-open implicit
+    transaction makes that raise ``InvalidRequestError: A transaction is
+    already begun on this Session`` (surfaced to the client as a 503). Own the
+    read's transaction here so the session is left transaction-free for the
+    caller.
+    """
     try:
-        return await read_org_flag(session, org_id, FLAG_COMMUNITY_OBJECTS_ENABLED, default=True)
+        if session.in_transaction():
+            return await read_org_flag(session, org_id, FLAG_COMMUNITY_OBJECTS_ENABLED, default=True)
+        async with session.begin():
+            return await read_org_flag(session, org_id, FLAG_COMMUNITY_OBJECTS_ENABLED, default=True)
     except Exception:
         _log.exception("community_library.flag_read_failed")
         return True
