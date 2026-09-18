@@ -1,14 +1,15 @@
 ﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Settings License', { tag: "@regression" }, () => {
-  test('renders the License page', { tag: "@regression" }, async ({ page, env }) => {
+  // FAR-938 gates /settings/license (SYSTEM sidebar group) on the
+  // is_system_admin JWT claim. No e2e identity holds that claim, so the router
+  // guard redirects to the dashboard. Rendering is covered by
+  // SettingsLicenseView.spec.ts at the unit level.
+  test('redirects a non-system-admin away from the License page', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await page.route('**/api/v1/admin/license*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ has_license: true, tier: 'team', features: ['sso', 'audit_log', 'custom_roles'], expires_at: '2026-06-01T10:00:00Z', org_id: 'org1' }) })
-    })
     await page.goto('/settings/license')
-    await expect(page.locator('h1')).toContainText('License')
-    await expect(page.getByTestId('license-title')).toBeVisible()
+    await expect(page).toHaveURL(/\/$/)
+    await expect(page.locator('h1')).toContainText('Dashboard')
   })
 })
 
