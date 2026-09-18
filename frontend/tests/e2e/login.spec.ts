@@ -23,7 +23,7 @@ test.describe('Login Flow', () => {
       })
     }
 
-    await page.goto('/login')
+    await page.goto(env.credentials.loginPath)
 
     await page.fill(env.credentials.loginFormEmailSelector, 'wrong@example.com')
     await page.fill(env.credentials.loginFormPasswordSelector, 'thisiswrong')
@@ -84,7 +84,7 @@ test.describe('Login Flow', () => {
       })
     }
 
-    await page.goto('/login')
+    await page.goto(env.credentials.loginPath)
 
     await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
     await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)
