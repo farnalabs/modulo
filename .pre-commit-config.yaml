@@ -171,7 +171,7 @@
       # "Diagnose CI failures with the EXACT CI command" lesson.
       - id: prepush-mypy
         name: prepush mypy (exact CI Lint Backend command)
-        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/**/*.py" -- uv --directory backend run --no-build --no-sync mypy src/modulo/
+        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/modulo/**/*.py" -- uv --directory backend run --no-build --no-sync mypy src/modulo/
         language: system
         files: ^backend/src/
         pass_filenames: false
