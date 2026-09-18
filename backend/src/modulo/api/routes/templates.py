@@ -15,7 +15,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
-from modulo.db.crud.pipeline import create_pipeline
+from modulo.db.crud.pipeline import ManualNodeOutputSchemaError, create_pipeline, enforce_manual_node_output_schemas
 from modulo.db.crud.template import (
     _agent_count_from_content,
     _preview_data_from_content,
@@ -165,14 +165,19 @@ def _resolve_template_nodes(
                 }
             )
         else:
-            resolved_nodes.append(
-                {
-                    "id": resolved_id_str,
-                    "node_type": node.get("node_type", "manual"),
-                    "label": node.get("label", "Manual Step"),
-                    "position": node.get("position", {"x": 100, "y": 100}),
-                }
-            )
+            resolved_node: dict[str, Any] = {
+                "id": resolved_id_str,
+                "node_type": node.get("node_type", "manual"),
+                "label": node.get("label", "Manual Step"),
+                "position": node.get("position", {"x": 100, "y": 100}),
+            }
+            if resolved_node["node_type"] == "manual":
+                # FAR-889: carry every output-schema form through so the
+                # write-path guard accepts template manual gates.
+                resolved_node["output_schema_id"] = node.get("output_schema_id")
+                resolved_node["output_schema_pin"] = node.get("output_schema_pin")
+                resolved_node["output_schema_json"] = node.get("output_schema_json")
+            resolved_nodes.append(resolved_node)
     return resolved_nodes
 
 
@@ -260,6 +265,8 @@ async def create_pipeline_from_template_endpoint(
             )
 
             resolved_nodes = _resolve_template_nodes(graph_nodes, agent_configs, agent_ids)
+            # FAR-889: reject manual nodes without output schemas at write time.
+            enforce_manual_node_output_schemas(resolved_nodes)
             pipeline.graph_nodes_json = resolved_nodes
 
             persisted_edges = await _persist_template_edges(
@@ -290,6 +297,11 @@ async def create_pipeline_from_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except ManualNodeOutputSchemaError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
         ) from exc
     except Exception as e:
         logger.exception(_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE)

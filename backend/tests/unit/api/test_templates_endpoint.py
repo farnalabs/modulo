@@ -302,7 +302,13 @@ def test_create_from_template_with_hitl_gate(client: TestClient) -> None:
             ],
             "graph_nodes": [
                 {"id": "n1", "node_type": "agent", "agent_index": 0, "label": "A", "position": {"x": 0, "y": 0}},
-                {"id": "n2", "node_type": "manual", "label": "Gate", "position": {"x": 200, "y": 0}},
+                {
+                    "id": "n2",
+                    "node_type": "manual",
+                    "label": "Gate",
+                    "position": {"x": 200, "y": 0},
+                    "output_schema_json": {"type": "object", "description": "Gate decision."},
+                },
                 {"id": "n3", "node_type": "agent", "agent_index": 1, "label": "B", "position": {"x": 400, "y": 0}},
             ],
             "edges": [
@@ -346,6 +352,54 @@ def test_create_from_template_with_hitl_gate(client: TestClient) -> None:
     data = resp.json()
     assert data["agent_count"] == 2
     assert data["edge_count"] == 2
+
+
+def test_create_from_template_with_schemaless_manual_node_returns_422(client: TestClient) -> None:
+    """FAR-889: a manual node with no output schema is rejected at write time.
+
+    Exercises the full round trip (write-path guard -> HTTP 422) through the
+    from-template endpoint, which previously only had coverage for the
+    schema-carrying happy path.
+    """
+    template_id = uuid.uuid4()
+    template_prim = _make_template_primitive(
+        id=template_id,
+        content_json={
+            "agents": [
+                {
+                    "name": "Agent A",
+                    "description": "First",
+                    "prompt_template": "Do A",
+                    "connector_type_refs": [],
+                    "required_environment_capabilities": [],
+                }
+            ],
+            "graph_nodes": [
+                {"id": "n1", "node_type": "agent", "agent_index": 0, "label": "A", "position": {"x": 0, "y": 0}},
+                {"id": "n2", "node_type": "manual", "label": "Gate", "position": {"x": 200, "y": 0}},
+            ],
+            "edges": [{"source_node_id": "n1", "target_node_id": "n2", "edge_type": "normal"}],
+            "connector_type_refs": [],
+            "schema_refs": [],
+            "category": "code-review",
+        },
+    )
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.id = uuid.uuid4()
+    mock_pipeline.name = "Test (from template)"
+
+    with (
+        patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
+        patch("modulo.api.routes.templates.create_pipeline", new_callable=AsyncMock) as mock_create,
+    ):
+        mock_get.return_value = template_prim
+        mock_create.return_value = mock_pipeline
+
+        resp = client.post(f"/api/v1/pipelines/from-template/{template_id}")
+
+    assert resp.status_code == 422
+    assert "requires an output schema" in resp.json()["detail"]
 
 
 def test_create_from_template_below_operator_denied(client: TestClient) -> None:

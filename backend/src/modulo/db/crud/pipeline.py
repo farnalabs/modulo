@@ -516,6 +516,10 @@ async def _clone_pipeline_config(
         lock_wait_timeout_seconds=snapshot.lock_wait_timeout_seconds,
         node_timeout_seconds=snapshot.node_timeout_seconds,
         run_context_defaults=copy.deepcopy(snapshot.run_context_defaults),
+        # FAR-889: copying a stored snapshot replays its graph verbatim.  A
+        # snapshot predating the guard may contain schema-less manual nodes, so
+        # this duplicate path tolerates them (FAR-874) rather than running
+        # enforce_manual_node_output_schemas; new graphs are guarded on write.
         graph_nodes_json=copy.deepcopy(snapshot.graph_nodes_json),
         default_autonomy_level=snapshot.default_autonomy_level,
         stale_run_timeout_minutes=snapshot.stale_run_timeout_minutes,
@@ -795,6 +799,10 @@ async def _read_clone_source_snapshot(
                 lock_wait_timeout_seconds=source.lock_wait_timeout_seconds,
                 node_timeout_seconds=source.node_timeout_seconds,
                 run_context_defaults=copy.deepcopy(source.run_context_defaults),
+                # FAR-889: raw source graph for the clone writer; carried
+                # verbatim so legacy schema-less manual nodes survive a copy
+                # (FAR-874).  This is a read for an existing graph, not a
+                # new-node entry point.
                 graph_nodes_json=copy.deepcopy(list(source.graph_nodes_json or [])),
                 default_autonomy_level=str(source.default_autonomy_level or "manual_approval"),
                 stale_run_timeout_minutes=source.stale_run_timeout_minutes,
@@ -834,6 +842,41 @@ def _preserve_omitted_gate_config(
         str(edge["edge_type"]),
     )
     return old_by_key.get(key)
+
+
+class ManualNodeOutputSchemaError(Exception):
+    """Raised when a manual node is persisted without an output schema.
+
+    Manual nodes MUST carry either ``output_schema_id`` or
+    ``output_schema_pin`` so the run-time executor knows what output shape
+    to expect.  Storing a manual node without one is a data-integrity
+    violation (FAR-889).
+    """
+
+    def __init__(self, node_id: str) -> None:
+        self.node_id = node_id
+        super().__init__(f"Manual node '{node_id}' requires an output schema (output_schema_id or output_schema_pin)")
+
+
+def enforce_manual_node_output_schemas(nodes: list[dict[str, Any]]) -> None:
+    """Reject manual nodes that lack an output schema at write time.
+
+    This is the write-path guard for FAR-889.  It catches the case where a
+    template, library primitive, or direct graph update tries to persist a
+    manual node without any of ``output_schema_id``, ``output_schema_pin``,
+    or ``output_schema_json``.
+    """
+    for node in nodes:
+        if node.get("node_type") != "manual":
+            continue
+        has_output = (
+            node.get("output_schema_id") is not None
+            or node.get("output_schema_pin") is not None
+            or node.get("output_schema_json") is not None
+        )
+        if not has_output:
+            raw_id = node.get("id")
+            raise ManualNodeOutputSchemaError(str(raw_id) if raw_id is not None else "unknown")
 
 
 async def replace_pipeline_graph(
@@ -946,6 +989,9 @@ async def replace_pipeline_graph(
             resource_id=pipeline_id,
             payload_json=build_gate_diff_payload(diff, caller_type),
         )
+
+    # FAR-889: reject manual nodes without output schemas at write time.
+    enforce_manual_node_output_schemas(nodes)
 
     pipeline.graph_nodes_json = nodes
     await session.execute(delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))

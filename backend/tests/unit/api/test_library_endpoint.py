@@ -137,6 +137,7 @@ def _make_primitive(
                 "node_type": "manual",
                 "label": "Review Gate",
                 "position": {"x": 650, "y": 100},
+                "output_schema_json": {"type": "object", "description": "Review decision."},
             },
         ],
         "edges": [

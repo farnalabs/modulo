@@ -440,6 +440,10 @@ async def _get_or_create_pipeline(
             description=description,
             account_id=account.id,
             visibility="org",
+            # FAR-889: the demo graphs are trusted fixture data (FAR-535) built
+            # from agent nodes only, not a user-supplied new-node entry point,
+            # so they are not routed through the manual-node output-schema
+            # guard (enforce_manual_node_output_schemas).
             graph_nodes_json=graph_nodes,
             default_autonomy_level="manual_approval",
         )

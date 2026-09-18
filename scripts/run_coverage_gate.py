@@ -67,7 +67,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -131,6 +131,9 @@ _NO_CHANGED_LINES_RE = re.compile(r"No lines with coverage information in this d
 _COVERAGE_LINE_RE = re.compile(r"Coverage:\s*(\d+(?:\.\d+)?)\s*%")
 _THRESHOLD_NOT_MET_RE = re.compile(r"Failure\. Coverage is below", re.IGNORECASE)
 _DIFF_COVER_TOTAL_RE = re.compile(r"Total:\s*(\d+)\s+line", re.IGNORECASE)
+# ``@@ -old,count +new,count @@``: captures the new-file start line so the
+# per-hunk bracket/string state can be seeded from the file content.
+_HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 # Matches a standalone Python string literal (triple-quoted or single/double
 # quoted) with no other code around it.  Used to exclude docstrings and bare
@@ -316,32 +319,116 @@ def _py_multiline_opener(line: str) -> tuple[int, str] | None:
     return None
 
 
-def _iter_executable_python_lines(lines: Iterable[str]) -> Iterator[str]:
+def _scan_python_brackets(line: str, depth: int) -> int:
+    """Update bracket nesting *depth* by scanning *line*.
+
+    Skips brackets inside single-line strings, triple-quoted strings, and
+    ``#`` comments, so a literal ``(``/``[``/``{`` in data never shifts the
+    depth.  An unclosed triple-quote ends the scan: the rest of the line (and
+    every following line until the delimiter closes) is string data.
+    """
+    i = 0
+    n = len(line)
+    while i < n:
+        if line[i] == "#":
+            return depth
+        if line.startswith("'''", i) or line.startswith('"""', i):
+            quote = line[i : i + 3]
+            close = line.find(quote, i + 3)
+            if close == -1:
+                return depth
+            i = close + 3
+            continue
+        if line[i] in ("'", '"'):
+            quote = line[i]
+            i += 1
+            while i < n:
+                if line[i] == "\\":
+                    i += 2
+                    continue
+                if line[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if line[i] in "([{":
+            depth += 1
+        elif line[i] in ")]}" and depth > 0:
+            depth -= 1
+        i += 1
+    return depth
+
+
+def _python_line_state(
+    line: str,
+    depth: int,
+    delimiter: str | None,
+) -> tuple[int, str | None, bool, bool]:
+    """Advance the Python bracket/string state by one *line*.
+
+    Returns ``(depth, delimiter, continuation, bare_string)`` where
+    *continuation* is True when the line begins inside an unclosed bracket or
+    triple-quoted string (so it is not a statement start) and *bare_string* is
+    True when the line opens a docstring with no code prefix.
+    """
+    if delimiter is not None:
+        return depth, (None if delimiter in line else delimiter), True, False
+    continuation = depth > 0
+    opener = _py_multiline_opener(line)
+    bare_string = False
+    if opener is not None:
+        index, quote = opener
+        prefix = line[:index].strip().strip("rbfuRBFU").strip()
+        if not prefix:
+            # A bare string literal (docstring): the opening line itself is
+            # data, not a statement.
+            bare_string = True
+            delimiter = quote
+    depth = _scan_python_brackets(line, depth)
+    if opener is not None and not bare_string:
+        delimiter = opener[1]
+    return depth, delimiter, continuation, bare_string
+
+
+def _python_state_before(file_lines: Sequence[str], line_number: int) -> tuple[int, str | None]:
+    """Return the bracket/string state just before *line_number* (1-based)."""
+    depth: int = 0
+    delimiter: str | None = None
+    for context_line in file_lines[: max(0, line_number - 1)]:
+        depth, delimiter, _, _ = _python_line_state(context_line, depth, delimiter)
+    return depth, delimiter
+
+
+def _iter_executable_python_lines(
+    lines: Iterable[str],
+    initial_depth: int = 0,
+    initial_delimiter: str | None = None,
+) -> Iterator[str]:
     """Yield the added Python *lines* that are executable statements.
 
     Tracks triple-quoted string state across lines so the body and closing
     delimiter of a multi-line docstring are not counted as executable even
     though, taken in isolation, they are not parseable statements.
+
+    Also tracks bracket nesting: a line that continues a statement inside an
+    unclosed ``(``/``[``/``{`` is not itself a statement, and coverage.py
+    never instruments it.  Counting such continuation lines (e.g. entries
+    inside a module-level data literal) inflated the gate's denominator and
+    failed PRs that only added data.  Only lines whose statement *starts* at
+    bracket depth zero are counted.
+
+    *initial_depth* / *initial_delimiter* carry the state in from the file
+    context preceding a diff hunk, so an added line inside a bracket that
+    opened before the hunk is still recognised as a continuation.
     """
-    delimiter: str | None = None
+    delimiter = initial_delimiter
+    depth = initial_depth
     for line in lines:
-        if delimiter is not None:
-            if delimiter in line:
-                delimiter = None
+        depth, delimiter, continuation, bare_string = _python_line_state(line, depth, delimiter)
+        if continuation or bare_string:
             continue
-        opener = _py_multiline_opener(line)
-        if opener is not None:
-            index, quote = opener
-            prefix = line[:index].strip().strip("rbfuRBFU").strip()
-            if not prefix:
-                # A bare string literal (docstring): the opening line itself
-                # is data, not a statement.
-                delimiter = quote
-                continue
         if not _is_executable_python_line(line):
             continue
-        if opener is not None:
-            delimiter = opener[1]
         yield line
 
 
@@ -406,6 +493,42 @@ def _diff_range(compare_branch: str) -> str:
     return f"{safe_ref}...HEAD"
 
 
+def _count_python_added_lines(diff_text: str, filepath: str) -> int:
+    """Count executable added Python lines, tracking state through each hunk.
+
+    Each ``@@`` hunk is seeded with the bracket/triple-quote state recovered
+    from the file content preceding the hunk, then every hunk line is replayed
+    in order: context lines advance the new-file state (a hunk often starts
+    mid-statement, so the state at the hunk header is not the state at the
+    first added line), removed lines are ignored, and an added line is counted
+    only when it is a statement start rather than a continuation.
+    """
+    try:
+        file_lines = (REPO_ROOT / filepath).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        file_lines = []
+
+    depth: int = 0
+    delimiter: str | None = None
+    total = 0
+    for raw in diff_text.splitlines():
+        header = _HUNK_HEADER_RE.match(raw)
+        if header:
+            depth, delimiter = _python_state_before(file_lines, int(header.group(1)))
+            continue
+        if raw.startswith(("+++", "---", "\\")):
+            continue
+        if raw.startswith("+"):
+            content = raw[1:]
+            total += sum(1 for _ in _iter_executable_python_lines((content,), depth, delimiter))
+            depth, delimiter, _, _ = _python_line_state(content, depth, delimiter)
+        elif raw.startswith("-"):
+            continue
+        else:
+            depth, delimiter, _, _ = _python_line_state(raw[1:], depth, delimiter)
+    return total
+
+
 def _count_added_lines(diff_range: str, filepath: str) -> int:
     """Count executable non-blank lines added to *filepath* within *diff_range*.
 
@@ -413,8 +536,9 @@ def _count_added_lines(diff_range: str, filepath: str) -> int:
     ``subprocess`` (resolves pythonsecurity:S8705).
 
     Only executable lines (statements, assignments, control flow, etc.) are
-    counted.  Comments, docstrings, and blank lines are excluded so they do
-    not inflate the coverage denominator (FAR-962).
+    counted.  Comments, docstrings, blank lines, and bracket/string
+    continuation lines are excluded so they do not inflate the coverage
+    denominator (FAR-962).
     """
     safe_range = _safe_repo_path(diff_range)
     safe_path = _safe_repo_path(filepath)
@@ -437,13 +561,14 @@ def _count_added_lines(diff_range: str, filepath: str) -> int:
     is_python = filepath.endswith(".py")
     is_js = any(filepath.endswith(ext) for ext in (".ts", ".tsx", ".js", ".jsx", ".vue"))
 
+    if is_python:
+        return _count_python_added_lines(result.stdout, filepath)
+
     added = [
         diff_line[1:]
         for diff_line in result.stdout.splitlines()
         if diff_line.startswith("+") and not diff_line.startswith("+++")
     ]
-    if is_python:
-        return sum(1 for _ in _iter_executable_python_lines(added))
     if is_js:
         return sum(1 for _ in _iter_executable_js_lines(added))
     return sum(1 for content in added if content.strip())
