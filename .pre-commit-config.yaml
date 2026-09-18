@@ -5,6 +5,7 @@
       - id: bandit
         args: [-r, backend/src/, -ll, -x, backend/src/modulo/model_backends/stub/]
         pass_filenames: false
+        stages: [pre-commit]
 
   - repo: local
     hooks:
@@ -14,12 +15,14 @@
         language: system
         types: [python]
         pass_filenames: false
+        stages: [pre-commit]
       - id: ruff-format
         name: ruff format (locked backend environment)
         entry: uv --directory backend run --no-sync ruff format .
         language: system
         types: [python]
         pass_filenames: false
+        stages: [pre-commit]
       - id: mypy
         name: mypy (locked backend environment)
         entry: uv --directory backend run --no-sync mypy --strict --ignore-missing-imports src/
@@ -39,6 +42,7 @@
         language: system
         files: ^backend/src/
         pass_filenames: false
+        stages: [pre-commit]
       - id: vulture
         name: vulture (dead code gate)
         entry: uv run --project backend --no-sync python scripts/run_vulture.py
@@ -46,6 +50,7 @@
         types: [python]
         files: ^backend/src/
         pass_filenames: false
+        stages: [pre-commit]
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.18.3
@@ -116,6 +121,7 @@
         entry: uv run --project backend --no-sync python scripts/run_check_utf8_encoding.py
         language: system
         pass_filenames: false
+        stages: [pre-commit]
       - id: run-changed-tests
         name: run tests for changed test files
         entry: uv run --project backend --no-sync python scripts/run_changed_tests.py
@@ -151,11 +157,11 @@
         files: ^(backend/src/modulo/core/pipeline_engine/node_runner\.py|backend/src/modulo/api/mcp_server\.py|scripts/validate_pipeline_configs\.py)$
         pass_filenames: false
 
-  # CI-parity pre-push gate: mirrors the commands the PR CI actually runs, so a
-  # red-PR push is caught locally before the CI round-trip (the PR Reviewer
-  # mostly CHANGES_REQUESTED on "CI red at PR time": Test Backend 67, Integration
-  # 33, BDD 20, Lint Backend 18, Schema freshness 15, migration heads 12).
-  # Install: pre-commit install --hook-type pre-push (see CONTRIBUTING.md).
+  # CI-parity pre-push gate: mirrors key CI checks so a red-PR push is caught
+  # locally before the CI round-trip. Tests are NOT included — CI's
+  # "Test (Backend)" job runs the full suite properly; a pre-push best-guess
+  # subset duplicates CI, costs minutes, and can fail on files unrelated to the
+  # change. Install: pre-commit install --hook-type pre-push (see CONTRIBUTING.md).
   - repo: local
     hooks:
       # EXACT `Lint (Backend)` mypy invocation (ci.yml backend-lint job,
@@ -165,7 +171,7 @@
       # "Diagnose CI failures with the EXACT CI command" lesson.
       - id: prepush-mypy
         name: prepush mypy (exact CI Lint Backend command)
-        entry: uv --directory backend run --no-build --no-sync mypy src/modulo/
+        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/modulo/**/*.py" -- uv --directory backend run --no-build --no-sync mypy src/modulo/
         language: system
         files: ^backend/src/
         pass_filenames: false
@@ -175,7 +181,7 @@
       # run_frontend_npm.py runs `pnpm run type-check` in frontend/ — same command.
       - id: prepush-vue-tsc
         name: prepush vue-tsc (exact CI type-check command)
-        entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
+        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "frontend/src/**" -- uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
         language: system
         files: \.(vue|ts)$
         pass_filenames: false
@@ -184,19 +190,9 @@
       # file and fail if it differs from the committed schema.ts (never touches it).
       - id: prepush-schema-freshness
         name: prepush schema freshness (openapi-typescript@7.13.0 --check)
-        entry: uv run --project backend --no-sync python scripts/run_generate_api_types.py --check
+        entry: uv run --project backend --no-sync python scripts/run_prepush_gated_check.py --pattern "backend/src/**/*.py" -- uv run --project backend --no-sync python scripts/run_generate_api_types.py --check
         language: system
         files: ^(backend/src/.+\.py$)
-        pass_filenames: false
-        stages: [pre-push]
-      # Fast best-guess affected-tests gate: the changed test files plus candidate
-      # test files for changed source modules — NOT the full suite. The full
-      # backend unit suite runs in CI's "Test (Backend)" job.
-      - id: prepush-affected-tests
-        name: prepush affected tests (changed tests + best-guess for changed source)
-        entry: uv run --project backend --no-sync python scripts/run_affected_tests.py
-        language: system
-        files: ^backend/(src|tests)/.*\.py$
         pass_filenames: false
         stages: [pre-push]
       - id: prepush-merge-conflict-check
