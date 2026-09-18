@@ -148,30 +148,32 @@ jobs:
           elif [ "$LAST_SUCCESS_AGE" -ge 0 ]; then
             echo "Last successful merge-queue run was ${LAST_SUCCESS_AGE} min ago — within threshold."
           else
-            echo "::warning::merge-queue-watchdog: no completed merge-queue runs found — cannot determine staleness."
+            echo "::warning::merge-queue-watchdog: no successful run among the last 10 completed merge-queue runs — the queue may be stalled; re-arming."
           fi
 
-          # ---- 3. Re-arm: dispatch merge-queue.yml if queue appears idle ----
+           # ---- 3. Re-arm: dispatch merge-queue.yml if queue appears idle ----
           # Re-arm when: (a) we just cancelled a stuck run, or (b) no merge-queue
-          # run is in progress and the last successful one is older than the
-          # watchdog interval (~10 min). Use repository_dispatch (NOT
-          # workflow_dispatch) — merge-queue.yml documents a GitHub caching bug
-          # where workflow_dispatch on a recently modified workflow returns HTTP
-          # 422. repository_dispatch is the established convention.
+          # run is in progress and the last successful one is older than 30 min
+          # (the documented threshold — safely above merge-queue.yml's own 15-min
+          # cron so the watchdog only fires when the queue has genuinely missed
+          # ticks). Use repository_dispatch (NOT workflow_dispatch) —
+          # merge-queue.yml documents a GitHub caching bug where
+          # workflow_dispatch on a recently modified workflow returns HTTP 422.
+          # repository_dispatch is the established convention.
           IN_PROGRESS_COUNT="$(echo "$IN_PROGRESS" | jq '[.[] | select(.databaseId != ${{ github.run_id }})] | length' 2>/dev/null)" || IN_PROGRESS_COUNT="0"
 
-          SHOULD_DISPATH=false
-          if [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$LAST_SUCCESS_AGE" -ge 10 ]; then
-            SHOULD_DISPATH=true
+          SHOULD_DISPATCH=false
+          if [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$LAST_SUCCESS_AGE" -ge 30 ]; then
+            SHOULD_DISPATCH=true
             echo "No in_progress merge-queue runs and last success was ${LAST_SUCCESS_AGE} min ago — rearming."
           elif [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$LAST_SUCCESS_AGE" -eq -1 ]; then
-            SHOULD_DISPATH=true
+            SHOULD_DISPATCH=true
             echo "No in_progress merge-queue runs and no successful runs found — rearming."
           fi
 
-          if [ "$SHOULD_DISPATH" = "true" ]; then
-            PAYLOAD='{\"event_type\": \"merge-queue-chain\", \"client_payload\": {\"depth\": 0, \"ready_at\": 0}}'
-            if gh api -X POST "repos/$REPO/dispatches" --input - <<< "$PAYLOAD" 2>/dev/null; then
+          if [ "$SHOULD_DISPATCH" = "true" ]; then
+            PAYLOAD="$(jq -n '{event_type: "merge-queue-chain", client_payload: {depth: 0, ready_at: 0}}')"
+            if gh api -X POST "repos/$REPO/dispatches" --input - <<< "$PAYLOAD" 2>&1; then
               echo "Re-armed merge-queue via repository_dispatch."
             else
               echo "::warning::merge-queue-watchdog: repository_dispatch to re-arm merge-queue.yml failed — the 15-min cron + PR/CI events still cover the queue."
