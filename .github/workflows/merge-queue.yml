@@ -204,7 +204,14 @@ jobs:
       issues: write
     runs-on: ubicloud-standard-2
     steps:
-      - name: Cancel stale stuck runs (self-healing)
+      - name: Cancel stale stuck runs (self-healing — belt-and-braces)
+        # BELT-AND-BRACES: the authoritative out-of-lock sweep is
+        # merge-queue-watchdog.yml (a separate workflow with its own concurrency
+        # group). This in-job sweep runs ONLY when the lock is free — i.e. when
+        # it is not needed for the chicken-and-egg failure mode (a stuck run
+        # holding the lock prevents THIS job from starting). It still catches
+        # stale runs that accumulated between watchdog ticks.
+        #
         # A run that is in_progress with a job that never got picked up by a
         # runner (startedAt: null) holds the merge-queue concurrency group lock
         # (cancel-in-progress: false), blocking every later queue run. This sweep
