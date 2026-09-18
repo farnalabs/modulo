@@ -7334,10 +7334,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 )
                 return _idempotency_gate_skipped_envelope(node_id)
 
-    # FAR-995: _resolved_provider is set to RUNNER_PROVIDER_E2B above (the
-    # Bundled Runner path returns before reaching this point).  The assert
-    # narrows the type from str | None → str for the marker API calls below.
-    assert _resolved_provider is not None
+    # The Bundled Runner route returns above (it attributes via its own
+    # dispatch route). Every path that reaches this point is the legacy E2B
+    # route ("e2b", or the historical "none" default), so attribute the
+    # marker explicitly rather than relying on a default at the marker API.
+    if _resolved_provider is None:
+        from modulo.core.runner_capacity import RUNNER_PROVIDER_E2B
+
+        _resolved_provider = RUNNER_PROVIDER_E2B
 
     async def _acquire_dispatch_marker() -> str | None:
         """D8 atomic dispatch gate + marker (FAR-594): capacity check and the
