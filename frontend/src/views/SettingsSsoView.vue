@@ -67,7 +67,7 @@
                   </p>
                 </div>
               </div>
-              <div class="flex shrink-0 items-center gap-2" @click.stop>
+              <div class="flex shrink-0 items-center gap-2" @click.stop @keydown.stop>
                 <button type="button"
                   :disabled="testingId === provider.id"
                   class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
@@ -114,7 +114,7 @@
               </div>
             </div>
 
-            <div v-if="editProviderId === provider.id" class="border-t p-4" @click.stop>
+            <div v-if="editProviderId === provider.id" class="border-t p-4" @click.stop @keydown.stop>
               <SsoProviderForm
                 :data="formData"
                 :saving="saving"
@@ -131,7 +131,7 @@
               />
             </div>
 
-            <div v-if="deleteConfirmProviderId === provider.id" class="border-t border-destructive/50 bg-destructive/10 p-4" @click.stop>
+            <div v-if="deleteConfirmProviderId === provider.id" class="border-t border-destructive/50 bg-destructive/10 p-4" @click.stop @keydown.stop>
               <p class="text-sm font-medium text-destructive">{{ $t('views.SettingsSsoView.delete_confirm', { name: provider.name }) }}</p>
               <p class="mt-1 text-sm text-destructive/80">{{ $t('views.SettingsSsoView.delete_warning') }}</p>
               <div class="mt-3 flex items-center gap-2">
@@ -149,7 +149,7 @@
               <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
             </div>
 
-            <div v-if="testResultProviderId === provider.id" class="border-t p-4" @click.stop>
+            <div v-if="testResultProviderId === provider.id" class="border-t p-4" @click.stop @keydown.stop>
                 <div
                   class="rounded-lg p-3 text-sm"
                   :class="testResult?.success ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'"
