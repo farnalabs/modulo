@@ -53,7 +53,7 @@ def main() -> int:
     test_paths = [p[len("backend/") :] for p in changed]
     print(f"Running tests for changed files: {' '.join(test_paths)}", file=sys.stderr)
 
-    cmd = ["uv", "run", "--no-sync", "pytest", "--tb=short", "-q", "--timeout=120", *test_paths]
+    cmd = ["uv", "run", "--no-sync", "python", "-m", "pytest", "--tb=short", "-q", "--timeout=120", *test_paths]
     result = subprocess.run(cmd, cwd=BACKEND_DIR, check=False)
     if result.returncode != 0:
         print("FAILED: Changed tests did not pass", file=sys.stderr)
