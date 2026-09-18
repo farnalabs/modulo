@@ -8,6 +8,8 @@ mocked so the tests are fast and offline.
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
@@ -961,3 +963,201 @@ def test_deletion_lines_not_counted():
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=mixed_diff, stderr="")
         count = mod._count_added_lines("origin/main...HEAD", "src/module.py")
     assert count == 2  # only the two added lines
+
+
+def test_multiline_docstring_body_lines_not_counted():
+    """Body lines inside a multi-line docstring are data, not statements.
+
+    A single-line predicate cannot see the enclosing triple quotes, so body
+    lines fail ``ast.parse`` and hit the lenient fallback.  The stateful
+    iterator must exclude the docstring opening line, its body, and its
+    closing delimiter — only ``def f():`` and ``return 1`` are executable.
+    """
+    py_diff = """+++ b/src/module.py
++def f():
++    \"\"\"Summary.
++
++    Body line one.
++    Body line two.
++    \"\"\"
++    return 1
+"""
+    with patch.object(mod.subprocess, "run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=py_diff, stderr="")
+        count = mod._count_added_lines("origin/main...HEAD", "src/module.py")
+    assert count == 2
+
+
+def test_multiline_docstring_assignment_still_counted():
+    """An assignment whose value opens a multi-line string is executable.
+
+    The ``x = ...`` prefix is real code, so the opening line counts; the
+    string body and closing delimiter that follow do not.
+    """
+    py_diff = """+++ b/src/module.py
++x = \"\"\"
++line one
++line two
++\"\"\"
++y = 2
+"""
+    with patch.object(mod.subprocess, "run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=py_diff, stderr="")
+        count = mod._count_added_lines("origin/main...HEAD", "src/module.py")
+    assert count == 2  # x = """ and y = 2
+
+
+def test_js_block_comment_body_lines_not_counted():
+    """JSDoc ``/* ... */`` continuation lines are not executable."""
+    js_diff = """+++ b/src/app.ts
++/**
++ * JSDoc summary.
++ * @param x - input
++ */
++export const x = 1;
+"""
+    with patch.object(mod.subprocess, "run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=js_diff, stderr="")
+        count = mod._count_added_lines("origin/main...HEAD", "src/app.ts")
+    assert count == 1
+
+
+def test_js_inline_block_comment_only_not_counted():
+    """A complete inline ``/* ... */`` comment line carries no code."""
+    js_diff = """+++ b/src/app.ts
++/* inline */
++const y = 2; /* trailing */
+"""
+    with patch.object(mod.subprocess, "run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=js_diff, stderr="")
+        count = mod._count_added_lines("origin/main...HEAD", "src/app.ts")
+    assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# FAR-962 end-to-end: real git diff through the unpatched code path
+# ---------------------------------------------------------------------------
+_GIT = shutil.which("git") or "git"
+
+
+def _git(repo: Path, env: dict[str, str], *args: str) -> None:
+    subprocess.run(  # noqa: S603 — trusted fixed git args, test helper
+        [_GIT, *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def _init_repo(repo: Path, base_content: str = "def f():\n    return 1\n") -> dict[str, str]:
+    """Create a git repo with a ``main`` commit; return an env for commits."""
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+    }
+
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "module.py").write_text(base_content, encoding="utf-8")
+    _git(repo, env, "init", "-b", "main")
+    _git(repo, env, "add", "-A")
+    _git(repo, env, "commit", "-m", "base")
+    return env
+
+
+def _commit_on_feature(repo: Path, env: dict[str, str]) -> None:
+    _git(repo, env, "checkout", "-b", "feature")
+    _git(repo, env, "add", "-A")
+    _git(repo, env, "commit", "-m", "feature")
+
+
+def test_evaluate_comment_only_diff_skips_via_real_git_diff(tmp_path):
+    """Drive a real comment-only diff through the unpatched code path.
+
+    Stronger than the mocked tests: ``_get_changed_production_files`` and
+    ``_count_added_lines`` both run real ``git diff`` against a scratch repo,
+    proving the executable-line filter yields zero changed lines end-to-end.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _init_repo(repo)
+    # 12 added comment lines: above the tiny-diff exemption, so a pre-fix
+    # count of these lines would flow into the missing-report path and FAIL
+    # rather than being masked by the ≤10-line exemption.
+    comments = "".join(f"    # comment {i}\n" for i in range(12))
+    (repo / "src" / "module.py").write_text(
+        f"def f():\n{comments}    return 1\n",
+        encoding="utf-8",
+    )
+    _commit_on_feature(repo, env)
+
+    with patch.object(mod, "REPO_ROOT", repo):
+        changed = mod._get_changed_production_files("main", "Python")
+        result = mod.evaluate(
+            language="Python",
+            report_path=None,
+            compare_branch="main",
+            fail_under=90,
+        )
+
+    assert changed == {}
+    assert result.skipped is True
+    assert result.passed is True
+
+
+def test_evaluate_docstring_only_diff_skips_via_real_git_diff(tmp_path):
+    """A real multi-line-docstring-only diff yields zero executable lines.
+
+    Exercises the triple-quote state tracker end-to-end (real ``git diff``,
+    unpatched ``_get_changed_production_files``/``_count_added_lines``).  The
+    docstring body lines are not independently parseable, so without state
+    tracking they would count as executable and fail the gate.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _init_repo(repo)
+    body = "".join(f"    doc line {i}\n" for i in range(12))
+    (repo / "src" / "module.py").write_text(
+        f'def f():\n    """Summary.\n{body}    """\n    return 1\n',
+        encoding="utf-8",
+    )
+    _commit_on_feature(repo, env)
+
+    with patch.object(mod, "REPO_ROOT", repo):
+        changed = mod._get_changed_production_files("main", "Python")
+        result = mod.evaluate(
+            language="Python",
+            report_path=None,
+            compare_branch="main",
+            fail_under=90,
+        )
+
+    assert changed == {}
+    assert result.skipped is True
+    assert result.passed is True
+
+
+def test_evaluate_deletion_only_diff_skips_via_real_git_diff(tmp_path):
+    """A real deletion-only diff must not enter the changed-lines denominator."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _init_repo(repo, "def f():\n    x = 1\n    return 1\n")
+    (repo / "src" / "module.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    _commit_on_feature(repo, env)
+
+    with patch.object(mod, "REPO_ROOT", repo):
+        changed = mod._get_changed_production_files("main", "Python")
+        result = mod.evaluate(
+            language="Python",
+            report_path=None,
+            compare_branch="main",
+            fail_under=90,
+        )
+
+    assert changed == {}
+    assert result.skipped is True
+    assert result.passed is True

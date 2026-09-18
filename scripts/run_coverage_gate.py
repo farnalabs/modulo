@@ -67,6 +67,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -213,6 +214,12 @@ def _is_executable_python_line(line: str) -> bool:
     data, not control flow.  Strings inside assignments, calls, or
     expressions ARE executable and are counted.
 
+    This is a *single-line* predicate: it cannot see across lines, so body
+    lines inside a multi-line docstring (which are not independently
+    parseable and hit the lenient fallback below) would be counted as
+    executable.  Filter a whole file's added lines with
+    :func:`_iter_executable_python_lines` to track triple-quote state.
+
     The function is lenient on parse failure — lines that cannot be parsed
     are counted as executable to avoid under-counting.
     """
@@ -236,12 +243,25 @@ def _is_executable_python_line(line: str) -> bool:
             return True
 
 
-def _is_executable_js_line(line: str) -> bool:
-    """Return True if a JS/TS line is an executable statement.
+def _js_strip_line_comment(line: str) -> str:
+    """Strip a trailing ``//`` comment and surrounding whitespace.
 
-    Uses lightweight regex stripping to remove single-line comments
-    (``//``) and blank lines.  Multi-line comment internals are handled by
-    the ``/* ... */`` stripping below.
+    Heuristic: a ``//`` inside a string literal is not distinguished, which
+    is acceptable for the coverage gate's purpose of excluding clearly
+    non-executable lines.
+    """
+    return re.sub(r"//[^\n]*$", "", line).strip()
+
+
+def _is_executable_js_line(line: str) -> bool:
+    """Return True if a single JS/TS line carries executable code.
+
+    Removes blank lines, a trailing ``//`` comment, and a complete inline
+    ``/* ... */`` block comment.  A block comment that *opens* on this line
+    and closes on a later line is handled by
+    :func:`_iter_executable_js_lines`, which tracks block-comment state
+    across the added lines; this single-line predicate treats such a line as
+    non-executable unless it carries code before the ``/*``.
 
     This is a heuristic — it does not handle every edge case (e.g. ``//``
     inside a string literal), but it is correct for the vast majority of
@@ -251,10 +271,106 @@ def _is_executable_js_line(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
-    # Strip trailing single-line comments (but not inside strings — heuristic).
-    stripped = re.sub(r"//[^\n]*$", "", stripped)
-    stripped = stripped.strip()
-    return bool(stripped)
+    start = stripped.find("/*")
+    if start != -1:
+        end = stripped.find("*/", start + 2)
+        stripped = stripped[:start] + stripped[end + 2 :] if end != -1 else stripped[:start]
+    return bool(_js_strip_line_comment(stripped))
+
+
+def _py_multiline_opener(line: str) -> tuple[int, str] | None:
+    """Return ``(index, delimiter)`` for an unclosed triple-quote in *line*.
+
+    Scans left to right, skipping single-line strings and ``#`` comments, so
+    a ``\"\"\"`` inside a comment or a normal string is not mistaken for a
+    docstring opener.  Returns ``None`` when the line opens no multi-line
+    string (or closes it on the same line).  Escape sequences are honoured
+    inside short strings; triple-quoted strings are assumed not to contain
+    an escaped delimiter.
+    """
+    i = 0
+    n = len(line)
+    while i < n:
+        if line[i] == "#":
+            return None
+        if line.startswith("'''", i) or line.startswith('"""', i):
+            quote = line[i : i + 3]
+            close = line.find(quote, i + 3)
+            if close == -1:
+                return i, quote
+            i = close + 3
+            continue
+        if line[i] in ("'", '"'):
+            quote = line[i]
+            i += 1
+            while i < n:
+                if line[i] == "\\":
+                    i += 2
+                    continue
+                if line[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        i += 1
+    return None
+
+
+def _iter_executable_python_lines(lines: Iterable[str]) -> Iterator[str]:
+    """Yield the added Python *lines* that are executable statements.
+
+    Tracks triple-quoted string state across lines so the body and closing
+    delimiter of a multi-line docstring are not counted as executable even
+    though, taken in isolation, they are not parseable statements.
+    """
+    delimiter: str | None = None
+    for line in lines:
+        if delimiter is not None:
+            if delimiter in line:
+                delimiter = None
+            continue
+        opener = _py_multiline_opener(line)
+        if opener is not None:
+            index, quote = opener
+            prefix = line[:index].strip().strip("rbfuRBFU").strip()
+            if not prefix:
+                # A bare string literal (docstring): the opening line itself
+                # is data, not a statement.
+                delimiter = quote
+                continue
+        if not _is_executable_python_line(line):
+            continue
+        if opener is not None:
+            delimiter = opener[1]
+        yield line
+
+
+def _iter_executable_js_lines(lines: Iterable[str]) -> Iterator[str]:
+    """Yield the added JS/TS *lines* that carry executable code.
+
+    Tracks ``/* ... */`` block-comment state across lines so JSDoc
+    continuation lines and the closing ``*/`` are not counted as
+    executable.
+    """
+    in_block = False
+    for line in lines:
+        if in_block:
+            end = line.find("*/")
+            if end == -1:
+                continue
+            in_block = False
+            rest = line[end + 2 :]
+            if _js_strip_line_comment(rest):
+                yield rest
+            continue
+        start = line.find("/*")
+        if start != -1 and line.find("*/", start + 2) == -1:
+            in_block = True
+            if _js_strip_line_comment(line[:start]):
+                yield line
+            continue
+        if _is_executable_js_line(line):
+            yield line
 
 
 def _safe_repo_path(value: str) -> str | None:
@@ -321,19 +437,16 @@ def _count_added_lines(diff_range: str, filepath: str) -> int:
     is_python = filepath.endswith(".py")
     is_js = any(filepath.endswith(ext) for ext in (".ts", ".tsx", ".js", ".jsx", ".vue"))
 
-    count = 0
-    for diff_line in result.stdout.splitlines():
-        if not diff_line.startswith("+") or diff_line.startswith("+++"):
-            continue
-        content = diff_line[1:]
-        if not content.strip():
-            continue
-        if is_python and not _is_executable_python_line(content):
-            continue
-        if is_js and not _is_executable_js_line(content):
-            continue
-        count += 1
-    return count
+    added = [
+        diff_line[1:]
+        for diff_line in result.stdout.splitlines()
+        if diff_line.startswith("+") and not diff_line.startswith("+++")
+    ]
+    if is_python:
+        return sum(1 for _ in _iter_executable_python_lines(added))
+    if is_js:
+        return sum(1 for _ in _iter_executable_js_lines(added))
+    return sum(1 for content in added if content.strip())
 
 
 def _get_changed_production_files(compare_branch: str, language: str) -> dict[str, int]:
