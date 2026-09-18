@@ -238,6 +238,15 @@ class TestGetPluginDetail:
 
         assert resp.status_code == 404
 
+    def test_registry_failure_returns_500(self, client: TestClient) -> None:
+        mock_registry = _make_mock_registry([PLUGIN_SLACK])
+        mock_registry.get_plugin.side_effect = RuntimeError("registry exploded")
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+            resp = client.get("/api/v1/plugins/modulo-connector-slack")
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "Failed to get plugin detail"
+
 
 class TestPluginHealthCheck:
     """Mirrors: Plugin health check (GET /api/v1/plugins/{id}/health)."""
