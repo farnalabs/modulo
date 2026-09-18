@@ -109,8 +109,9 @@ _MIGRATION_PATH = (
 # chained onto 0243_remove_organisations_audit_drift, and 0245_drop_organisations_created_by_fk
 # (PR #559) chained onto 0244_pipeline_stdout_retention_config, and 0246_sso_join_gate (FAR-855)
 # chained onto 0245_drop_organisations_created_by_fk, and 0247_sso_presets (FAR-853)
-# chained onto 0246_sso_join_gate as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0247_sso_presets"
+# chained onto 0246_sso_join_gate, and 0248_agent_schema_profile (FAR-900)
+# chained onto 0247_sso_presets as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0248_agent_schema_profile"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
