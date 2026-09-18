@@ -7,7 +7,8 @@ code:
   - backend/src/modulo/core/ssrf.py
 unit-tests:
   - backend/tests/unit/core/test_ssrf.py
-bdd: []
+bdd:
+  - backend/tests/bdd/features/security/ssrf_guard.feature
 depends-on: []
 status: covered
 ---
@@ -74,10 +75,6 @@ route, so it is tracked here rather than in the manifest registry.
 
 ## Known Gaps
 
-- **No BDD feature files.** The guard is covered by the dedicated unit
-  suite ``backend/tests/unit/core/test_ssrf.py`` (73 test functions incl. the
-  DNS-rebinding pinned-transport tests); there are no pytest-bdd features
-  for it.
 - **Pinning rides a private httpcore seam.** ``_PinnedAsyncNetworkBackend``
   is installed by overriding httpcore's private ``_pool._network_backend``
   attribute; if a future httpcore version stops routing that attribute into
@@ -85,6 +82,20 @@ route, so it is tracked here rather than in the manifest registry.
   un-pin loud via a runtime guard, but it is not a public API contract.
 
 ## QA History
+
+- 2026-09-18: **improve-architecture (product-map walk)** — closed the
+  tracked "No BDD feature files" gap. Registered ``security/ssrf_guard.feature``
+  into the executing BDD suite (``steps/test_ssrf_guard.py``), driving the real
+  ``modulo.core.ssrf`` seams — literal-IP fail-closed blocking (loopback /
+  private / link-local metadata / CGNAT / Aliyun metadata / current-network),
+  pre-DNS syntax rejection (scheme, userinfo, hostname, port, non-canonical IP
+  literals), injected-resolution sync/async validation including the any-blocked
+  and empty-resolution fail-closed semantics, the global + tenant-scoped
+  allowlists with the non-negotiable floor, ``resolve_pinned_ip`` target shape
+  (original hostname + full validated IP set), the pinned transport's
+  ``UnpinnedHostError`` refusal, and the pinned-client ``transport``-kwarg
+  rejection — all network-free. ``_ORPHANED_BDD_FEATURES`` stays empty.
+  The private-httpcore-seam gap above remains tracked.
 
 - 2026-08-27: **improve-architecture (product-map walk)** — entry added to
   close the feature-graph gap for a shipped infra-only surface whose tests
