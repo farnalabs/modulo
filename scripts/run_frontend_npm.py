@@ -39,6 +39,13 @@ PACKAGE_JSON = FRONTEND_DIR / "package.json"
 
 _SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:_./-]*$")
 
+# Allow-list for filenames that flow into the eslint subprocess command line.
+# Deriving the value from a regex ``fullmatch().group(0)`` gives the taint
+# analyser a string provably bounded to safe characters before it reaches
+# ``subprocess`` (resolves pythonsecurity:S8705 argument injection, mirroring
+# scripts/run_coverage_gate.py).
+_STAGED_PATH_CHARS_RE = re.compile(r"[A-Za-z0-9._/\\:-]+")
+
 
 def find_package_manager() -> str | None:
     if sys.platform == "win32":
@@ -46,6 +53,20 @@ def find_package_manager() -> str | None:
         # shell script that CreateProcess cannot launch on Windows.
         return shutil.which("pnpm.cmd") or shutil.which("pnpm") or shutil.which("npm.cmd") or shutil.which("npm")
     return shutil.which("pnpm") or shutil.which("npm")
+
+
+def _sanitize_staged_path(value: str) -> str | None:
+    """Bound a translated staged path to safe subprocess-argument characters.
+
+    Rejects a leading ``-`` (which eslint would read as an option) and returns
+    ``regex.fullmatch(value).group(0)`` so the taint analyser sees a value that
+    cannot carry an injection payload (pythonsecurity:S8705).  Returns ``None``
+    when the path is rejected.
+    """
+    if not value or value.startswith("-"):
+        return None
+    matched = _STAGED_PATH_CHARS_RE.fullmatch(value)
+    return matched.group(0) if matched else None
 
 
 def frontend_relative_paths(filenames: list[str]) -> list[str]:
@@ -56,7 +77,8 @@ def frontend_relative_paths(filenames: list[str]) -> list[str]:
     ``frontend/`` prefix has to be stripped.  Anything outside ``frontend/``
     is dropped: the frontend eslint config is scoped to ``frontend/src`` (the
     ``lint`` script is ``eslint src``) and files elsewhere are not part of the
-    CI lint gate.
+    CI lint gate.  Each surviving path is sanitized before it can reach the
+    subprocess command line.
     """
     result: list[str] = []
     for filename in filenames:
@@ -67,7 +89,10 @@ def frontend_relative_paths(filenames: list[str]) -> list[str]:
             relative = path.resolve().relative_to(FRONTEND_DIR.resolve())
         except ValueError:
             continue
-        result.append(relative.as_posix())
+        sanitized = _sanitize_staged_path(relative.as_posix())
+        if sanitized is None:
+            continue
+        result.append(sanitized)
     return result
 
 
