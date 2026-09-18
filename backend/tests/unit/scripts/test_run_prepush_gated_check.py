@@ -68,23 +68,23 @@ def test_trailing_double_star_matches_any_depth():
 
 
 def test_single_star_does_not_cross_path_separator():
-    assert mod._matches_pattern(["frontend/src/views/B.vue"], "frontend/src/*.vue") == []
+    assert not mod._matches_pattern(["frontend/src/views/B.vue"], "frontend/src/*.vue")
     assert mod._matches_pattern(["frontend/src/B.vue"], "frontend/src/*.vue") == ["frontend/src/B.vue"]
 
 
 def test_question_mark_matches_one_non_separator_character():
     assert mod._matches_pattern(["frontend/src/a.ts"], "frontend/src/?.ts") == ["frontend/src/a.ts"]
-    assert mod._matches_pattern(["frontend/src/ab.ts"], "frontend/src/?.ts") == []
-    assert mod._matches_pattern(["frontend/src/a/b.ts"], "frontend/src/?.ts") == []
+    assert not mod._matches_pattern(["frontend/src/ab.ts"], "frontend/src/?.ts")
+    assert not mod._matches_pattern(["frontend/src/a/b.ts"], "frontend/src/?.ts")
 
 
 def test_pattern_is_anchored_to_the_whole_path():
-    assert mod._matches_pattern(["backend/other/src/foo.py"], "backend/src/**/*.py") == []
-    assert mod._matches_pattern(["xbackend/src/foo.py"], "backend/src/**/*.py") == []
+    assert not mod._matches_pattern(["backend/other/src/foo.py"], "backend/src/**/*.py")
+    assert not mod._matches_pattern(["xbackend/src/foo.py"], "backend/src/**/*.py")
 
 
 def test_non_python_files_do_not_match_python_pattern():
-    assert mod._matches_pattern(["backend/src/foo.md"], "backend/src/**/*.py") == []
+    assert not mod._matches_pattern(["backend/src/foo.md"], "backend/src/**/*.py")
 
 
 def test_windows_separators_are_normalised():
