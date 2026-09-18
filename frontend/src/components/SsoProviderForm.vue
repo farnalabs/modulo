@@ -619,6 +619,8 @@ function commitPendingDomain(): boolean {
 /**
  * Fix #3: Handle comma/space-separated pasted input.
  * Splits on comma or whitespace and adds each valid domain.
+ * Accumulates locally and emits once to avoid stale-props issue
+ * (props.data doesn't update between synchronous emit calls).
  */
 function handleDomainPaste(e: ClipboardEvent) {
   const pasted = e.clipboardData?.getData('text') ?? ''
@@ -626,6 +628,7 @@ function handleDomainPaste(e: ClipboardEvent) {
   if (/[, ]/.test(pasted)) {
     e.preventDefault()
     const parts = pasted.split(/[, ]+/).map(s => s.trim()).filter(Boolean)
+    const domains = [...props.data.allowed_domains]
     let hasError = false
     for (const part of parts) {
       const err = validateDomain(part)
@@ -635,14 +638,14 @@ function handleDomainPaste(e: ClipboardEvent) {
         break
       }
       const normalised = part.toLowerCase().replace(/\.$/, '')
-      if (!props.data.allowed_domains.includes(normalised)) {
-        emitUpdate({
-          ...props.data,
-          allowed_domains: [...props.data.allowed_domains, normalised],
-        })
+      if (!domains.includes(normalised)) {
+        domains.push(normalised)
       }
     }
-    if (!hasError) domainError.value = null
+    if (!hasError) {
+      domainError.value = null
+      emitUpdate({ ...props.data, allowed_domains: domains })
+    }
     domainInput.value = ''
   }
 }
