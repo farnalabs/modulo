@@ -642,9 +642,13 @@ function handleDomainPaste(e: ClipboardEvent) {
         domains.push(normalised)
       }
     }
+    // Commit any valid domains collected before the batch aborted at an
+    // invalid entry, so a single bad domain never discards its valid prefix.
+    if (domains.length !== props.data.allowed_domains.length) {
+      emitUpdate({ ...props.data, allowed_domains: domains })
+    }
     if (!hasError) {
       domainError.value = null
-      emitUpdate({ ...props.data, allowed_domains: domains })
     }
     domainInput.value = ''
   }
