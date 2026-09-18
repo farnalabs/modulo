@@ -608,11 +608,11 @@ describe('SsoProviderForm', () => {
     expect(wrapper.text()).toContain('Leave blank to keep existing')
   })
 
-  it('does NOT show masked placeholder or hint when creating (no isEdit)', () => {
+  it('shows "enter client secret" placeholder when creating (no isEdit)', () => {
     const wrapper = mountForm(makeData(), { isEdit: false })
     const secretInput = wrapper.find('#ssoproviderform-field-7')
-    // Placeholder should be "Leave blank to keep existing", not masked dots
-    expect(secretInput.attributes('placeholder')).toBe('Leave blank to keep existing')
+    // Placeholder should prompt for input, not the "leave blank" text (which is for editing)
+    expect(secretInput.attributes('placeholder')).toBe('Enter client secret')
     // No hint paragraph should appear below the field
     expect(wrapper.findAll('p').filter(p => p.text().includes('Leave blank to keep existing'))).toHaveLength(0)
   })
