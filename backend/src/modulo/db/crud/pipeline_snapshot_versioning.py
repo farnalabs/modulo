@@ -305,6 +305,10 @@ async def rollback_to_snapshot(
             payload_json=build_gate_diff_payload(diff, caller_type),
         )
 
+    # FAR-889: restore replays the snapshot's stored graph verbatim.  Historic
+    # snapshots may contain schema-less manual nodes, so restore tolerates them
+    # (FAR-874) instead of running the manual-node output-schema guard; graphs
+    # arriving through the normal write path are guarded there.
     pipeline.graph_nodes_json = copy.deepcopy(target.graph_json.get("nodes", []))
     await session.execute(sa_delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
     for edge_data in new_edges:

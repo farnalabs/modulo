@@ -1633,6 +1633,47 @@ async def test_materialize_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert created["pipeline"].return_value.retry_policy == {"on": ["failure"], "max_retries": 2}
 
 
+async def test_materialize_warns_on_schemaless_manual_node(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-889: importing a manual node without an output schema warns.
+
+    The node is still persisted (FAR-874-style tolerance), but the importer
+    records an actionable warning so the operator knows the node will fail at
+    execution time.
+    """
+    created = _patch_crud(monkeypatch)
+    manual_node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "manual",
+        "label": "Gate",
+        "position": {"x": 0, "y": 0},
+    }
+    bundle = _make_bundle()
+    bundle["pipeline"]["graph_nodes_json"] = [manual_node]
+
+    result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    assert created["pipeline"].return_value.graph_nodes_json == [manual_node]
+    assert any("manual node without an output schema" in w for w in result["warnings"])
+
+
+async def test_materialize_does_not_warn_on_manual_node_with_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-889: a manual node carrying an output schema imports without the warning."""
+    _patch_crud(monkeypatch)
+    manual_node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "manual",
+        "label": "Gate",
+        "position": {"x": 0, "y": 0},
+        "output_schema_json": {"type": "object"},
+    }
+    bundle = _make_bundle()
+    bundle["pipeline"]["graph_nodes_json"] = [manual_node]
+
+    result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    assert not any("manual node without an output schema" in w for w in result["warnings"])
+
+
 async def test_materialize_rewires_connector_binding_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     created = _patch_crud(monkeypatch)
     export_schema_id = uuid.uuid4()

@@ -516,6 +516,10 @@ async def _clone_pipeline_config(
         lock_wait_timeout_seconds=snapshot.lock_wait_timeout_seconds,
         node_timeout_seconds=snapshot.node_timeout_seconds,
         run_context_defaults=copy.deepcopy(snapshot.run_context_defaults),
+        # FAR-889: copying a stored snapshot replays its graph verbatim.  A
+        # snapshot predating the guard may contain schema-less manual nodes, so
+        # this duplicate path tolerates them (FAR-874) rather than running
+        # enforce_manual_node_output_schemas; new graphs are guarded on write.
         graph_nodes_json=copy.deepcopy(snapshot.graph_nodes_json),
         default_autonomy_level=snapshot.default_autonomy_level,
         stale_run_timeout_minutes=snapshot.stale_run_timeout_minutes,
@@ -795,6 +799,10 @@ async def _read_clone_source_snapshot(
                 lock_wait_timeout_seconds=source.lock_wait_timeout_seconds,
                 node_timeout_seconds=source.node_timeout_seconds,
                 run_context_defaults=copy.deepcopy(source.run_context_defaults),
+                # FAR-889: raw source graph for the clone writer; carried
+                # verbatim so legacy schema-less manual nodes survive a copy
+                # (FAR-874).  This is a read for an existing graph, not a
+                # new-node entry point.
                 graph_nodes_json=copy.deepcopy(list(source.graph_nodes_json or [])),
                 default_autonomy_level=str(source.default_autonomy_level or "manual_approval"),
                 stale_run_timeout_minutes=source.stale_run_timeout_minutes,

@@ -1107,7 +1107,10 @@ async def _materialize_pipeline_and_edges(
     )
 
     pipeline.graph_nodes_json = list(graph_nodes)
-    # FAR-889: reject imports that recreate schema-less manual nodes.
+    # FAR-889: detect imports that recreate schema-less manual nodes.  Unlike
+    # the REST write path, import tolerates legacy bundles (FAR-874) and keeps
+    # the node, surfacing a warning instead of rejecting the whole import; the
+    # node will fail at execution time until an output schema is attached.
     try:
         enforce_manual_node_output_schemas(graph_nodes)
     except ManualNodeOutputSchemaError as exc:

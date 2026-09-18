@@ -414,6 +414,9 @@ async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation,
             description="Demo sample pipeline — read-only demo data (FAR-535).",
             account_id=account.id,
             visibility="org",
+            # FAR-889: the demo graph is trusted fixture data (FAR-535) built
+            # from agent nodes only, not a user-supplied new-node entry point,
+            # so it is not routed through the manual-node output-schema guard.
             graph_nodes_json=nodes,
             default_autonomy_level="manual_approval",
         )
