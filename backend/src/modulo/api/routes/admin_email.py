@@ -15,6 +15,7 @@ from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
     require_feature,
+    require_system_permission,
     require_target_org_role,
 )
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -75,6 +76,7 @@ async def admin_get_email_settings(
     org_id: uuid.UUID,
     _: AuthenticatedPrincipal = require_target_org_role("org.email.view", "operator"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
+    _sys: AuthenticatedPrincipal = require_system_permission("org.email.manage"),
 ) -> EmailSettingsResponse:
     try:
         async with session.begin():
@@ -130,6 +132,7 @@ async def admin_update_email_settings(
     _: AuthenticatedPrincipal = require_target_org_role("org.email.manage", "admin"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    _sys: AuthenticatedPrincipal = require_system_permission("org.email.manage"),
 ) -> EmailSettingsResponse:
     try:
         async with session.begin():
@@ -222,6 +225,7 @@ async def admin_test_email_settings(
     _: AuthenticatedPrincipal = require_target_org_role("org.email.manage", "admin"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    _sys: AuthenticatedPrincipal = require_system_permission("org.email.manage"),
 ) -> dict[str, Any]:
     try:
         async with session.begin():

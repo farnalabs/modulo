@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.routes.admin_housekeeping import CleanupResponse
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.housekeeping import Candidate, CategoryResult
 from modulo.settings import Settings, get_settings
@@ -20,12 +20,13 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 
-def _make_principal(role: str = "admin") -> TenantPrincipal:
+def _make_principal(role: str = "admin", *, is_system_admin: bool = False) -> TenantPrincipal:
     return TenantPrincipal(
         username="admin" if role == "admin" else "viewer",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
         org_role=role,
+        is_system_admin=is_system_admin,
     )
 
 
@@ -76,7 +77,8 @@ def client() -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_settings] = override_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_tenant_user] = lambda: _make_principal("admin")
+    app.dependency_overrides[get_current_tenant_user] = lambda: _make_principal("admin", is_system_admin=True)
+    app.dependency_overrides[get_current_user] = lambda: _make_principal("admin", is_system_admin=True)
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -99,6 +101,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
     )
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_current_tenant_user] = lambda: _make_principal("viewer")
+    app.dependency_overrides[get_current_user] = lambda: _make_principal("viewer")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -126,6 +129,34 @@ def unauth_client() -> Generator[TestClient, None, None]:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
     app.dependency_overrides[get_current_tenant_user] = raise_unauthorized
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def non_sys_admin_client() -> Generator[TestClient, None, None]:
+    """Org admin (passes require_permission) but NOT system admin (fails require_system_permission)."""
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key="a" * 32,
+            fernet_key="a" * 32,
+            modulo_admin_password="testpass",
+        )
+
+    principal = _make_principal("admin", is_system_admin=False)
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_current_tenant_user] = lambda: principal
+    app.dependency_overrides[get_current_user] = lambda: principal
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -426,3 +457,19 @@ def _make_begin_nested(*, raise_on_enter: bool = False) -> MagicMock:
         cm.__aenter__ = AsyncMock(return_value=None)
     cm.__aexit__ = AsyncMock(return_value=False)
     return cm
+
+
+class TestSystemAdminRequired:
+    """Non-system-admin org admins must get 403 on all housekeeping routes."""
+
+    def test_list_housekeeping_403_for_org_admin(self, non_sys_admin_client: TestClient) -> None:
+        resp = non_sys_admin_client.get("/api/v1/admin/housekeeping")
+        assert resp.status_code == 403
+
+    def test_cleanup_403_for_org_admin(self, non_sys_admin_client: TestClient) -> None:
+        resp = non_sys_admin_client.post("/api/v1/admin/housekeeping/cleanup", json={"items": []})
+        assert resp.status_code == 403
+
+    def test_checkpoints_purge_403_for_org_admin(self, non_sys_admin_client: TestClient) -> None:
+        resp = non_sys_admin_client.post("/api/v1/admin/housekeeping/checkpoints/purge", json={"confirm": True})
+        assert resp.status_code == 403

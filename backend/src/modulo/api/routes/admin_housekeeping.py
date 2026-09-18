@@ -14,7 +14,7 @@ from modulo.api.constants import (
     MSG_FEATURE_NOT_AVAILABLE,
     MSG_INTERNAL_SERVER_ERROR,
 )
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import get_db_session, require_permission, require_system_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.housekeeping import ENTITY_MODEL_MAP, NON_DELETABLE_ENTITY_TYPES, scan_all
 from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, purge_terminal_checkpoints
@@ -67,6 +67,7 @@ class CleanupResponse(BaseModel):
 async def list_housekeeping(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_PERM_HOUSEKEEPING_MANAGE),
+    _sys: TenantPrincipal = require_system_permission(_PERM_HOUSEKEEPING_MANAGE),
 ) -> HousekeepingScanResponse:
     try:
         async with session.begin():
@@ -122,6 +123,7 @@ async def perform_cleanup(
     req: CleanupRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_PERM_HOUSEKEEPING_MANAGE),
+    _sys: TenantPrincipal = require_system_permission(_PERM_HOUSEKEEPING_MANAGE),
 ) -> CleanupResponse:
     deleted_count = 0
     errors: list[dict[str, str]] = []
@@ -206,6 +208,7 @@ async def purge_checkpoints(
     req: CheckpointRetentionPurgeRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_PERM_HOUSEKEEPING_MANAGE),
+    _sys: TenantPrincipal = require_system_permission(_PERM_HOUSEKEEPING_MANAGE),
 ) -> CheckpointRetentionPurgeResponse:
     """Purge LangGraph checkpoint rows for old terminal runs (keep the ``runs``).
 

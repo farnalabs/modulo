@@ -23,7 +23,6 @@ from starlette.responses import Response
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission
-from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry, resolve_plan_context
 from modulo.core.license import get_license
@@ -208,7 +207,7 @@ async def _apply_org_flag_override(
 async def list_feature_flags(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),
 ) -> Response | dict[str, Any]:
     # Attempt Redis cache read
     redis: Redis | None = None
@@ -329,7 +328,7 @@ async def get_feature_flag(
     flag_name: str,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),
 ) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
