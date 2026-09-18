@@ -520,6 +520,63 @@ class _FlakyFlush:
         self._session.flush = self._real_flush  # type: ignore[method-assign]
 
 
+class _HideAllChecks:
+    """Hide EVERY existence/recovery SELECT for ``entity`` from the seed.
+
+    Unlike :class:`_HideCheckOnce`, the interception never burns out, so the
+    post-IntegrityError recovery re-select also misses. That drives the seed's
+    defensive ``if winner is None: raise`` branch — the path taken when a
+    concurrent boot deletes the winner between the failed insert and the
+    recovery lookup.
+    """
+
+    def __init__(self, session: AsyncSession, entity: type) -> None:
+        self._session = session
+        self._entity = entity
+        self._real_execute = session.execute
+
+    def _is_check(self, stmt: object) -> bool:
+        descriptions = getattr(stmt, "column_descriptions", None)
+        if not descriptions:
+            return False
+        return descriptions[0].get("entity") is self._entity
+
+    async def _intercepted(self, stmt: object, *args: object) -> object:
+        if self._is_check(stmt):
+            return _EmptyResult()
+        return await self._real_execute(stmt, *args)  # type: ignore[arg-type]
+
+    def install(self) -> None:
+        self._session.execute = self._intercepted  # type: ignore[method-assign]
+
+    def uninstall(self) -> None:
+        self._session.execute = self._real_execute  # type: ignore[method-assign]
+
+
+class _ExplodingFlush:
+    """Raise a non-IntegrityError once when persisting an ``entity`` row.
+
+    Exercises the seed's broad ``except Exception`` swallow path, distinct from
+    the IntegrityError recovery path the other flush helper drives.
+    """
+
+    def __init__(self, session: AsyncSession, entity: type) -> None:
+        self._session = session
+        self._entity = entity
+        self._real_flush = session.flush
+
+    async def _intercepted(self) -> object:
+        if any(isinstance(obj, self._entity) for obj in self._session.new):
+            raise RuntimeError("simulated unexpected write failure")
+        return await self._real_flush()
+
+    def install(self) -> None:
+        self._session.flush = self._intercepted  # type: ignore[method-assign]
+
+    def uninstall(self) -> None:
+        self._session.flush = self._real_flush  # type: ignore[method-assign]
+
+
 async def test_seed_adopts_winner_after_real_slug_conflict(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -607,6 +664,8 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
         pytest.param(Run, Run, id="run"),
         pytest.param(Agent, Agent, id="agent"),
         pytest.param(Trigger, Trigger, id="trigger"),
+        pytest.param(Team, Team, id="team"),
+        pytest.param(TeamMembership, TeamMembership, id="team-membership"),
     ],
 )
 async def test_seed_sample_data_inserts_recover_after_conflict(
@@ -638,6 +697,125 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
 
     assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
     assert await _count(session, count_model) == counts_before
+
+
+@pytest.mark.parametrize("entity", [Pipeline, PipelineSnapshot, Run, Agent, Team])
+async def test_seed_reraises_when_recovery_finds_no_winner(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, entity: type
+) -> None:
+    """Recovery re-raises the IntegrityError when the winner vanished too.
+
+    The savepoint rolls back the losing insert, then the recovery re-select
+    (hidden here) comes back empty — a second concurrent boot deleted the
+    winner in the window between the two. The seed must surface the original
+    failure rather than continue with a missing row.
+    """
+    hide = _HideAllChecks(session, entity)
+    flaky = _FlakyFlush(session, entity)
+    hide.install()
+    flaky.install()
+    try:
+        with pytest.raises(IntegrityError, match="simulated concurrent duplicate"):
+            await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+        hide.uninstall()
+
+
+async def test_seed_run_spec_unknown_pipeline_is_skipped(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A run spec naming a pipeline absent from the lookup warns and skips."""
+    extra_spec = (999, "complete", "manual", "Nonexistent Pipeline", 100, 0.001, 0, 1)
+    monkeypatch.setattr(seed_demo_module, "_DEMO_RUN_SPECS", [*seed_demo_module._DEMO_RUN_SPECS, extra_spec])
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        summary = await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, Run) == 20
+    assert any(record.getMessage() == "demo_seed.run_spec_unknown_pipeline" for record in caplog.records)
+
+
+async def test_seed_run_node_output_failure_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A best-effort node-output write failure must not abort the run insert."""
+    calls: list[str] = []
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        calls.append("called")
+        raise RuntimeError("simulated node-output write failure")
+
+    monkeypatch.setattr("modulo.db.crud.run_node_outputs.replace_run_node_outputs", _explode)
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        summary = await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert calls, "seed must attempt to write node outputs"
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, Run) == 20
+    assert any(record.getMessage().startswith("demo_seed.run_outputs_write_failed") for record in caplog.records)
+
+
+async def test_seed_daily_fact_integrity_conflict_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A RunDailyFact unique conflict is swallowed; the Run rows still land."""
+    flaky = _FlakyFlush(session, RunDailyFact)
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, Run) == 20
+    assert await _count(session, RunDailyFact) == 0
+    assert any(record.getMessage() == "demo_seed.daily_fact_recovered_after_conflict" for record in caplog.records)
+
+
+async def test_seed_daily_fact_generic_failure_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A non-unique RunDailyFact write failure is swallowed, not fatal."""
+    exploding = _ExplodingFlush(session, RunDailyFact)
+    exploding.install()
+    try:
+        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        exploding.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, Run) == 20
+    assert await _count(session, RunDailyFact) == 0
+    assert any(record.getMessage().startswith("demo_seed.daily_fact_write_failed") for record in caplog.records)
+
+
+async def test_seed_cron_trigger_recovers_after_conflict(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The cron trigger's savepoint recovery path is exercised on conflict."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    cron = (await session.execute(select(Trigger).where(Trigger.trigger_type == "cron"))).scalar_one()
+    await session.delete(cron)
+    await session.commit()
+
+    flaky = _FlakyFlush(session, Trigger)
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    # The webhook trigger already exists, so only the deleted cron hits the
+    # insert -> conflict -> recovery-log branch.
+    assert await _count(session, Trigger) == 1
+    assert any(record.getMessage() == "demo_seed.cron_trigger_recovered" for record in caplog.records)
 
 
 async def test_seed_stray_membership_warning_ignores_soft_deleted_orgs(
