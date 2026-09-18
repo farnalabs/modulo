@@ -331,6 +331,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `decode_claim_token` HITL-gate run/gate scoping with a wrong-gate refusal, and
 > the legacy no-`client_kind` token decoding as `browser`.
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-18):** closed `feat-feedback`'s "No standalone BDD
+> step file for the inbox/proposals endpoints" gap (`improve/feedback.md`).
+> Registered `eval/feedback_inbox.feature` into the executing BDD suite from the
+> new `steps/test_feedback_inbox.py`, driving the real
+> `modulo/api/routes/feedback.py` seams with only the FeedbackManager CRUD,
+> RLS and audit seams patched — inbox list with pipeline-name enrichment + the
+> type/status filter passthrough, inbox-item detail, the `/inbox/{id}/review`
+> workflow (`mark_reviewed` → resolved, `dismiss` → dismissed,
+> `create_correction_run` → spawned correction run, invalid action → 422, missing
+> record → 404), `/feedback/{id}/detect-gap` eval-gap reporting, the proposals
+> queue, and `/proposals/{id}/publish` (201 pipeline/node-scoped `EvalDefinition`
+> + resolved transition, 422 non-gap, 409 non-pending, 404 missing).
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
