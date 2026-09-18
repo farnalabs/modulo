@@ -165,14 +165,19 @@ def _resolve_template_nodes(
                 }
             )
         else:
-            resolved_nodes.append(
-                {
-                    "id": resolved_id_str,
-                    "node_type": node.get("node_type", "manual"),
-                    "label": node.get("label", "Manual Step"),
-                    "position": node.get("position", {"x": 100, "y": 100}),
-                }
-            )
+            resolved_node: dict[str, Any] = {
+                "id": resolved_id_str,
+                "node_type": node.get("node_type", "manual"),
+                "label": node.get("label", "Manual Step"),
+                "position": node.get("position", {"x": 100, "y": 100}),
+            }
+            if resolved_node["node_type"] == "manual":
+                # FAR-889: carry every output-schema form through so the
+                # write-path guard accepts template manual gates.
+                resolved_node["output_schema_id"] = node.get("output_schema_id")
+                resolved_node["output_schema_pin"] = node.get("output_schema_pin")
+                resolved_node["output_schema_json"] = node.get("output_schema_json")
+            resolved_nodes.append(resolved_node)
     return resolved_nodes
 
 

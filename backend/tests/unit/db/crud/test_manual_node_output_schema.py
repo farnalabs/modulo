@@ -198,7 +198,7 @@ class TestHandleDbErrorsMapsTo422:
         assert "node-123" in exc_info.value.detail
         assert "requires an output schema" in exc_info.value.detail
 
-    def test_handle_db_errors_decorator_maps_to_422(self) -> None:
+    async def test_handle_db_errors_decorator_maps_to_422(self) -> None:
         """An endpoint decorated with @handle_db_errors returns 422 for this error."""
         from modulo.api.db_error_handling import handle_db_errors
 
@@ -206,10 +206,8 @@ class TestHandleDbErrorsMapsTo422:
         async def _failing_endpoint() -> None:
             raise ManualNodeOutputSchemaError("node-xyz")
 
-        import asyncio
-
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(_failing_endpoint())
+            await _failing_endpoint()
         assert exc_info.value.status_code == 422
         assert "node-xyz" in exc_info.value.detail
 

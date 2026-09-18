@@ -1598,7 +1598,11 @@ def _convert_template_nodes(
         if agent_index is not None and agent_index < len(agents):
             pipeline_node["template_agent"] = agents[agent_index]
         if node.get("node_type") == "manual":
+            # FAR-889: carry every output-schema form through to the pipeline
+            # node so the write-path guard accepts template manual gates.
             pipeline_node["output_schema_id"] = node.get("output_schema_id")
+            pipeline_node["output_schema_pin"] = node.get("output_schema_pin")
+            pipeline_node["output_schema_json"] = node.get("output_schema_json")
 
         pipeline_nodes.append(pipeline_node)
     return pipeline_nodes
