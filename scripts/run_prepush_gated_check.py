@@ -129,8 +129,11 @@ def main() -> int:
 
     print(f"changed files matching {pattern}: {len(matched)} (running check)", file=sys.stderr)
 
-    # Run the actual command
-    result = subprocess.run(cmd, check=False)
+    # Run the actual command. `cmd` is the literal command declared after `--`
+    # in the hook's .pre-commit-config.yaml entry — developer-controlled, not
+    # remote/LLM input — and subprocess runs without a shell, so no command
+    # injection is reachable (pythonsecurity:S8705 false positive).
+    result = subprocess.run(cmd, check=False)  # NOSONAR
     return result.returncode
 
 
