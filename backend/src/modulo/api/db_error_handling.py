@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.db.capacity import StorageExhaustedError
+from modulo.db.crud.pipeline import ManualNodeOutputSchemaError
 
 _log = logging.getLogger(__name__)
 _P = ParamSpec("_P")
@@ -60,6 +61,11 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Data validation failed.",
+        ) from None
+    except ManualNodeOutputSchemaError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
         ) from None
     except StorageExhaustedError:
         raise

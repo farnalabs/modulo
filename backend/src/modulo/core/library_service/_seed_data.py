@@ -1817,7 +1817,7 @@ _MODULO_PRIMITIVES.extend(
                     {
                         "id": "hitl-gate",
                         "node_type": "manual",
-                        "label": "Review Gate",
+                        "label": "Triage Review Gate",
                         "position": {"x": 350, "y": 100},
                         "output_schema_json": {
                             "type": "object",

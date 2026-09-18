@@ -850,7 +850,7 @@ class ManualNodeOutputSchemaError(Exception):
         super().__init__(f"Manual node '{node_id}' requires an output schema (output_schema_id or output_schema_pin)")
 
 
-def _enforce_manual_node_output_schemas(nodes: list[dict[str, Any]]) -> None:
+def enforce_manual_node_output_schemas(nodes: list[dict[str, Any]]) -> None:
     """Reject manual nodes that lack an output schema at write time.
 
     This is the write-path guard for FAR-889.  It catches the case where a
@@ -983,7 +983,7 @@ async def replace_pipeline_graph(
         )
 
     # FAR-889: reject manual nodes without output schemas at write time.
-    _enforce_manual_node_output_schemas(nodes)
+    enforce_manual_node_output_schemas(nodes)
 
     pipeline.graph_nodes_json = nodes
     await session.execute(delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))

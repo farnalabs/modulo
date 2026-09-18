@@ -89,8 +89,8 @@ from modulo.db.crud.library_primitive import (
     update_library_primitive,
 )
 from modulo.db.crud.pipeline import (
-    _enforce_manual_node_output_schemas,
     create_pipeline,
+    enforce_manual_node_output_schemas,
     get_pipeline,
 )
 from modulo.db.crud.rating import (
@@ -1723,7 +1723,7 @@ async def create_pipeline_from_template_endpoint(
                 run_context_defaults={"library_source_id": str(primitive_id), "library_template_name": primitive.name},
             )
             # FAR-889: reject manual nodes without output schemas at write time.
-            _enforce_manual_node_output_schemas(graph_nodes)
+            enforce_manual_node_output_schemas(graph_nodes)
             pipeline.graph_nodes_json = graph_nodes
             _add_pipeline_edges(session, principal.organisation_id, pipeline, edges)
             await session.flush()

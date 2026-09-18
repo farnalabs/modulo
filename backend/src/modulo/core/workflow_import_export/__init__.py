@@ -30,7 +30,11 @@ from modulo.core.runner_bindings import BindingValidationError, validate_binding
 from modulo.db.crud.agent import create_agent
 from modulo.db.crud.agent_runner_binding import replace_agent_bindings
 from modulo.db.crud.library_primitive import create_library_primitive
-from modulo.db.crud.pipeline import create_pipeline
+from modulo.db.crud.pipeline import (
+    ManualNodeOutputSchemaError,
+    create_pipeline,
+    enforce_manual_node_output_schemas,
+)
 from modulo.db.crud.schema import create_schema, create_schema_version
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -1103,6 +1107,14 @@ async def _materialize_pipeline_and_edges(
     )
 
     pipeline.graph_nodes_json = list(graph_nodes)
+    # FAR-889: reject imports that recreate schema-less manual nodes.
+    try:
+        enforce_manual_node_output_schemas(graph_nodes)
+    except ManualNodeOutputSchemaError as exc:
+        ctx.warnings.append(
+            f"Imported pipeline contains a manual node without an output schema: {exc}. "
+            "The node has been included but will fail at execution time."
+        )
     _apply_imported_retry_policy(pipeline, sections.pipeline_info, ctx.warnings)
     await ctx.session.flush()
 
