@@ -33,6 +33,10 @@ async def test_demo_seed_org_isolation_under_rls(db_engine: AsyncEngine, monkeyp
     monkeypatch.setenv("MODULO_DEMO_ENABLED", "1")
     monkeypatch.setenv("MODULO_DEMO_USER", _DEMO_EMAIL)
     monkeypatch.setenv("MODULO_DEMO_PASSWORD", _DEMO_PASSWORD)
+    # The demo seed creates a second org (slug "demo") and is skipped in
+    # single-org deployments (FAR-929) — opt into multi-org so this RLS
+    # isolation test exercises the real seed.
+    monkeypatch.setenv("MODULO_MULTI_ORG_ENABLED", "1")
     get_settings.cache_clear()
 
     role = f"test_demo_rls_{uuid.uuid4().hex[:8]}"
