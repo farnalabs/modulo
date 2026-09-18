@@ -178,7 +178,7 @@ importers:
         version: 30.1.0
       magic-string:
         specifier: ^1.3.1
-        version: 1.4.0
+        version: 1.4.1
       openapi-fetch:
         specifier: ^0.17.0
         version: 0.17.0
@@ -2689,8 +2689,8 @@ packages:
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
-  magic-string@1.4.0:
-    resolution: {integrity: sha512-8NqNnId7mC856G90HQHexzPTiojQFptw2gdl5XACcONjZIqC3RZGMCKktwA+WUtoOrr17VpUfCuBISIQhVebXg==}
+  magic-string@1.4.1:
+    resolution: {integrity: sha512-8lyCu36ErXR0J9uaGKlKQoiLZKmtI63YGLE8G2o9jyRPdr4X47LusSOwgOJOzcVtp81fTAAjxR7BwKz682Jhow==}
 
   magicast@0.5.5:
     resolution: {integrity: sha512-UicdXN8zQ3JHlxVq+28afMXPr1z7WNY6+7EJnzTdQWkTAlMLF5fNCCKxJHBQwGaNGR11581EiQmQzx73+MvszA==}
@@ -5939,7 +5939,7 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
 
-  magic-string@1.4.0:
+  magic-string@1.4.1:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
 
