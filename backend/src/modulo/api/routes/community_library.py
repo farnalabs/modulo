@@ -39,7 +39,7 @@ _log = logging.getLogger(__name__)
 _CODE_COMMUNITY_LIBRARY_INSTALL = "community_library.install"
 
 
-async def _community_objects_enabled(session: AsyncSession, org_id: object) -> bool:
+async def _community_objects_enabled(session: AsyncSession, org_id: UUID) -> bool:
     """Fail-open: if the flag read fails, community objects stay enabled."""
     try:
         return await read_org_flag(session, org_id, FLAG_COMMUNITY_OBJECTS_ENABLED, default=True)
