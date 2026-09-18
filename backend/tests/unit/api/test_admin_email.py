@@ -21,12 +21,20 @@ ADMIN_PRINCIPAL = AuthenticatedPrincipal(
     organisation_id=ORG_ID,
     account_id=USER_ID,
     org_role="admin",
+    is_system_admin=True,
 )
 VIEWER_PRINCIPAL = AuthenticatedPrincipal(
     username="viewer@test",
     organisation_id=ORG_ID,
     account_id=uuid4(),
     org_role="viewer",
+)
+NON_SYS_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
+    username="orgadmin@test",
+    organisation_id=ORG_ID,
+    account_id=uuid4(),
+    org_role="admin",
+    is_system_admin=False,
 )
 SYSTEM_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
     username="sysadmin@test",
@@ -91,6 +99,26 @@ def client_viewer(mock_session):
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: VIEWER_PRINCIPAL
+    mock_session.execute = AsyncMock(return_value=_FakeResult())
+    transport = ASGITransport(app=app)
+    client = AsyncClient(transport=transport, base_url="http://test")
+    yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_non_sys_admin(mock_session):
+    """Org admin (passes require_target_org_role) but NOT system admin (fails require_system_permission)."""
+
+    class _FakeResult:
+        def scalar_one_or_none(self):
+            return "admin"
+
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    app.dependency_overrides[get_current_user] = lambda: NON_SYS_ADMIN_PRINCIPAL
     mock_session.execute = AsyncMock(return_value=_FakeResult())
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url="http://test")
@@ -648,3 +676,31 @@ class TestTestEmail:
         finally:
             admin_email.get_organisation = original_get
             admin_email.send_email = original_send
+
+
+class TestSystemAdminRequired:
+    """Non-system-admin org admins must get 403 on all email-settings routes."""
+
+    async def test_get_email_settings_403(self, client_non_sys_admin):
+        resp = await client_non_sys_admin.get(f"/api/v1/admin/org/{ORG_ID}/email-settings")
+        assert resp.status_code == 403
+
+    async def test_put_email_settings_403(self, client_non_sys_admin):
+        resp = await client_non_sys_admin.put(
+            f"/api/v1/admin/org/{ORG_ID}/email-settings",
+            json={
+                "smtp_host": "smtp.example.com",
+                "smtp_port": 587,
+                "smtp_username": "",
+                "smtp_password": "",
+                "email_from": "",
+            },
+        )
+        assert resp.status_code == 403
+
+    async def test_test_email_403(self, client_non_sys_admin):
+        resp = await client_non_sys_admin.post(
+            f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
+            json={"to": "admin@example.com"},
+        )
+        assert resp.status_code == 403

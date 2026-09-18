@@ -1,4 +1,11 @@
-"""Step definitions for admin housekeeping BDD scenarios."""
+"""Step definitions for admin housekeeping BDD scenarios.
+
+The ``admin_housekeeping`` routes gate on both ``require_permission`` (org
+role) and ``require_system_permission`` (``is_system_admin``), so the admin
+scenarios must override BOTH ``get_current_tenant_user`` and
+``get_current_user``. Without the latter the real HTTPBearer dependency runs
+and the request dies with 401 before the route handler is reached.
+"""
 
 import uuid
 from collections.abc import AsyncGenerator
@@ -10,8 +17,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.housekeeping import Candidate, CategoryResult
 from modulo.settings import Settings, get_settings
 
@@ -48,12 +55,16 @@ def _make_mock_session() -> AsyncMock:
 
 
 def _role_client(role: str | None, session: AsyncMock | None = None) -> TestClient:
-    """Build a TestClient with an explicitly managed tenant principal.
+    """Build a TestClient with an explicitly managed principal.
 
-    ``role`` is the org role for ``get_current_tenant_user``; ``None`` removes
-    the override so the real HTTPBearer dependency rejects the request.
+    ``role`` is the org role for ``get_current_tenant_user``; the same role is
+    mirrored onto ``get_current_user`` so ``require_system_permission`` sees a
+    matching principal (``is_system_admin`` only for ``admin``). ``None``
+    removes both overrides so the real HTTPBearer dependency rejects the
+    request with 401.
     """
     app.dependency_overrides.pop(get_current_tenant_user, None)
+    app.dependency_overrides.pop(get_current_user, None)
     app.dependency_overrides[get_settings] = lambda: Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key="a" * 32,
@@ -77,6 +88,13 @@ def _role_client(role: str | None, session: AsyncMock | None = None) -> TestClie
             account_id=_USER_ID,
             org_role=role,
         )
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username=role,
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role=role,
+            is_system_admin=(role == "admin"),
+        )
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -85,6 +103,7 @@ def _role_client(role: str | None, session: AsyncMock | None = None) -> TestClie
 
 def _clean_overrides() -> None:
     app.dependency_overrides.pop(get_current_tenant_user, None)
+    app.dependency_overrides.pop(get_current_user, None)
     app.dependency_overrides.pop(get_db_session, None)
     app.dependency_overrides.pop(get_settings, None)
     app.dependency_overrides.pop(get_plan_context, None)

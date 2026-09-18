@@ -78,6 +78,24 @@ def no_org_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def non_sys_admin_client() -> Generator[TestClient, None, None]:
+    """Org admin (not system admin) — must get 403 on feature-flag endpoints."""
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: MagicMock()
+    app.dependency_overrides[get_db_session] = lambda: MagicMock()
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id="00000000-0000-0000-0000-000000000001",
+        account_id="00000000-0000-0000-0000-000000000002",
+        org_role="admin",
+        is_system_admin=False,
+    )
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 @pytest.fixture(autouse=True)
 def _clear_registry_overrides() -> Generator[None, None, None]:
     """Clear the class-level FeatureFlagRegistry._overrides after each test.
@@ -958,3 +976,20 @@ class TestEnforceTeamTierGate:
         flag = registry.get_flag("sso")
         assert flag is not None
         _enforce_team_tier_gate(flag, "sso", registry, enabled=True)
+
+
+# ---------------------------------------------------------------------------
+# System-admin requirement on GET endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestSystemAdminRequired:
+    """Non-system-admin users must get 403 on feature-flag read endpoints."""
+
+    def test_list_feature_flags_403(self, non_sys_admin_client: TestClient) -> None:
+        resp = non_sys_admin_client.get("/api/v1/admin/feature-flags")
+        assert resp.status_code == 403
+
+    def test_get_feature_flag_403(self, non_sys_admin_client: TestClient) -> None:
+        resp = non_sys_admin_client.get("/api/v1/admin/feature-flags/sso")
+        assert resp.status_code == 403
