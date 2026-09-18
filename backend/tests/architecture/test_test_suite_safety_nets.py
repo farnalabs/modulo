@@ -122,14 +122,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Flood protection rejects when at max concurrent runs",
         }
     ),
-    "tests/bdd/features/plugins/plugin_registry.feature": frozenset(
-        {
-            "Discover installed plugins",
-            "Get plugin detail",
-            "Plugin discovery on startup",
-            "Plugin manifest validation",
-        }
-    ),
     "tests/bdd/features/variants/variant_groups.feature": frozenset(
         {
             "Sequential execution order matches insertion order",

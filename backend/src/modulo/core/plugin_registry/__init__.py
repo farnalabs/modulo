@@ -61,6 +61,7 @@ _HLTH_LOADED = "Loaded"
 _HLTH_REGISTERED_IN_TREE = "Registered in-tree"
 _HLTH_METADATA_FOUND = "Package metadata found"
 _HLTH_PACKAGE_NOT_FOUND = "Package not found in installed packages"
+_HLTH_MISSING_METADATA = "Entry point references a package with no installed metadata"
 _HLTH_UNKNOWN_PLUGIN = "Unknown plugin"
 
 _CAP_CONNECTOR = "connector_type"
@@ -172,6 +173,20 @@ class PluginRegistry:
         """
         dist = ep.dist
         if dist is None:
+            detail = _HLTH_MISSING_METADATA
+            plugin_id = ep.name
+            with self._lock:
+                self._entry_point_errors[plugin_id] = detail
+                existing = self._plugins.get(plugin_id)
+                if existing is None:
+                    existing = PluginManifest(
+                        PLUGIN_ID=plugin_id,
+                        display_name=plugin_id,
+                        description="",
+                        version="0.0.0",
+                    )
+                self._plugins[plugin_id] = existing
+                self._health[plugin_id] = PluginHealth(ok=False, detail=detail)
             return None
         plugin_id = dist.name
         display_name = dist.metadata.get("Name", plugin_id)

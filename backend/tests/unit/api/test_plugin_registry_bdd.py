@@ -207,19 +207,20 @@ class TestDiscoverInstalledPlugins:
 
 
 class TestGetPluginDetail:
-    """Mirrors: Get plugin detail (GET /api/v1/plugins/{id}).
-
-    Note: this endpoint does not exist yet. Tests verify the current
-    behaviour (404 route not found) until the route is implemented.
-    """
+    """Mirrors: Get plugin detail (GET /api/v1/plugins/{id})."""
 
     def test_returns_plugin_detail(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
         with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack")
 
-        # Currently returns 404 — route does not exist
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["PLUGIN_ID"] == "modulo-connector-slack"
+        assert "display_name" in body
+        assert "description" in body
+        assert "version" in body
+        assert "capabilities" in body
 
     @pytest.mark.parametrize("plugin_id", ["modulo-connector-slack", "modulo-backend-github"])
     def test_returns_full_manifest(self, client: TestClient, plugin_id: str) -> None:
@@ -227,7 +228,8 @@ class TestGetPluginDetail:
         with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get(f"/api/v1/plugins/{plugin_id}")
 
-        assert resp.status_code in (200, 404)
+        assert resp.status_code == 200
+        assert resp.json()["PLUGIN_ID"] == plugin_id
 
     def test_unknown_plugin_returns_404(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
@@ -363,7 +365,7 @@ class TestPluginDiscoveryOnStartup:
 class TestPluginManifestValidation:
     """Mirrors: Plugin manifest validation (handling broken entry points)."""
 
-    def test_entry_point_without_dist_is_skipped(self) -> None:
+    def test_entry_point_without_dist_is_marked_unhealthy(self) -> None:
         from modulo.core.plugin_registry import PluginRegistry
 
         registry = PluginRegistry()
@@ -377,7 +379,11 @@ class TestPluginManifestValidation:
             discovered = registry.discover_plugins()
 
         assert discovered == []
-        assert not registry.list_plugins()
+        # The broken entry point is surfaced, never silently dropped.
+        assert "slack" in registry.list_plugins()
+        health = registry.health_check("slack")
+        assert health["slack"].ok is False
+        assert "metadata" in health["slack"].detail
 
     def test_entry_point_load_failure_marks_unhealthy(self) -> None:
         from modulo.core.plugin_registry import PluginRegistry

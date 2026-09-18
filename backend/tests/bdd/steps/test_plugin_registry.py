@@ -268,6 +268,29 @@ def _discover_plugins(request: pytest.FixtureRequest, patches: list[Any]) -> Non
     request.node._registry_state = registry
 
 
+@when("the registry processes the entry point")
+def _registry_processes_entry_point(request: pytest.FixtureRequest) -> None:
+    """Run discovery over the broken entry point flagged by the Given step.
+
+    An entry point that references a package with missing metadata
+    (``dist is None``) is surfaced as an unhealthy plugin rather than being
+    silently dropped from the registry.
+    """
+    from modulo.core.plugin_registry import PluginRegistry
+
+    registry = PluginRegistry()
+    with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+        mock_ep = MagicMock()
+        mock_ep.name = "slack"
+        mock_ep.dist = None  # No distribution → manifest rejected
+        mock_eps.side_effect = lambda group=None: (
+            [mock_ep] if group in ("modulo.connectors", "modulo.model_backends") else []
+        )
+        registry.discover_plugins()
+
+    request.node._registry_state = registry
+
+
 # ===========================================================================
 # Then
 # ===========================================================================

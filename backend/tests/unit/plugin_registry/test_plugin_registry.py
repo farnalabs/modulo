@@ -814,7 +814,7 @@ def test_discover_plugins_duplicate_plugin_id():
 
 
 def test_discover_plugins_entry_point_no_dist():
-    """An entry point without a distribution is silently skipped."""
+    """An entry point without package metadata is registered as unhealthy, never skipped."""
     registry = PluginRegistry()
     no_dist = _make_mock_entry_point("modulo.connectors", "c1", dist_name="pkg-x")
     no_dist.dist = None  # type: ignore[attr-defined]
@@ -824,6 +824,14 @@ def test_discover_plugins_entry_point_no_dist():
     ):
         discovered = registry.discover_plugins()
     assert discovered == []
+
+    # The entry point has no distribution to derive metadata from, so it is
+    # surfaced as a broken plugin with a descriptive detail instead of being
+    # silently invisible to the /api/v1/plugins surface.
+    assert "c1" in registry.list_plugins()
+    health = registry.health_check("c1")
+    assert health["c1"].ok is False
+    assert "metadata" in health["c1"].detail
 
 
 def test_discover_plugins_entry_point_load_failure():

@@ -3,7 +3,6 @@ Feature: Plugin Registry
   I want to discover and monitor installed Modulo plugins
   So that I can manage my instance's extension capabilities
 
-  @awaiting-implementation
   Scenario: Discover installed plugins
     Given 2 plugins are registered
     When I GET /api/plugins
@@ -11,7 +10,6 @@ Feature: Plugin Registry
     And the response contains 2 plugins
     And each plugin has PLUGIN_ID, display_name, version, and capabilities
 
-  @awaiting-implementation
   Scenario: Get plugin detail
     Given a plugin "modulo-connector-slack" is registered
     When I GET /api/plugins/modulo-connector-slack
@@ -30,14 +28,12 @@ Feature: Plugin Registry
     Then the response status is 404
     And the response detail says "Plugin not found"
 
-  @awaiting-implementation
   Scenario: Plugin discovery on startup
     Given no plugins are initially registered
     When the plugin registry discovers plugins
     Then entry points in "modulo.connectors" and "modulo.model_backends" are scanned
     And discovered plugins are available via list_plugins
 
-  @awaiting-implementation
   Scenario: Plugin manifest validation
     Given an entry point references a package with missing metadata
     When the registry processes the entry point
