@@ -207,7 +207,7 @@ async def _apply_org_flag_override(
 async def list_feature_flags(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> Response | dict[str, Any]:
     # Attempt Redis cache read
     redis: Redis | None = None
@@ -328,7 +328,7 @@ async def get_feature_flag(
     flag_name: str,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)

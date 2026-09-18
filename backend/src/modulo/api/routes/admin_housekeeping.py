@@ -67,7 +67,7 @@ class CleanupResponse(BaseModel):
 async def list_housekeeping(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_PERM_HOUSEKEEPING_MANAGE),
-    _sys: TenantPrincipal = require_system_permission(_PERM_HOUSEKEEPING_MANAGE),
+    _sys: TenantPrincipal = require_system_permission(_PERM_HOUSEKEEPING_MANAGE),  # type: ignore[assignment]
 ) -> HousekeepingScanResponse:
     try:
         async with session.begin():
@@ -123,7 +123,7 @@ async def perform_cleanup(
     req: CleanupRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_PERM_HOUSEKEEPING_MANAGE),
-    _sys: TenantPrincipal = require_system_permission(_PERM_HOUSEKEEPING_MANAGE),
+    _sys: TenantPrincipal = require_system_permission(_PERM_HOUSEKEEPING_MANAGE),  # type: ignore[assignment]
 ) -> CleanupResponse:
     deleted_count = 0
     errors: list[dict[str, str]] = []
@@ -208,7 +208,7 @@ async def purge_checkpoints(
     req: CheckpointRetentionPurgeRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_PERM_HOUSEKEEPING_MANAGE),
-    _sys: TenantPrincipal = require_system_permission(_PERM_HOUSEKEEPING_MANAGE),
+    _sys: TenantPrincipal = require_system_permission(_PERM_HOUSEKEEPING_MANAGE),  # type: ignore[assignment]
 ) -> CheckpointRetentionPurgeResponse:
     """Purge LangGraph checkpoint rows for old terminal runs (keep the ``runs``).
 
