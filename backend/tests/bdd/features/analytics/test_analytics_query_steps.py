@@ -207,6 +207,7 @@ def _make_client(
     HTTPBearer dependency itself produces the 401 (no header), while the plan
     and session seams are still overridden so only the auth dependency raises.
     """
+
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield _make_mock_session()
 
@@ -297,9 +298,7 @@ def _given_rate_limited(request: Any) -> None:
 
 @given("the analytics service times out")
 def _given_timeout(request: Any) -> None:
-    _ctx(request)["query_error"] = AnalyticsQueryTimeoutError(
-        "query exceeded timeout — reduce the date range"
-    )
+    _ctx(request)["query_error"] = AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range")
 
 
 @given("the analytics_page feature is disabled")
@@ -369,13 +368,9 @@ def _when_request(request: Any, url: str) -> None:
             return_value=ctx.get("concurrency_result", dict(_CONCURRENCY_RESULT))
         )
     elif "/analytics/guardrails" in url:
-        mocks["run_guardrail_scorecard"] = AsyncMock(
-            return_value=ctx.get("guardrail_result", dict(_GUARDRAIL_RESULT))
-        )
+        mocks["run_guardrail_scorecard"] = AsyncMock(return_value=ctx.get("guardrail_result", dict(_GUARDRAIL_RESULT)))
     elif "/analytics/export" in url:
-        mocks["export_facts"] = AsyncMock(
-            return_value=ctx.get("export_result", dict(_EXPORT_RESULT))
-        )
+        mocks["export_facts"] = AsyncMock(return_value=ctx.get("export_result", dict(_EXPORT_RESULT)))
     _perform_request(request, url, **mocks)
 
 
