@@ -240,8 +240,8 @@ class TestNonPipelineDriftDetail:
         detail = report["drift_detail"]
         assert "schema:alpha" in detail
         fields = detail["schema:alpha"]["fields"]
-        assert fields["added"] == []
-        assert fields["removed"] == []
+        assert not fields["added"]
+        assert not fields["removed"]
         assert fields["modified"] == ["description"]
 
     @respx.mock
@@ -278,8 +278,8 @@ class TestNonPipelineDriftDetail:
         assert "model_backend:openai" in detail
         fields = detail["model_backend:openai"]["fields"]
         assert fields["modified"] == ["model_id"]
-        assert fields["added"] == []
-        assert fields["removed"] == []
+        assert not fields["added"]
+        assert not fields["removed"]
 
     @respx.mock
     def test_trigger_drift_reports_modified_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -309,8 +309,8 @@ class TestNonPipelineDriftDetail:
         assert "trigger:sample/nightly" in detail
         fields = detail["trigger:sample/nightly"]["fields"]
         assert fields["modified"] == ["daily_spend_limit"]
-        assert fields["added"] == []
-        assert fields["removed"] == []
+        assert not fields["added"]
+        assert not fields["removed"]
 
     def test_top_level_schema_drift_still_gets_no_pipeline_entry(self) -> None:
         """Non-pipeline drift never adds a bare-name (pipeline-shaped) entry."""
