@@ -18,6 +18,15 @@ Webhook processing pipeline:
      proceeds). Replays re-run the pass detection-only.
   6. Deduplication (WebhookDedupHash - canonical POST-guardrail payload hash,
      5-min TTL)
+  6b. CI-failure coalescing (FAR-1034) - a repeat CI-failure (Branch Fixer)
+      event for the same PR + head SHA within a configurable window (default
+      1h) is suppressed via the same WebhookDedupHash table keyed on a
+      SHA-256 digest of the stable ``(prNumber, headSha)`` subset instead of
+      the volatile runUrl-bearing payload hash. Subject to the same
+      ``coalesce_pending`` kill switch as the D2 coalesce. The suppression
+      logs a ``coalesced`` TriggerEvent and raises ``CiFailureCoalescedError``
+      (the route COMMITS the audit event inside its transaction and acks the
+      sender with a handled 202).
   7. Flood protection (concurrent run count vs. trigger.max_concurrent_runs)
   8. Payload mapping (dot-notation path → input_payload key)
   9. Create Run + TriggerEvent in one transaction
@@ -52,7 +61,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.secret_storage import decode_stored_secret_scoped
@@ -65,6 +74,7 @@ from modulo.core.release_channels import (
 )
 from modulo.core.run_admission import (
     coalesce_enabled,
+    derive_ci_failure_coalesce_key,
     derive_webhook_coalesce_key,
     evaluate_backpressure,
 )
@@ -130,6 +140,19 @@ class DuplicateWebhookError(RuntimeError):
         self.payload_hash = payload_hash
 
 
+# FAR-1034: the CI-failure coalesce gate reuses the dedup seam (same insert),
+# but the delivery was HANDLED (suppressed as a no-op), not rejected-as-retry.
+# A distinct subtype lets the webhook route COMMIT the auditable
+# ``coalesced`` TriggerEvent inside its transaction instead of rolling back
+# with the exception (matching the GuardrailBlockedAtIntakeError pattern),
+# then ack the sender with an honest handled-202 — it must never loop on a
+# retry of the very duplicates the gate exists to quiet.
+class CiFailureCoalescedError(DuplicateWebhookError):
+    def __init__(self, ci_key: str) -> None:
+        super().__init__(ci_key)
+        self.ci_key = ci_key
+
+
 class ConcurrentRunLimitError(RuntimeError):
     def __init__(self, trigger_id: uuid.UUID, limit: int) -> None:
         super().__init__(f"Trigger {trigger_id} already has {limit} concurrent run(s); limit reached")
@@ -182,6 +205,21 @@ class TriggerBusyError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 _DEDUP_TTL_SECONDS = 300  # 5 minutes
+# FAR-1034: window during which repeat CI-failure events for the SAME PR + head
+# SHA are coalesced into one Branch Fixer run instead of minting a fresh full
+# run per event. 1 hour comfortably covers the observed duplicate cluster
+# (~3 runs in ~33 min, run ids cd5fe39e/6af1e40b/cf236743) while never
+# suppressing a genuinely-needed fix: the coalesce key includes the head SHA,
+# so a NEW commit always launches a fresh run. The observed events were
+# identical-work repeats; events more than an hour after the first landing are
+# overwhelmingly a genuinely different state. Overridable per trigger via
+# ``config_json.ci_failure_coalesce_window_seconds``.
+_CI_FAILURE_COALESCE_WINDOW_SECONDS = 3600  # 1 hour
+# Upper bound for the per-trigger override: sanity only — a mis-set absurd
+# value would otherwise ``datetime + timedelta`` OverflowError into a 500 on
+# every matching delivery (a ``DataError``-class crash, not an IntegrityError),
+# and would mute same-head re-failures for far too long.
+_CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS = 7 * 24 * 60 * 60  # 7 days
 _REPLAY_WINDOW_SECONDS = 300  # ±300s for X-Modulo-Timestamp
 # Active (non-terminal) run statuses — single-sourced from the canonical set
 # in db.models.run (the never-entered ``waiting_for_lock`` sub-state was
@@ -495,6 +533,77 @@ class TriggerEngine:
                     result="deduplicated",
                 )
                 raise DuplicateWebhookError(dedup_hash)
+
+            # FAR-1034 CI-failure coalescing — a repeat CI-failure event for the
+            # SAME PR + head SHA within the window is a no-op (no new run)
+            # instead of launching another full Branch Fixer run. The canonical
+            # dedup above cannot catch these: each event carries the volatile
+            # runUrl of the CI run that failed, so the payload hashes always
+            # differ. Key the window on the stable (prNumber, headSha) subset
+            # instead — the same `config_json.coalesce_pending=false` kill switch
+            # that turns off the D2 pending-fold coalesce also disables this
+            # gate, and the window length is configurable via
+            # `config_json.ci_failure_coalesce_window_seconds` (default 1h).
+            #
+            # Accepted trade-offs (documented FAR-1034):
+            #   * If the first fixer run for (pr, headSha) terminates WITHOUT
+            #     pushing a fix commit (crash/exhausted/no-fix), a same-head CI
+            #     re-fire within the window is deliberately suppressed. A NEW
+            #     commit always launches a fresh run, and the manual
+            #     branch-fixer.yml dispatch (no headSha) is never suppressed.
+            #   * ci.yml's notify-main-failure sends headSha=github.sha, so a
+            #     manually re-dispatched main CI run failing at the SAME sha
+            #     within the window is suppressed — same broken commit, same
+            #     work unit.
+            ci_key = derive_ci_failure_coalesce_key(post_guardrail_payload)
+            if ci_key is not None and coalesce_enabled(cfg):
+                ci_raw = cfg.get("ci_failure_coalesce_window_seconds", _CI_FAILURE_COALESCE_WINDOW_SECONDS)
+                try:
+                    ci_window = int(ci_raw)
+                except (TypeError, ValueError):
+                    ci_window = _CI_FAILURE_COALESCE_WINDOW_SECONDS
+                ci_window = max(1, min(ci_window, _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS))
+                # webhook_dedup_hashes.payload_hash is VARCHAR(64) and the
+                # canonical dedup fills it with 64-hex digests. Hash the
+                # readable key so a long head SHA / 6-digit+ PR number can
+                # never overflow it — a DataError (22001) is NOT an
+                # IntegrityError, so it would 503 EVERY delivery for that PR.
+                ci_dedup_hash = hashlib.sha256(ci_key.encode("utf-8")).hexdigest()
+                try:
+                    ci_is_new = await self._try_insert_dedup(
+                        session,
+                        trigger_id,
+                        org_id,
+                        ci_dedup_hash,
+                        ttl_seconds=ci_window,
+                    )
+                except SQLAlchemyError:
+                    # Best-effort suppression gate: if the coalesce marker
+                    # cannot be recorded, FAIL OPEN (log + launch) — never
+                    # refuse a fixer run because of gate bookkeeping. The
+                    # savepoint inside _try_insert_dedup confines the failure,
+                    # so the outer transaction can still create the run.
+                    _log.exception(
+                        "Webhook CI-failure coalesce write failed for trigger %s — failing open",
+                        trigger_id,
+                    )
+                    ci_is_new = True
+                if not ci_is_new:
+                    _log.info(
+                        "Webhook CI-failure coalesced for trigger %s (%s) — suppressed for %ss",
+                        trigger_id,
+                        ci_key,
+                        ci_window,
+                    )
+                    await self._log_event(
+                        session,
+                        trigger=trigger,
+                        org_id=org_id,
+                        payload_hash=dedup_hash,
+                        result="coalesced",
+                        error_detail=f"ci_failure_coalesced:{ci_key}",
+                    )
+                    raise CiFailureCoalescedError(ci_key)
 
             # Flood / concurrency protection — accept and queue instead of rejecting.
             # The run is created as pending and the executor queues it via
@@ -982,13 +1091,19 @@ class TriggerEngine:
         trigger_id: uuid.UUID,
         org_id: uuid.UUID,
         payload_hash: str,
+        ttl_seconds: int | None = None,
     ) -> bool:
         """Try to insert a dedup hash row. Return True if new, False if duplicate.
+
+        *ttl_seconds* overrides the default 5-minute TTL (used by the
+        FAR-1034 CI-failure coalesce gate, which needs a longer window than a
+        byte-identical replay dedup).
 
         Uses a savepoint so IntegrityError from a concurrent insert does not
         roll back the outer transaction.
         """
         now = datetime.now(UTC)
+        ttl = _DEDUP_TTL_SECONDS if ttl_seconds is None else ttl_seconds
 
         existing = await session.execute(
             select(WebhookDedupHash).where(
@@ -1012,7 +1127,7 @@ class TriggerEngine:
             organisation_id=org_id,
             trigger_id=trigger_id,
             payload_hash=payload_hash,
-            expires_at=now + timedelta(seconds=_DEDUP_TTL_SECONDS),
+            expires_at=now + timedelta(seconds=ttl),
         )
         try:
             async with session.begin_nested():

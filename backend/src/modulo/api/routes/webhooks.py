@@ -50,6 +50,7 @@ from modulo.core.exceptions import SnapshotLockNotAvailableError, TriggersPaused
 # Deprecated private aliases — kept importable so legacy patch targets and
 # callers referencing the underscore names keep working (M5 public-API fix).
 from modulo.core.trigger_engine import (  # noqa: F401
+    CiFailureCoalescedError,
     ConcurrentRunLimitError,
     DuplicateWebhookError,
     HmacValidationError,
@@ -82,6 +83,14 @@ from modulo.version import get_version
 
 _CODE_WEBHOOKS_RECEIVE_WEBHOOK = "webhooks.receive_webhook"
 _CODE_WEBHOOKS_REPLAY_WEBHOOK = "webhooks.replay_webhook"
+
+# FAR-1034 handled-no-op ack. Deliberately a 2xx "handled" message, never a
+# "rejected" 4xx: the delivery was suppressed, not rejected, so a retry-on-4xx
+# sender must NOT loop on the very duplicates the gate exists to quiet.
+CI_FAILURE_COALESCED_ACK = (
+    "Duplicate CI-failure event for the same PR + head SHA within the "
+    "coalesce window — suppressed (no new Branch Fixer run)."
+)
 
 
 _log = logging.getLogger(__name__)
@@ -200,6 +209,7 @@ async def receive_webhook(
     trigger: Trigger | None = None
     org_id: uuid.UUID | None = None
     guardrail_block_detail: str | None = None
+    ci_failure_coalesced = False
 
     try:
         raw_payload: dict[str, Any] = await request.json()
@@ -322,6 +332,20 @@ async def receive_webhook(
                 session.add(paused_event)
                 await session.flush()
                 return {"status": "paused"}
+            except CiFailureCoalescedError:
+                # FAR-1034: the engine wrote the ``coalesced`` TriggerEvent
+                # (and the coalesce dedup marker row) INSIDE this transaction
+                # and then raised, because the delivery was HANDLED as a no-op
+                # — NOT rejected. Catching here (mirroring the
+                # GuardrailBlockedAtIntakeError pattern) lets the transaction
+                # COMMIT so the audit event and the suppression marker survive,
+                # then the 202 handled-ack below is returned AFTER the
+                # transaction. This is deliberate: unlike the canonical
+                # byte-dedup path (DuplicateWebhookError, rolled back so a
+                # truly identical re-send re-evaluates), the coalesce marker is
+                # the whole point — it MUST persist to keep suppressing within
+                # the window.
+                ci_failure_coalesced = True
             except GuardrailBlockedAtIntakeError as exc:
                 # The engine wrote the ``guardrail_blocked`` TriggerEvent and
                 # stored the raw payload INSIDE this transaction. Catch here
@@ -492,6 +516,14 @@ async def receive_webhook(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=guardrail_block_detail,
         )
+
+    if ci_failure_coalesced:
+        # FAR-1034 handled no-op: the ``coalesced`` TriggerEvent and the
+        # coalesce dedup marker row were committed with the transaction above
+        # (caught in-transaction). Ack the sender with the handled 2xx — see
+        # CI_FAILURE_COALESCED_ACK for why this is not a 4xx.
+        _log.info("webhooks.receive_webhook.ci_failure_coalesced trigger=%s", trigger_id)
+        return {"run_id": None, "status": "coalesced", "detail": CI_FAILURE_COALESCED_ACK}
 
     run_id = run.id
     # FAR-213 webhook ack-after-validate semantics: the delivery is validated
