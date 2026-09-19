@@ -19,7 +19,7 @@ import respx
 from click.testing import CliRunner
 
 from modulo.cli.apply import register_apply, render_table
-from modulo.cli.apply.drift import build_drift_detail, has_drift
+from modulo.cli.apply.drift import _managed_current_view, build_drift_detail, has_drift
 from modulo.cli.apply.executor import ApplyExecutor
 from modulo.cli.apply.loader import parse_apply_documents
 from tests.unit.cli.test_apply_executor import (
@@ -320,6 +320,36 @@ class TestNonPipelineDriftDetail:
             {"updated": [{"kind": "schema", "name": "alpha"}]},
         )
         assert detail == {"schema:alpha": {"fields": {"added": [], "removed": [], "modified": ["description"]}}}
+
+    def test_updated_schema_absent_locally_emits_no_detail(self) -> None:
+        """An updated schema with no current entity is skipped, never guessed."""
+        detail = build_drift_detail(
+            {"schema": {}},
+            {"schema": [("alpha", {"description": "Desired"})]},
+            {"updated": [{"kind": "schema", "name": "alpha"}]},
+        )
+        assert detail == {}
+
+    def test_updated_schema_missing_from_desired_emits_no_detail(self) -> None:
+        """An updated report entry with no desired view is skipped."""
+        detail = build_drift_detail(
+            {"schema": {"alpha": {"description": "Live"}}},
+            {"schema": []},
+            {"updated": [{"kind": "schema", "name": "alpha"}]},
+        )
+        assert detail == {}
+
+    def test_managed_current_view_returns_none_for_unhandled_kind(self) -> None:
+        """A kind with no canonical current-view builder yields no comparison."""
+        assert (
+            _managed_current_view(
+                "widget",
+                "alpha",
+                {"name": "alpha"},
+                {"widget": {"alpha": {"name": "alpha"}}},
+            )
+            is None
+        )
 
 
 class TestDiffNeverWrites:
