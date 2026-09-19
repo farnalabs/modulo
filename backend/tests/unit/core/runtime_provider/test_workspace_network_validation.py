@@ -298,21 +298,18 @@ def test_crud_validate_profile_workspace_network_accepts_valid() -> None:
     """Valid network name passes CRUD validation."""
     from modulo.db.crud.environment_profile import validate_profile_workspace_network
 
-    # Should not raise
-    validate_profile_workspace_network({"workspace_network": "modulo-runner-workspace"})
+    assert validate_profile_workspace_network({"workspace_network": "modulo-runner-workspace"}) is None
 
 
 def test_crud_validate_profile_workspace_network_none_config() -> None:
     """None config_json is fine."""
     from modulo.db.crud.environment_profile import validate_profile_workspace_network
 
-    # Should not raise
-    validate_profile_workspace_network(None)
+    assert validate_profile_workspace_network(None) is None
 
 
 def test_crud_validate_profile_workspace_network_no_key() -> None:
     """config_json without workspace_network key is fine."""
     from modulo.db.crud.environment_profile import validate_profile_workspace_network
 
-    # Should not raise
-    validate_profile_workspace_network({"timeout_seconds": 3600})
+    assert validate_profile_workspace_network({"timeout_seconds": 3600}) is None
