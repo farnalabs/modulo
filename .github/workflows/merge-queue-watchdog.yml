@@ -196,6 +196,17 @@ jobs:
             # no-completion gap past the alert threshold on this same tick is a
             # genuine dispatch failure — escalate instead of re-arming silently
             # and hoping a later tick notices. (-1 means unmeasurable: no alert.)
+            #
+            # Knowingly conservative, and it can fire one tick early: the
+            # cancellations just issued become completed runs (conclusion
+            # "cancelled") moments later, so the NEXT tick would see fresh
+            # liveness and stay quiet. We accept that one-tick-early ::error::
+            # rather than deferring, because deferring creates a blind spot: if
+            # runner allocation is what is broken, every re-armed run gets stuck
+            # again, and a defer-only cancel/re-arm loop would escalate never.
+            # Section 1 restores the queue; this alert fires when it cannot stay
+            # restored. A one-off wedge therefore costs at most one early alert,
+            # while a permanent wedge still escalates.
             if [ "$LAST_COMPLETED_AGE" -ge "$ALERT_MIN_STALE" ]; then
               SHOULD_ALERT=true
             fi
