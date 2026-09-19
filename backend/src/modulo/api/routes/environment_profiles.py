@@ -39,6 +39,7 @@ from modulo.db.crud.environment_profile import (
 )
 from modulo.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.util import WorkspaceNetworkValidationError
 
 _CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE = "environment_profiles.create_profile"
 _CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE = "environment_profiles.update_profile"
@@ -246,6 +247,9 @@ async def create_profile(
         # Model/crud policy violations (e.g. the Bundled Runner's locked
         # ephemeral persistence — FAR-590 D4) are user-input errors, 422.
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    except WorkspaceNetworkValidationError as exc:
+        # FAR-1020: workspace_network validation failure is a user-input error.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ProgrammingError:
         _log.exception(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
         raise HTTPException(
@@ -331,6 +335,9 @@ async def update_profile(
     except ValueError as exc:
         # Model/crud policy violations (e.g. the Bundled Runner's locked
         # ephemeral persistence — FAR-590 D4) are user-input errors, 422.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    except WorkspaceNetworkValidationError as exc:
+        # FAR-1020: workspace_network validation failure is a user-input error.
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ProgrammingError:
         _log.exception(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)

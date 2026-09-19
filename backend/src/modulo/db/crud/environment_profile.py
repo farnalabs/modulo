@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.util import validate_workspace_network
 
 
 def validate_runner_docker_persistence(provider_type: str, persistence_policy: str) -> None:
@@ -23,6 +24,21 @@ def validate_runner_docker_persistence(provider_type: str, persistence_policy: s
             "The Bundled Runner (runner_docker) locks persistence_policy to 'ephemeral' "
             f"(got '{persistence_policy}'); retained/cache workspaces are not supported."
         )
+
+
+def validate_profile_workspace_network(config_json: dict[str, Any] | None) -> None:
+    """Validate ``workspace_network`` inside ``config_json`` at the CRUD boundary (FAR-1020).
+
+    Rejects Docker network modes (host, container:*, bridge, none, default)
+    and any value that is not a plain deployment-owned bridge network name.
+    Raises :class:`WorkspaceNetworkValidationError` on invalid values — the
+    route handler surfaces it as a 422.
+    """
+    if not config_json:
+        return
+    raw = config_json.get("workspace_network")
+    if raw is not None:
+        validate_workspace_network(str(raw))
 
 
 async def create_environment_profile(
@@ -44,6 +60,7 @@ async def create_environment_profile(
     visibility: str = "org",
 ) -> EnvironmentProfile:
     validate_runner_docker_persistence(provider_type, persistence_policy)
+    validate_profile_workspace_network(config_json)
     profile = EnvironmentProfile(
         organisation_id=org_id,
         name=name,
@@ -132,6 +149,7 @@ async def update_environment_profile(
         return None
     apply_updates(profile, updates)
     validate_runner_docker_persistence(profile.provider_type, profile.persistence_policy)
+    validate_profile_workspace_network(profile.config_json)
     await session.flush()
     return profile
 
