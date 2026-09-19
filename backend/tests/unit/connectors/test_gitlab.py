@@ -102,9 +102,13 @@ async def test_query_mrs(connector):
 
 
 @respx.mock
-async def test_write_file(connector):
+async def test_write_file_update_when_exists(connector):
+    """PUT (update) is used when the probe GET finds an existing file."""
+    probe_route = respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json={"sha": "abc123", "file_name": "main.py"})
+    )
     response_body = {"file_path": "src/main.py", "branch": "main"}
-    route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+    put_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
         return_value=httpx.Response(200, json=response_body)
     )
     result = await connector.write(
@@ -119,13 +123,46 @@ async def test_write_file(connector):
         )
     )
     assert result["file_path"] == "src/main.py"
-    body = json.loads(route.calls.last.request.content)
+    assert probe_route.called, "probe GET must be issued for existence check"
+    body = json.loads(put_route.calls.last.request.content)
     assert body["branch"] == "main"
+    assert body["sha"] == "abc123"
+
+
+@respx.mock
+async def test_write_file_create_when_new(connector):
+    """POST (create) is used when the probe GET returns 404."""
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/new%2Ffile.py").mock(
+        return_value=httpx.Response(404, text='{"message":"404 File Not Found"}')
+    )
+    response_body = {"file_path": "new/file.py", "branch": "main"}
+    post_route = respx.post(f"{_API}/projects/group%2Fproject/repository/files/new%2Ffile.py").mock(
+        return_value=httpx.Response(201, json=response_body)
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={
+                "project": "group/project",
+                "path": "new/file.py",
+                "content": "print('new')",
+                "message": "Create file",
+            },
+        )
+    )
+    assert result["file_path"] == "new/file.py"
+    body = json.loads(post_route.calls.last.request.content)
+    assert body["branch"] == "main"
+    assert body["commit_message"] == "Create file"
+    assert "sha" not in body, "create POST must not include sha"
 
 
 @respx.mock
 async def test_write_file_honors_branch_key(connector):
     response_body = {"file_path": "src/main.py", "branch": "feature-branch"}
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json={"sha": "def456"})
+    )
     route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
         return_value=httpx.Response(200, json=response_body)
     )
@@ -143,6 +180,32 @@ async def test_write_file_honors_branch_key(connector):
     assert result["branch"] == "feature-branch"
     body = json.loads(route.calls.last.request.content)
     assert body["branch"] == "feature-branch"
+
+
+@respx.mock
+async def test_write_file_explicit_sha_skips_probe(connector):
+    """When the caller supplies sha, the probe GET is skipped and PUT is issued directly."""
+    probe_route = respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py")
+    response_body = {"file_path": "src/main.py", "branch": "main"}
+    put_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json=response_body)
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={
+                "project": "group/project",
+                "path": "src/main.py",
+                "content": "print('hello')",
+                "sha": "known_sha_123",
+                "message": "Update with known sha",
+            },
+        )
+    )
+    assert result["file_path"] == "src/main.py"
+    assert not probe_route.called, "probe GET must be skipped when sha is provided"
+    body = json.loads(put_route.calls.last.request.content)
+    assert body["sha"] == "known_sha_123"
 
 
 @respx.mock
@@ -1046,6 +1109,9 @@ async def test_write_mr_blocked_without_api_scope(connector):
 async def test_write_file_allowed_with_write_repository_scope(connector):
     """write_repository satisfies repository-file writes without the api scope."""
     respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api", "write_repository"]}))
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json={"sha": "aaa111"})
+    )
     response_body = {"file_path": "src/main.py", "branch": "main"}
     write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
         return_value=httpx.Response(200, json=response_body)
@@ -1082,6 +1148,9 @@ async def test_write_allowed_with_api_scope(connector):
 async def test_write_proceeds_when_scopes_unavailable(connector):
     """An unavailable token-info endpoint (old self-hosted) must not block writes."""
     respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(404, text="Not Found"))
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json={"sha": "bbb222"})
+    )
     response_body = {"file_path": "src/main.py", "branch": "main"}
     write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
         return_value=httpx.Response(200, json=response_body)
@@ -1100,6 +1169,9 @@ async def test_write_proceeds_when_scopes_unavailable(connector):
 async def test_write_proceeds_when_token_info_network_error(connector):
     """A network error probing scopes must degrade to allow, not block the write."""
     respx.get(_TOKEN_INFO).mock(side_effect=httpx.ConnectError("Connection refused"))
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json={"sha": "ccc333"})
+    )
     write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
         return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"})
     )
@@ -1135,6 +1207,9 @@ async def test_verify_write_scopes_empty_when_satisfied_or_unknown(connector):
 async def test_write_scope_cache_avoids_reprobe(connector):
     """Declared scopes are cached so consecutive writes don't re-hit token-info."""
     token_info_route = respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json={"sha": "ddd444"})
+    )
     write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
         return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"})
     )
@@ -1156,6 +1231,9 @@ async def test_health_check_warms_write_scope_cache(connector):
     token_info_route = respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
     result = await connector.health_check()
     assert result.ok is True
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json={"sha": "eee555"})
+    )
     write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
         return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"})
     )
