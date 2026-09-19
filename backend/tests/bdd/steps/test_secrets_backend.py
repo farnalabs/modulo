@@ -73,7 +73,7 @@ def _new_store(request) -> FernetSecretsBackend:
     stores: dict[str, FernetSecretsBackend] = {}
     for label, org_id in _ORG_ID_BY_LABEL.items():
         session = factory()
-        session.info["org_id"] = str(org_id)
+        session.info["org_id"] = org_id
         stores[label] = FernetSecretsBackend(fernet_key=key, session=session)
 
     request.node._secret_engine = engine
