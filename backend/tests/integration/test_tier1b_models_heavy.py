@@ -7,60 +7,24 @@ nightly ``tier1b-nightly`` CI job, never on PRs.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import TYPE_CHECKING
-
 import pytest
 
 from tests.helpers.testcontainers_harness import (
-    SSRF_LOOPBACK_OPTIN,
     ContainerHandle,
     ContainerSpec,
     Tier1bFixtureError,
     probe_http,
     start_tier1b_container,
 )
-
-if TYPE_CHECKING:
-    from modulo.model_backends.module import OpenAICompatibleBackend
+from tests.helpers.tier1b_backends import (
+    invoke_once,
+    make_backend,
+    ssrf_loopback_consent,  # noqa: F401 — imported fixture, autouse via module namespace
+)
 
 pytestmark = pytest.mark.integration
 
-
-@pytest.fixture(scope="session", autouse=True)
-def ssrf_loopback_consent() -> Iterator[None]:
-    """SSRF guard loopback opt-in (see the light connector module for rationale).
-
-    Uses a session-scoped MonkeyPatch directly — the ``monkeypatch``
-    fixture is function-scoped and cannot be requested by a session
-    fixture (ScopeMismatch).
-    """
-    mp = pytest.MonkeyPatch()
-    mp.setenv("SSRF_ALLOW_PRIVATE_RANGES", SSRF_LOOPBACK_OPTIN)
-    yield
-    mp.undo()
-
-
-QWEN_05B_GGUF = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
 QWEN_05B_REPO_ID = "Qwen/Qwen2.5-0.5B-Instruct"
-
-
-def _backend(provider: str, model_id: str, base_url: str) -> OpenAICompatibleBackend:
-    from modulo.model_backends.module import OpenAICompatibleBackend
-
-    return OpenAICompatibleBackend(
-        api_key="not-needed",
-        model_id=model_id,
-        base_url=base_url,
-        provider=provider,
-    )
-
-
-async def _invoke_once(backend: OpenAICompatibleBackend) -> str:
-    from langchain_core.messages import HumanMessage
-
-    result = await backend.invoke([HumanMessage(content="Say the single word: modulo")])
-    return str(result.content)
 
 
 # ── vllm (CPU nightly) ──────────────────────────────────────────────────────
@@ -93,11 +57,11 @@ def vllm_service() -> ContainerHandle:
 
 
 async def test_vllm_health_and_completion(vllm_service: ContainerHandle) -> None:
-    backend = _backend("vllm", QWEN_05B_REPO_ID, f"{vllm_service.base_url}/v1")
+    backend = make_backend("vllm", QWEN_05B_REPO_ID, f"{vllm_service.base_url}/v1")
     try:
         health = await backend.health_check()
         assert health.ok, f"vllm health check failed against real container: {health}"
-        text = await _invoke_once(backend)
+        text = await invoke_once(backend)
         assert text.strip(), "vllm completion must be non-empty from the real container"
     finally:
         await backend.aclose()
@@ -131,11 +95,11 @@ def tgi_service() -> ContainerHandle:
 
 
 async def test_tgi_health_and_completion(tgi_service: ContainerHandle) -> None:
-    backend = _backend("tgi", QWEN_05B_REPO_ID, f"{tgi_service.base_url}/v1")
+    backend = make_backend("tgi", QWEN_05B_REPO_ID, f"{tgi_service.base_url}/v1")
     try:
         health = await backend.health_check()
         assert health.ok, f"tgi health check failed against real container: {health}"
-        text = await _invoke_once(backend)
+        text = await invoke_once(backend)
         assert text.strip(), "tgi completion must be non-empty from the real container"
     finally:
         await backend.aclose()

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import secrets
 import string
 import time
@@ -41,31 +42,20 @@ from modulo.connectors.teamcity import TeamCityConnector
 # The trivy connector is intentionally NOT exercised end-to-end here — see
 # test_trivy_connector_roundtrip_recorded_skip below for the recorded skip.
 from tests.helpers.testcontainers_harness import (
-    SSRF_LOOPBACK_OPTIN,
     ContainerHandle,
     ContainerSpec,
     Tier1bFixtureError,
     probe_http,
     start_tier1b_container,
 )
+from tests.helpers.tier1b_backends import (
+    ssrf_loopback_consent,  # noqa: F401 — imported fixture, autouse via module namespace
+)
 
 pytestmark = pytest.mark.integration
 ADMIN = "modulo-admin"
-
-
-@pytest.fixture(scope="session", autouse=True)
-def ssrf_loopback_consent() -> Iterator[None]:
-    """Let the pinned-transport SSRF guard reach loopback containers.
-
-    The same documented operator opt-in the Tier 1a fixtures use, applied
-    lint-clean via a session-scoped MonkeyPatch (``monkeypatch`` itself is
-    function-scoped and therefore illegal for a session fixture — pytest
-    raises ScopeMismatch if requested here).
-    """
-    mp = pytest.MonkeyPatch()
-    mp.setenv("SSRF_ALLOW_PRIVATE_RANGES", SSRF_LOOPBACK_OPTIN)
-    yield
-    mp.undo()
+#: Points at a pre-confirmed TeamCity datadir volume; see teamcity_service.
+_TEAMCITY_SEED_DIR_ENV = "TEAMCITY_SEED_DIR"
 
 
 # ── shared seed data helpers ────────────────────────────────────────────────
@@ -597,48 +587,62 @@ async def test_grafana_write_annotation_then_query(grafana_connector: GrafanaCon
 
 @pytest.fixture(scope="session")
 def teamcity_service() -> Iterator[ContainerHandle]:
-    pytest.skip(
-        "Tier 1b TeamCity connector roundtrip cannot run headless against jetbrains/teamcity-server "
-        "2024.07.2: on first start the server permanently blocks in its 'Confirming TeamCity first "
-        "start' maintenance screen until a superuser finishes it interactively. Verified against the "
-        "live container in this worktree: /app/rest/users stays HTTP 503, /mnt/do/goNewInstallation "
-        "says 'We can't persist data directory location' on a fresh container, and the documented "
-        "skip flags (teamcity.startup.confirmation.skip / granted, internal.properties, mounted "
-        "startup.properties at every writable /conf path) do not suppress the gate in this version. "
-        "recorded skip (FAR-934): the connector's own code path still needs a session-scope "
-        "container fixture once TeamCity can be seeded with a pre-confirmed data directory "
-        "(volume of a manually-confirmed datadir) — track as follow-up."
-    )
+    """TeamCity roundtrip, condition-gated on a pre-confirmed datadir seed.
+
+    jetbrains/teamcity-server 2024.07.2 permanently blocks on its 'Confirming
+    TeamCity first start' maintenance screen until a superuser completes it
+    interactively, so a pristine container can never be seeded headless.
+    Verified against the live container: /app/rest/users stays HTTP 503 and the
+    documented skip flags (teamcity.startup.confirmation.skip / granted,
+    internal.properties, mounted startup.properties at every writable /conf
+    path) do not suppress the gate in this version.
+
+    Rather than an unconditional skip, the fixture is gated on
+    ``TEAMCITY_SEED_DIR``: point it at a volume holding a manually-confirmed
+    TeamCity data directory and the seeding code below runs against a real
+    server; unset (the default) records the skip loudly. A follow-up that ships
+    a pre-confirmed datadir image only needs to set the env var.
+    """
+    seed_dir = os.environ.get(_TEAMCITY_SEED_DIR_ENV, "").strip()
+    if not seed_dir:
+        pytest.skip(
+            "Tier 1b TeamCity connector roundtrip is a recorded skip (FAR-934): "
+            "jetbrains/teamcity-server 2024.07.2 blocks headless on its first-start "
+            "confirmation screen. Set TEAMCITY_SEED_DIR to a pre-confirmed TeamCity "
+            "data directory to run this roundtrip against a real server."
+        )
     handle = start_tier1b_container(
         ContainerSpec(
             image="jetbrains/teamcity-server:2024.07.2",
             container_port=8111,
             env={"TEAMCITY_SERVER_MEM_OPTS": "-Xms256m -Xmx1g"},
+            volumes=[(seed_dir, "/data/teamcity")],
             probe=probe_http("/app/rest/users"),
             ready_timeout_seconds=1800,
             poll_interval_seconds=5.0,
         )
     )
-    project_id = "ModuloTier1b"
-    superuser_token = _find_teamcity_superuser_token(handle)
-    with httpx.Client(base_url=handle.base_url, headers={"Authorization": f"Bearer {superuser_token}"}) as client:
-        project_create = client.post("/app/rest/projects", json={"id": project_id, "name": "Modulo Tier 1b"})
-        if project_create.status_code == 403:
-            # Superuser token over Basic auth only in some versions.
-            import base64 as _b64
-
-            raw = _b64.b64encode(f"superuser:{superuser_token}".encode()).decode()
-            client.headers["Authorization"] = f"Basic {raw}"
+    try:
+        project_id = "ModuloTier1b"
+        superuser_token = _find_teamcity_superuser_token(handle)
+        with httpx.Client(base_url=handle.base_url, headers={"Authorization": f"Bearer {superuser_token}"}) as client:
             project_create = client.post("/app/rest/projects", json={"id": project_id, "name": "Modulo Tier 1b"})
-        project_create.raise_for_status()
-        user_token_resp = client.post("/app/rest/users/id:1/tokens", json={"name": "modulo-ci"})
-        admin_access_token = user_token_resp.json().get("value", "")
-        if admin_access_token:
+            if project_create.status_code == 403:
+                # Superuser token over Basic auth only in some versions.
+                import base64 as _b64
+
+                raw = _b64.b64encode(f"superuser:{superuser_token}".encode()).decode()
+                client.headers["Authorization"] = f"Basic {raw}"
+                project_create = client.post("/app/rest/projects", json={"id": project_id, "name": "Modulo Tier 1b"})
+            project_create.raise_for_status()
+            user_token_resp = client.post("/app/rest/users/id:1/tokens", json={"name": "modulo-ci"})
+            admin_access_token = user_token_resp.json().get("value", "")
+            if not admin_access_token:
+                raise AssertionError(f"TeamCity access token mint failed via superuser REST: {user_token_resp.text!r}")
             handle.creds["teamcity_admin_token"] = admin_access_token
-    if not admin_access_token:
-        raise AssertionError(f"TeamCity access token mint failed via superuser REST: {user_token_resp.text!r}")
-    yield handle
-    handle.stop()
+        yield handle
+    finally:
+        handle.stop()
 
 
 def _find_teamcity_superuser_token(handle: ContainerHandle) -> str:

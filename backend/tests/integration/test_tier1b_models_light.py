@@ -5,9 +5,9 @@ tgi — multi-GB images, very slow CPU boot) lives in
 ``test_tier1b_models_heavy.py`` and runs only in the nightly job.
 
 Each test boots a real local model server with Testcontainers, then drives
-the real Modulo ``OpenAICompatibleBackend`` (pinned transport; SSRF loopback
-consent is granted by the integration conftest) and asserts on REAL model
-completions — never canned bodies.
+the real Modulo ``OpenAICompatibleBackend`` (pinned transport; the shared
+``ssrf_loopback_consent`` fixture grants loopback consent) and asserts on REAL
+model completions — never canned bodies.
 """
 
 from __future__ import annotations
@@ -16,59 +16,25 @@ import shutil
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
 from urllib.request import urlretrieve
 
 import pytest
 
 from tests.helpers.testcontainers_harness import (
-    SSRF_LOOPBACK_OPTIN,
     ContainerHandle,
     ContainerSpec,
     Tier1bFixtureError,
     probe_http,
     start_tier1b_container,
 )
-
-if TYPE_CHECKING:
-    from modulo.model_backends.module import OpenAICompatibleBackend
+from tests.helpers.tier1b_backends import (
+    QWEN_05B_GGUF,
+    invoke_once,
+    make_backend,
+    ssrf_loopback_consent,  # noqa: F401 — imported fixture, autouse via module namespace
+)
 
 pytestmark = pytest.mark.integration
-
-
-@pytest.fixture(scope="session", autouse=True)
-def ssrf_loopback_consent() -> Iterator[None]:
-    """SSRF guard loopback opt-in (see the light connector module for rationale).
-
-    Uses a session-scoped MonkeyPatch directly — the ``monkeypatch``
-    fixture is function-scoped and cannot be requested by a session
-    fixture (ScopeMismatch).
-    """
-    mp = pytest.MonkeyPatch()
-    mp.setenv("SSRF_ALLOW_PRIVATE_RANGES", SSRF_LOOPBACK_OPTIN)
-    yield
-    mp.undo()
-
-
-QWEN_05B_GGUF = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-
-
-def _backend(provider: str, model_id: str, base_url: str) -> OpenAICompatibleBackend:
-    from modulo.model_backends.module import OpenAICompatibleBackend
-
-    return OpenAICompatibleBackend(
-        api_key="not-needed",
-        model_id=model_id,
-        base_url=base_url,
-        provider=provider,
-    )
-
-
-async def _invoke_once(backend: OpenAICompatibleBackend) -> str:
-    from langchain_core.messages import HumanMessage
-
-    result = await backend.invoke([HumanMessage(content="Say the single word: modulo")])
-    return str(result.content)
 
 
 # ── ollama ──────────────────────────────────────────────────────────────────
@@ -98,11 +64,11 @@ def ollama_service() -> Iterator[ContainerHandle]:
 
 
 async def test_ollama_health_and_completion(ollama_service: ContainerHandle) -> None:
-    backend = _backend("ollama", "qwen2:0.5b", f"{ollama_service.base_url}/v1")
+    backend = make_backend("ollama", "qwen2:0.5b", f"{ollama_service.base_url}/v1")
     try:
         health = await backend.health_check()
         assert health.ok, f"ollama health check failed against real container: {health}"
-        text = await _invoke_once(backend)
+        text = await invoke_once(backend)
         assert text.strip(), "ollama completion must be non-empty from the real container"
     finally:
         await backend.aclose()
@@ -121,7 +87,7 @@ def llamacpp_service() -> Iterator[ContainerHandle]:
     """llama.cpp server over a host-downloaded GGUF bind mount."""
     model_dir = Path(tempfile.mkdtemp(prefix="llamacpp-tier1b-"))
     try:
-        urlretrieve(QWEN_05B_GGUF, str(model_dir / "qwen2.5-0.5b.gguf"))
+        urlretrieve(QWEN_05B_GGUF, str(model_dir / "qwen2.5-0.5b.gguf"))  # noqa: S310 - pinned https GGUF URL
     except Exception as exc:
         shutil.rmtree(model_dir, ignore_errors=True)
         pytest.skip(f"Tier 1b llamacpp model seed unavailable (recorded skip): {exc}")
@@ -164,11 +130,11 @@ def llamacpp_service() -> Iterator[ContainerHandle]:
 
 
 async def test_llamacpp_health_and_completion(llamacpp_service: ContainerHandle) -> None:
-    backend = _backend("llamacpp", "qwen2.5-0.5b-instruct", f"{llamacpp_service.base_url}/v1")
+    backend = make_backend("llamacpp", "qwen2.5-0.5b-instruct", f"{llamacpp_service.base_url}/v1")
     try:
         health = await backend.health_check()
         assert health.ok, f"llamacpp health check failed against real container: {health}"
-        text = await _invoke_once(backend)
+        text = await invoke_once(backend)
         assert text.strip(), "llamacpp completion must be non-empty from the real container"
     finally:
         await backend.aclose()
@@ -182,7 +148,7 @@ def localai_service() -> ContainerHandle:
     """LocalAI CPU image serving a Qwen2.5 GGUF seeded through a bind mount."""
     model_dir = Path(tempfile.mkdtemp(prefix="localai-tier1b-"))
     try:
-        urlretrieve(QWEN_05B_GGUF, str(model_dir / "qwen2.5-0.5b.gguf"))
+        urlretrieve(QWEN_05B_GGUF, str(model_dir / "qwen2.5-0.5b.gguf"))  # noqa: S310 - pinned https GGUF URL
         (model_dir / "qwen2.yml").write_text("name: qwen2\nbackend: llama\nparameters:\n  model: qwen2.5-0.5b.gguf\n")
     except Exception as exc:
         shutil.rmtree(model_dir, ignore_errors=True)
@@ -218,11 +184,11 @@ def localai_service() -> ContainerHandle:
 
 
 async def test_localai_health_and_completion(localai_service: ContainerHandle) -> None:
-    backend = _backend("localai", "qwen2", f"{localai_service.base_url}/v1")
+    backend = make_backend("localai", "qwen2", f"{localai_service.base_url}/v1")
     try:
         health = await backend.health_check()
         assert health.ok, f"localai health check failed against real container: {health}"
-        text = await _invoke_once(backend)
+        text = await invoke_once(backend)
         assert text.strip(), "localai completion must be non-empty from the real container"
     finally:
         await backend.aclose()

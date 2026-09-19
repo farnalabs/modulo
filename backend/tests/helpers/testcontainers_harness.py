@@ -41,7 +41,6 @@ from typing import Any
 import httpx
 
 SSRF_LOOPBACK_OPTIN = "127.0.0.0/8,::1/128"
-EXEC_READINESS_TIMEOUT = 600
 
 
 class Tier1bFixtureError(RuntimeError):
@@ -115,17 +114,17 @@ class ContainerHandle:
             )
         return f"http://127.0.0.1:{self.host_port}"
 
-    def exec(
-        self,
-        args: list[str],
-        timeout_seconds: float = EXEC_READINESS_TIMEOUT,
-        user: str | None = None,
-    ) -> str:
+    def exec(self, args: list[str], user: str | None = None) -> str:
         """Run args inside the container; return utf-8 stdout; raise on failure.
 
         ``user`` is optional (docker exec user spec, e.g. ``"git"`` or
         ``"1000:1000"``) — needed for images whose CLI tools refuse to run
         as the container's default root user (gitea, notably).
+
+        There is deliberately no timeout parameter: testcontainers 4.15's
+        ``ExecConfig`` exposes no timeout, so accepting one here would be
+        dead code (FAR-934 review). A hung exec is bounded by the suite-level
+        ``--timeout`` in CI.
         """
         if self._docker_container is None:
             raise Tier1bFixtureError("container fixture already stopped")

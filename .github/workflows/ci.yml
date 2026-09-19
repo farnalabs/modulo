@@ -360,7 +360,11 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      # NOSONAR githubactions:S8541: pytest-bdd is a pinned source-archive dep (no
+      # wheel) and ibm-cos-sdk is sdist-only, so `--no-build` hard-fails the sync on
+      # a cold uv cache. `--frozen` locks the exact revisions, so the builds are
+      # deterministic and trusted (no untrusted setup scripts execute).
+      - run: uv sync --frozen  # NOSONAR
       - name: Run Tier 1b light connector + model-server suites
         run: |
           uv run --no-build --no-sync pytest \
