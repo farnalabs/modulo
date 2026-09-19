@@ -345,6 +345,21 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > queue, and `/proposals/{id}/publish` (201 pipeline/node-scoped `EvalDefinition`
 > + resolved transition, 422 non-gap, 409 non-pending, 404 missing).
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-19):** closed `feat-core-secrets-backend`'s
+> "No BDD feature files" gap (`core/secrets-backend.md`). Registered
+> `infra/secrets_backend.feature` into the executing BDD suite from the new
+> `steps/test_secrets_backend.py`, driving the REAL
+> `modulo.core.secrets_backend` seams network-free and DB-free — the
+> `FernetSecretsBackend` persists/reads real rows in an in-memory aiosqlite
+> engine (round-trip, in-place upsert, delete, whitespace-normalised keys),
+> organisation scoping via the real `WHERE organisation_id = :oid` SQL the
+> backend emits (org A reads what org A wrote; org B gets `KeyError`),
+> `validate_key` / `_read_org_id_from_session` fail-closed rejections (blank
+> key / no session / missing RLS context), no-downtime rotation fallback +
+> alien/corrupt ciphertext `ValueError`, and the real factory default /
+> unknown-name / unlicensed-`vault`-fallback logic (forced exactly as the unit
+> suite does). `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
