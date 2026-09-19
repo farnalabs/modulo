@@ -46,6 +46,7 @@ from modulo.core.runtime_provider import (
     build_hub,
 )
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
+from modulo.util import validate_workspace_network
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -236,6 +237,11 @@ def _workspace_spec_for_dispatch(
         "modulo.node.id": node_id,
     }
     egress = (getattr(profile, "network_policy", None) or "outbound").strip().lower()
+    # Defense-in-depth (FAR-1020): validate workspace_network at dispatch
+    # even if the CRUD boundary already validated it — a value written
+    # directly to the DB could bypass the route validation.
+    raw_network = cfg.get("workspace_network")
+    validated_network = validate_workspace_network(raw_network)
     return WorkspaceSpec(
         environment_profile_id=profile.id,
         organisation_id=org_id,  # type: ignore[arg-type]
@@ -248,7 +254,7 @@ def _workspace_spec_for_dispatch(
         persistence_policy=getattr(profile, "persistence_policy", "ephemeral"),
         labels={},
         workspace_metadata={key: value for key, value in metadata.items() if value},
-        workspace_network=cfg.get("workspace_network"),
+        workspace_network=validated_network,
     )
 
 

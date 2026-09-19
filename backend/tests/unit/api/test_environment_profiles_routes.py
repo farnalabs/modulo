@@ -24,6 +24,7 @@ from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.db.crud.base import PageResult
 from modulo.db.models.environment_profile import PROVIDER_TYPES
 from modulo.settings import Settings, get_settings
+from modulo.util import WorkspaceNetworkValidationError
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -265,6 +266,24 @@ class TestCreateProfile:
             )
         assert resp.status_code == 422
 
+    def test_create_profile_invalid_workspace_network_returns_422(self, client: TestClient) -> None:
+        """A dangerous workspace_network rejected at the CRUD boundary maps to a
+        typed 422 (FAR-1020) — the route must not surface it as a 500."""
+        with (
+            patch(
+                f"{_ROUTES}.create_environment_profile",
+                new_callable=AsyncMock,
+                side_effect=WorkspaceNetworkValidationError("host"),
+            ),
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.post(
+                self.URL,
+                json={"name": "runner", "provider_type": "runner_docker", "config_json": {"workspace_network": "host"}},
+            )
+        assert resp.status_code == 422
+        assert "workspace_network" in resp.json()["detail"]
+
     @pytest.mark.parametrize("persistence", ["retained", "cache"])
     def test_update_runner_docker_non_ephemeral_returns_422(self, persistence: str, client: TestClient) -> None:
         """The update path re-validates the merged row (validator parity)."""
@@ -274,6 +293,20 @@ class TestCreateProfile:
         ):
             resp = client.put(f"{self.URL}/{_PROFILE_ID}", json={"persistence_policy": persistence})
         assert resp.status_code == 422
+
+    def test_update_profile_invalid_workspace_network_returns_422(self, client: TestClient) -> None:
+        """The update route maps a CRUD WorkspaceNetworkValidationError to 422 (FAR-1020)."""
+        with (
+            patch(
+                f"{_ROUTES}.update_environment_profile",
+                new_callable=AsyncMock,
+                side_effect=WorkspaceNetworkValidationError("host"),
+            ),
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.put(f"{self.URL}/{_PROFILE_ID}", json={"config_json": {"workspace_network": "host"}})
+        assert resp.status_code == 422
+        assert "workspace_network" in resp.json()["detail"]
 
 
 class TestGetProfile:
