@@ -440,6 +440,39 @@ def derive_webhook_coalesce_key(raw_payload: dict[str, Any] | None) -> str | Non
     return None
 
 
+def derive_ci_failure_coalesce_key(raw_payload: dict[str, Any] | None) -> str | None:
+    """Derive a stable coalesce key for CI-failure (Branch Fixer) webhook deliveries.
+
+    The GitHub Actions ``ci.yml`` ``notify-pr-failure`` job dispatches the Branch
+    Fixer with a payload shaped ``{branchName, prNumber, runUrl,
+    failureDescription, headSha}``. ``runUrl`` is the GitHub run id of the CI
+    workflow that failed and therefore differs on EVERY delivery, so the
+    canonical payload hash (FAR-1034) could never deduplicate two CI-failure
+    events for the same PR — each compared unequal and minted its own full
+    Branch Fixer run.
+
+    This key pins the identity a duplicate really has: the PR number plus the
+    head SHA of the commit whose CI failed. Two events for the same PR at the
+    same head SHA (re-triggered CI, re-opened PR, a second workflow run for the
+    same commit) produce the SAME key and are coalesced; a new commit changes
+    the head SHA and is never suppressed. Shape: ``ci-failure:pr:<n>:sha:<sha>``.
+
+    Returns ``None`` (no coalescing) for anything that is not a CI-failure
+    delivery — the merge-queue conflict / migration-collision payloads carry
+    ``phase`` and no ``prNumber``, and a manual ``branch-fixer.yml`` dispatch has
+    no ``headSha``, so an intentionally-fired fix is never suppressed.
+    """
+    if not isinstance(raw_payload, dict):
+        return None
+    pr_number = raw_payload.get("prNumber")
+    head_sha = raw_payload.get("headSha")
+    if isinstance(pr_number, bool) or not isinstance(pr_number, int):
+        return None
+    if isinstance(head_sha, bool) or not isinstance(head_sha, str) or not head_sha:
+        return None
+    return f"ci-failure:pr:{pr_number}:sha:{head_sha}"
+
+
 def coalesce_enabled(trigger_config: dict[str, Any] | None) -> bool:
     """Read the per-trigger coalescing flag (default ON for webhook triggers).
 

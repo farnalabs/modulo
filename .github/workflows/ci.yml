@@ -887,6 +887,7 @@ jobs:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           PR_NUM: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
         shell: bash
@@ -896,12 +897,20 @@ jobs:
           # jq -n --arg/--argjson JSON-escapes every value, so a crafted branch
           # name (legal in git refnames, e.g. containing '"') cannot inject
           # keys or break the payload. See FAR-568.
+          #
+          # headSha (FAR-1034): the Branch Fixer's webhook trigger coalesces
+          # repeated CI-failure events by (prNumber, headSha), so the payload
+          # MUST carry the failing commit's head SHA. Without it the modulo
+          # side could not distinguish a duplicate event (same commit still
+          # failing) from a genuinely new failure (new commit), and every
+          # event launched a separate full fixer run.
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber "${PR_NUM}" \
+            --arg headSha "${HEAD_SHA}" \
             --arg runUrl "${RUN_URL}" \
             --arg failureDescription "CI checks failed on PR #${PR_NUM} (branch: ${BRANCH})" \
-            '{branchName: $branchName, prNumber: $prNumber, runUrl: $runUrl, failureDescription: $failureDescription}')
+            '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription}')
           echo "PR #${PR_NUM} on branch '${BRANCH}' -- CI checks failed."
           echo "Sending to Modulo Branch Fixer pipeline..."
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
@@ -913,7 +922,15 @@ jobs:
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY_RESP=$(echo "$RESPONSE" | sed '$d')
           if [ "$HTTP_CODE" = "202" ]; then
-            echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+            RESP_STATUS=$(echo $BODY_RESP | jq -r '.status // "accepted"')
+            if [ "$RESP_STATUS" = "coalesced" ]; then
+              # FAR-1034 handled no-op: duplicate CI-failure for the same
+              # PR + head SHA within the coalesce window — intentionally no
+              # new run. Not an error, not retried.
+              echo "::notice::Modulo Branch Fixer coalesced (duplicate CI-failure for same PR + head SHA — suppressed)"
+            else
+              echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+            fi
           elif [ "$HTTP_CODE" = "429" ]; then
             echo "::warning::Modulo Branch Fixer rate-limited -- $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
           else
@@ -950,16 +967,21 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          MAIN_SHA: ${{ github.sha }}
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # headSha (FAR-1034): mirrors the notify-pr-failure payload so the
+          # Branch Fixer trigger can coalesce repeated failures at the same
+          # main SHA.
           BODY=$(jq -n \
             --arg branchName "main" \
             --argjson prNumber 0 \
+            --arg headSha "${MAIN_SHA}" \
             --arg runUrl "${RUN_URL}" \
             --arg failureDescription "CI checks failed on main at ${{ github.sha }}. The Branch Fixer should create a fix branch from main, diagnose the failure, fix it, and raise a PR." \
-            '{branchName: $branchName, prNumber: $prNumber, runUrl: $runUrl, failureDescription: $failureDescription}')
+            '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription}')
           echo "CI checks failed on main (${{ github.sha }}) -- dispatching Branch Fixer."
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
@@ -970,7 +992,12 @@ jobs:
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY_RESP=$(echo "$RESPONSE" | sed '$d')
           if [ "$HTTP_CODE" = "202" ]; then
-            echo "Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+            RESP_STATUS=$(echo $BODY_RESP | jq -r '.status // "accepted"')
+            if [ "$RESP_STATUS" = "coalesced" ]; then
+              echo "::notice::Branch Fixer coalesced (duplicate CI-failure for same sha — suppressed)"
+            else
+              echo "Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+            fi
           elif [ "$HTTP_CODE" = "429" ]; then
             echo "::warning::Branch Fixer rate-limited -- $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
           else

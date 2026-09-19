@@ -374,6 +374,24 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `failed`), and the `--diff` drift surface (read-only `mode=drift` report,
 > node-level `drift_detail`, `has_drift` gate, `drift create` / `drift summary`
 > rendering). `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-19):** closed `feat-analytics`'s "No dedicated
+> BDD feature files for `/analytics`" gap (`analytics/analytics.md`).
+> Registered `analytics/query.feature` into the executing BDD suite from the
+> colocated `features/analytics/test_analytics_query_steps.py`, driving the
+> REAL `modulo/api/routes/analytics.py` routes with only the four advisory
+> service functions (`run_analytics_query`, `run_concurrency_query`,
+> `export_facts`, `run_guardrail_scorecard`) patched — the `/query` envelope +
+> freshness indicators, the repeated `pipeline_id` A/B composition (both ids
+> asserted to reach the service) and dimension echo, FastAPI-level validation
+> (malformed date / `limit` bound → 422), the typed error mapping (inverted
+> range → 422, rate limit → 429, statement timeout → 503), the org-context
+> requirement (no org context → 403), the `analytics_page` feature gate
+> (disabled → 402), an explicit unauthenticated 401 (HTTPBearer with no
+> `Authorization` header), the JSON + CSV export surfaces (CSV carries a
+> `Content-Disposition: attachment`), the concurrency slot-utilisation series
+> and the advisory-only guardrail scorecard. `_ORPHANED_BDD_FEATURES` stays
+> empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

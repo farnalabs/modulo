@@ -4684,6 +4684,21 @@ features:
             - "[x] Audit events invite_created / invite_revoked (admin paths) and invite_consumed (accept path) record the invitation lifecycle; consume audit is fail-open — an audit failure never fails enrollment"
     feat-analytics:
         description: Reporting and analytics over runs, costs, and facts
+        status: covered
+        behaviours:
+            # REST surface (modulo/api/routes/analytics.py, FAR-102 / ADR 020)
+            - "[x] GET /api/v1/analytics/query returns the bucketed run-facts series (day/hour/week, auto_granularity, zero-filled) scoped to the caller's org; a repeated pipeline_id composes an A/B comparison and a dimension (trigger_type/status/pipeline/folder/team/error_code) keys the buckets"
+            - "[x] The response carries the group_by/dimension/date_from/date_to envelope plus the facts-freshness indicators (facts_freshness_hours / facts_stale) and per-bucket count/cost/token/duration/success/capacity/queue metrics"
+            - "[x] Bounds validation is typed: an inverted or over-365-day range and an explicit hour granularity beyond 14 days are AnalyticsValidationError -> 422; FastAPI-level param validation rejects a malformed date_from and a limit outside 1..1000 with 422"
+            - "[x] The route maps the service's typed errors to HTTP (rate limit -> 429, statement timeout -> 503, migration required -> 501, database failure -> 503) and never leaks internals"
+            - "[x] Access is gated: authenticated org principals need the analytics.query role floor (viewer), a principal without an organisation context is 403, an unauthenticated caller is 401, and the analytics_page feature flag (disabled -> 402) gates the whole surface"
+            - "[x] GET /api/v1/analytics/export streams raw fact rows paginated (offset/limit 1..5000, items/total envelope) as JSON or a Content-Disposition CSV attachment"
+            - "[x] GET /api/v1/analytics/concurrency reports the pooled slot-utilisation series (pool_reference plus per-bucket max/avg active + queued), and GET /api/v1/analytics/guardrails returns an advisory-only guardrail scorecard (fires, rates, self-correction, evasion-band drift) that never gates autonomy"
+            # Frontend (AnalyticsView, /analytics)
+            - "[x] The analytics page renders the bucketed series, dimension/status/trigger filters, concurrency utilisation, the advisory guardrail scorecard and a JSON/CSV export, surfaced via /api/v1/analytics/*"
+        deferrals:
+            - No server-side streaming / scan export for the whole org in one response (export is paginated JSON/CSV only)
+            - Per-org analytics rate limiting is a best-effort in-memory window (60/min), not a shared Redis-scaled limiter
     feat-apply:
         description: '`modulo apply` — declarative configuration CLI (FAR-681)'
         status: covered

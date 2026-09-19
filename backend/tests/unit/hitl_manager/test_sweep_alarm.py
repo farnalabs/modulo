@@ -97,6 +97,13 @@ class TestThreshold:
         # The alarm itself writes NO in-app notification — dispatch_event does.
         mock_notify.assert_not_awaited()
         mock_webhook.assert_called_once()
+        # Verify the webhook received the correct org_id and payload fields.
+        assert mock_webhook.call_args.args[0] == _ORG
+        webhook_payload = mock_webhook.call_args.args[1]
+        assert webhook_payload["actor"] == str(_USER)
+        assert webhook_payload["approve_count"] == 6
+        assert webhook_payload["distinct_pipeline_count"] == 2
+        assert webhook_payload["window_seconds"] == sweep_alarm.SWEEP_WINDOW_SECONDS
 
     async def test_fifth_approve_does_not_alarm(self):
         """The count must EXCEED the threshold — 5 approves do not alarm."""
@@ -156,6 +163,13 @@ class TestThreshold:
         assert alarmed is True
         mock_audit.assert_awaited_once()
         mock_webhook.assert_called_once()
+        # Verify the webhook received the correct org_id and payload fields.
+        assert mock_webhook.call_args.args[0] == _ORG
+        webhook_payload = mock_webhook.call_args.args[1]
+        assert webhook_payload["actor"] == str(_USER)
+        assert webhook_payload["approve_count"] == 6
+        assert webhook_payload["distinct_pipeline_count"] == 2
+        assert webhook_payload["window_seconds"] == sweep_alarm.SWEEP_WINDOW_SECONDS
 
 
 class TestCooldown:

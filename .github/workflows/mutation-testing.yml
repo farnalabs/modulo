@@ -1,0 +1,78 @@
+name: "Mutation Testing (weekly baseline)"
+
+on:
+  schedule:
+    # Weekly on Sunday at 04:00 UTC (offset from other nightlies)
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Authenticate GitHub git fetches so `uv sync --frozen` can resolve git-pinned
+  # dependencies without an anonymous fetch-by-SHA, which GitHub rejects from CI runners.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
+  GIT_CONFIG_VALUE_0: "https://github.com/"
+
+jobs:
+  mutation-baseline:
+    name: "Mutation testing (graph_validator + rls)"
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      # NOSONAR githubactions:S8541: pytest-bdd is a pinned source-archive dep (no
+      # wheel), so `--no-build` hard-fails the sync on a cold uv cache. `--frozen`
+      # locks the exact revisions, so builds are deterministic and trusted (no
+      # untrusted setup scripts execute).
+      - run: uv sync --frozen  # NOSONAR
+      - name: Run mutmut on high-value modules
+        run: |
+          # Scope to a SMALL high-value set only — mutation runs are long.
+          # mutmut 3.x has no --paths-to-mutate/--runner flags: the runner comes from
+          # [tool.mutmut] in pyproject.toml and scoping is done with mutant-name
+          # wildcards (the module prefix of each generated mutant key).
+          uv run --no-build --no-sync mutmut run "modulo.core.graph_validator*" "modulo.db.rls*"
+      - name: Generate mutation report
+        if: always()
+        run: |
+          echo "## Mutation Testing Report" > /tmp/mutation-report.md
+          echo "" >> /tmp/mutation-report.md
+          echo "**Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> /tmp/mutation-report.md
+          echo "**Commit:** ${{ github.sha }}" >> /tmp/mutation-report.md
+          echo "**Modules:** \`src/modulo/core/graph_validator/\`, \`src/modulo/db/rls.py\`" >> /tmp/mutation-report.md
+          echo "" >> /tmp/mutation-report.md
+          echo "### Results" >> /tmp/mutation-report.md
+          echo "" >> /tmp/mutation-report.md
+          # mutmut 3.x keeps per-file state under mutants/ and writes an aggregate
+          # CI/CD stats JSON on request; parse that instead of the removed
+          # .mutmut-cache SQLite database.
+          if uv run --no-build --no-sync mutmut export-cicd-stats > /dev/null 2>&1 && [ -f mutants/mutmut-cicd-stats.json ]; then
+            uv run --no-build --no-sync python -c "import json; s = json.load(open('mutants/mutmut-cicd-stats.json')); total = s.get('total', 0); killed = s.get('killed', 0); print('| Status | Count |'); print('| --- | --- |'); [print(f'| {k} | {s.get(k, 0)} |') for k in ('killed', 'survived', 'timeout', 'no_tests', 'suspicious', 'segfault', 'skipped')]; print(f'| **Total** | **{total}** |'); print(f'| **Kill rate** | **{(killed / total * 100 if total else 0):.1f}%** |')" >> /tmp/mutation-report.md 2>&1 || echo "Could not parse stats." >> /tmp/mutation-report.md
+            echo "" >> /tmp/mutation-report.md
+            echo "### Survived mutants (unconstrained logic)" >> /tmp/mutation-report.md
+            echo "" >> /tmp/mutation-report.md
+            uv run --no-build --no-sync mutmut results 2>/dev/null | grep ': survived$' | sed -E 's/^[[:space:]]*//; s/^/- \`/; s/$/\`/' >> /tmp/mutation-report.md 2>&1 || true
+          else
+            echo "No mutation stats found — mutmut may not have run." >> /tmp/mutation-report.md
+          fi
+      - name: Upload mutation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-results
+          path: |
+            backend/mutants/
+            /tmp/mutation-report.md
+          retention-days: 30
