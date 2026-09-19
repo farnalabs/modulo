@@ -595,6 +595,172 @@ describe('SsoProviderForm', () => {
     expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
   })
 
+﻿  // ── FAR-1016: multi-domain splitting on every entry path ──────────
+  it('adds space-separated domains on Enter (FAR-1016)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['seed.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: '<SsoProviderForm :data="data" :saving="false" submit-label="Save" saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />',
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    await input.setValue('a.com b.com c.com')
+    await input.trigger('keydown.enter')
+    await nextTick()
+
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['seed.com', 'a.com', 'b.com', 'c.com'])
+  })
+
+  it('adds comma-separated domains on Enter (FAR-1016)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['seed.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: '<SsoProviderForm :data="data" :saving="false" submit-label="Save" saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />',
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    await input.setValue('a.com, b.com')
+    await input.trigger('keydown.enter')
+    await nextTick()
+
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['seed.com', 'a.com', 'b.com'])
+  })
+
+  it('adds space-separated domains on blur (FAR-1016)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['seed.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: '<SsoProviderForm :data="data" :saving="false" submit-label="Save" saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />',
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    await input.setValue('a.com b.com')
+    await input.trigger('blur')
+    await nextTick()
+
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['seed.com', 'a.com', 'b.com'])
+  })
+
+  it('adds valid prefix and surfaces error for invalid token in mixed batch (FAR-1016)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['seed.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: '<SsoProviderForm :data="data" :saving="false" submit-label="Save" saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />',
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    await input.setValue('a.com not_a_domain b.com')
+    await input.trigger('keydown.enter')
+    await nextTick()
+
+    // The two valid domains were added despite the invalid one
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['seed.com', 'a.com', 'b.com'])
+    // Error is surfaced
+    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
+  })
+
+  it('deduplicates within a batch and against existing list (FAR-1016)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['a.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: '<SsoProviderForm :data="data" :saving="false" submit-label="Save" saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />',
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    // a.com duplicates existing; b.com appears twice in the batch
+    await input.setValue('a.com b.com b.com')
+    await input.trigger('keydown.enter')
+    await nextTick()
+
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['a.com', 'b.com'])
+  })
+
+  it('normalises trailing dot and uppercase (FAR-1016)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['seed.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: '<SsoProviderForm :data="data" :saving="false" submit-label="Save" saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />',
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    await input.setValue('Example.COM.')
+    await input.trigger('keydown.enter')
+    await nextTick()
+
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['seed.com', 'example.com'])
+  })
+
+  it('emitted allowed_domains type matches generated SsoFormState interface (FAR-1016)', async () => {
+    // At least one test asserts the emitted shape against the real generated types
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['seed.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: '<SsoProviderForm :data="data" :saving="false" submit-label="Save" saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />',
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+    await input.setValue('typed.com pasted.com')
+    await input.trigger('keydown.enter')
+    await nextTick()
+
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    // Type assertion: the emitted payload satisfies SsoFormState
+    const _typeCheck: SsoFormState = payload
+    expect(_typeCheck.allowed_domains).toEqual(['seed.com', 'typed.com', 'pasted.com'])
+    expect(typeof _typeCheck.name).toBe('string')
+    expect(typeof _typeCheck.auto_provision).toBe('boolean')
+    expect(Array.isArray(_typeCheck.allowed_domains)).toBe(true)
+  })
+
+
   // ── Fix #5: secret placeholder and hint ──────────────────────────
   it('shows masked placeholder for client secret when editing (isEdit)', () => {
     const wrapper = mountForm(makeData(), { isEdit: true })

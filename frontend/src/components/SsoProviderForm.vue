@@ -568,89 +568,79 @@ const unrestrictedOptionHidden = computed(
 const domainInput = ref('')
 const domainError = ref<string | null>(null)
 
-function addDomain() {
-  const raw = domainInput.value.trim()
-  if (!raw) return
-  const err = validateDomain(raw)
-  if (err) {
-    domainError.value = t(err)
-    return
+/** Shared helper for all domain-entry paths (Enter, blur, submit, paste).
+ *  Splits on commas and/or whitespace, normalises each token, validates,
+ *  deduplicates within the batch AND against existing entries, and emits a
+ *  SINGLE update:data with all valid domains collected so far. Invalid tokens
+ *  are surfaced as errors without discarding the valid prefix. */
+function addDomainsFromText(raw: string) {
+  const parts = raw.split(/[, ]+/).map(s => s.trim()).filter(Boolean)
+  if (!parts.length) return
+  const domains = [...props.data.allowed_domains]
+  let firstError: DomainErrorKey | null = null
+  for (const part of parts) {
+    const err = validateDomain(part)
+    if (err) {
+      if (!firstError) firstError = err
+      continue // skip invalid token, keep valid ones
+    }
+    const normalised = part.toLowerCase().replace(/\.$/, '')
+    if (!domains.includes(normalised)) {
+      domains.push(normalised)
+    }
   }
-  domainError.value = null
-  const normalised = raw.trim().toLowerCase().replace(/\.$/, '')
-  if (props.data.allowed_domains.includes(normalised)) {
+  if (domains.length !== props.data.allowed_domains.length) {
+    emitUpdate({ ...props.data, allowed_domains: domains })
+  }
+  if (firstError) {
+    // Keep the original text in the input so (a) the user can recover the
+    // rejected tokens, and (b) changing domainInput would fire the watcher
+    // that clears domainError before the next render.
+    domainError.value = t(firstError)
+  } else {
+    domainError.value = null
     domainInput.value = ''
-    return
   }
-  emitUpdate({
-    ...props.data,
-    allowed_domains: [...props.data.allowed_domains, normalised],
-  })
-  domainInput.value = ''
+}
+
+function addDomain() {
+  addDomainsFromText(domainInput.value)
 }
 
 /**
  * Fix #4: Commit any pending domain input that hasn't been added yet.
  * Called on blur, before save, and when leaving domains mode.
+ * Uses the same splitting logic as addDomain so typed comma/space-separated
+ * input is handled identically to paste.
  * Returns true if the pending value was valid (or empty), false if invalid.
  */
 function commitPendingDomain(): boolean {
   const raw = domainInput.value.trim()
   if (!raw) return true
-  const err = validateDomain(raw)
-  if (err) {
-    domainError.value = t(err)
+  // Split before checking — matches the Enter/paste paths
+  const parts = raw.split(/[, ]+/).map(s => s.trim()).filter(Boolean)
+  const hasInvalid = parts.some(p => !!validateDomain(p))
+  if (hasInvalid) {
+    addDomainsFromText(raw)
     return false
   }
-  domainError.value = null
-  const normalised = raw.trim().toLowerCase().replace(/\.$/, '')
-  if (props.data.allowed_domains.includes(normalised)) {
-    domainInput.value = ''
-    return true
-  }
-  emitUpdate({
-    ...props.data,
-    allowed_domains: [...props.data.allowed_domains, normalised],
-  })
-  domainInput.value = ''
+  addDomainsFromText(raw)
   return true
 }
 
 /**
- * Fix #3: Handle comma/space-separated pasted input.
- * Splits on comma or whitespace and adds each valid domain.
- * Accumulates locally and emits once to avoid stale-props issue
- * (props.data doesn't update between synchronous emit calls).
+ * Handle paste: delegate to the shared multi-domain helper.
+ * Prevent default when the paste contains commas or spaces so the browser
+ * does not insert the raw multi-domain text into the input (which would
+ * trigger the domainInput watcher and clear any error we just set).
  */
 function handleDomainPaste(e: ClipboardEvent) {
   const pasted = e.clipboardData?.getData('text') ?? ''
-  // If the paste contains a comma or whitespace, split and batch-add
   if (/[, ]/.test(pasted)) {
     e.preventDefault()
-    const parts = pasted.split(/[, ]+/).map(s => s.trim()).filter(Boolean)
-    const domains = [...props.data.allowed_domains]
-    let hasError = false
-    for (const part of parts) {
-      const err = validateDomain(part)
-      if (err) {
-        domainError.value = t(err)
-        hasError = true
-        break
-      }
-      const normalised = part.toLowerCase().replace(/\.$/, '')
-      if (!domains.includes(normalised)) {
-        domains.push(normalised)
-      }
-    }
-    // Commit any valid domains collected before the batch aborted at an
-    // invalid entry, so a single bad domain never discards its valid prefix.
-    if (domains.length !== props.data.allowed_domains.length) {
-      emitUpdate({ ...props.data, allowed_domains: domains })
-    }
-    if (!hasError) {
-      domainError.value = null
-    }
-    domainInput.value = ''
+  }
+  if (pasted) {
+    addDomainsFromText(pasted)
   }
 }
 

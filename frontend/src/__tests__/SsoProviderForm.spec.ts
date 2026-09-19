@@ -224,12 +224,11 @@ describe('SsoProviderForm — domain paste support (FAR-974 #3)', () => {
     } as unknown as ClipboardEvent)
     await nextTick()
 
-    // The batch aborts at the invalid entry, but the valid prefix must still be
-    // committed and the validation error surfaced. Without the prefix commit
-    // this test fails because no update:data is emitted at all.
+    // Valid tokens on both sides of the invalid entry are retained — the
+    // batch no longer aborts at the first invalid token.
     const emitted = wrapper.emitted('update:data')!
     const lastEmit = emitted[emitted.length - 1][0] as SsoFormState
-    expect(lastEmit.allowed_domains).toEqual(['valid.com'])
+    expect(lastEmit.allowed_domains).toEqual(['valid.com', 'valid2.com'])
     expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
   })
 
