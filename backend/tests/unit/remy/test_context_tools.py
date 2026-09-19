@@ -31,6 +31,7 @@ def _mock_connector(**overrides: object) -> MagicMock:
     c.name = overrides.get("name", "Slack")
     c.connector_type_id = overrides.get("connector_type_id", "slack_webhook")
     c.status = overrides.get("status", "healthy")
+    c.validation_level = overrides.get("validation_level", "unit-only")
     c.last_health_check_at = overrides.get("last_health_check_at")
     c.last_health_check_error = overrides.get("last_health_check_error", "")
     return c
@@ -43,6 +44,7 @@ def _mock_backend(**overrides: object) -> MagicMock:
     b.model_id = overrides.get("model_id", "claude-sonnet-4")
     b.credentials_ciphertext = overrides.get("credentials_ciphertext", b"cipher")
     b.status = overrides.get("status", "active")
+    b.validation_level = overrides.get("validation_level", "unit-only")
     return b
 
 
@@ -181,6 +183,7 @@ class TestGetIntegrationStatus:
             name="Slack",
             connector_type_id="slack_webhook",
             status="healthy",
+            validation_level="unit-only",
             last_health_check_at=None,
             last_health_check_error="",
         )
@@ -190,6 +193,7 @@ class TestGetIntegrationStatus:
             model_id="claude-sonnet-4",
             credentials_ciphertext=b"cipher",
             status="active",
+            validation_level="contract-recorded",
         )
         connector_result = MagicMock()
         connector_result.scalars.return_value.all.return_value = [connector]
@@ -209,13 +213,15 @@ class TestGetIntegrationStatus:
             result = await get_integration_status()
 
         assert "## Connectors (1)" in result["results"]
-        assert "| Slack | slack_webhook | healthy | never |" in result["results"]
+        assert "| Slack | slack_webhook | healthy | unit-only | never |" in result["results"]
         assert "## Model Backends (1)" in result["results"]
-        assert "| Claude | anthropic | claude-sonnet-4 | yes | active |" in result["results"]
+        assert "| Claude | anthropic | claude-sonnet-4 | yes | active | contract-recorded |" in result["results"]
         assert "Total triggers: 2" in result["results"]
         assert result["connectors"][0]["name"] == "Slack"
         assert result["connectors"][0]["last_check"] == "never"
+        assert result["connectors"][0]["validation_level"] == "unit-only"
         assert result["model_backends"][0]["has_credentials"] is True
+        assert result["model_backends"][0]["validation_level"] == "contract-recorded"
 
     async def test_missing_credentials_reported_as_no(self) -> None:
         backend = _mock_backend(credentials_ciphertext=None)

@@ -36,6 +36,7 @@ from modulo.core.model_backend_hub import _build_backend
 from modulo.core.model_backend_presets import MODEL_BACKEND_PRESETS
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import create_secrets_backend
+from modulo.core.validation_level import model_backend_baseline_level, resolve_validation_level
 from modulo.db.crud.model_backend import (
     create_model_backend,
     delete_model_backend,
@@ -156,6 +157,11 @@ async def _persist_health_check_result(
             return
         row.last_health_check_at = checked_at
         row.last_health_check_error = None if status_ != "unhealthy" else detail
+        row.validation_level = resolve_validation_level(
+            model_backend_baseline_level(row.provider),
+            last_health_check_at=checked_at,
+            last_health_check_error=None if status_ != "unhealthy" else detail,
+        )
 
 
 async def _run_health_check_on_save_and_persist(
@@ -286,6 +292,7 @@ class ModelBackendResponse(BaseModel):
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
+    validation_level: str | None = None
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -353,6 +360,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
         created_by=mb.account_id,
         created_at=mb.created_at,
         updated_at=mb.updated_at,
+        validation_level=getattr(mb, "validation_level", None),
     )
 
 

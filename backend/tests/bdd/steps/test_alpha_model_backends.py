@@ -38,6 +38,7 @@ def _make_mock_backend(name: str = "backend", provider: str = "openai", model_id
     b.account_id = USER_ID
     b.created_at = datetime.now(UTC)
     b.updated_at = datetime.now(UTC)
+    b.validation_level = None
     return b
 
 

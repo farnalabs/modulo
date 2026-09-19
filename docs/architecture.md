@@ -175,6 +175,19 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 | `CodeClimateConnector` | `quality` | query code quality metrics |
 | *(42 built-in connectors total; see `modulo/connectors/`)* | | |
 
+#### Integration Validation Levels (FAR-935)
+
+Every connector type and model backend provider resolves to a validation level — a four-tier classification of how thoroughly the integration has been tested:
+
+| Level | Meaning |
+|-------|---------|
+| `unit-only` | Hand-written mocks / SDK patched; no real server contacted |
+| `contract-recorded` | Replaying a recorded real interaction |
+| `self-hosted-e2e` | Exercised against a real container-hosted server in CI |
+| `canary-green` | Live call against the real vendor API succeeded recently |
+
+The baseline (ceiling) for each integration type is defined in a static map in `core/validation_level.py`. The current level is written to the DB by the health/canary sweep (`core/connector_hub/health_sweep.py`), which mirrors the `last_health_check_at` pattern: a successful canary writes the baseline level, while a failed canary degrades the level one step below. The level is surfaced on `get_integration_status` (MCP tool), the connectors REST API, and the model-backends REST API.
+
 ### Model Backend Hub (`modulo/model_backends/`)
 
 Registered LLM provider wrappers. Agents bind to a model backend at pipeline-save time; `model_id` is resolved from `PipelineSnapshot.model_backend_pins_json` at run time – not the live entity – ensuring consistency across pauses/resumes.

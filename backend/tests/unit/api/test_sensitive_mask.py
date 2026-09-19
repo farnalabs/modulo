@@ -579,6 +579,7 @@ def test_connector_response_masks_config_json(client: TestClient) -> None:
     # non-serialisable mocks, so mirror a healthy ORM row explicitly.
     mock_connector.degraded_at = None
     mock_connector.last_skip_error = None
+    mock_connector.validation_level = None
 
     with (
         patch("modulo.api.routes.connectors.get_connector_instance", return_value=mock_connector),

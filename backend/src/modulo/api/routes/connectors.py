@@ -342,6 +342,7 @@ class ConnectorResponse(BaseModel):
     updated_at: datetime
     degraded_at: datetime | None = None
     last_skip_error: str | None = None
+    validation_level: str | None = None
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -387,6 +388,7 @@ def _to_response(ci: Any) -> ConnectorResponse:
         updated_at=ci.updated_at,
         degraded_at=ci.degraded_at,
         last_skip_error=ci.last_skip_error,
+        validation_level=getattr(ci, "validation_level", None),
     )
 
 

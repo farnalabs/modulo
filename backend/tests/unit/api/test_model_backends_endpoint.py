@@ -54,6 +54,7 @@ def _make_backend(credentials_ciphertext: bytes = b"encrypted", tier: str = "nat
     mb.account_id = uuid.uuid4()
     mb.created_at = _NOW
     mb.updated_at = _NOW
+    mb.validation_level = None
     return mb
 
 

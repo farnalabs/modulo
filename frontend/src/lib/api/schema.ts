@@ -10825,6 +10825,8 @@ export interface components {
             degraded_at?: string | null;
             /** Last Skip Error */
             last_skip_error?: string | null;
+            /** Validation Level */
+            validation_level?: string | null;
         };
         /** ConnectorTypeItem */
         ConnectorTypeItem: {
@@ -14020,6 +14022,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Validation Level */
+            validation_level?: string | null;
         };
         /** ModelBackendUpdate */
         ModelBackendUpdate: {

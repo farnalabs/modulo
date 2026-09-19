@@ -182,6 +182,7 @@ class TestApplyApiKeyAuth:
         backend.account_id = _USER_ID
         backend.created_at = _NOW_STAMP
         backend.updated_at = _NOW_STAMP
+        backend.validation_level = None
 
         route_session = _make_route_session()
         auth_session = _make_auth_session()

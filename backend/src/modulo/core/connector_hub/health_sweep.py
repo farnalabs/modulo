@@ -11,11 +11,12 @@ This module owns the sweep the SAQ system cron ticks every 15 minutes:
 * lists every ACTIVE connector instance cross-org (system role, BYPASSRLS),
 * builds each instance through :class:`ConnectorHub` and calls its
   ``health_check`` (cheap credential probe — never ``query``/``write``),
-* persists ``last_health_check_at`` + ``last_health_check_error``.
+* persists ``last_health_check_at`` + ``last_health_check_error``
+  + ``validation_level`` (FAR-935).
 
 Contract:
 
-* NO data mutation — the only writes are the two health columns on the aired
+* NO data mutation — the only writes are the health columns on the aired
   row (a plain UPDATE, plain columns, no config mutation).
 * Per-instance isolation — one poisoned instance (undecryptable credentials,
   unknown type, exploding connector) is recorded as that instance's error and
@@ -23,6 +24,9 @@ Contract:
 * FAR-442 rate budget — the hub is built with the instance's ``org_id`` so
   rate-limited connectors (REST) draw from the org's SHARED Redis budget, not
   an untenant'd per-process bucket.
+* FAR-935 validation level — the sweep computes and writes the current
+  validation level for each instance, mirroring the ``last_health_check_at``
+  pattern: a failed canary degrades the level automatically.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.core.connector_hub import ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
+from modulo.core.validation_level import connector_baseline_level, resolve_validation_level
 from modulo.db.models.connector_instance import ConnectorInstance
 
 _ERR_DETAIL_LIMIT = 2000
@@ -99,6 +104,11 @@ async def run_connector_health_checks(
                 .values(
                     last_health_check_at=checked_at,
                     last_health_check_error=None if detail == "" else detail,
+                    validation_level=resolve_validation_level(
+                        connector_baseline_level(ci.connector_type_id),
+                        last_health_check_at=checked_at,
+                        last_health_check_error=None if detail == "" else detail,
+                    ),
                 )
             )
 

@@ -523,6 +523,7 @@ class TestConnectorEndpointSchemas:
         connector.description = None
         connector.degraded_at = None
         connector.last_skip_error = None
+        connector.validation_level = None
 
         with (
             patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
