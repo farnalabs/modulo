@@ -616,7 +616,12 @@ async def get_coverage_gaps(
     Returns a list of gaps: [{variant: …, missing_evals: [str, …]}, …].
     """
     if eval_def_ids is None:
-        result = await session.execute(select(EvalDefinition).where(EvalDefinition.pipeline_id == group.pipeline_id))
+        result = await session.execute(
+            select(EvalDefinition).where(
+                EvalDefinition.pipeline_id == group.pipeline_id,
+                EvalDefinition.deleted_at.is_(None),
+            )
+        )
         eval_defs = list(result.scalars())
         eval_def_ids = [e.id for e in eval_defs]
 
@@ -755,7 +760,14 @@ async def has_pipeline_default_evals(session: AsyncSession, pipeline_id: uuid.UU
     default evals the frontend shows "no evals → cost/diff only". Returned as a
     signal only — never a hard block.
     """
-    result = await session.execute(select(EvalDefinition.id).where(EvalDefinition.pipeline_id == pipeline_id).limit(1))
+    result = await session.execute(
+        select(EvalDefinition.id)
+        .where(
+            EvalDefinition.pipeline_id == pipeline_id,
+            EvalDefinition.deleted_at.is_(None),
+        )
+        .limit(1)
+    )
     return result.scalar_one_or_none() is not None
 
 

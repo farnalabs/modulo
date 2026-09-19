@@ -120,6 +120,7 @@ async def _load_guardrail_definitions(
             EvalDefinitionModel.pipeline_id == pipeline_id,
             EvalDefinitionModel.organisation_id == org_id,
             EvalDefinitionModel.eval_type == "guardrail",
+            EvalDefinitionModel.deleted_at.is_(None),
         )
     )
     rows = result.scalars().all()

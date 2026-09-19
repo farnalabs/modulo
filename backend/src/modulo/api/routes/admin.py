@@ -2804,7 +2804,10 @@ async def _eval_coverage_gaps(session: AsyncSession, org_id: uuid.UUID) -> list[
     covered_pairs: set[tuple[uuid.UUID, str]] = set()
     eval_defs = (
         await session.execute(
-            select(EvalDefinition.pipeline_id, EvalDefinition.node_id).where(EvalDefinition.organisation_id == org_id)
+            select(EvalDefinition.pipeline_id, EvalDefinition.node_id).where(
+                EvalDefinition.organisation_id == org_id,
+                EvalDefinition.deleted_at.is_(None),
+            )
         )
     ).all()
     for ed in eval_defs:
