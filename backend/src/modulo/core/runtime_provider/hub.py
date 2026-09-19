@@ -9,12 +9,26 @@ from typing import Any
 from modulo.core.runtime_provider import (
     ProviderNotConfiguredError,
     RuntimeProvider,
+    UnknownProviderTypeError,
     env_var_for_provider_type,
 )
+from modulo.db.models.environment_profile import PROVIDER_TYPES
 
 _log = logging.getLogger(__name__)
 
 _PROVIDER_CLOSE_TIMEOUT_S = 60
+
+
+def _is_unknown_provider_type(provider_type: str) -> bool:
+    """Return True when *provider_type* is not in the known vocabulary at all.
+
+    A type that is neither in ``PROVIDER_TYPES`` nor mapped by
+    ``env_var_for_provider_type`` is truly unknown — callers should raise
+    :class:`UnknownProviderTypeError`.  A type that IS in the vocabulary
+    (or has a documented env var) is merely unregistered and should raise
+    :class:`ProviderNotConfiguredError` instead.
+    """
+    return provider_type not in PROVIDER_TYPES and env_var_for_provider_type(provider_type) is None
 
 
 class RuntimeProviderHub:
@@ -23,8 +37,10 @@ class RuntimeProviderHub:
     All providers implement the canonical WorkspaceSpec-based interface.
     Resolution is deterministic: an explicit ``provider_hint`` or
     ``provider_type`` match wins; anything unresolvable raises
-    :class:`ProviderNotConfiguredError` — there is no ``supports()`` guessing
-    and no first-registered fallback (ADR 029).
+    :class:`ProviderNotConfiguredError` (known type, env var not set) or
+    :class:`UnknownProviderTypeError` (type not in PROVIDER_TYPES vocabulary)
+    — there is no ``supports()`` guessing and no first-registered fallback
+    (ADR 029).
     """
 
     def __init__(self) -> None:
@@ -63,8 +79,10 @@ class RuntimeProviderHub:
            name, use it.
         2. Treat an explicit ``provider_type`` as authoritative and match it
            against registered names or provider identity (id + aliases).
-        3. Anything else raises :class:`ProviderNotConfiguredError` naming
-           the env var that would register the provider (when documented).
+        3. An unknown type (not in PROVIDER_TYPES) raises
+           :class:`UnknownProviderTypeError`.  A known type whose provider
+           is not registered raises :class:`ProviderNotConfiguredError`
+           naming the env var that would register it (when documented).
         """
         providers = dict(self._providers)
         provider = self._resolve_by_hint(providers, profile)
@@ -105,6 +123,12 @@ class RuntimeProviderHub:
             if matches:
                 return matches[0]
 
+            # Distinguish unknown type (not in PROVIDER_TYPES and not a
+            # documented alias) from known but unregistered (in PROVIDER_TYPES
+            # or _PROVIDER_ENV_VARS but env var not set).
+            if _is_unknown_provider_type(provider_type):
+                raise UnknownProviderTypeError(provider_type, PROVIDER_TYPES)
+
             raise ProviderNotConfiguredError(
                 provider_type,
                 env_var_for_provider_type(provider_type),
@@ -125,7 +149,7 @@ class RuntimeProviderHub:
                 continue
             provider_type = provider_config.get("type", provider_name)
             match provider_type:
-                case "local_docker" | "runner_docker":
+                case "local_docker" | "runner_docker" | "docker":
                     from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 
                     docker_host = provider_config.get("docker_host")
@@ -151,7 +175,12 @@ class RuntimeProviderHub:
                     except ValueError:
                         _log.warning("Provider '%s' already registered, skipping", provider_name)
                 case _:
-                    _log.warning("Unknown provider type '%s' in config, skipping", provider_type)
+                    if _is_unknown_provider_type(provider_type):
+                        raise UnknownProviderTypeError(provider_type, PROVIDER_TYPES)
+                    _log.warning(
+                        "Known provider type '%s' not handled in initialise; skipping",
+                        provider_type,
+                    )
 
     async def aclose(self) -> None:
         """Close every registered provider's owned resources.

@@ -10,6 +10,7 @@ from modulo.core.runtime_provider import (
     ExecResult,
     ProviderNotConfiguredError,
     RuntimeProvider,
+    UnknownProviderTypeError,
     WorkspaceSpec,
 )
 from modulo.core.runtime_provider.docker import DockerRuntimeProvider
@@ -169,13 +170,32 @@ def test_resolve_docker_type_without_docker_env_raises_with_remediation() -> Non
 
 
 def test_resolve_unknown_provider_type_raises_without_fallback() -> None:
-    """Unknown provider types raise; no first-registered fallback exists."""
+    """Unknown provider types raise UnknownProviderTypeError; no first-registered fallback exists."""
     hub = RuntimeProviderHub()
     hub.register("local", LocalRuntimeProvider())
 
-    with pytest.raises(ProviderNotConfiguredError, match="k8s") as exc_info:
+    with pytest.raises(UnknownProviderTypeError, match="k8s") as exc_info:
         hub.resolve(SimpleNamespace(provider_type="k8s"))
-    assert exc_info.value.env_var is None
+    assert exc_info.value.provider_type == "k8s"
+    assert isinstance(exc_info.value.valid_types, frozenset)
+
+
+def test_unknown_provider_type_is_caught_by_provider_not_configured_handler() -> None:
+    """UnknownProviderTypeError is a subclass of ProviderNotConfiguredError (FIX 1).
+
+    Every existing ``except ProviderNotConfiguredError`` handler must
+    automatically catch unknown-type errors too, so an unknown provider type
+    surfaces as a structured, operator-actionable error rather than a raw 500.
+    """
+    hub = RuntimeProviderHub()
+    hub.register("local", LocalRuntimeProvider())
+
+    with pytest.raises(ProviderNotConfiguredError) as exc_info:
+        hub.resolve(SimpleNamespace(provider_type="kubernetes"))
+
+    assert isinstance(exc_info.value, UnknownProviderTypeError)
+    assert exc_info.value.provider_type == "kubernetes"
+    assert isinstance(exc_info.value.valid_types, frozenset)
 
 
 def test_resolve_missing_provider_type_raises() -> None:
@@ -261,6 +281,13 @@ class TestInitialise:
         provider = hub.get("container-runtime")
         assert isinstance(provider, DockerRuntimeProvider)
 
+    async def test_registers_docker_alias_type(self) -> None:
+        """FIX 2: the 'docker' alias must be handled, not silently skipped."""
+        hub = RuntimeProviderHub()
+        await hub.initialise({"container-runtime": {"type": "docker"}})
+        provider = hub.get("container-runtime")
+        assert isinstance(provider, DockerRuntimeProvider)
+
     async def test_registers_e2b_with_api_key(self) -> None:
         hub = RuntimeProviderHub()
         await hub.initialise({"sandbox": {"type": "e2b", "api_key": "test-key"}})
@@ -274,11 +301,11 @@ class TestInitialise:
         assert hub.get("sandbox") is None
         assert "has no api_key" in caplog.text
 
-    async def test_skips_unknown_provider_type(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_raises_unknown_provider_type(self) -> None:
+        """Unknown provider types raise UnknownProviderTypeError (FAR-997)."""
         hub = RuntimeProviderHub()
-        await hub.initialise({"mystery": {"type": "not-a-provider"}})
-        assert hub.get("mystery") is None
-        assert "Unknown provider type" in caplog.text
+        with pytest.raises(UnknownProviderTypeError, match="not-a-provider"):
+            await hub.initialise({"mystery": {"type": "not-a-provider"}})
 
     async def test_skips_already_registered_provider(self, caplog: pytest.LogCaptureFixture) -> None:
         hub = RuntimeProviderHub()

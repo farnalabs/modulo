@@ -22,14 +22,13 @@ if TYPE_CHECKING:
 
 
 class ProviderNotConfiguredError(RuntimeError):
-    """A profile's ``provider_type`` has no registered runtime provider.
+    """A profile's ``provider_type`` is known but has no registered runtime provider.
 
     Raised by :meth:`RuntimeProviderHub.resolve` when the profile's explicit
-    provider type cannot be satisfied — either the type is unknown or the
-    matching provider is not registered because its enabling environment
-    variable is unset. Carries the provider type and (when known) the env
-    var that would register the provider, so callers can surface remediation
-    copy instead of a silent fallback.
+    ``provider_type`` is a valid vocabulary member but the matching provider
+    is not registered because its enabling environment variable is unset.
+    Carries the env var that would register the provider, so callers can
+    surface remediation copy instead of a silent fallback.
     """
 
     def __init__(self, provider_type: str, env_var: str | None = None) -> None:
@@ -38,8 +37,8 @@ class ProviderNotConfiguredError(RuntimeError):
         if env_var and env_var in _DOCKER_ENV_VARS:
             message = (
                 f"No runtime provider registered for provider_type '{provider_type}'. "
-                "Set MODULO_DOCKER_HOST (or DOCKER_HOST, or any MODULO_RUNNER_* variable) "
-                "and restart to enable it, or choose a different provider type for the profile."
+                "Set MODULO_DOCKER_HOST (or DOCKER_HOST) and restart to enable it, "
+                "or choose a different provider type for the profile."
             )
         elif env_var:
             message = (
@@ -52,6 +51,36 @@ class ProviderNotConfiguredError(RuntimeError):
         super().__init__(message)
 
 
+class UnknownProviderTypeError(ProviderNotConfiguredError):
+    """A profile's ``provider_type`` is not in the known provider vocabulary.
+
+    Subclasses :class:`ProviderNotConfiguredError` so that every existing
+    ``except ProviderNotConfiguredError`` handler automatically catches
+    unknown-type errors too — the two failure modes (unknown type vs. known
+    but unregistered) share the same remediation surface (update the profile).
+
+    Raised by :meth:`RuntimeProviderHub.resolve` when the profile's explicit
+    ``provider_type`` does not match any value in the ``PROVIDER_TYPES``
+    vocabulary.  This is distinct from a plain
+    :class:`ProviderNotConfiguredError` (a known type whose registration env
+    var is unset) in carrying the ``valid_types`` vocabulary for actionable
+    remediation copy.
+    """
+
+    def __init__(self, provider_type: str, valid_types: frozenset[str]) -> None:
+        self.valid_types = valid_types
+        sorted_types = ", ".join(sorted(valid_types))
+        message = (
+            f"Unknown provider_type '{provider_type}'. "
+            f"Valid types are: {sorted_types}. "
+            "Update the environment profile to use a valid provider type."
+        )
+        # Initialise parent to set self.provider_type and self.env_var,
+        # then override the message with the more specific unknown-type copy.
+        super().__init__(provider_type, env_var=None)
+        self.args = (message,)
+
+
 # ---------------------------------------------------------------------------
 # Provider-registration environment signals (single source of truth, FAR-587)
 # ---------------------------------------------------------------------------
@@ -61,7 +90,6 @@ class ProviderNotConfiguredError(RuntimeError):
 # derive from these constants so the documented behaviour and the implemented
 # behaviour can never drift apart.
 
-_RUNNER_ENV_PREFIX = "MODULO_RUNNER_"
 _DOCKER_ENV_VARS: tuple[str, ...] = ("MODULO_DOCKER_HOST", "DOCKER_HOST")
 _E2B_ENV_VAR = "MODULO_E2B_API_KEY"
 
@@ -272,10 +300,8 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
     - ``local`` — always registered (host-process fallback tier).
     - ``e2b`` — registered when ``MODULO_E2B_API_KEY`` is set.
     - ``runner_docker`` (aliases ``docker`` / ``local_docker``) — registered
-      when any ``MODULO_RUNNER_*`` variable is set **or** a Docker endpoint
-      (``MODULO_DOCKER_HOST`` / ``DOCKER_HOST``) is configured. Legacy
-      ``local_docker`` profiles keep resolving identically to the pre-rename
-      behaviour.
+      when ``MODULO_DOCKER_HOST`` or ``DOCKER_HOST`` is set.  An unrelated
+      ``MODULO_RUNNER_*`` variable does NOT register Docker (FAR-996).
     """
     if max_local_concurrency < 1:
         _log.warning(
@@ -301,8 +327,7 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
         except ImportError:
             _log.warning("E2B dependency not installed; skipping E2B provider")
 
-    runner_signal = any(key.startswith(_RUNNER_ENV_PREFIX) for key in os.environ)
-    if runner_signal or any(os.environ.get(var) for var in _DOCKER_ENV_VARS):
+    if any(os.environ.get(var) for var in _DOCKER_ENV_VARS):
         try:
             from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 
