@@ -97,7 +97,7 @@ def gitlab_service() -> ContainerHandle:
     except Tier1bFixtureError as exc:
         pytest.skip(f"Tier 1b nightly gitlab fixture unavailable on this Docker host (recorded skip): {exc}")
     token = _gitlab_root_pat(handle)
-    handle.gitlab_token = token  # type: ignore[attr-defined]
+    handle.creds["gitlab_token"] = token
     yield handle
     handle.stop()
 
@@ -105,7 +105,7 @@ def gitlab_service() -> ContainerHandle:
 @pytest.fixture(scope="session")
 def gitlab_connector(gitlab_service: ContainerHandle) -> GitLabConnector:
     connector = GitLabConnector(
-        token=str(gitlab_service.gitlab_token),  # type: ignore[attr-defined]
+        token=gitlab_service.creds["gitlab_token"],
         base_url=f"{gitlab_service.base_url}/api/v4",
     )
     # Seed one project so list/tree/file resources have real data.
@@ -113,7 +113,7 @@ def gitlab_connector(gitlab_service: ContainerHandle) -> GitLabConnector:
 
     create = httpx.post(
         f"{gitlab_service.base_url}/api/v4/projects",
-        headers={"PRIVATE-TOKEN": str(gitlab_service.gitlab_token)},  # type: ignore[attr-defined]
+        headers={"PRIVATE-TOKEN": gitlab_service.creds["gitlab_token"]},
         data={
             "name": "demo",
             "path": "demo",
@@ -134,7 +134,7 @@ def gitlab_connector(gitlab_service: ContainerHandle) -> GitLabConnector:
     seed = httpx.post(
         f"{gitlab_service.base_url}/api/v4/projects/{GITLAB_PROJECT.replace('/', '%2F')}"
         "/repository/files/tier1b%2Fmarker.md",
-        headers={"PRIVATE-TOKEN": str(gitlab_service.gitlab_token)},  # type: ignore[attr-defined]
+        headers={"PRIVATE-TOKEN": gitlab_service.creds["gitlab_token"]},
         data={
             "branch": "main",
             "content": "seed placeholder",

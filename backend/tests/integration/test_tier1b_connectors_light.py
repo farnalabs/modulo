@@ -168,7 +168,6 @@ def gitea_service() -> Iterator[ContainerHandle]:
             ready_timeout_seconds=240,
         )
     )
-    admin_password = _random_password()
     try:
         handle.exec(
             [
@@ -211,7 +210,7 @@ def gitea_service() -> Iterator[ContainerHandle]:
             timeout=60.0,
         )
         file_resp.raise_for_status()
-        handle.tokens_gitea = token  # type: ignore[attr-defined]
+        handle.creds["gitea_token"] = token
         yield handle
     finally:
         handle.stop()
@@ -219,12 +218,12 @@ def gitea_service() -> Iterator[ContainerHandle]:
 
 @pytest.fixture(scope="session")
 def gitea_connector(gitea_service: ContainerHandle) -> GiteaConnector:
-    token: str = gitea_service.tokens_gitea  # type: ignore[no-any-return]
+    token: str = gitea_service.creds["gitea_token"]
     return GiteaConnector(token=token, base_url=gitea_service.base_url)
 
 
 async def test_gitea_health(gitea_service: ContainerHandle):
-    connector = GiteaConnector(token=str(gitea_service.tokens_gitea), base_url=gitea_service.base_url)
+    connector = GiteaConnector(token=gitea_service.creds["gitea_token"], base_url=gitea_service.base_url)
     result = await connector.health_check()
     assert result.ok, f"Gitea health failed on real container {gitea_service.base_url}: {result.detail}"
 
@@ -327,8 +326,8 @@ def n8n_service() -> Iterator[ContainerHandle]:
             data = payload.get("data") if isinstance(payload, dict) else None
             # The JWT lives under ``data.rawApiKey`` (the outer ``apiKey`` is masked).
             api_key = data.get("rawApiKey", "") if isinstance(data, dict) else ""
-            handle.public_api_key = api_key  # type: ignore[attr-defined]
-            handle.owner_password = owner_password  # type: ignore[attr-defined]
+            handle.creds["n8n_api_key"] = api_key
+            handle.creds["n8n_owner_password"] = owner_password
         if not api_key:
             raise AssertionError(f"n8n API key mint failed ({key_resp.status_code}): {key_resp.text!r}")
         yield handle
@@ -338,7 +337,7 @@ def n8n_service() -> Iterator[ContainerHandle]:
 
 @pytest.fixture(scope="session")
 def n8n_connector(n8n_service: ContainerHandle) -> N8NConnector:
-    api_key: str = n8n_service.public_api_key
+    api_key: str = n8n_service.creds["n8n_api_key"]
     return N8NConnector(token=api_key, base_url=n8n_service.base_url)
 
 
@@ -376,7 +375,7 @@ def jenkins_service() -> Iterator[ContainerHandle]:
     # the initial admin password IS a valid credential set — no API-token
     # mint needed while the first-run wizard is still pending (the token
     # endpoint 403s until setup completes).
-    handle.jenkins_api_token = initial_password  # type: ignore[attr-defined]
+    handle.creds["jenkins_api_token"] = initial_password
     freestyle_xml = (
         "<project><actions/><description>modulo tier1b</description>"
         "<keepDependencies>false</keepDependencies>"
@@ -403,7 +402,7 @@ def jenkins_service() -> Iterator[ContainerHandle]:
 
 @pytest.fixture(scope="session")
 def jenkins_connector(jenkins_service: ContainerHandle) -> JenkinsConnector:
-    token: str = jenkins_service.jenkins_api_token
+    token: str = jenkins_service.creds["jenkins_api_token"]
     return JenkinsConnector(username="admin", token=token, base_url=jenkins_service.base_url)
 
 
@@ -486,8 +485,8 @@ def sonarqube_service() -> Iterator[ContainerHandle]:
                 project_resp.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 raise AssertionError(f"sonar project create failed: {exc}") from exc
-        handle.sonar_token = admin_token  # type: ignore[attr-defined]
-        handle.sonar_project_key = project_key  # type: ignore[attr-defined]
+        handle.creds["sonar_token"] = admin_token
+        handle.creds["sonar_project_key"] = project_key
         yield handle
     finally:
         handle.stop()
@@ -495,7 +494,7 @@ def sonarqube_service() -> Iterator[ContainerHandle]:
 
 @pytest.fixture(scope="session")
 def sonarqube_connector(sonarqube_service: ContainerHandle) -> SonarQubeConnector:
-    return SonarQubeConnector(token=str(sonarqube_service.sonar_token), base_url=sonarqube_service.base_url)
+    return SonarQubeConnector(token=sonarqube_service.creds["sonar_token"], base_url=sonarqube_service.base_url)
 
 
 async def test_sonarqube_health_and_query(
@@ -512,7 +511,7 @@ async def test_sonarqube_health_and_query(
     assert health is not None and health.ok, f"sonar health against real container failed: {health}"
     result = await sonarqube_connector.query(ConnectorQuery(resource="projects"))
     keys = {record.get("key") for record in result.records}
-    assert sonarqube_service.sonar_project_key in keys, f"expected project in real search: {keys!r}"
+    assert sonarqube_service.creds["sonar_project_key"] in keys, f"expected project in real search: {keys!r}"
 
 
 async def test_sonarqube_write_gate_then_query(sonarqube_connector: SonarQubeConnector) -> None:
@@ -561,7 +560,7 @@ def grafana_service() -> Iterator[ContainerHandle]:
                 },
             )
             dash_resp.raise_for_status()
-        handle.grafana_token = sa_token  # type: ignore[attr-defined]
+        handle.creds["grafana_token"] = sa_token
         yield handle
     finally:
         handle.stop()
@@ -569,7 +568,7 @@ def grafana_service() -> Iterator[ContainerHandle]:
 
 @pytest.fixture(scope="session")
 def grafana_connector(grafana_service: ContainerHandle) -> GrafanaConnector:
-    return GrafanaConnector(token=str(grafana_service.grafana_token), base_url=grafana_service.base_url)
+    return GrafanaConnector(token=grafana_service.creds["grafana_token"], base_url=grafana_service.base_url)
 
 
 async def test_grafana_health_and_dashboards(grafana_connector: GrafanaConnector) -> None:
@@ -635,7 +634,7 @@ def teamcity_service() -> Iterator[ContainerHandle]:
         user_token_resp = client.post("/app/rest/users/id:1/tokens", json={"name": "modulo-ci"})
         admin_access_token = user_token_resp.json().get("value", "")
         if admin_access_token:
-            handle.teamcity_admin_token = admin_access_token  # type: ignore[attr-defined]
+            handle.creds["teamcity_admin_token"] = admin_access_token
     if not admin_access_token:
         raise AssertionError(f"TeamCity access token mint failed via superuser REST: {user_token_resp.text!r}")
     yield handle
@@ -661,7 +660,7 @@ def _find_teamcity_superuser_token(handle: ContainerHandle) -> str:
 
 @pytest.fixture(scope="session")
 def teamcity_connector(teamcity_service: ContainerHandle) -> TeamCityConnector:
-    return TeamCityConnector(token=str(teamcity_service.teamcity_admin_token), base_url=teamcity_service.base_url)
+    return TeamCityConnector(token=teamcity_service.creds["teamcity_admin_token"], base_url=teamcity_service.base_url)
 
 
 async def test_teamcity_health_and_agents(teamcity_connector: TeamCityConnector) -> None:
@@ -784,15 +783,13 @@ def codeclimate_cli_container() -> Iterator[ContainerHandle]:
     handle.stop()
 
 
-def test_codeclimate_cli_container_runs(codeclimate_cli_container: ContainerHandle | None) -> None:
-    if codeclimate_cli_container is None:
-        pytest.skip("Tier 1b codeclimate CLI container skipped on this Docker host (recorded skip)")
+def test_codeclimate_cli_container_runs(codeclimate_cli_container: ContainerHandle) -> None:
     listing = codeclimate_cli_container.exec(["sh", "-c", "command -v codeclimate || ls /usr/src/app/bin"])
     assert listing.strip(), "codeclimate CLI binary must exist in the official container"
 
 
 def test_codeclimate_connector_has_no_self_hostable_target(
-    codeclimate_cli_container: ContainerHandle | None,
+    codeclimate_cli_container: ContainerHandle,
 ) -> None:
     # Recorded skip, gated on an explicit condition so it never silently
     # deselects: if the connector ever gains a base_url/_API_BASE override

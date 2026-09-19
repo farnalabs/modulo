@@ -99,6 +99,12 @@ class ContainerHandle:
     spec: ContainerSpec
     host_port: int | None
     _docker_container: Any = field(default=None, repr=False, compare=False)
+    creds: dict[str, str] = field(default_factory=dict)
+    """Fixture-minted credentials (tokens/passwords) keyed by a stable name.
+
+    Session-scoped fixtures publish credentials here for dependent fixtures to
+    read, instead of dynamically assigning ``handle.<attr>`` (FAR-934 review).
+    """
 
     @property
     def base_url(self) -> str:
