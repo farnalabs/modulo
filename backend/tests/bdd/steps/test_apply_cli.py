@@ -21,13 +21,13 @@ verdicts can inspect it.
 from __future__ import annotations
 
 import json
-import os
 import re
 import uuid
 from contextlib import contextmanager
 from typing import Any
 
 import httpx
+import pytest
 import respx
 from pytest_bdd import given, parsers, scenarios, then, when
 
@@ -147,27 +147,16 @@ def _apply_env(state: dict[str, Any]) -> Any:
 
     The real ``executor.run`` resolves ``${env:VAR}`` refs from ``os.environ``,
     so a scenario's declared env (or deliberate missing-var) must be mirrored
-    there for the duration of the (mocked) HTTP run.
+    there for the duration of the (mocked) HTTP run. ``MonkeyPatch.context``
+    restores the original process environment on exit.
     """
     environ = state.get("environ", {})
-    saved = {key: os.environ.get(key) for key in environ}
-    saved_sk = os.environ.get("SK")
-    for key, value in environ.items():
-        os.environ[key] = value
-    if "SK" not in environ:
-        os.environ.pop("SK", None)
-    try:
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        for key, value in environ.items():
+            monkeypatch.setenv(key, value)
+        if "SK" not in environ:
+            monkeypatch.delenv("SK", raising=False)
         yield
-    finally:
-        for key, value in saved.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-        if saved_sk is None:
-            os.environ.pop("SK", None)
-        else:
-            os.environ["SK"] = saved_sk
 
 
 # ---------------------------------------------------------------------------
