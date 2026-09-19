@@ -33,10 +33,10 @@ jobs:
       - name: Run mutmut on high-value modules
         run: |
           # Scope to a SMALL high-value set only — mutation runs are long.
-          # Full configured path set is in [tool.mutmut] source_paths in pyproject.toml.
-          uv run mutmut run \
-            --paths-to-mutate src/modulo/core/graph_validator/ src/modulo/db/rls.py \
-            --runner "pytest tests/unit/ -x -q --timeout=60 -m 'not integration and not e2e'"
+          # mutmut 3.x has no --paths-to-mutate/--runner flags: the runner comes from
+          # [tool.mutmut] in pyproject.toml and scoping is done with mutant-name
+          # wildcards (the module prefix of each generated mutant key).
+          uv run mutmut run "modulo.core.graph_validator*" "modulo.db.rls*"
       - name: Generate mutation report
         if: always()
         run: |
@@ -48,35 +48,17 @@ jobs:
           echo "" >> /tmp/mutation-report.md
           echo "### Results" >> /tmp/mutation-report.md
           echo "" >> /tmp/mutation-report.md
-          # mutmut results are in .mutmut-cache (SQLite). Dump summary if available.
-          if [ -f .mutmut-cache ]; then
-            uv run python -c "
-          import sqlite3, sys
-          conn = sqlite3.connect('.mutmut-cache')
-          cur = conn.cursor()
-          try:
-              cur.execute('SELECT status, COUNT(*) FROM mutant GROUP BY status')
-              rows = cur.fetchall()
-              total = sum(r[1] for r in rows)
-              killed = sum(r[1] for r in rows if r[0] == 'killed')
-              survived = sum(r[1] for r in rows if r[0] == 'survived')
-              for status, count in sorted(rows):
-                  print(f'| {status} | {count} |')
-              print(f'| **Total** | **{total}** |')
-              if total > 0:
-                  print(f'| **Kill rate** | **{killed/total*100:.1f}%** |')
-              if survived > 0:
-                  print()
-                  print('### Survived mutants (unconstrained logic)')
-                  print()
-                  cur.execute(\"SELECT filename, line_number, mutator_name FROM mutant WHERE status = 'survived' ORDER BY filename, line_number\")
-                  for fn, line, mut in cur.fetchall():
-                      print(f'- \`{fn}:{line}\` — {mut}')
-          except Exception as e:
-              print(f'Could not parse cache: {e}')
-          " >> /tmp/mutation-report.md 2>&1 || echo "Cache not available or empty." >> /tmp/mutation-report.md
+          # mutmut 3.x keeps per-file state under mutants/ and writes an aggregate
+          # CI/CD stats JSON on request; parse that instead of the removed
+          # .mutmut-cache SQLite database.
+          if uv run mutmut export-cicd-stats > /dev/null 2>&1 && [ -f mutants/mutmut-cicd-stats.json ]; then
+            uv run python -c "import json; s = json.load(open('mutants/mutmut-cicd-stats.json')); total = s.get('total', 0); killed = s.get('killed', 0); print('| Status | Count |'); print('| --- | --- |'); [print(f'| {k} | {s.get(k, 0)} |') for k in ('killed', 'survived', 'timeout', 'no_tests', 'suspicious', 'segfault', 'skipped')]; print(f'| **Total** | **{total}** |'); print(f'| **Kill rate** | **{(killed / total * 100 if total else 0):.1f}%** |')" >> /tmp/mutation-report.md 2>&1 || echo "Could not parse stats." >> /tmp/mutation-report.md
+            echo "" >> /tmp/mutation-report.md
+            echo "### Survived mutants (unconstrained logic)" >> /tmp/mutation-report.md
+            echo "" >> /tmp/mutation-report.md
+            uv run mutmut results 2>/dev/null | grep ': survived$' | sed -E 's/^[[:space:]]*//; s/^/- \`/; s/$/\`/' >> /tmp/mutation-report.md 2>&1 || true
           else
-            echo "No .mutmut-cache found — mutmut may not have run." >> /tmp/mutation-report.md
+            echo "No mutation stats found — mutmut may not have run." >> /tmp/mutation-report.md
           fi
       - name: Upload mutation results
         if: always()
@@ -84,6 +66,6 @@ jobs:
         with:
           name: mutation-results
           path: |
-            backend/.mutmut-cache
+            backend/mutants/
             /tmp/mutation-report.md
           retention-days: 30
