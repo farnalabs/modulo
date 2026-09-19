@@ -25,6 +25,7 @@ from modulo.core.cost_controller.finalize import (
     _derive_total_tokens,
     _enrich_union,
     _fold_model_cost,
+    _fold_reported_token_fallback,
     _fold_stored_clamped,
     _fold_token_usage,
     _legacy_sandbox_cost,
@@ -397,6 +398,111 @@ def test_fold_token_usage_rejects_above_ceiling_values() -> None:
     assert not folded
 
 
+# ---------------------------------------------------------------------------
+# FAR-1033 — the agent-reported -> canonical token fallback
+# ---------------------------------------------------------------------------
+
+
+def test_reported_token_fallback_populates_sandbox_canonical_counters() -> None:
+    """FAR-1033 regression: a sandbox node the server never measured (LLM
+    calls ran inside the agent) contributes 0 to the SERVER tokens — after
+    ``_fold_reported_token_fallback`` its canonical counters carry the
+    agent-reported NON-ZERO values, and ``_derive_total_tokens`` returns the
+    non-zero total (this is the assertion that FAILED before the fix: the
+    canonical counters and ``Run.total_tokens`` used to stay 0 while
+    ``cost_breakdown.tokens_*_reported`` carried the truth)."""
+    enriched = {
+        "node-a": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "reported_input_tokens": 1234,
+            "reported_output_tokens": 567,
+            "reported_total_tokens": 1801,
+            "reported_cache_read_tokens": 100,
+            "reported_cache_write_tokens": 8,
+        }
+    }
+    _fold_reported_token_fallback(enriched)
+    assert enriched["node-a"]["input_tokens"] == 1234
+    assert enriched["node-a"]["output_tokens"] == 567
+    assert enriched["node-a"]["total_tokens"] == 1801
+    assert _derive_total_tokens(enriched) == 1801
+
+
+def test_reported_token_fallback_never_overwrites_server_measured() -> None:
+    """FAR-1033 trust boundary: a node the server DID measure (any canonical
+    counter non-zero) keeps its server values — the reported_* keys stay
+    display-only and are never folded over real measurements."""
+    enriched = {
+        "node-a": {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+            "reported_input_tokens": 100,
+            "reported_output_tokens": 50,
+            "reported_total_tokens": 150,
+        }
+    }
+    _fold_reported_token_fallback(enriched)
+    entry = enriched["node-a"]
+    assert entry["input_tokens"] == 10
+    assert entry["output_tokens"] == 5
+    assert entry["total_tokens"] == 15
+    assert _derive_total_tokens(enriched) == 15
+
+
+def test_reported_token_fallback_revalidates_reported_values() -> None:
+    """FAR-1033: the fallback re-validates reported values tri-state (the
+    ``coerce_reported_token`` rule) — bool / non-numeric / negative /
+    above-ceiling values are NOT folded into the canonical counters."""
+    enriched = {
+        "node-a": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "reported_input_tokens": True,
+            "reported_output_tokens": "many",
+            "reported_total_tokens": -3,
+        },
+        "node-b": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "reported_input_tokens": 1,
+            "reported_output_tokens": 2,
+            "reported_total_tokens": 3,
+        },
+    }
+    _fold_reported_token_fallback(enriched)
+    entry_a = enriched["node-a"]
+    assert entry_a["input_tokens"] == 0
+    assert entry_a["output_tokens"] == 0
+    assert entry_a["total_tokens"] == 0
+    entry_b = enriched["node-b"]
+    assert entry_b["input_tokens"] == 1
+    assert entry_b["output_tokens"] == 2
+    assert entry_b["total_tokens"] == 3
+    assert _derive_total_tokens(enriched) == 3
+
+
+def test_reported_token_fallback_keeps_proven_zero_report() -> None:
+    """FAR-1033: a valid agent-reported 0 is a REAL report (proven-zero) and
+    stays — the fallback must not turn it into a phantom non-zero total."""
+    enriched = {
+        "node-a": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "reported_input_tokens": 0,
+            "reported_output_tokens": 0,
+            "reported_total_tokens": 0,
+        }
+    }
+    _fold_reported_token_fallback(enriched)
+    assert _derive_total_tokens(enriched) == 0
+
+
 def test_reported_token_field_map_derives_from_shared_chain() -> None:
     """FAR-532 wave-2: the fold map is DERIVED from the shared
     ``REPORTED_TOKEN_CHAIN`` in (src, dst) reading order — matching
@@ -700,6 +806,61 @@ async def test_finalize_cost_fallback_runs_ledger_block() -> None:
     assert mock_block.await_args.kwargs["total"] == Decimal("0.1332")
     # The fallback path passes through the run's terminal status.
     assert mock_block.await_args.kwargs["status"] == "complete"
+
+
+async def test_finalize_cost_sandbox_reported_tokens_populate_run_counters() -> None:
+    """FAR-1033 end-to-end regression: a terminal run whose ONLY token data is
+    the agent-reported usage (a sandbox node — the server measured nothing,
+    ``node_token_usage`` has no usage entries) must finalize with NON-ZERO
+    canonical node counters AND a non-zero ``total_tokens`` persisted through
+    ``update_run_status``. Before the fix both were ``0`` while the
+    enrichment carried the correct ``reported_*`` values."""
+    stored_outputs = {"node-a": {"summary": "agent summary"}}
+    reported = {
+        "status": "completed",
+        "model_tokens_input": 1234,
+        "model_tokens_output": 567,
+        "model_tokens_total": 1801,
+    }
+    stored_telemetry = {"node-a": dict(reported)}
+    run = _make_run(
+        node_token_usage=None,
+        outputs_json=stored_outputs,
+        node_telemetry_json=stored_telemetry,
+        snapshot_id=uuid.uuid4(),
+    )
+    run.cancellation_requested = False
+    run.pipeline_id = None
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.load_live_components", new=AsyncMock(return_value=[])),
+        patch("modulo.settings.get_settings", return_value=MagicMock()),
+        patch("modulo.core.cost_controller.finalize._enforce_agent_token_budgets", new=AsyncMock(return_value=None)),
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("modulo.core.cost_controller.finalize._advance_journeys_on_terminal", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
+    ):
+        await finalize_cost(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            status="complete",
+            segment_node_token_usage=None,
+            segment_completed_node_outputs=stored_outputs,
+            node_type_map={"node-a": "sandbox_agent"},
+            is_terminal=True,
+        )
+    kwargs = mock_urs.await_args.kwargs
+    node_a = kwargs["node_token_usage"]["node-a"]
+    assert node_a["input_tokens"] == 1234
+    assert node_a["output_tokens"] == 567
+    assert node_a["total_tokens"] == 1801
+    assert kwargs["total_tokens"] == 1801
 
 
 # ---------------------------------------------------------------------------

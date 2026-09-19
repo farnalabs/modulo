@@ -743,7 +743,11 @@ def _derive_total_tokens(enriched: dict[str, dict[str, Any]]) -> int:
     DELIBERATELY IGNORES them: reported tokens are display-only analytics, so
     ``Run.total_tokens`` stays server-measured-only by design (FAR-532 wave-2
     documents this where the summing happens — the union carries the reported
-    fields; the sum never reads them).
+    fields; the sum never reads them). The FAR-1033 fallback
+    (``_fold_reported_token_fallback``) runs AFTER the cost build + budget
+    enforcement and BEFORE this final sum, so by the time this function reads
+    a node's ``total_tokens`` it is the server-measured value OR the folded
+    agent-reported fallback.
     """
     total = 0
     for entry in (enriched or {}).values():
@@ -755,6 +759,58 @@ def _derive_total_tokens(enriched: dict[str, dict[str, Any]]) -> int:
         else:
             total += int(entry.get("input_tokens") or 0) + int(entry.get("output_tokens") or 0)
     return total
+
+
+#: Canonical server-token key -> agent-reported fallback key (FAR-1033).
+#: The enriched union carries TWO token families: the server-measured
+#: ``input_tokens`` / ``output_tokens`` / ``total_tokens`` (populated ONLY for
+#: nodes whose LLM calls execute in-process, from the ``astream_events``
+#: accumulator) and the agent-reported ``reported_*`` keys (FAR-491 — written
+#: for EVERY completed node whose output carries ``token_usage``, sandbox
+#: agents included). For a sandbox node the server measures nothing, so its
+#: canonical counters stayed ``0`` and every token signal downstream
+#: (run-status node telemetry, ``Run.total_tokens``, the analytics daily-fact
+#: token columns) silently reported 'no usage' while ``cost_breakdown`` carried
+#: the real values via the ``*_reported`` counters. This fold closes that gap.
+_CANONICAL_TOKEN_FALLBACK: tuple[tuple[str, str], ...] = (
+    ("input_tokens", "reported_input_tokens"),
+    ("output_tokens", "reported_output_tokens"),
+    ("total_tokens", "reported_total_tokens"),
+)
+
+
+def _fold_reported_token_fallback(enriched: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Populate a node's canonical token counters from its agent-reported
+    tokens when the server measured NOTHING for that node (FAR-1033).
+
+    A node is "server-measured" iff any of its three canonical counters holds a
+    non-zero number — for such a node the reported values NEVER overwrite the
+    server values (the ``reported_*`` keys stay display-only by design,
+    FAR-532 wave-2). For a node the server did not measure (sandbox agents
+    self-report their usage in ``output.json``), the valid reported values are
+    folded into the canonical ``input_tokens`` / ``output_tokens`` /
+    ``total_tokens`` so run-status node telemetry, ``Run.total_tokens`` and the
+    analytics daily-fact token columns stop reporting a silent ``0``.
+
+    Reported values are re-validated tri-state through
+    ``coerce_reported_token`` (the same rule ``_fold_token_usage`` and the
+    telemetry accumulation apply) — absent / non-numeric / bool / negative /
+    above-ceiling values are NOT folded. Called AFTER the cost build and the
+    FAR-104 budget enforcement, so the server-measured-only trust boundary
+    (``llm_tokens`` money math, runaway budgets) is untouched. Mutates in
+    place (mirrors ``_write_back_node_cost``); returns the map.
+    """
+    for entry in (enriched or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        if any(entry.get(key) not in (None, 0) for key in ("input_tokens", "output_tokens", "total_tokens")):
+            continue
+        for dst, src in _CANONICAL_TOKEN_FALLBACK:
+            if src in entry:
+                coerced = coerce_reported_token(entry[src])
+                if coerced is not None:
+                    entry[dst] = coerced
+    return enriched
 
 
 def derive_node_type_map(graph_json: Any) -> dict[str, str]:
@@ -1948,6 +2004,23 @@ async def finalize_cost(
         status, error_code, error_detail = await _apply_agent_budget_override(
             session, run, built.enriched, is_terminal, status, error_code, error_detail
         )
+        # FAR-1033: fold agent-reported tokens into the canonical per-node
+        # counters for nodes the server never measured (sandbox agents). Runs
+        # AFTER the cost build AND the FAR-104 budget enforcement, so the
+        # server-measured-only trust boundary (``llm_tokens`` money math,
+        # runaway budgets) is untouched; then re-derive ``total_tokens`` so
+        # the persisted ``Run.total_tokens`` and the analytics daily facts
+        # reflect the fallback instead of a silent ``0``.
+        if built.enriched:
+            enriched = _fold_reported_token_fallback(built.enriched)
+            total_tokens = _derive_total_tokens(enriched)
+            if total_tokens != built.total_tokens:
+                built = _BuiltCost(
+                    total=built.total,
+                    breakdown=built.breakdown,
+                    enriched=enriched,
+                    total_tokens=total_tokens,
+                )
         await _write_finalized_run(
             session,
             run_id,
