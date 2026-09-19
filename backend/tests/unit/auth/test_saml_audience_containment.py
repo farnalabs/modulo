@@ -286,6 +286,42 @@ class TestModuloSamlAuthAudienceEnforcement:
         with pytest.raises(SamlAuthError, match="SAML response validation failed"):
             self._process(self._handler(self.ENTITY_B), xml)
 
+    def test_mismatch_rejected_by_enforcement_layer(self) -> None:
+        """FAR-1010: the enforcement layer's OWN mismatch branch rejects a
+        response whose AudienceRestriction does not include the resolved
+        provider's Entity ID.
+
+        Driven directly: on the full handler path python3-saml's strict-mode
+        audience check rejects this response first, so this pins the
+        fail-closed branch we own rather than python3-saml's.
+        """
+        xml = _build_saml_response(audience=self.ENTITY_A, add_audience_restriction=True)
+        with pytest.raises(SamlAuthError, match="does not include SP entity ID"):
+            ModuloSamlAuth._enforce_audience_restriction(_to_b64(xml), self.ENTITY_B)
+
+    def test_unparseable_response_rejected_by_enforcement_layer(self) -> None:
+        """FAR-1010: a response that cannot be parsed fails closed."""
+        bad = base64.b64encode(b"this is not xml <<<").decode()
+        with pytest.raises(SamlAuthError, match="audience could not be parsed"):
+            ModuloSamlAuth._enforce_audience_restriction(bad, self.ENTITY_A)
+
+
+class TestRequestDataAcsDerivation:
+    """FAR-1011: ``_get_request_data`` derives the strict-mode current URL
+    from the configured ACS URL, with a legacy localhost fallback."""
+
+    def test_acs_url_derives_host_path_and_scheme(self) -> None:
+        data = ModuloSamlAuth._get_request_data("https://app.example.com/api/v1/auth/saml/acs")
+        assert data["http_host"] == "app.example.com"
+        assert data["script_name"] == "/api/v1/auth/saml/acs"
+        assert data["https"] == "on"
+
+    def test_no_acs_url_falls_back_to_legacy_localhost(self) -> None:
+        data = ModuloSamlAuth._get_request_data()
+        assert data["http_host"] == "localhost"
+        assert data["script_name"] == ""
+        assert data["https"] == "off"
+
 
 class TestStrictDestinationRealAcs:
     """FAR-1011: the REAL handler must accept Destination = the real ACS URL.
