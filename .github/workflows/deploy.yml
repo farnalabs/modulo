@@ -293,9 +293,18 @@ jobs:
       # Per-test timeout: without it a single hung test stalls the whole job
       # silently until the job-level kill (observed 2026-08-27, run
       # 33063471418: zero output for 41 min after 93%). 300s matches ci.yml.
+      #
+      # The Tier 1b testcontainers suites (FAR-934) are excluded here, exactly
+      # as ci.yml's integration job excludes them. They own dedicated jobs with
+      # boot budgets sized for their real readiness windows: the light set runs
+      # on every PR in tier1b-light (--timeout=900) and the heavy set (gitlab,
+      # vllm, tgi) is nightly-only in tier1b-nightly (--timeout=3600). Fed to
+      # this 300s gate, their real multi-minute boots (sonarqube 600s, gitlab
+      # 1800s) and disk-hung image pulls become pytest-timeout ERRORs, turning
+      # main red (deploy run 35451961476).
       - name: Integration tests
         working-directory: backend
-        run: uv run --no-build --no-sync pytest tests/integration/ -m integration -n 2 --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
+        run: uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"
