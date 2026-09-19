@@ -269,6 +269,7 @@ class TestGetIntegrationStatusSuccess(AuthContext):
         connector.name = "github-main"
         connector.connector_type_id = "github"
         connector.status = "connected"
+        connector.validation_level = "contract-recorded"
         connector.last_health_check_at = last_check
         connector.last_health_check_error = ""
 
@@ -278,6 +279,7 @@ class TestGetIntegrationStatusSuccess(AuthContext):
         backend.model_id = "gpt-4o"
         backend.credentials_ciphertext = b"encrypted-bytes"
         backend.status = "ok"
+        backend.validation_level = "contract-recorded"
 
         connector_result = MagicMock()
         connector_result.scalars.return_value.all.return_value = [connector]
@@ -298,6 +300,7 @@ class TestGetIntegrationStatusSuccess(AuthContext):
                 "name": "github-main",
                 "type": "github",
                 "status": "connected",
+                "validation_level": "contract-recorded",
                 "last_check": last_check.isoformat(),
                 "error": "",
             }
@@ -309,6 +312,7 @@ class TestGetIntegrationStatusSuccess(AuthContext):
                 "model": "gpt-4o",
                 "has_credentials": True,
                 "status": "ok",
+                "validation_level": "contract-recorded",
             }
         ]
         assert "## Connectors (1)" in result["results"]

@@ -69,6 +69,7 @@ def connector_with_sensitive_config(
     # non-serialisable mocks, so mirror a healthy ORM row explicitly.
     mock_connector.degraded_at = None
     mock_connector.last_skip_error = None
+    mock_connector.validation_level = None
 
     request.node._mock_connector = mock_connector
 

@@ -77,8 +77,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # (PR #559) chains off 0244_pipeline_stdout_retention_config, and 0246_sso_join_gate (FAR-855)
 # chains off 0245_drop_organisations_created_by_fk, and 0247_sso_presets (FAR-853)
 # chains off 0246_sso_join_gate, and 0248_agent_schema_profile (FAR-900)
-# chains off 0247_sso_presets as the chain head.
-_CHAIN_HEAD_MIGRATION = "0248_agent_schema_profile"
+# chains off 0247_sso_presets, and 0249_validation_level (FAR-935)
+# chains off 0248_agent_schema_profile as the chain head.
+_CHAIN_HEAD_MIGRATION = "0249_validation_level"
 
 
 def _source(name: str) -> str:

@@ -80,6 +80,7 @@ def _make_connector(credentials_ciphertext: bytes = b"encrypted", tier: str = "n
     # non-serialisable mocks, so mirror a healthy ORM row explicitly.
     ci.degraded_at = None
     ci.last_skip_error = None
+    ci.validation_level = None
     return ci
 
 

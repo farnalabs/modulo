@@ -144,6 +144,8 @@ class TestCredentialsMaskedInApiResponse:
         # non-serialisable mocks, so mirror a healthy ORM row explicitly.
         mock_connector.degraded_at = None
         mock_connector.last_skip_error = None
+        mock_connector.validation_level = None
+
         return mock_connector
 
     def test_api_key_is_masked(self, client: TestClient) -> None:
