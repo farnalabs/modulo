@@ -210,9 +210,16 @@ provider registration time:
 
 **What counts as "local"**: unix sockets, loopback TCP endpoints
 (`localhost`, `127.x.y.z`, `::1`), and the shipped compose-internal hostname
-(`docker-socket-proxy`). A bare hostname on the compose network
-(`tcp://my-service:2375`) is NOT treated as local — it could be a different
-host on a different network segment. If in doubt, the rule requires TLS.
+on the shipped port (`tcp://docker-socket-proxy:2375`). A bare hostname on
+the compose network (`tcp://my-service:2375`) is NOT treated as local — it
+could be a different host on a different network segment. The
+`docker-socket-proxy` exemption is pinned to port `2375`: the same host on
+any other port is remote and requires TLS. If in doubt, the rule requires TLS.
+
+**Single enforcement point**: the same validation runs for BOTH Docker
+consumers — the runtime provider at registration and the orphan reconciler
+when it constructs its engine client — so a remote cleartext endpoint cannot
+slip through one path while being rejected on the other.
 
 **Escape hatch**: operators who need a non-loopback, non-TLS endpoint (e.g. a
 socket proxy on a private bridge) can set

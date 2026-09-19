@@ -236,10 +236,9 @@ async def test_docker_source_filters_on_deployment_identity(monkeypatch: pytest.
     monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "deployment-a")
     client = MagicMock()
     client.containers.list = AsyncMock(return_value=[])
-    # Original endpoint: tcp://engine:2375 (non-loopback).  _DockerWorkspaceSource
-    # does NOT validate TLS — it stores the host string and passes it to
-    # aiodocker lazily.  The test mocks the client, so no real connection occurs.
-    source = runner_reconciler._DockerWorkspaceSource("tcp://engine:2375")
+    # Shipped compose-internal endpoint (FAR-1038-exempt).  The test mocks the
+    # client, so no real connection occurs; TLS validation is covered separately.
+    source = runner_reconciler._DockerWorkspaceSource("tcp://docker-socket-proxy:2375")
     source._client = client
 
     listed = await source.list_labelled_workspaces()
@@ -263,8 +262,8 @@ async def test_docker_source_parses_labels_into_ages() -> None:
         },
     )
     client.containers.list = AsyncMock(return_value=[listing])
-    # Original endpoint: tcp://engine:2375 — no TLS validation in this source.
-    source = runner_reconciler._DockerWorkspaceSource("tcp://engine:2375")
+    # Shipped compose-internal endpoint (FAR-1038-exempt).
+    source = runner_reconciler._DockerWorkspaceSource("tcp://docker-socket-proxy:2375")
     source._client = client
 
     entries = await source.list_labelled_workspaces()
@@ -273,6 +272,25 @@ async def test_docker_source_parses_labels_into_ages() -> None:
     assert entries[0].run_id == "run-77"
     assert entries[0].id == "abc123"
     assert entries[0].created_age_s > 0
+
+
+def test_docker_source_rejects_remote_endpoint_without_tls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1038: the reconciler shares the provider's TLS gate — a remote
+    cleartext endpoint is rejected at source construction, not silently
+    connected."""
+    monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
+    monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
+    monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
+    with pytest.raises(ValueError, match="requires TLS"):
+        runner_reconciler._DockerWorkspaceSource("tcp://engine:2375")
+
+
+def test_docker_source_accepts_remote_endpoint_with_tls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same remote endpoint is accepted once TLS is configured."""
+    monkeypatch.setenv("DOCKER_TLS_VERIFY", "1")
+    monkeypatch.setenv("DOCKER_CERT_PATH", "/certs")
+    source = runner_reconciler._DockerWorkspaceSource("tcp://engine:2375")
+    assert source._docker_host == "tcp://engine:2375"
 
 
 def test_deployment_identity_env_then_hostname(monkeypatch: pytest.MonkeyPatch) -> None:

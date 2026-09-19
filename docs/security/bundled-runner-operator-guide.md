@@ -170,6 +170,10 @@ error. **Loopback** TCP endpoints (`tcp://localhost:2375`,
 traverse a network — this is a legitimate, common configuration (Docker
 Desktop, Docker-in-Docker, CI rigs). Local unix sockets and the shipped
 compose-internal proxy (`tcp://docker-socket-proxy:2375`) are also exempt.
+The `docker-socket-proxy` exemption is pinned to the shipped port `2375`;
+the same hostname on any other port is treated as remote. The gate is
+enforced for both Docker consumers — provider registration and the orphan
+reconciler — so a rejected endpoint is rejected on every path.
 
 ### Loopback endpoints (no TLS needed)
 

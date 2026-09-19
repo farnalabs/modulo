@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import ipaddress
 import logging
 import os
 import socket
@@ -12,11 +11,13 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
-from urllib.parse import urlparse
 
 import aiodocker
 
 from modulo.core.runtime_provider import ExecProcess, ExecResult, ExecStreamChunk, RuntimeProvider, WorkspaceSpec
+from modulo.core.runtime_provider.endpoint_tls import (
+    validate_docker_endpoint_tls as _validate_docker_endpoint_tls,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -69,115 +70,11 @@ _DEFAULT_WORKSPACE_NETWORK = "modulo-runner-workspace"
 _DEPLOYMENT_IDENTITY_ENV = "MODULO_RUNNER_MACHINE_ID"
 _DEPLOYMENT_IDENTITY_LABEL = "modulo.machine.id"
 
-# --- FAR-1038: TLS enforcement for remote Docker endpoints ---------------
-# The shipped compose overlay uses ``tcp://docker-socket-proxy:2375`` on a
-# private bridge network — that is the only non-unix, non-loopback endpoint
-# that is exempt from the TLS requirement.  Loopback TCP endpoints are also
-# exempt because they do not traverse a network.
-_COMPOSE_INTERNAL_HOST = "docker-socket-proxy"
-# Environment variables that signal TLS is configured for a Docker endpoint.
-_TLS_ENV_VARS = ("DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")
-# Operator escape hatch: set to a non-empty, non-false value to allow a
-# deliberately-insecure remote TCP endpoint without TLS.  Logged prominently
-# at provider construction.
-_ALLOW_INSECURE_ENDPOINT_ENV = "MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT"
 
-
-def _is_loopback_hostname(hostname: str) -> bool:
-    """Return True if *hostname* refers to a loopback address or ``localhost``.
-
-    Handles: ``localhost``, bare IPv4 loopback (``127.x.y.z``), bare IPv6
-    ``::1``, and the bracketed IPv6 form (``[::1]``).
-    """
-    # Strip brackets from the bracketed IPv6 form ([::1]).
-    stripped = hostname.strip("[]")
-    if stripped.lower() in ("localhost", "::1"):
-        return True
-    try:
-        return ipaddress.ip_address(stripped).is_loopback
-    except ValueError:
-        return False
-
-
-# ---------------------------------------------------------------------------
-# FAR-1038: TLS enforcement for remote Docker endpoints
-# ---------------------------------------------------------------------------
-
-
-def _is_local_endpoint(endpoint: str | None) -> bool:
-    """Return True if *endpoint* is a local (non-remote) Docker endpoint.
-
-    Local endpoints:
-    - ``None`` or empty (default local socket)
-    - ``unix://`` sockets and bare paths (no scheme)
-    - Loopback TCP: ``localhost``, ``127.x.y.z``, ``::1`` / ``[::1]``
-    - The shipped compose-internal ``tcp://docker-socket-proxy:2375``
-
-    Everything else (any other ``tcp://`` host) is remote and MUST use TLS.
-    """
-    if not endpoint:
-        return True
-    parsed = urlparse(endpoint if "://" in endpoint else f"unix://{endpoint}")
-    scheme = parsed.scheme.lower()
-    if scheme in ("unix", ""):
-        return True
-    if scheme == "tcp" and parsed.hostname:
-        if parsed.hostname.lower() == _COMPOSE_INTERNAL_HOST:
-            return True
-        if _is_loopback_hostname(parsed.hostname):
-            return True
-    return False
-
-
-def _is_tls_configured() -> bool:
-    """Return True if the process environment signals Docker TLS is configured."""
-    for var in _TLS_ENV_VARS:
-        val = os.environ.get(var, "").strip()
-        if val and val not in ("0", "false", "False"):
-            return True
-    return False
-
-
-def _is_insecure_endpoint_allowed() -> bool:
-    """Return True if the operator explicitly opted in to insecure remote endpoints."""
-    val = os.environ.get(_ALLOW_INSECURE_ENDPOINT_ENV, "").strip()
-    return bool(val and val not in ("0", "false", "False"))
-
-
-def _validate_docker_endpoint_tls(endpoint: str | None) -> None:
-    """Validate that a remote Docker endpoint has TLS configured.
-
-    Raises ``ValueError`` with an actionable message when a non-local TCP
-    endpoint is used without TLS.  Local (unix / None / loopback) and
-    compose-internal endpoints are always accepted.
-
-    The ``MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT`` escape hatch (set to any
-    non-empty, non-false value) bypasses the check but logs a prominent
-    warning at provider construction.
-    """
-    if _is_local_endpoint(endpoint):
-        return
-    if _is_tls_configured():
-        return
-    if _is_insecure_endpoint_allowed():
-        _log.warning(
-            "INSECURE: Docker endpoint '%s' accepted without TLS "
-            "(MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT is set) — "
-            "credentials will be transmitted in cleartext",
-            endpoint,
-        )
-        return
-    raise ValueError(
-        f"Remote Docker endpoint '{endpoint}' requires TLS.  "
-        "Set DOCKER_TLS_VERIFY=1 and DOCKER_CERT_PATH to a directory "
-        "containing client certificates (cert.pem, key.pem, ca.pem), "
-        "or use a local unix socket / the compose-internal proxy instead. "
-        "See docs/security/bundled-runner-operator-guide.md §8 for details. "
-        "To bypass this check for a private bridge endpoint, set "
-        "MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT=1 (see §8 for caveats)."
-    )
-
-
+# FAR-1038: remote-endpoint TLS enforcement lives in the neutral
+# ``endpoint_tls`` module so both Docker consumers (this provider and the
+# orphan reconciler) share ONE enforcement point without the reconciler
+# importing this concrete provider module (architecture contract).
 def _route_by_channel(channel: Any, data: Any) -> tuple[bytes, bytes]:
     """Route a (channel, data) pair: channel 1 -> stdout, anything else -> stderr."""
     if channel == 1:
