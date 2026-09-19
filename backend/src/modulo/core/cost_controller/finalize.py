@@ -779,7 +779,9 @@ _CANONICAL_TOKEN_FALLBACK: tuple[tuple[str, str], ...] = (
 )
 
 
-def _fold_reported_token_fallback(enriched: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _fold_reported_token_fallback(
+    enriched: dict[str, dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
     """Populate a node's canonical token counters from its agent-reported
     tokens when the server measured NOTHING for that node (FAR-1033).
 
@@ -798,9 +800,13 @@ def _fold_reported_token_fallback(enriched: dict[str, dict[str, Any]]) -> dict[s
     above-ceiling values are NOT folded. Called AFTER the cost build and the
     FAR-104 budget enforcement, so the server-measured-only trust boundary
     (``llm_tokens`` money math, runaway budgets) is untouched. Mutates in
-    place (mirrors ``_write_back_node_cost``); returns the map.
+    place (mirrors ``_write_back_node_cost``); ALWAYS returns a mapping — the
+    same map when ``enriched`` is provided, otherwise an empty one (so the
+    docstring's "returns the map" contract also holds for ``None``).
     """
-    for entry in (enriched or {}).values():
+    if not enriched:
+        return enriched or {}
+    for entry in enriched.values():
         if not isinstance(entry, dict):
             continue
         if any(entry.get(key) not in (None, 0) for key in ("input_tokens", "output_tokens", "total_tokens")):

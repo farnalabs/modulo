@@ -19,7 +19,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.cost_controller.breakdown.constants import MAX_REPORTABLE_BAND_USD
-from modulo.core.cost_controller.breakdown.params import REPORTED_TOKEN_CHAIN
+from modulo.core.cost_controller.breakdown.params import (
+    MAX_REPORTABLE_TOKEN_COUNT,
+    REPORTED_TOKEN_CHAIN,
+)
 from modulo.core.cost_controller.finalize import (
     _REPORTED_TOKEN_FIELD_MAP,
     _derive_total_tokens,
@@ -473,6 +476,14 @@ def test_reported_token_fallback_revalidates_reported_values() -> None:
             "reported_output_tokens": 2,
             "reported_total_tokens": 3,
         },
+        "node-c": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "reported_input_tokens": MAX_REPORTABLE_TOKEN_COUNT + 1,
+            "reported_output_tokens": MAX_REPORTABLE_TOKEN_COUNT + 1,
+            "reported_total_tokens": MAX_REPORTABLE_TOKEN_COUNT + 1,
+        },
     }
     _fold_reported_token_fallback(enriched)
     entry_a = enriched["node-a"]
@@ -483,6 +494,10 @@ def test_reported_token_fallback_revalidates_reported_values() -> None:
     assert entry_b["input_tokens"] == 1
     assert entry_b["output_tokens"] == 2
     assert entry_b["total_tokens"] == 3
+    entry_c = enriched["node-c"]
+    assert entry_c["input_tokens"] == 0
+    assert entry_c["output_tokens"] == 0
+    assert entry_c["total_tokens"] == 0
     assert _derive_total_tokens(enriched) == 3
 
 
