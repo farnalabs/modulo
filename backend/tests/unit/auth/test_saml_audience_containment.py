@@ -135,6 +135,36 @@ def _to_b64(element: etree._Element) -> str:
     return base64.b64encode(xml).decode()
 
 
+def _build_encrypted_only_response() -> etree._Element:
+    """Build a Response carrying ONLY an ``EncryptedAssertion``.
+
+    python3-saml decrypts this internally when an SP private key is
+    configured, so the plaintext-assertion scan in
+    ``_enforce_audience_restriction`` sees no ``{ns}Assertion`` element. The
+    ciphertext is opaque/irrelevant — the enforcement layer must reject the
+    response before it ever inspects an audience (FAR-1010 fail-closed).
+    """
+    now = datetime.now(UTC)
+    instant = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    dummy = etree.Element("root")
+    r = etree.SubElement(dummy, f"{N}Response")
+    r.set("ID", "_resp_enc")
+    r.set("Version", "2.0")
+    r.set("IssueInstant", instant)
+
+    st = etree.SubElement(r, f"{N}Status")
+    sc = etree.SubElement(st, f"{N}StatusCode")
+    sc.set("Value", f"{NS_STATUS}:Success")
+
+    enc = etree.SubElement(r, f"{S}EncryptedAssertion")
+    ed = etree.SubElement(enc, "{http://www.w3.org/2001/04/xmlenc#}EncryptedData")
+    ed.set("Type", "http://www.w3.org/2001/04/xmlenc#Element")
+
+    dummy.remove(r)
+    return r
+
+
 def _make_settings(entity_id: str) -> dict[str, Any]:
     return {
         "strict": True,
@@ -304,6 +334,30 @@ class TestModuloSamlAuthAudienceEnforcement:
         bad = base64.b64encode(b"this is not xml <<<").decode()
         with pytest.raises(SamlAuthError, match="audience could not be parsed"):
             ModuloSamlAuth._enforce_audience_restriction(bad, self.ENTITY_A)
+
+    def test_encrypted_only_response_rejected_by_enforcement_layer(self) -> None:
+        """FAR-1010: a response with NO plaintext Assertion fails closed.
+
+        Regression for the review-found escape hatch: an encrypted-only
+        response (``EncryptedAssertion``) is decrypted internally by
+        python3-saml when an SP private key is configured, but the raw
+        response contains no ``{ns}Assertion`` element for the audience scan.
+        Before the fix the loop iterated zero times and ACCEPTED the response
+        with no audience containment; it must now raise ``SamlAuthError``.
+        """
+        xml = _build_encrypted_only_response()
+        with pytest.raises(SamlAuthError, match="no plaintext Assertion"):
+            ModuloSamlAuth._enforce_audience_restriction(_to_b64(xml), self.ENTITY_A)
+
+    def test_assertion_less_response_rejected_by_enforcement_layer(self) -> None:
+        """FAR-1010: a Response carrying neither a plaintext nor an encrypted
+        Assertion also fails closed rather than silently passing."""
+        xml = _build_saml_response(audience=None, add_audience_restriction=False)
+        for child in list(xml):
+            if child.tag == f"{S}Assertion":
+                xml.remove(child)
+        with pytest.raises(SamlAuthError, match="no plaintext Assertion"):
+            ModuloSamlAuth._enforce_audience_restriction(_to_b64(xml), self.ENTITY_A)
 
 
 class TestRequestDataAcsDerivation:

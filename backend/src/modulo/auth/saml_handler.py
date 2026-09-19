@@ -224,7 +224,24 @@ class ModuloSamlAuth:
             root = ElementTree.fromstring(raw)
         except (ValueError, ElementTree.ParseError) as exc:
             raise SamlAuthError("SAML response rejected: assertion audience could not be parsed") from exc
-        for assertion in root.iter(f"{_SAML_ASSERTION_NS}Assertion"):
+
+        # Fail closed when there is no plaintext Assertion to inspect. An
+        # encrypted-only response (an ``EncryptedAssertion`` element, which
+        # python3-saml decrypts internally when an SP private key is
+        # configured) yields zero matches here; iterating zero times would
+        # ACCEPT the response with no audience containment — the exact escape
+        # hatch this method exists to close. Modulo does not configure SP
+        # decryption, so such a response cannot be audience-checked and is
+        # rejected rather than trusted.
+        assertions = list(root.iter(f"{_SAML_ASSERTION_NS}Assertion"))
+        if not assertions:
+            _log.warning("sso.saml_assertion_missing", extra={"entity_id": entity_id})
+            raise SamlAuthError(
+                "SAML response rejected: no plaintext Assertion found — cannot enforce "
+                f"audience containment for SP entity ID {entity_id!r} "
+                "(encrypted-only or assertion-less response)"
+            )
+        for assertion in assertions:
             audiences = [
                 (aud.text or "").strip()
                 for aud in assertion.findall(
