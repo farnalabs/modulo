@@ -303,3 +303,164 @@ async def test_resume_recompiles_with_fresh_eval_defs():
         await executor.resume(run_id=run.id, org_id=org_id, resume_data={"action": "approved"}, claim_token="tok")
 
     _assert_fresh_eval_defs_reach_compile(struct_hashes, build_eval_defs, defs_e1, defs_e2)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1009: soft-deleted EvalDefinitions must be excluded from runtime loading
+# ---------------------------------------------------------------------------
+
+
+def _eval_row_with_delete(
+    config: dict[str, Any],
+    *,
+    deleted_at: Any = None,
+    node_id: str | uuid.UUID | None = "A",
+    eval_id: uuid.UUID | None = None,
+) -> SimpleNamespace:
+    """ORM-shaped eval-definition row with a ``deleted_at`` attribute."""
+    return SimpleNamespace(
+        id=eval_id or uuid.uuid4(),
+        node_id=node_id,
+        pipeline_id=uuid.uuid4(),
+        name="gate-eval",
+        eval_type=EvalType.REGEX,
+        config_json=config,
+        failure_behaviour="warn",
+        pass_threshold=None,
+        suite_id=None,
+        version=1,
+        deleted_at=deleted_at,
+    )
+
+
+async def test_load_eval_defs_excludes_soft_deleted():
+    """_load_eval_defs_for_pipeline must exclude rows where deleted_at is set.
+
+    Without the FAR-1009 filter the method returns all matching rows
+    including soft-deleted ones, causing stale eval definitions to
+    participate in runtime evaluation.
+    """
+    pipeline_id = uuid.uuid4()
+    active_row = _eval_row_with_delete({"pattern": "active"})
+
+    # The mock session returns both rows; the SQL filter in the real method
+    # should exclude the deleted one. Since we mock session.execute we
+    # simulate the DB-side filter by having the mock return only the
+    # active row — proving the method's WHERE clause is correct when the
+    # real DB enforces it.
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = [active_row]
+    execute_result = MagicMock()
+    execute_result.scalars.return_value = scalars_mock
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = AsyncMock(return_value=execute_result)
+
+    executor = PipelineExecutor(MagicMock())
+    result = await executor._load_eval_defs_for_pipeline(session, pipeline_id)
+
+    assert len(result) == 1
+    assert result[0].config_json == {"pattern": "active"}
+
+    # Verify the WHERE clause includes deleted_at IS NULL
+    call_args = session.execute.call_args
+    stmt = call_args[0][0]
+    where_clause = str(stmt.whereclause)
+    assert "deleted_at" in where_clause
+
+
+async def test_check_eval_suites_excludes_soft_deleted():
+    """_check_eval_suites must not count soft-deleted definitions in suite aggregation.
+
+    Without the FAR-1009 filter, soft-deleted definitions still
+    participate in suite pass/fail calculations, potentially blocking
+    runs with stale eval criteria.
+    """
+    from modulo.core.eval_engine import EvalResult
+    from modulo.core.pipeline_engine.executor import PipelineExecutor
+
+    pipeline_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    suite_id = "test-suite"
+
+    # Active definition in the suite
+    active_def = SimpleNamespace(
+        id=uuid.uuid4(),
+        pipeline_id=pipeline_id,
+        node_id="A",
+        name="active-eval",
+        eval_type="regex",
+        config_json={"pattern": "ok"},
+        failure_behaviour="warn",
+        pass_threshold=0.5,
+        suite_id=suite_id,
+        version=1,
+        deleted_at=None,
+    )
+
+    # EvalResult for the active definition (passes)
+    active_result = EvalResult(
+        id=uuid.uuid4(),
+        run_id=run_id,
+        node_id="A",
+        eval_id=active_def.id,
+        passed=True,
+        score=1.0,
+        detail="ok",
+    )
+
+    # Build scripted session responses:
+    # Query 1 (stmt): suite defs with pass_threshold -> returns only active
+    #   (the DB filter excludes deleted; mock returns only active)
+    # Query 2 (eval_stmt): defs in suite -> returns only active
+    # Query 3 (result_stmt): eval results -> returns active_result
+    scalars_suite = MagicMock()
+    scalars_suite.all.return_value = [active_def]
+    q1_result = MagicMock()
+    q1_result.scalars.return_value = scalars_suite
+
+    scalars_eval = MagicMock()
+    scalars_eval.all.return_value = [active_def]
+    q2_result = MagicMock()
+    q2_result.scalars.return_value = scalars_eval
+
+    scalars_results = MagicMock()
+    scalars_results.all.return_value = [active_result]
+    q3_result = MagicMock()
+    q3_result.scalars.return_value = scalars_results
+
+    call_count = {"n": 0}
+    captured_stmts: list[Any] = []
+
+    async def _scripted_execute(stmt: Any, *_args: Any, **_kwargs: Any) -> Any:
+        call_count["n"] += 1
+        captured_stmts.append(stmt)
+        if call_count["n"] == 1:
+            return q1_result
+        if call_count["n"] == 2:
+            return q2_result
+        return q3_result
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = _scripted_execute
+
+    executor = PipelineExecutor(MagicMock())
+    results = await executor._check_eval_suites(session, run_id, pipeline_id)
+
+    # With only the active def (deleted excluded), the suite has 1/1 passing = 100%
+    # which exceeds the 0.5 threshold -> suite passes
+    assert len(results) == 1
+    assert results[0].passed is True
+    assert results[0].passed_evals == 1
+    assert results[0].total_evals == 1
+
+    # Verify the WHERE clause of BOTH suite queries includes deleted_at.
+    # Query 1: suite-defs with pass_threshold; Query 2: per-suite defs.
+    # Without the FAR-1009 filter the WHERE clause omits deleted_at and these
+    # assertions fail — the test would still pass on aggregate output alone
+    # because the mock returns the same rows either way.
+    assert len(captured_stmts) >= 2
+    where_1 = str(captured_stmts[0].whereclause)
+    where_2 = str(captured_stmts[1].whereclause)
+    assert "deleted_at" in where_1, f"Suite-defs query WHERE clause missing deleted_at filter: {where_1}"
+    assert "deleted_at" in where_2, f"Per-suite defs query WHERE clause missing deleted_at filter: {where_2}"

@@ -382,7 +382,10 @@ async def list_eval_definitions(
     """List eval definitions for the caller's organisation."""
     from sqlalchemy import func as sa_func
 
-    conditions = [EvalDefinition.organisation_id == principal.organisation_id]
+    conditions = [
+        EvalDefinition.organisation_id == principal.organisation_id,
+        EvalDefinition.deleted_at.is_(None),
+    ]
     if pipeline_id:
         conditions.append(EvalDefinition.pipeline_id == pipeline_id)
     if eval_type:
@@ -489,6 +492,7 @@ async def eval_coverage(
                             EvalDefinition.pipeline_id == pipeline_id,
                             EvalDefinition.organisation_id == principal.organisation_id,
                             EvalDefinition.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
+                            EvalDefinition.deleted_at.is_(None),
                         )
                     )
                 )

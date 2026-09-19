@@ -401,6 +401,7 @@ async def load_node_guardrails(
         EvalDefinition.pipeline_id == pipeline_id,
         EvalDefinition.organisation_id == org_id,
         EvalDefinition.eval_type == "guardrail",
+        EvalDefinition.deleted_at.is_(None),
     )
     if node_id:
         node_uuid = uuid.UUID(node_id) if _is_uuid(node_id) else None
@@ -440,6 +441,7 @@ async def load_claimed_guardrails(
                 EvalDefinition.pipeline_id == pipeline_id,
                 EvalDefinition.organisation_id == org_id,
                 EvalDefinition.eval_type == "guardrail",
+                EvalDefinition.deleted_at.is_(None),
             )
             rows = (await session.execute(stmt)).scalars().all()
         guardrails = [to_engine_definition(row) for row in rows]
