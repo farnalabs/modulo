@@ -29,14 +29,18 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      # NOSONAR githubactions:S8541: pytest-bdd is a pinned source-archive dep (no
+      # wheel), so `--no-build` hard-fails the sync on a cold uv cache. `--frozen`
+      # locks the exact revisions, so builds are deterministic and trusted (no
+      # untrusted setup scripts execute).
+      - run: uv sync --frozen  # NOSONAR
       - name: Run mutmut on high-value modules
         run: |
           # Scope to a SMALL high-value set only — mutation runs are long.
           # mutmut 3.x has no --paths-to-mutate/--runner flags: the runner comes from
           # [tool.mutmut] in pyproject.toml and scoping is done with mutant-name
           # wildcards (the module prefix of each generated mutant key).
-          uv run mutmut run "modulo.core.graph_validator*" "modulo.db.rls*"
+          uv run --no-build --no-sync mutmut run "modulo.core.graph_validator*" "modulo.db.rls*"
       - name: Generate mutation report
         if: always()
         run: |
@@ -51,12 +55,12 @@ jobs:
           # mutmut 3.x keeps per-file state under mutants/ and writes an aggregate
           # CI/CD stats JSON on request; parse that instead of the removed
           # .mutmut-cache SQLite database.
-          if uv run mutmut export-cicd-stats > /dev/null 2>&1 && [ -f mutants/mutmut-cicd-stats.json ]; then
-            uv run python -c "import json; s = json.load(open('mutants/mutmut-cicd-stats.json')); total = s.get('total', 0); killed = s.get('killed', 0); print('| Status | Count |'); print('| --- | --- |'); [print(f'| {k} | {s.get(k, 0)} |') for k in ('killed', 'survived', 'timeout', 'no_tests', 'suspicious', 'segfault', 'skipped')]; print(f'| **Total** | **{total}** |'); print(f'| **Kill rate** | **{(killed / total * 100 if total else 0):.1f}%** |')" >> /tmp/mutation-report.md 2>&1 || echo "Could not parse stats." >> /tmp/mutation-report.md
+          if uv run --no-build --no-sync mutmut export-cicd-stats > /dev/null 2>&1 && [ -f mutants/mutmut-cicd-stats.json ]; then
+            uv run --no-build --no-sync python -c "import json; s = json.load(open('mutants/mutmut-cicd-stats.json')); total = s.get('total', 0); killed = s.get('killed', 0); print('| Status | Count |'); print('| --- | --- |'); [print(f'| {k} | {s.get(k, 0)} |') for k in ('killed', 'survived', 'timeout', 'no_tests', 'suspicious', 'segfault', 'skipped')]; print(f'| **Total** | **{total}** |'); print(f'| **Kill rate** | **{(killed / total * 100 if total else 0):.1f}%** |')" >> /tmp/mutation-report.md 2>&1 || echo "Could not parse stats." >> /tmp/mutation-report.md
             echo "" >> /tmp/mutation-report.md
             echo "### Survived mutants (unconstrained logic)" >> /tmp/mutation-report.md
             echo "" >> /tmp/mutation-report.md
-            uv run mutmut results 2>/dev/null | grep ': survived$' | sed -E 's/^[[:space:]]*//; s/^/- \`/; s/$/\`/' >> /tmp/mutation-report.md 2>&1 || true
+            uv run --no-build --no-sync mutmut results 2>/dev/null | grep ': survived$' | sed -E 's/^[[:space:]]*//; s/^/- \`/; s/$/\`/' >> /tmp/mutation-report.md 2>&1 || true
           else
             echo "No mutation stats found — mutmut may not have run." >> /tmp/mutation-report.md
           fi
