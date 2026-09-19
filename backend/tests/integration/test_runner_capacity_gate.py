@@ -345,14 +345,15 @@ async def test_gate_flag_on_default_caps_docker_tier_only(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     # 3 legacy tier-less markers + 1 explicit runner_docker marker = 4 slots.
-    for _idx, provider in enumerate((None, None, None, "runner_docker")):
-        run_id = await _seed_run(
-            db_engine,
-            org_id,
-            pipe,
-            snap,
-            marker=build_dispatch_marker(f"run:x:node:n:{_idx}", provider),
+    # The tier-less shape predates D8/FAR-995, so it is seeded as raw JSON —
+    # build_dispatch_marker now requires an explicit provider.
+    for _idx, provider in enumerate((None, None, None, RUNNER_PROVIDER_DOCKER)):
+        marker = (
+            json.dumps({"state": "dispatching", "attempt_key": f"run:x:node:n:{_idx}"})
+            if provider is None
+            else build_dispatch_marker(f"run:x:node:n:{_idx}", provider)
         )
+        run_id = await _seed_run(db_engine, org_id, pipe, snap, marker=marker)
         _ = run_id
     # 2 e2b markers: NOT counted into the Docker-tier default bucket.
     for _idx in range(2):
