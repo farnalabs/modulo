@@ -18,6 +18,9 @@ whole suite loudly (stderr banner + recorded skip reason).
 
 from __future__ import annotations
 
+import secrets
+from collections.abc import Iterator
+
 import pytest
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
@@ -33,13 +36,21 @@ from tests.helpers.testcontainers_harness import (
 
 pytestmark = pytest.mark.integration
 
-GITLAB_PROJECT = "modulo-tier1b/demo"
+GITLAB_PROJECT = "root/demo"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ssrf_loopback_consent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SSRF guard loopback opt-in (see the light module for the rationale)."""
-    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", SSRF_LOOPBACK_OPTIN)
+def ssrf_loopback_consent() -> Iterator[None]:
+    """SSRF guard loopback opt-in (see the light module for the rationale).
+
+    Uses a session-scoped MonkeyPatch directly — the ``monkeypatch``
+    fixture is function-scoped and cannot be requested by a session
+    fixture (ScopeMismatch).
+    """
+    mp = pytest.MonkeyPatch()
+    mp.setenv("SSRF_ALLOW_PRIVATE_RANGES", SSRF_LOOPBACK_OPTIN)
+    yield
+    mp.undo()
 
 
 def _gitlab_root_pat(handle: ContainerHandle) -> str:
@@ -56,7 +67,7 @@ def _gitlab_root_pat(handle: ContainerHandle) -> str:
             "-e",
             "production",
             "t = PersonalAccessToken.create!(user: User.find_by(username: 'root'), "
-            "name: 'modulo-ci', scopes: [:api]); puts t.token",
+            "name: 'modulo-ci', scopes: [:api], expires_at: 364.days.from_now); puts t.token",
         ]
     ).strip()
     assert token and len(token) >= 20, f"expected a real GitLab PAT from rails runner, got {token!r}"
@@ -71,11 +82,16 @@ def gitlab_service() -> ContainerHandle:
                 image="gitlab/gitlab-ce:latest",
                 container_port=80,
                 env={
-                    "GITLAB_ROOT_PASSWORD": "modulo-Tier1b-root!",
+                    # A random password: policy rejects common word combos such as
+                    # "modulo-Tier1b-root!" ("Password must not contain commonly used
+                    # combinations of words and letters") which kills the 003_admin seed.
+                    "GITLAB_ROOT_PASSWORD": f"Mt1b-{secrets.token_hex(12)}$aA",
                     "GITLAB_OMNIBUS_CONFIG": "gitlab_rails['gitlab_shell_ssh_port'] = 2222",
                 },
                 probe=probe_http("/users/sign_in"),
-                ready_timeout_seconds=900,
+                # First boot reconfigures + migrates the DB, then puma preloads —
+                # observed at the ceiling of 30 min on this host under load.
+                ready_timeout_seconds=1800,
             )
         )
     except Tier1bFixtureError as exc:
@@ -98,9 +114,35 @@ def gitlab_connector(gitlab_service: ContainerHandle) -> GitLabConnector:
     create = httpx.post(
         f"{gitlab_service.base_url}/api/v4/projects",
         headers={"PRIVATE-TOKEN": str(gitlab_service.gitlab_token)},  # type: ignore[attr-defined]
-        data={"name": "modulo-tier1b/demo", "path": "demo", "visibility": "public"},
+        data={
+            "name": "demo",
+            "path": "demo",
+            "visibility": "public",
+            # Without an initial commit there is no default branch, and a file
+            # create answered 400 "A file with this name doesn't exist".
+            "initialize_with_readme": "true",
+        },
+        # GitLab's webapp is still warming right after boot — a 60s read window.
+        timeout=60.0,
     )
     create.raise_for_status()
+    # The connector's ``file`` write path is the repository-files UPDATE endpoint
+    # (PUT /repository/files) — on real GitLab that answers 400
+    # "A file with this name doesn't exist" unless the file exists, so seed
+    # the marker through the raw CREATE endpoint here. The roundtrip test
+    # then proves the connector's own write surface against real data.
+    seed = httpx.post(
+        f"{gitlab_service.base_url}/api/v4/projects/{GITLAB_PROJECT.replace('/', '%2F')}"
+        "/repository/files/tier1b%2Fmarker.md",
+        headers={"PRIVATE-TOKEN": str(gitlab_service.gitlab_token)},  # type: ignore[attr-defined]
+        data={
+            "branch": "main",
+            "content": "seed placeholder",
+            "commit_message": "tier1b: seed marker",
+        },
+        timeout=60.0,
+    )
+    seed.raise_for_status()
     return connector
 
 

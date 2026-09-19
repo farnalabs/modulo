@@ -32,4 +32,4 @@ jobs:
           uv run --no-build --no-sync pytest \
             tests/integration/test_tier1b_connectors_heavy.py \
             tests/integration/test_tier1b_models_heavy.py \
-            -q --tb=short --timeout=2400 -p no:warnings
+            -q --tb=short --timeout=3600 -p no:warnings

@@ -7,6 +7,7 @@ nightly ``tier1b-nightly`` CI job, never on PRs.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import pytest
@@ -27,9 +28,17 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ssrf_loopback_consent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SSRF guard loopback opt-in (see the light connector module for rationale)."""
-    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", SSRF_LOOPBACK_OPTIN)
+def ssrf_loopback_consent() -> Iterator[None]:
+    """SSRF guard loopback opt-in (see the light connector module for rationale).
+
+    Uses a session-scoped MonkeyPatch directly — the ``monkeypatch``
+    fixture is function-scoped and cannot be requested by a session
+    fixture (ScopeMismatch).
+    """
+    mp = pytest.MonkeyPatch()
+    mp.setenv("SSRF_ALLOW_PRIVATE_RANGES", SSRF_LOOPBACK_OPTIN)
+    yield
+    mp.undo()
 
 
 QWEN_05B_GGUF = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"

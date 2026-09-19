@@ -78,9 +78,14 @@ class ContainerSpec:
     """Declarative description of a Tier 1b container fixture."""
 
     image: str
-    container_port: int
+    container_port: int | None
+    """None for port-less containers (CLI-only images like ``codeclimate``) — no port mapping is set up."""
     env: dict[str, str] = field(default_factory=dict)
     command: str | list[str] | None = None
+    volumes: list[tuple[str, str]] | None = None
+    """Optional [(host_dir, container_path)] bind mounts for seeded fixtures (LocalAI model seeds)."""
+    volume_mode: str = "rw"
+    """Docker bind-mount mode for ``volumes`` (testcontainers defaults to read-only; seeding needs rw)."""
     ready_timeout_seconds: float = 600
     poll_interval_seconds: float = 2.0
     probe: Callable[[int], str | None] | None = None
@@ -92,18 +97,35 @@ class ContainerHandle:
     """A started container fixture with base_url and exec helpers."""
 
     spec: ContainerSpec
-    host_port: int
+    host_port: int | None
     _docker_container: Any = field(default=None, repr=False, compare=False)
 
     @property
     def base_url(self) -> str:
+        if self.host_port is None:
+            raise Tier1bFixtureError(
+                f"container {self.spec.image} was started without a port mapping "
+                "(container_port=None); base_url is not addressable"
+            )
         return f"http://127.0.0.1:{self.host_port}"
 
-    def exec(self, args: list[str], timeout_seconds: float = EXEC_READINESS_TIMEOUT) -> str:
-        """Run args inside the container; return utf-8 stdout; raise on failure."""
+    def exec(
+        self,
+        args: list[str],
+        timeout_seconds: float = EXEC_READINESS_TIMEOUT,
+        user: str | None = None,
+    ) -> str:
+        """Run args inside the container; return utf-8 stdout; raise on failure.
+
+        ``user`` is optional (docker exec user spec, e.g. ``"git"`` or
+        ``"1000:1000"``) — needed for images whose CLI tools refuse to run
+        as the container's default root user (gitea, notably).
+        """
         if self._docker_container is None:
             raise Tier1bFixtureError("container fixture already stopped")
-        result = self._docker_container.exec(args)
+        from testcontainers.core.container import ExecConfig as _ExecConfig
+
+        result = self._docker_container.exec(_ExecConfig(command=args, user=user))
         output = result.output
         out = output.decode("utf-8", errors="replace") if isinstance(output, bytes) else str(output)
         if result.exit_code != 0:
@@ -148,10 +170,13 @@ def start_tier1b_container(spec: ContainerSpec) -> ContainerHandle:
     if spec.command:
         command = spec.command if isinstance(spec.command, list) else spec.command.split()
         container.with_command(command)
-    container.with_exposed_ports(spec.container_port)
+    for host_dir, mount_path in spec.volumes or []:
+        container.with_volume_mapping(host_dir, mount_path, spec.volume_mode)
+    if spec.container_port is not None:
+        container.with_exposed_ports(spec.container_port)
     container.start()
 
-    host_port = int(container.get_exposed_port(spec.container_port))
+    host_port = None if spec.container_port is None else int(container.get_exposed_port(spec.container_port))
     handle = ContainerHandle(spec=spec, host_port=host_port, _docker_container=container)
 
     deadline = time.monotonic() + spec.ready_timeout_seconds

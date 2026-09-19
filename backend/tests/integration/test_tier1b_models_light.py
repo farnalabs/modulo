@@ -12,7 +12,12 @@ completions — never canned bodies.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
+from collections.abc import Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.request import urlretrieve
 
 import pytest
 
@@ -32,9 +37,17 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ssrf_loopback_consent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SSRF guard loopback opt-in (see the light connector module for rationale)."""
-    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", SSRF_LOOPBACK_OPTIN)
+def ssrf_loopback_consent() -> Iterator[None]:
+    """SSRF guard loopback opt-in (see the light connector module for rationale).
+
+    Uses a session-scoped MonkeyPatch directly — the ``monkeypatch``
+    fixture is function-scoped and cannot be requested by a session
+    fixture (ScopeMismatch).
+    """
+    mp = pytest.MonkeyPatch()
+    mp.setenv("SSRF_ALLOW_PRIVATE_RANGES", SSRF_LOOPBACK_OPTIN)
+    yield
+    mp.undo()
 
 
 QWEN_05B_GGUF = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
@@ -102,15 +115,28 @@ def test_ollama_model_listed(ollama_service: ContainerHandle) -> None:
 
 
 @pytest.fixture(scope="session")
-def llamacpp_service() -> ContainerHandle:
+def llamacpp_service() -> Iterator[ContainerHandle]:
+    """llama.cpp server over a host-downloaded GGUF bind mount."""
+    model_dir = Path(tempfile.mkdtemp(prefix="llamacpp-tier1b-"))
+    try:
+        urlretrieve(QWEN_05B_GGUF, str(model_dir / "qwen2.5-0.5b.gguf"))
+    except Exception as exc:
+        shutil.rmtree(model_dir, ignore_errors=True)
+        pytest.skip(f"Tier 1b llamacpp model seed unavailable (recorded skip): {exc}")
     try:
         handle = start_tier1b_container(
             ContainerSpec(
-                image="ghcr.io/ggerganov/llama.cpp:server",
+                # 2025+: llama.cpp containers moved to the org namespace
+                # ghcr.io/ggml-org/llama.cpp (ghcr.io/ggerganov no longer ships a :server tag).
+                image="ghcr.io/ggml-org/llama.cpp:server",
                 container_port=8080,
+                # Recorded live contract (verified against ggml-org/llama.cpp:server):
+                # this build cannot fetch a model over HTTP (-m <URL> fails with
+                # gguf_init_from_file "No such file or directory"), so the GGUF is
+                # downloaded on the host and bind-mounted read-write into /models.
                 command=[
                     "-m",
-                    QWEN_05B_GGUF,
+                    "/models/qwen2.5-0.5b.gguf",
                     "--host",
                     "0.0.0.0",  # noqa: S104 - container server must bind all interfaces inside the container
                     "--port",
@@ -120,12 +146,15 @@ def llamacpp_service() -> ContainerHandle:
                 ],
                 probe=probe_http("/health"),
                 ready_timeout_seconds=900,
+                volumes=[(str(model_dir), "/models")],
             )
         )
     except Tier1bFixtureError as exc:
+        shutil.rmtree(model_dir, ignore_errors=True)
         pytest.skip(f"Tier 1b llamacpp fixture unavailable on this Docker host (recorded skip): {exc}")
     yield handle
     handle.stop()
+    shutil.rmtree(model_dir, ignore_errors=True)
 
 
 async def test_llamacpp_health_and_completion(llamacpp_service: ContainerHandle) -> None:
@@ -144,21 +173,38 @@ async def test_llamacpp_health_and_completion(llamacpp_service: ContainerHandle)
 
 @pytest.fixture(scope="session")
 def localai_service() -> ContainerHandle:
-    """LocalAI CPU image; the ``qwen2`` catalog boots a bundled Qwen2.5 model."""
+    """LocalAI CPU image serving a Qwen2.5 GGUF seeded through a bind mount."""
+    model_dir = Path(tempfile.mkdtemp(prefix="localai-tier1b-"))
+    try:
+        urlretrieve(QWEN_05B_GGUF, str(model_dir / "qwen2.5-0.5b.gguf"))
+        (model_dir / "qwen2.yml").write_text("name: qwen2\nbackend: llama\nparameters:\n  model: qwen2.5-0.5b.gguf\n")
+    except Exception as exc:
+        shutil.rmtree(model_dir, ignore_errors=True)
+        pytest.skip(f"Tier 1b localai model seed unavailable (recorded skip): {exc}")
     try:
         handle = start_tier1b_container(
             ContainerSpec(
                 image="localai/localai:latest-cpu",
                 container_port=8080,
-                command=["qwen2"],
+                command=["run", "qwen2"],
+                env={
+                    # The image entrypoint rebuilds local-ai from source unless
+                    # REBUILD=false — a multi-minute make cycle we must never hit.
+                    "REBUILD": "false",
+                    "MODELS_PATH": "/build/models",
+                    "THREADS": "2",
+                },
+                volumes=[(str(model_dir), "/build/models")],
                 probe=probe_http("/readyz"),
                 ready_timeout_seconds=900,
             )
         )
     except Tier1bFixtureError as exc:
+        shutil.rmtree(model_dir, ignore_errors=True)
         pytest.skip(f"Tier 1b localai fixture unavailable on this Docker host (recorded skip): {exc}")
     yield handle
     handle.stop()
+    shutil.rmtree(model_dir, ignore_errors=True)
 
 
 async def test_localai_health_and_completion(localai_service: ContainerHandle) -> None:
