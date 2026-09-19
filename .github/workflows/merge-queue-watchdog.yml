@@ -192,6 +192,13 @@ jobs:
             # Priority 1: we just freed the queue by cancelling stuck runs
             SHOULD_DISPATCH=true
             echo "Freed the queue by cancelling ${CANCELLED_COUNT} stuck run(s) — rearming."
+            # Cancelling stuck runs proves the machinery was wedged, so a
+            # no-completion gap past the alert threshold on this same tick is a
+            # genuine dispatch failure — escalate instead of re-arming silently
+            # and hoping a later tick notices. (-1 means unmeasurable: no alert.)
+            if [ "$LAST_COMPLETED_AGE" -ge "$ALERT_MIN_STALE" ]; then
+              SHOULD_ALERT=true
+            fi
           elif [ "$ACTIVE_COUNT" -gt 0 ]; then
             echo "Run(s) in progress/queued — skipping re-arm and alert."
           elif [ "$LAST_COMPLETED_AGE" -ge "$REARM_MIN" ]; then
