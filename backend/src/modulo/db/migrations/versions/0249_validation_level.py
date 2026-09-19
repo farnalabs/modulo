@@ -10,8 +10,8 @@ and writes the level.
 
 Downgrade: drops both columns.
 
-Revision ID: 0248_validation_level
-Revises: 0247_sso_presets
+Revision ID: 0249_validation_level
+Revises: 0248_agent_schema_profile
 Create Date: 2026-09-17
 """
 
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0248_validation_level"
-down_revision = "0247_sso_presets"
+revision = "0249_validation_level"
+down_revision = "0248_agent_schema_profile"
 branch_labels = None
 depends_on = None
 
