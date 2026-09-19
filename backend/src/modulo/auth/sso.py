@@ -1034,8 +1034,14 @@ def _validate_saml_response_destination(saml_response: str, acs_url: str) -> Non
     SAML 2.0 Core §4.1.1 requires the Response ``Destination`` to match the
     SP's ACS endpoint. A mismatched Destination is a replay/misdelivery signal
     and MUST be rejected. The attribute may be legitimately absent from some
-    IdPs, in which case validation is skipped (python3-saml enforces it only
-    in strict mode, which is not enabled here).
+    IdPs, in which case validation is skipped here (python3-saml strict mode
+    only enforces it when the attribute is present; strict mode IS enabled —
+    python3-saml defaults ``strict=True``, verified by the FAR-1000 spike).
+
+    NOTE (per-provider SAML, FAR-1000 design): once per-provider ACS URLs
+    land, this function must be called with the RESOLVED PROVIDER's ACS URL
+    instead of the single instance-wide one — a hardcoded legacy ACS URL
+    here would reject responses destined for a provider-specific endpoint.
     """
     try:
         raw = _decode_saml_response(saml_response)
