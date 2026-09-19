@@ -171,7 +171,12 @@ def build_dispatch_marker(attempt_key: str, provider: str) -> str:
     and ``"written_at"`` for every tier.  ``provider`` is REQUIRED — every
     call site must pass its value explicitly so the type-checker enforces
     correct attribution (FAR-995).
+
+    Raises :class:`ValueError` if ``provider`` is empty or whitespace-only —
+    a syntactically valid but meaningless marker is worse than a loud failure.
     """
+    if not provider or not provider.strip():
+        raise ValueError("provider must be a non-empty string")
     marker: dict[str, Any] = {
         "state": MARKER_STATE_DISPATCHING,
         "attempt_key": attempt_key,
@@ -420,9 +425,10 @@ async def acquire_runner_dispatch_slot(
     flag_on = settings.runner_capacity_gate_enabled
     # Tier attribution: ``provider`` is REQUIRED (FAR-995) — every call site
     # must pass its value explicitly so the type-checker enforces correct
-    # attribution.  An UNKNOWN provider value (e.g. a future tier) is skipped
-    # by the Docker-tier default gate — the host-resource count does not count
-    # it.
+    # attribution.  The SQL COALESCE(provider_key, 'runner_docker') default
+    # covers only NULL/missing values in the database column; a Python-level
+    # unknown string (e.g. a future tier) would be written straight through
+    # to the JSON marker — callers must supply a recognised provider value.
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     try:

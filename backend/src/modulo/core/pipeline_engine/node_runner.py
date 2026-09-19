@@ -7114,11 +7114,17 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     agent_id = _parse_uuid_opt(node_def.get("agent_id"))
     await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id, node_def=node_def)
 
-    # D8 (FAR-594): the provider tier attribution for the dispatch marker,
-    # resolved with the route. The Bundled Runner path attributes below via
-    # the gate default (runner_docker); the legacy path is E2B (route "e2b"
-    # or the historical "none" default).
-    _resolved_provider: str | None = None
+    # D8 (FAR-594): the provider tier attribution for the dispatch marker.
+    # Every path that reaches this point is the legacy E2B route ("e2b" or the
+    # historical "none" default) — the Bundled Runner returns above (it
+    # attributes via its own dispatch route).  The attribution is unconditional
+    # rather than a conditional fallback, so a future provider branch that
+    # forgets to set the variable would produce a type error, not a silent
+    # default (FAR-995).  Import is local to match this file's lazy-import
+    # convention for runner_capacity.
+    from modulo.core.runner_capacity import RUNNER_PROVIDER_E2B
+
+    _resolved_provider: str = RUNNER_PROVIDER_E2B
 
     # D4 dispatch adapter (FAR-590): branch on the PIPELINE-LEVEL bound
     # profile's provider_type (the validated, same-org-enforced
@@ -7136,7 +7142,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             resolve_sandbox_dispatch_route,
             validate_e2b_dispatch_timeout,
         )
-        from modulo.core.runner_capacity import RUNNER_PROVIDER_E2B
 
         _ctx = get_conformance_ctx()
         _env_profile_id = _ctx[2] if _ctx else None
@@ -7152,7 +7157,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 _dc_replace(config, schema_validator_mode=schema_validator_mode),
                 _route,
             )
-        _resolved_provider = RUNNER_PROVIDER_E2B
         if _route.provider_type == "e2b":
             validate_e2b_dispatch_timeout(sandbox_timeout)
 
@@ -7333,15 +7337,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     extra={"node_id": node_id, "run_id": run_id},
                 )
                 return _idempotency_gate_skipped_envelope(node_id)
-
-    # The Bundled Runner route returns above (it attributes via its own
-    # dispatch route). Every path that reaches this point is the legacy E2B
-    # route ("e2b", or the historical "none" default), so attribute the
-    # marker explicitly rather than relying on a default at the marker API.
-    if _resolved_provider is None:
-        from modulo.core.runner_capacity import RUNNER_PROVIDER_E2B
-
-        _resolved_provider = RUNNER_PROVIDER_E2B
 
     async def _acquire_dispatch_marker() -> str | None:
         """D8 atomic dispatch gate + marker (FAR-594): capacity check and the

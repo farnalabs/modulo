@@ -198,6 +198,16 @@ def test_build_dispatch_marker_always_includes_provider_and_written_at() -> None
         assert parsed["provider"] == provider
 
 
+def test_build_dispatch_marker_rejects_empty_provider() -> None:
+    """FAR-995: empty/whitespace-only provider must not silently write a meaningless marker."""
+    with pytest.raises(ValueError, match="provider must be a non-empty string"):
+        build_dispatch_marker("k", "")
+    with pytest.raises(ValueError, match="provider must be a non-empty string"):
+        build_dispatch_marker("k", "   ")
+    with pytest.raises(ValueError, match="provider must be a non-empty string"):
+        build_dispatch_marker("k", "\t\n")
+
+
 def test_tombstone_is_capacity_neutral_state() -> None:
     tombstone = build_hitl_tombstone()
     assert parse_marker_state(tombstone) == MARKER_STATE_CLEARED_AT_HITL
