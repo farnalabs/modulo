@@ -19,13 +19,14 @@ import respx
 from click.testing import CliRunner
 
 from modulo.cli.apply import register_apply, render_table
-from modulo.cli.apply.drift import has_drift
+from modulo.cli.apply.drift import build_drift_detail, has_drift
 from modulo.cli.apply.executor import ApplyExecutor
 from modulo.cli.apply.loader import parse_apply_documents
 from tests.unit.cli.test_apply_executor import (
     _STABLE_CURRENT,
     CONFIG_TEXT,
     GOLDEN_CONFIG_TEXT,
+    _backend_item,
     _mock_current,
     _mock_new_kind_lists,
     _schema_item,
@@ -51,6 +52,19 @@ entities:
     - pipeline: sample
       name: hook
       trigger_type: webhook
+"""
+
+_BACKENDS_ONLY_CONFIG_TEXT = """
+api_version: modulo.dev/v1
+entities:
+  model_backends:
+    - name: openai
+      display_name: OpenAI
+      provider: openai
+      model_id: gpt-x
+      api_key: ${env:SK}
+      default_params:
+        temperature: 0.5
 """
 
 _CLI_LIST_PARAMS = {"page": "1", "page_size": "100"}
@@ -210,6 +224,104 @@ class TestNodeLevelPipelineDrift:
         assert updated == ["sample"]
 
 
+class TestNonPipelineDriftDetail:
+    """drift_detail now breaks schemas / model backends / triggers down per field."""
+
+    @respx.mock
+    def test_schema_drift_reports_modified_fields(self) -> None:
+        """A live schema differing only in description reports that field."""
+        _cli_mock([_schema_item("alpha", "Live description")])
+        config = parse_apply_documents(_MATCH_SCHEMA_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, drift=True)
+        updated = [e["name"] for e in report["updated"] if e["kind"] == "schema"]
+        assert updated == ["alpha"]
+        detail = report["drift_detail"]
+        assert "schema:alpha" in detail
+        fields = detail["schema:alpha"]["fields"]
+        assert fields["added"] == []
+        assert fields["removed"] == []
+        assert fields["modified"] == ["description"]
+
+    @respx.mock
+    def test_model_backend_drift_reports_modified_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A backend drifting in model_id surfaces exactly that managed field."""
+        monkeypatch.setenv("SK", "resolved-secret")
+        schemas = respx.get("https://api.test/api/v1/schemas", params=_CLI_LIST_PARAMS).respond(
+            json={"items": [], "total": 0, "page": 1, "page_size": 100}
+        )
+        backends = respx.get("https://api.test/api/v1/model-backends", params=_CLI_BACKENDS_LIST_PARAMS).respond(
+            json={
+                "items": [
+                    _backend_item(
+                        "openai",
+                        "openai",
+                        display_name="OpenAI",
+                        model_id="gpt-y",
+                        default_params={"temperature": 0.5},
+                    )
+                ],
+                "total": 1,
+                "page": 1,
+                "page_size": 100,
+            }
+        )
+        config = parse_apply_documents(_BACKENDS_ONLY_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, drift=True)
+        assert schemas.called and backends.called
+        updated = [e["name"] for e in report["updated"] if e["kind"] == "model_backend"]
+        assert updated == ["openai"]
+        detail = report["drift_detail"]
+        assert "model_backend:openai" in detail
+        fields = detail["model_backend:openai"]["fields"]
+        assert fields["modified"] == ["model_id"]
+        assert fields["added"] == []
+        assert fields["removed"] == []
+
+    @respx.mock
+    def test_trigger_drift_reports_modified_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A trigger whose spend limit differs from the config reports that field."""
+        monkeypatch.setenv("SK", "resolved-secret")
+        _cli_mock([])
+        respx.get("https://api.test/api/v1/pipelines", params=_CLI_LIST_PARAMS).respond(
+            json={"items": [_golden_pipeline_row()], "total": 1, "page": 1, "page_size": 100}
+        )
+        nightly = _golden_trigger_row(
+            "nightly",
+            trigger_type="cron",
+            cron_expression="0 3 * * *",
+            daily_spend_limit=1.5,
+        )
+        hook = _golden_trigger_row("hook", trigger_type="webhook")
+        respx.get("https://api.test/api/v1/triggers", params=_CLI_LIST_PARAMS).respond(
+            json={"items": [nightly, hook], "total": 2, "page": 1, "page_size": 100}
+        )
+        config = parse_apply_documents(_TRIGGERS_ONLY_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, drift=True)
+        updated = [e["name"] for e in report["updated"] if e["kind"] == "trigger"]
+        assert updated == ["sample/nightly"]
+        detail = report["drift_detail"]
+        assert "trigger:sample/nightly" in detail
+        fields = detail["trigger:sample/nightly"]["fields"]
+        assert fields["modified"] == ["daily_spend_limit"]
+        assert fields["added"] == []
+        assert fields["removed"] == []
+
+    def test_top_level_schema_drift_still_gets_no_pipeline_entry(self) -> None:
+        """Non-pipeline drift never adds a bare-name (pipeline-shaped) entry."""
+        detail = build_drift_detail(
+            {"schema": {"alpha": {"description": "Live", "abstract_name": None, "versions": []}}},
+            {"schema": [("alpha", {"description": "Desired", "abstract_name": None, "versions": []})]},
+            {"updated": [{"kind": "schema", "name": "alpha"}]},
+        )
+        assert detail == {"schema:alpha": {"fields": {"added": [], "removed": [], "modified": ["description"]}}}
+
+
 class TestDiffNeverWrites:
     @respx.mock
     def test_drift_mode_makes_no_mutating_requests(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -254,6 +366,26 @@ class TestDriftRendering:
         assert "unchanged model_backend 'openai'" in text
         assert "drift detail pipeline 'sample': graph +1/-0/~1 nodes, +0/-0/~0 edges" in text
         assert "drift summary: 1 created, 1 updated, 1 unchanged, 0 blocked, 0 failed" in text
+
+    def test_table_renders_field_breakdown_for_non_pipeline_drift(self) -> None:
+        report = {
+            "mode": "drift",
+            "created": [],
+            "updated": [
+                {"kind": "schema", "name": "alpha"},
+                {"kind": "trigger", "name": "sample/nightly"},
+            ],
+            "unchanged": [],
+            "blocked": [],
+            "failed": [],
+            "drift_detail": {
+                "schema:alpha": {"fields": {"added": [], "removed": [], "modified": ["description"]}},
+                "trigger:sample/nightly": {"fields": {"added": [], "removed": [], "modified": ["daily_spend_limit"]}},
+            },
+        }
+        text = render_table(report)
+        assert "drift detail schema 'alpha': +0/-0/~1 fields" in text
+        assert "drift detail trigger 'sample/nightly': +0/-0/~1 fields" in text
 
     def test_table_keeps_plan_labels_without_drift_mode(self) -> None:
         report = {

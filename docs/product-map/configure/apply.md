@@ -95,11 +95,13 @@ schemas, model-backends, pipelines and triggers features.
 - [x] `--diff` (drift mode) is read-only: it fetches the live org state and
       reports the plan-shaped report explicitly labelled `mode=drift` WITHOUT
       writing anything (the run returns after the plan phase — no
-      POST/PATCH/PUT code path is reachable), adds a node-level breakdown for
-      drifted pipelines (`drift_detail`: graph node/edge added/removed/modified
-      matched by id; top-level-only drift gets no entry), and the table output
-      prefixes verbs (`drift create` / `drift update`) plus per-graph drift
-      detail lines (`backend/src/modulo/cli/apply/drift.py`,
+      POST/PATCH/PUT code path is reachable), adds a per-entity breakdown
+      (`drift_detail`): a graph node/edge added/removed/modified breakdown
+      matched by id for drifted pipelines (top-level-only pipeline drift gets
+      no entry) plus a managed-field added/removed/modified breakdown for
+      drifted schemas / model backends / triggers (keyed `<kind>:<name>`),
+      and the table output prefixes verbs (`drift create` / `drift update`)
+      plus per-entity drift detail lines (`backend/src/modulo/cli/apply/drift.py`,
       `test_apply_drift.py`)
 - [x] Output: human-friendly table (`render_table`: create/update/block/fail/
       unchanged lines + summary counts, or drift-prefixed variants) or
@@ -113,10 +115,20 @@ schemas, model-backends, pipelines and triggers features.
 
 ## Known Gaps
 
-- **`--diff` graph detail is pipeline-only** — drift in schemas / model
-  backends / triggers reports at the top level with no per-entity breakdown.
-
 ## QA History
+- 2026-09-19: **improve-architecture (product-map walk)** — closed the
+  "`--diff` graph detail is pipeline-only" gap. Extended `drift_detail` so a
+  drifted schema / model backend / trigger carries a per-entity managed-field
+  breakdown (`{"fields": {added/removed/modified}}`, keyed `<kind>:<name>` so
+  a schema or trigger sharing a pipeline's name never collides with the
+  bare-name pipeline key), computed over the SAME canonical views that decided
+  drift (`plan._CURRENT_VIEWS` / `_trigger_current_view` — spend-limit
+  quantization, `config_json` secret stripping and desired-key restriction
+  inclusive), and the table output now renders `drift detail <kind> '<name>'`
+  field lines alongside the pipeline graph lines. Verified by
+  `test_apply_drift.py` (schema / model backend / trigger field breakdowns,
+  renderer output, and the no-bare-name-entry-for-non-pipeline guard).
+
 - 2026-09-19: **improve-architecture (product-map walk)** — closed the
   "No BDD feature file" gap. Registered `cli/apply.feature` into the executing
   BDD suite from the new `steps/test_apply_cli.py`, driving the REAL
