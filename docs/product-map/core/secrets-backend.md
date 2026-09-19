@@ -15,7 +15,8 @@ unit-tests:
   - backend/tests/unit/secrets_backend/test_aws_backend.py
   - backend/tests/unit/secrets_backend/test_run_sync.py
   - backend/tests/unit/core/test_fernet_rotation.py
-bdd: []
+bdd:
+  - backend/tests/bdd/features/infra/secrets_backend.feature
 depends-on: []
 status: covered
 ---
@@ -71,14 +72,28 @@ rather than in the manifest registry.
 
 ## Known Gaps
 
-- **No BDD feature files.** Backend behaviour is unit-tested
-  (``backend/tests/unit/secrets_backend/*`` + ``test_fernet_rotation.py``);
-  there is no pytest-bdd coverage and no UI route.
 - **External backends require a paid plan.** ``vault`` / ``aws`` are
-  license-gated; ``fernet`` is the only community-tier store.
+  license-gated; ``fernet`` is the only community-tier store, and their
+  live-service construction remains unit-tested only —
+  ``secrets_backend.feature`` (added 2026-09-19) locks the Fernet store, the
+  factory, and the unlicensed fallback end to end instead.
 
 ## QA History
 
+- 2026-09-19: **improve-architecture (product-map walk)** — closed the "No
+  BDD feature files" gap. Registered ``backend/tests/bdd/features/infra/
+  secrets_backend.feature`` into the executing BDD suite from
+  ``steps/test_secrets_backend.py``, driving the REAL
+  ``modulo.core.secrets_backend`` seams network-free and DB-free — the
+  ``FernetSecretsBackend`` persists/reads real rows in an in-memory aiosqlite
+  engine (round-trip, in-place upsert, delete, whitespace-normalised keys),
+  organisation scoping via the real ``WHERE organisation_id = :oid`` SQL the
+  backend emits (org A can read what org A wrote; org B gets ``KeyError``),
+  ``validate_key`` / ``_read_org_id_from_session`` fail-closed rejections
+  (blank key, no session, missing RLS context), real-key rotation fallback +
+  alien/corrupt ciphertext ``ValueError``, and the real factory default /
+  unknown-name / unlicensed-``vault``-fallback logic (forced exactly as the
+  unit suite does). `_ORPHANED_BDD_FEATURES` stays empty. Status: covered.
 - 2026-08-27: **improve-architecture (product-map walk)** — entry added to
   close the feature-graph gap for a shipped infra-only surface consumed by the
   connector / model-backend / notification / OTel-export credential paths but
