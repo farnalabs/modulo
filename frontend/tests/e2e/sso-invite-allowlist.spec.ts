@@ -58,7 +58,9 @@ test.afterEach(async ({ page, env }) => {
   if (createdUserId) {
     try {
       await page.request.post(`${base}/api/v1/admin/users/${createdUserId}/deactivate`, { headers })
-    } catch { /* best-effort */ }
+    } catch (err) {
+      console.warn('[sso-invite-allowlist] deactivate invited user failed (best-effort)', err)
+    }
     createdUserId = null
   }
 
@@ -66,7 +68,9 @@ test.afterEach(async ({ page, env }) => {
   if (createdInvitationId) {
     try {
       await page.request.delete(`${base}/api/v1/admin/users/invitations/${createdInvitationId}`, { headers })
-    } catch { /* best-effort — may already be consumed */ }
+    } catch (err) {
+      console.warn('[sso-invite-allowlist] revoke invitation failed (best-effort, may be consumed)', err)
+    }
     createdInvitationId = null
   }
 
@@ -74,7 +78,9 @@ test.afterEach(async ({ page, env }) => {
   if (createdProviderId) {
     try {
       await page.request.delete(`${base}/api/v1/admin/sso/providers/${createdProviderId}`, { headers })
-    } catch { /* best-effort */ }
+    } catch (err) {
+      console.warn('[sso-invite-allowlist] delete SSO provider failed (best-effort)', err)
+    }
     createdProviderId = null
   }
 })
