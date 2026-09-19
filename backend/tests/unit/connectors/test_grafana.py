@@ -261,21 +261,33 @@ async def test_query_users_with_permission_filter(connector: GrafanaConnector) -
 async def test_query_annotations(connector: GrafanaConnector) -> None:
     annotations = [
         {"id": 1, "text": "Deploy v2.0", "type": "alert"},
-        {"id": 2, "text": "Scaling event", "type": "alert"},
+        {"id": 2, "text": "Scaling event", "type": "annotation"},
     ]
-    respx.get(f"{_BASE}/api/annotations", params={"type": "alert"}).mock(
-        return_value=httpx.Response(200, json=annotations)
-    )
+    # ``type`` is opt-in — the default list must NOT force ``type=alert``
+    # (that silently excluded manually created annotations).
+    route = respx.get(f"{_BASE}/api/annotations").mock(return_value=httpx.Response(200, json=annotations))
     result = await connector.query(ConnectorQuery(resource="annotations"))
     assert len(result.records) == 2
     assert result.records[0]["text"] == "Deploy v2.0"
+    sent = route.calls.last.request.url.params
+    assert "type" not in sent, f"default annotation list must not filter by type, got {dict(sent)!r}"
+
+
+@respx.mock
+async def test_query_annotations_type_filter_opt_in(connector: GrafanaConnector) -> None:
+    respx.get(f"{_BASE}/api/annotations", params={"type": "alert"}).mock(
+        return_value=httpx.Response(200, json=[{"id": 9, "text": "Alert only"}])
+    )
+    result = await connector.query(ConnectorQuery(resource="annotations", filters={"type": "alert"}))
+    assert len(result.records) == 1
+    assert result.records[0]["text"] == "Alert only"
 
 
 @respx.mock
 async def test_query_annotations_with_filters(connector: GrafanaConnector) -> None:
     respx.get(
         f"{_BASE}/api/annotations",
-        params={"type": "alert", "from": "1700000000000", "to": "1700001000000", "limit": 5},
+        params={"from": "1700000000000", "to": "1700001000000", "limit": 5},
     ).mock(
         return_value=httpx.Response(
             200,

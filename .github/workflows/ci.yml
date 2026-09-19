@@ -235,6 +235,18 @@ jobs:
             [ -z "$f" ] && continue
             base="${f##*/}"
             case "$base" in
+              test_tier1b_*.py)
+                # The Tier 1b testcontainers suites own dedicated CI jobs with
+                # boot budgets sized for their real readiness windows: the light
+                # set runs in tier1b-light (--timeout=900) and the heavy set
+                # (gitlab, vllm, tgi) is nightly-only in tier1b-nightly
+                # (--timeout=3600). Feeding them to this job's --timeout=300
+                # turns their real boot (sonarqube 600s, gitlab 1800s) into
+                # pytest-timeout ERRORs (PR #773). Light coverage is unaffected:
+                # tier1b-light runs on every PR regardless of changed paths.
+                echo "  (skip) Tier 1b suite has a dedicated CI job: ${f}"
+                continue
+                ;;
               test_*.py|*_test.py) ;;
               *)
                 echo "  (skip) not a collectable test module: ${f}"
@@ -311,6 +323,59 @@ jobs:
           # exits 5 ("no tests collected"), failing the job.  The deploy
           # pre-deploy gate and schemathesis-nightly.yml both set REDIS_URL.
           REDIS_URL: "redis://localhost:6379/0"
+
+  tier1b-light:
+    # Tier 1b connectors (FAR-934): container-hosted LIGHT set only.
+    # Boots self-hostable connector servers + light local model servers via
+    # Testcontainers and drives the real Modulo connectors/backends against
+    # them. The heavy set (gitlab, vllm, tgi) is nightly-only — see
+    # tier1b-nightly.yml (it must NOT be a schedule trigger here: a
+    # schedule trigger fires this ENTIRE fast-validation suite, FAR-773).
+    name: Tier 1b testcontainers (light)
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free up disk space
+        # The Tier 1b suites pull many container images and the runner's local
+        # disk is the binding constraint: on ubicloud-standard-2 the suite has
+        # been observed with 0-2 MB free, which aborts Docker pulls and kills
+        # the shared Postgres Testcontainer mid-run (teardown ERRORs, PR #773).
+        # Remove preinstalled toolchains the suite never uses. Fail-open: a
+        # missing path or absent passwordless sudo is not an error.
+        shell: bash
+        run: |
+          echo "disk before:"; df -h / || true
+          for path in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+                      /usr/local/share/boost /usr/local/share/powershell; do
+            if [ -d "$path" ]; then
+              echo "removing $path"; sudo -n rm -rf "$path" || true
+            fi
+          done
+          sudo -n apt-get clean || true
+          echo "disk after:"; df -h / || true
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      # NOSONAR githubactions:S8541: pytest-bdd is a pinned source-archive dep (no
+      # wheel) and ibm-cos-sdk is sdist-only, so `--no-build` hard-fails the sync on
+      # a cold uv cache. `--frozen` locks the exact revisions, so the builds are
+      # deterministic and trusted (no untrusted setup scripts execute).
+      - run: uv sync --frozen  # NOSONAR
+      - name: Run Tier 1b light connector + model-server suites
+        run: |
+          uv run --no-build --no-sync pytest \
+            tests/integration/test_tier1b_connectors_light.py \
+            tests/integration/test_tier1b_models_light.py \
+            -q --tb=short --timeout=900 -p no:warnings
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+          # Tier 1b fixtures deliberately loud-skip (with a recorded reason)
+          # when a server cannot be stood up on the runner; successes assert
+          # against REAL server responses only.
 
   runner-ci-harness:
     # Bundled Runner CI harness (FAR-773): boots the deploy/compose/

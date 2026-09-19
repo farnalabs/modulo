@@ -21,7 +21,7 @@ from modulo.connectors.security import CredentialRedactor, redacting
 from modulo.core.ssrf import pinned_async_client_sync
 
 # Repeated REST path (S1192).
-_WORKFLOWS_PATH = "/rest/workflows"
+_WORKFLOWS_PATH = "/api/v1/workflows"
 
 
 class N8NConnector(ConnectorBase):
@@ -43,7 +43,7 @@ class N8NConnector(ConnectorBase):
             self._base_url,
             base_url=self._base_url,
             headers={
-                "Authorization": f"Bearer {self._token}",
+                "X-N8N-API-KEY": self._token,
                 "Accept": "application/json",
             },
             timeout=30,
@@ -138,7 +138,7 @@ class N8NConnector(ConnectorBase):
         workflow_id = q.filters.get("id") if q.filters else None
         if not workflow_id:
             raise ValueError("n8n workflow query requires 'id' filter")
-        resp = await c.get(f"/rest/workflows/{workflow_id}")
+        resp = await c.get(f"/api/v1/workflows/{workflow_id}")
         resp.raise_for_status()
         body = resp.json()
         record = body.get("data", {}) if isinstance(body, dict) else {}
@@ -153,7 +153,7 @@ class N8NConnector(ConnectorBase):
                 params[key] = q.filters[key]
         if q.cursor:
             params["cursor"] = q.cursor
-        resp = await c.get("/rest/executions", params=params)
+        resp = await c.get("/api/v1/executions", params=params)
         resp.raise_for_status()
         body = resp.json()
         records = _safe_records(body, "data")
@@ -167,7 +167,7 @@ class N8NConnector(ConnectorBase):
         execution_id = q.filters.get("id") if q.filters else None
         if not execution_id:
             raise ValueError("n8n execution query requires 'id' filter")
-        resp = await c.get(f"/rest/executions/{execution_id}")
+        resp = await c.get(f"/api/v1/executions/{execution_id}")
         resp.raise_for_status()
         body = resp.json()
         record = body.get("data", {}) if isinstance(body, dict) else {}
@@ -179,7 +179,7 @@ class N8NConnector(ConnectorBase):
             params["limit"] = q.limit
         if q.cursor:
             params["cursor"] = q.cursor
-        resp = await c.get("/rest/webhooks", params=params)
+        resp = await c.get("/api/v1/webhooks", params=params)
         resp.raise_for_status()
         body = resp.json()
         records = _safe_records(body, "data")
@@ -195,7 +195,7 @@ class N8NConnector(ConnectorBase):
             params["limit"] = q.limit
         if q.cursor:
             params["cursor"] = q.cursor
-        resp = await c.get("/rest/credentials", params=params)
+        resp = await c.get("/api/v1/credentials", params=params)
         resp.raise_for_status()
         body = resp.json()
         records = _safe_records(body, "data")
@@ -209,7 +209,7 @@ class N8NConnector(ConnectorBase):
         credential_id = q.filters.get("id") if q.filters else None
         if not credential_id:
             raise ValueError("n8n credential query requires 'id' filter")
-        resp = await c.get(f"/rest/credentials/{credential_id}")
+        resp = await c.get(f"/api/v1/credentials/{credential_id}")
         resp.raise_for_status()
         body = resp.json()
         record = body.get("data", {}) if isinstance(body, dict) else {}
@@ -221,7 +221,7 @@ class N8NConnector(ConnectorBase):
             params["limit"] = q.limit
         if q.cursor:
             params["cursor"] = q.cursor
-        resp = await c.get("/rest/tags", params=params)
+        resp = await c.get("/api/v1/tags", params=params)
         resp.raise_for_status()
         body = resp.json()
         records = _safe_records(body, "data")
@@ -237,7 +237,7 @@ class N8NConnector(ConnectorBase):
             params["limit"] = q.limit
         if q.cursor:
             params["cursor"] = q.cursor
-        resp = await c.get("/rest/node-types", params=params)
+        resp = await c.get("/api/v1/node-types", params=params)
         resp.raise_for_status()
         body = resp.json()
         records = _safe_records(body, "data")
@@ -255,9 +255,9 @@ class N8NConnector(ConnectorBase):
             "name": name,
             "nodes": data.get("nodes", []),
             "connections": data.get("connections", {}),
+            # The public API requires the ``settings`` property (may be {}).
+            "settings": data.get("settings", {}),
         }
-        if "settings" in data:
-            body["settings"] = data["settings"]
         if "staticData" in data:
             body["staticData"] = data["staticData"]
         if "tags" in data:
@@ -275,7 +275,7 @@ class N8NConnector(ConnectorBase):
         for key in ("name", "nodes", "connections", "settings", "staticData", "tags"):
             if key in data:
                 body[key] = data[key]
-        resp = await c.put(f"/rest/workflows/{workflow_id}", json=body)
+        resp = await c.put(f"/api/v1/workflows/{workflow_id}", json=body)
         resp.raise_for_status()
         result = cast(_DICT_STR_ANY, resp.json())
         return cast(_DICT_STR_ANY, result.get("data", {}))
@@ -284,7 +284,7 @@ class N8NConnector(ConnectorBase):
         workflow_id = data.get("id")
         if not workflow_id:
             raise ValueError("n8n workflow activation requires 'id' in data")
-        resp = await c.post(f"/rest/workflows/{workflow_id}/activate")
+        resp = await c.post(f"/api/v1/workflows/{workflow_id}/activate")
         resp.raise_for_status()
         result = cast(_DICT_STR_ANY, resp.json())
         return cast(_DICT_STR_ANY, result.get("data", {}))
@@ -293,7 +293,7 @@ class N8NConnector(ConnectorBase):
         workflow_id = data.get("id")
         if not workflow_id:
             raise ValueError("n8n workflow deactivation requires 'id' in data")
-        resp = await c.post(f"/rest/workflows/{workflow_id}/deactivate")
+        resp = await c.post(f"/api/v1/workflows/{workflow_id}/deactivate")
         resp.raise_for_status()
         result = cast(_DICT_STR_ANY, resp.json())
         return cast(_DICT_STR_ANY, result.get("data", {}))
@@ -302,7 +302,7 @@ class N8NConnector(ConnectorBase):
         workflow_id = data.get("id")
         if not workflow_id:
             raise ValueError("n8n workflow deletion requires 'id' in data")
-        resp = await c.delete(f"/rest/workflows/{workflow_id}")
+        resp = await c.delete(f"/api/v1/workflows/{workflow_id}")
         if resp.status_code == 204:
             return {"id": workflow_id, "deleted": True}
         resp.raise_for_status()
@@ -313,7 +313,7 @@ class N8NConnector(ConnectorBase):
         execution_id = data.get("id")
         if not execution_id:
             raise ValueError("n8n execution deletion requires 'id' in data")
-        resp = await c.delete(f"/rest/executions/{execution_id}")
+        resp = await c.delete(f"/api/v1/executions/{execution_id}")
         if resp.status_code == 204:
             return {"id": execution_id, "deleted": True}
         resp.raise_for_status()
@@ -326,7 +326,7 @@ class N8NConnector(ConnectorBase):
         if not name or not cred_type:
             raise ValueError("n8n credential creation requires 'name' and 'type' in data")
         body: dict[str, Any] = {"name": name, "type": cred_type, "data": data.get("data", {})}
-        resp = await c.post("/rest/credentials", json=body)
+        resp = await c.post("/api/v1/credentials", json=body)
         resp.raise_for_status()
         result = cast(_DICT_STR_ANY, resp.json())
         return cast(_DICT_STR_ANY, result.get("data", {}))
@@ -335,7 +335,7 @@ class N8NConnector(ConnectorBase):
         execution_id = data.get("id")
         if not execution_id:
             raise ValueError("n8n execution retry requires 'id' in data")
-        resp = await c.post(f"/rest/executions/{execution_id}/retry")
+        resp = await c.post(f"/api/v1/executions/{execution_id}/retry")
         resp.raise_for_status()
         result = cast(_DICT_STR_ANY, resp.json())
         return cast(_DICT_STR_ANY, result.get("data", {}))

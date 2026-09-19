@@ -330,7 +330,7 @@ async def test_trello_connector_redacts_token_from_query_url() -> None:
         (lambda: PagerDutyConnector(token=_PD_TOKEN), "https://api.pagerduty.com/users", _PD_TOKEN),
         (
             lambda: N8NConnector(token=_N8N_TOKEN, base_url="https://n8n.example.com"),
-            "https://n8n.example.com/rest/workflows",
+            "https://n8n.example.com/api/v1/workflows",
             _N8N_TOKEN,
         ),
         (

@@ -201,7 +201,12 @@ class GrafanaConnector(ConnectorBase):
         )
 
     async def _list_annotations(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        params: dict[str, Any] = {"type": "alert"}
+        params: dict[str, Any] = {}
+        # ``type`` is opt-in: Grafana's default annotation list returns both
+        # manual and alert annotations; forcing ``type: alert`` silently
+        # excludes manually created ones.
+        if q.filters.get("type"):
+            params["type"] = q.filters["type"]
         for key in ("from", "to", "alertId", "dashboardId", "panelId", "limit"):
             if key in q.filters:
                 params[key] = q.filters[key]
