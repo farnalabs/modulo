@@ -137,23 +137,28 @@ jobs:
           fi
 
           # ---- 2. Check last successful merge-queue run age ----
-          # A successful run is one with conclusion == "success".
-          COMPLETED="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status completed --limit 10 --json databaseId,conclusion,updatedAt 2>/dev/null)" || COMPLETED="[]"
-          LAST_SUCCESS_AGE="$(echo "$COMPLETED" | python3 -c '
+          # Query the most recent SUCCESSFUL run DIRECTLY. Do NOT scan a
+          # mixed-conclusion window: cancellations structurally dominate it
+          # (the queue's own concurrency group cancels pending runs on every
+          # new event), so a "last N completed" window either contains no
+          # success at all or only a stale one — producing false "stalled"
+          # alarms and a wildly overstated age. Observed 2026-09-18: 1373 min
+          # reported while the true last success was ~20 min old, with 9 of
+          # the last 10 completed runs cancelled (FAR-975).
+          LAST_SUCCESS="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status success --limit 1 --json updatedAt 2>/dev/null)" || LAST_SUCCESS="[]"
+          LAST_SUCCESS_AGE="$(echo "$LAST_SUCCESS" | python3 -c '
           import json, sys, datetime
           try:
               runs = json.loads(sys.stdin.read())
           except Exception:
               runs = []
-          for r in runs:
-              if r.get("conclusion") == "success" and r.get("updatedAt"):
-                  updated = r["updatedAt"].replace("Z", "+00:00")
-                  dt = datetime.datetime.fromisoformat(updated)
-                  now = datetime.datetime.now(datetime.timezone.utc)
-                  age_min = int((now - dt).total_seconds() / 60)
-                  print(age_min)
-                  sys.exit(0)
-          print(-1)
+          if runs and runs[0].get("updatedAt"):
+              updated = runs[0]["updatedAt"].replace("Z", "+00:00")
+              dt = datetime.datetime.fromisoformat(updated)
+              now = datetime.datetime.now(datetime.timezone.utc)
+              print(int((now - dt).total_seconds() / 60))
+          else:
+              print(-1)
           ' 2>/dev/null)" || LAST_SUCCESS_AGE="-1"
 
           if [ "$LAST_SUCCESS_AGE" -ge 30 ]; then
@@ -163,7 +168,7 @@ jobs:
           elif [ "$LAST_SUCCESS_AGE" -ge 0 ]; then
             echo "Last successful merge-queue run was ${LAST_SUCCESS_AGE} min ago — within threshold."
           else
-            echo "::warning::merge-queue-watchdog: no successful run among the last 10 completed merge-queue runs — the queue may be stalled; re-arming."
+            echo "::warning::merge-queue-watchdog: no successful merge-queue run found — the queue may be stalled; re-arming."
           fi
 
           # ---- 3. Re-arm: dispatch merge-queue.yml if queue appears idle ----
