@@ -26,11 +26,17 @@ name: "Merge: Queue Watchdog"
 #      A run with SOME jobs started is left alone — a healthy self-chaining run
 #      can legitimately have an unstarted job (queue waiting on event-gate's
 #      CHAIN_READY_AT sleep), and cancelling it would destroy good queue work.
-#   2. Re-arm the queue by dispatching merge-queue.yml after clearing a stuck
-#      run, or whenever no merge-queue run is in progress but the last
-#      successful one is stale (>30 min).
-#   3. Escalate when the last successful merge-queue run is >30 min old
-#      (::error:: annotation).
+#   2. Re-arm the queue when no run is in progress/queued and the last
+#      completed run is older than 15 min (matching merge-queue.yml's intended
+#      cron cadence). A quiet-but-healthy repo must NOT be re-armed repeatedly;
+#      the threshold adds no load relative to design intent and is self-limiting
+#      (a dispatched run becomes in-progress/queued, blocking the next tick).
+#   3. Escalate on dispatch failure: when nothing has completed for >60 min
+#      despite repeated re-arms (::error:: annotation). A completed run of ANY
+#      conclusion (success, failure, cancelled) proves the queue machinery is
+#      alive — a quiet-but-healthy repo produces no alert. When no completed
+#      runs exist (age == -1), re-arm but do not alert (the age is
+#      unmeasurable, so "dispatch failure" cannot be asserted).
 #
 # Division of labour with merge-queue.yml's in-job sweep:
 #   - merge-queue.yml in-job sweep = belt-and-braces: runs only when the lock
@@ -136,17 +142,17 @@ jobs:
             done
           fi
 
-          # ---- 2. Check last successful merge-queue run age ----
-          # Query the most recent SUCCESSFUL run DIRECTLY. Do NOT scan a
-          # mixed-conclusion window: cancellations structurally dominate it
-          # (the queue's own concurrency group cancels pending runs on every
-          # new event), so a "last N completed" window either contains no
-          # success at all or only a stale one — producing false "stalled"
-          # alarms and a wildly overstated age. Observed 2026-09-18: 1373 min
-          # reported while the true last success was ~20 min old, with 9 of
-          # the last 10 completed runs cancelled (FAR-975).
-          LAST_SUCCESS="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status success --limit 1 --json updatedAt 2>/dev/null)" || LAST_SUCCESS="[]"
-          LAST_SUCCESS_AGE="$(echo "$LAST_SUCCESS" | python3 -c '
+          # ---- 2. Age of the last completed run (any conclusion) ----
+          # Query the most recent COMPLETED run. A completed run of ANY
+          # conclusion (success, failure, cancelled) proves the queue
+          # machinery — scheduler + runner — is alive. Using --status
+          # completed --limit 1 (instead of scanning a window of N) is
+          # immune to the historical crowding bug where cancellations
+          # structurally dominate a window and produce false "stalled"
+          # alarms (FAR-975, observed 2026-09-18: 1373 min reported while
+          # true last success was ~20 min old, with 9 of last 10 cancelled).
+          LAST_COMPLETED="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status completed --limit 1 --json updatedAt 2>/dev/null)" || LAST_COMPLETED="[]"
+          LAST_COMPLETED_AGE="$(echo "$LAST_COMPLETED" | python3 -c '
           import json, sys, datetime
           try:
               runs = json.loads(sys.stdin.read())
@@ -159,44 +165,75 @@ jobs:
               print(int((now - dt).total_seconds() / 60))
           else:
               print(-1)
-          ' 2>/dev/null)" || LAST_SUCCESS_AGE="-1"
+          ' 2>/dev/null)" || LAST_COMPLETED_AGE="-1"
 
-          if [ "$LAST_SUCCESS_AGE" -ge 30 ]; then
-            echo "::error::merge-queue-watchdog: last successful merge-queue run was ${LAST_SUCCESS_AGE} min ago — the merge queue is stalled."
-            echo "stalled=true" >> "$GITHUB_OUTPUT"
-            echo "last_success_age=${LAST_SUCCESS_AGE}" >> "$GITHUB_OUTPUT"
-          elif [ "$LAST_SUCCESS_AGE" -ge 0 ]; then
-            echo "Last successful merge-queue run was ${LAST_SUCCESS_AGE} min ago — within threshold."
-          else
-            echo "::warning::merge-queue-watchdog: no successful merge-queue run found — the queue may be stalled; re-arming."
-          fi
+          REARM_MIN=15   # match merge-queue.yml's intended 15-min cron cadence
+          ALERT_MIN_STALE=60  # four consecutive missed re-arms = dispatch failure
 
-          # ---- 3. Re-arm: dispatch merge-queue.yml if queue appears idle ----
-          # Re-arm when: (a) we just cancelled a stuck run, or (b) no merge-queue
-          # run is in progress and the last successful one is older than 30 min
-          # (the documented threshold — safely above merge-queue.yml's own 15-min
-          # cron so the watchdog only fires when the queue has genuinely missed
-          # ticks). Use repository_dispatch (NOT workflow_dispatch) —
-          # merge-queue.yml documents a GitHub caching bug where
-          # workflow_dispatch on a recently modified workflow returns HTTP 422.
-          # repository_dispatch is the established convention.
-          # Re-query in_progress AFTER the cancel loop: if the sweep just
-          # cancelled the only stuck run, the pre-sweep snapshot still shows it
+          # ---- 3. Decide: re-arm, alert, or both ----
+          # Re-query in_progress AND queued AFTER the cancel loop: if the sweep
+          # just cancelled a stuck run, the pre-sweep snapshot still shows it
           # as in_progress and would skip re-arm for a whole tick (up to 10 min).
           # Re-query so a freed queue can be re-armed in the same tick.
+          # Count queued as well as in_progress: a just-dispatched run sits
+          # "queued" and should not be re-dispatched.
           IN_PROGRESS_NOW="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status in_progress --limit 50 --json databaseId 2>/dev/null)" || IN_PROGRESS_NOW="[]"
-          IN_PROGRESS_COUNT="$(echo "$IN_PROGRESS_NOW" | jq --argjson me "${{ github.run_id }}" '[.[] | select(.databaseId != $me)] | length' 2>/dev/null)" || IN_PROGRESS_COUNT="0"
+          QUEUED_NOW="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status queued --limit 50 --json databaseId 2>/dev/null)" || QUEUED_NOW="[]"
+          ACTIVE_COUNT="$(echo "$IN_PROGRESS_NOW" "$QUEUED_NOW" | jq -s --argjson me "${{ github.run_id }}" '
+            [.[0][]?, .[1][]?]
+            | map(select(.databaseId != $me))
+            | length
+          ' 2>/dev/null)" || ACTIVE_COUNT="0"
 
           SHOULD_DISPATCH=false
-          if [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$CANCELLED_COUNT" -gt 0 ]; then
+          SHOULD_ALERT=false
+
+          if [ "$ACTIVE_COUNT" -eq 0 ] && [ "$CANCELLED_COUNT" -gt 0 ]; then
+            # Priority 1: we just freed the queue by cancelling stuck runs
             SHOULD_DISPATCH=true
             echo "Freed the queue by cancelling ${CANCELLED_COUNT} stuck run(s) — rearming."
-          elif [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$LAST_SUCCESS_AGE" -ge 30 ]; then
+            # Cancelling stuck runs proves the machinery was wedged, so a
+            # no-completion gap past the alert threshold on this same tick is a
+            # genuine dispatch failure — escalate instead of re-arming silently
+            # and hoping a later tick notices. (-1 means unmeasurable: no alert.)
+            #
+            # Knowingly conservative, and it can fire one tick early: the
+            # cancellations just issued become completed runs (conclusion
+            # "cancelled") moments later, so the NEXT tick would see fresh
+            # liveness and stay quiet. We accept that one-tick-early ::error::
+            # rather than deferring, because deferring creates a blind spot: if
+            # runner allocation is what is broken, every re-armed run gets stuck
+            # again, and a defer-only cancel/re-arm loop would escalate never.
+            # Section 1 restores the queue; this alert fires when it cannot stay
+            # restored. A one-off wedge therefore costs at most one early alert,
+            # while a permanent wedge still escalates.
+            if [ "$LAST_COMPLETED_AGE" -ge "$ALERT_MIN_STALE" ]; then
+              SHOULD_ALERT=true
+            fi
+          elif [ "$ACTIVE_COUNT" -gt 0 ]; then
+            echo "Run(s) in progress/queued — skipping re-arm and alert."
+          elif [ "$LAST_COMPLETED_AGE" -ge "$REARM_MIN" ]; then
+            # No active runs; last completed is old enough to re-arm
             SHOULD_DISPATCH=true
-            echo "No in_progress merge-queue runs and last success was ${LAST_SUCCESS_AGE} min ago — rearming."
-          elif [ "$IN_PROGRESS_COUNT" -eq 0 ] && [ "$LAST_SUCCESS_AGE" -eq -1 ]; then
+            echo "No in_progress/queued runs and last completed was ${LAST_COMPLETED_AGE} min ago — rearming."
+            if [ "$LAST_COMPLETED_AGE" -ge "$ALERT_MIN_STALE" ]; then
+              SHOULD_ALERT=true
+            fi
+          elif [ "$LAST_COMPLETED_AGE" -ge 0 ]; then
+            echo "No in_progress/queued runs but last completed was only ${LAST_COMPLETED_AGE} min ago — within rearm threshold."
+          else
+            # No completed runs at all — re-arm but do not alert (age is
+            # unmeasurable, so "dispatch failure" cannot be asserted).
             SHOULD_DISPATCH=true
-            echo "No in_progress merge-queue runs and no successful runs found — rearming."
+            echo "::warning::merge-queue-watchdog: no completed merge-queue run found — rearming; cannot assess dispatch failure without a completed-run baseline."
+          fi
+
+          if [ "$SHOULD_ALERT" = "true" ]; then
+            echo "::error::merge-queue-watchdog: no merge-queue run completed for ${LAST_COMPLETED_AGE} min despite repeated re-arms — the queue machinery appears broken."
+            echo "stalled=true" >> "$GITHUB_OUTPUT"
+            echo "last_completed_age=${LAST_COMPLETED_AGE}" >> "$GITHUB_OUTPUT"
+          elif [ "$LAST_COMPLETED_AGE" -ge 0 ]; then
+            echo "Last completed merge-queue run was ${LAST_COMPLETED_AGE} min ago — within alert threshold."
           fi
 
           if [ "$SHOULD_DISPATCH" = "true" ]; then
