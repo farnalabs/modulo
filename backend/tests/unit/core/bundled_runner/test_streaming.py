@@ -68,7 +68,19 @@ def test_split_exec_frame_aiodocker_message_shape() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _stream_provider() -> tuple[DockerRuntimeProvider, MagicMock]:
+def _stream_provider(monkeypatch: pytest.MonkeyPatch | None = None) -> tuple[DockerRuntimeProvider, MagicMock]:
+    """Build a mock-backed DockerRuntimeProvider for streaming tests.
+
+    Original endpoint: ``tcp://engine:2375`` (non-loopback).  We patch the
+    TLS validator to a no-op because these tests exercise the streaming
+    protocol, not TLS enforcement (which is covered in
+    test_docker_endpoint_tls.py).  The provider is never used for real I/O.
+    """
+    if monkeypatch is not None:
+        monkeypatch.setattr(
+            "modulo.core.runtime_provider.docker._validate_docker_endpoint_tls",
+            lambda _ep: None,
+        )
     provider = DockerRuntimeProvider(docker_host="tcp://engine:2375")
     client = MagicMock()
     stream = MagicMock()
@@ -79,8 +91,8 @@ def _stream_provider() -> tuple[DockerRuntimeProvider, MagicMock]:
     return provider, stream
 
 
-async def test_exec_stream_yields_chunks_and_exit_code() -> None:
-    provider, stream = _stream_provider()
+async def test_exec_stream_yields_chunks_and_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider, stream = _stream_provider(monkeypatch)
     exec_instance = MagicMock()
     exec_instance.start = AsyncMock(return_value=stream)
     exec_instance.inspect = AsyncMock(return_value={"ExitCode": 3})
@@ -108,10 +120,10 @@ async def test_exec_stream_yields_chunks_and_exit_code() -> None:
     assert process.error is None
 
 
-async def test_exec_stream_error_is_never_a_fabricated_success() -> None:
+async def test_exec_stream_error_is_never_a_fabricated_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """Engine/proxy drop mid-stream: process.error set, exit_code stays None,
     `done` fires — the dispatch layer classifies this as RETRYABLE."""
-    provider, stream = _stream_provider()
+    provider, stream = _stream_provider(monkeypatch)
     exec_instance = MagicMock()
     exec_instance.start = AsyncMock(return_value=stream)
     exec_instance.inspect = AsyncMock(return_value={"ExitCode": 0})
@@ -134,8 +146,8 @@ async def test_exec_stream_error_is_never_a_fabricated_success() -> None:
     assert process.exit_code is None
 
 
-async def test_exec_stream_unknown_ref_raises() -> None:
-    provider, _ = _stream_provider()
+async def test_exec_stream_unknown_ref_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider, _ = _stream_provider(monkeypatch)
     with pytest.raises(ValueError, match="Unknown workspace"):
         await provider.exec_command_stream("missing", ["echo"])
 

@@ -69,9 +69,21 @@ def deployment_identity() -> str:
 
 
 class _DockerWorkspaceSource:
-    """Docker engine boundary for the reconciler (same env resolution as the provider)."""
+    """Docker engine boundary for the reconciler (same env resolution as the provider).
+
+    FAR-1038: the reconciler is the SECOND consumer of the deployment's Docker
+    endpoint.  It applies the SAME TLS gate the provider applies at registration
+    (single enforcement point) — otherwise a remote cleartext endpoint the
+    provider refuses is still reachable through the orphan-sweep listing stream.
+    """
 
     def __init__(self, docker_host: str | None) -> None:
+        # Imported lazily (matching ``_get_client``); the validator is pure
+        # env/URL logic in the neutral endpoint_tls module, so unlike the
+        # concrete provider module it carries no aiodocker dependency.
+        from modulo.core.runtime_provider.endpoint_tls import validate_docker_endpoint_tls
+
+        validate_docker_endpoint_tls(docker_host)
         self._docker_host = docker_host
         self._client: Any = None
 

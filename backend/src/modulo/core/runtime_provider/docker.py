@@ -15,6 +15,9 @@ from typing import Any
 import aiodocker
 
 from modulo.core.runtime_provider import ExecProcess, ExecResult, ExecStreamChunk, RuntimeProvider, WorkspaceSpec
+from modulo.core.runtime_provider.endpoint_tls import (
+    validate_docker_endpoint_tls as _validate_docker_endpoint_tls,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -39,10 +42,26 @@ _TMPFS_TMP = "/tmp"  # noqa: S108 # nosec B108  # NOSONAR - container-side tmpfs
 _TMPFS_TMP_SIZE = "size=128m,mode=1777"
 # Dropped capabilities + no-new-privileges (no cap_add is granted).
 _CAP_DROP = ["ALL"]
-_SECURITY_OPT = ["no-new-privileges:true"]
-# The bundled runner image runs as the non-root `runner` uid (1001).
+# FAR-1037: explicit confinement profiles.  Every workspace container gets
+# an explicit seccomp profile (Docker's built-in default) and AppArmor
+# confinement (the host default profile).  These are *assertive* defaults —
+# a config that widens them (e.g. seccomp=unconfined) is rejected.
+#
+# ``seccomp=builtin`` is the daemon sentinel (moby's
+# ``config.SeccompProfileDefault``) that selects Docker's built-in default
+# profile.  It is NOT a profile name: the daemon JSON-decodes any other
+# non-``unconfined`` value as an inline profile, so e.g. ``seccomp=default``
+# or ``seccomp=docker/default`` fail at container start with
+# "Decoding seccomp profile failed".
+_SECURITY_OPT = [
+    "no-new-privileges:true",
+    "seccomp=builtin",
+    "apparmor=docker-default",
+]
+# FAR-1036: non-root user for EVERY workspace container.  Images that
+# genuinely cannot run as an arbitrary uid must set
+# ``spec.allow_root_user = True`` — this is logged as a warning.
 _RUNNER_USER = "1001:1001"
-_IMAGES_WITH_RUNNER_USER = ("modulo-runner",)
 # Dedicated workspace bridge network default (compose overlay-declared).
 _DEFAULT_WORKSPACE_NETWORK = "modulo-runner-workspace"
 # Deployment-identity label (reconciler machine scoping, ADR 029): sourced
@@ -52,6 +71,10 @@ _DEPLOYMENT_IDENTITY_ENV = "MODULO_RUNNER_MACHINE_ID"
 _DEPLOYMENT_IDENTITY_LABEL = "modulo.machine.id"
 
 
+# FAR-1038: remote-endpoint TLS enforcement lives in the neutral
+# ``endpoint_tls`` module so both Docker consumers (this provider and the
+# orphan reconciler) share ONE enforcement point without the reconciler
+# importing this concrete provider module (architecture contract).
 def _route_by_channel(channel: Any, data: Any) -> tuple[bytes, bytes]:
     """Route a (channel, data) pair: channel 1 -> stdout, anything else -> stderr."""
     if channel == 1:
@@ -132,6 +155,10 @@ class DockerRuntimeProvider(RuntimeProvider):
     2. ``MODULO_DOCKER_HOST`` environment variable
     3. ``DOCKER_HOST`` environment variable
     4. ``None`` (local socket — default)
+
+    FAR-1038: remote (non-local) TCP endpoints require TLS.  Local endpoints
+    (unix sockets, loopback TCP) and the shipped compose-internal proxy are
+    exempt.
     """
 
     provider_id = "runner_docker"
@@ -146,6 +173,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         workspace_network: str = _DEFAULT_WORKSPACE_NETWORK,
     ) -> None:
         self._docker_host = docker_host or os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
+        _validate_docker_endpoint_tls(self._docker_host)
         self._default_image = default_image
         self._create_timeout = create_timeout
         self._start_timeout = start_timeout
@@ -243,13 +271,15 @@ class DockerRuntimeProvider(RuntimeProvider):
         env: list[str],
         network_mode: str,
         workspace_labels: dict[str, str],
+        *,
+        allow_root_user: bool = False,
     ) -> dict[str, Any]:
         """Build the container create config (D4 hardening defaults, ADR 029)."""
         host_config: dict[str, Any] = {
             "AutoRemove": True,
             "Memory": memory_mb * 1024 * 1024,
             # D4 hardening: 1.0 CPU default, read-only rootfs, tmpfs
-            # workdir/tmp, dropped caps, no-new-privileges.
+            # workdir/tmp, dropped caps, no-new-privileges, seccomp, AppArmor.
             "NanoCpus": int(_DEFAULT_HARDENING_CPU * 1_000_000_000),
             "ReadonlyRootfs": True,
             "Tmpfs": {
@@ -267,9 +297,11 @@ class DockerRuntimeProvider(RuntimeProvider):
             "Labels": workspace_labels,
             "HostConfig": host_config,
         }
-        # Non-root user at provision. Only stamped on first-party runner
-        # images (generic base images carry no runner user).
-        if any(marker in image.lower() for marker in _IMAGES_WITH_RUNNER_USER):
+        # FAR-1036: non-root user at provision for ALL images by default.
+        # Only skipped when the profile explicitly opts in to root via
+        # ``allow_root_user=True`` (images that genuinely cannot run as an
+        # arbitrary uid).
+        if not allow_root_user:
             config["User"] = _RUNNER_USER
         return config
 
@@ -312,11 +344,13 @@ class DockerRuntimeProvider(RuntimeProvider):
         subsequent ``exec_command`` calls. Auto-removal is enabled.
 
         Hardening defaults (FAR-590 D4 / ADR 029 — applied at provision):
-        non-root user (runner uid 1001 on modulo-runner images), read-only
-        rootfs + tmpfs workdir/tmp with adequate sizing, dropped caps +
-        no-new-privileges, 1.0 CPU / 1 GiB resources, dedicated workspace
-        bridge network (``none`` opt-in per profile), structured labels from
-        ``spec.workspace_metadata`` + the machine deployment-identity label.
+        non-root user (uid 1001, FAR-1036 default for ALL images unless
+        ``spec.allow_root_user`` is set), read-only rootfs + tmpfs workdir/tmp
+        with adequate sizing, dropped caps + no-new-privileges + explicit
+        seccomp and AppArmor profiles (FAR-1037), 1.0 CPU / 1 GiB resources,
+        dedicated workspace bridge network (``none`` opt-in per profile),
+        structured labels from ``spec.workspace_metadata`` + the machine
+        deployment-identity label.
         """
         client = await self._get_client()
         image = spec.image_ref.strip() if spec.image_ref else self._default_image
@@ -327,7 +361,22 @@ class DockerRuntimeProvider(RuntimeProvider):
         env = self._build_container_env(spec.labels)
         workspace_labels = self._build_workspace_labels(spec)
         network_mode = self._resolve_network_mode(spec)
-        config = self._build_container_config(image, memory_mb, env, network_mode, workspace_labels)
+
+        # FAR-1036: log when root-user opt-out is used.
+        if spec.allow_root_user:
+            _log.warning(
+                "workspace image %s running as root (allow_root_user=True) — this weakens the security boundary",
+                image,
+            )
+
+        config = self._build_container_config(
+            image,
+            memory_mb,
+            env,
+            network_mode,
+            workspace_labels,
+            allow_root_user=spec.allow_root_user,
+        )
 
         try:
             await self._pull_image_best_effort(client, image)

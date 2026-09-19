@@ -176,6 +176,12 @@ class WorkspaceSpec:
     # per-provider semantics.
     repo_url: str = ""
     repo_ref: str = ""
+    # FAR-1036: root-user opt-in.  When True the Docker provider skips the
+    # non-root user stamp (uid 1001) — for images that genuinely cannot run
+    # as an arbitrary uid.  The default is False (non-root), so every
+    # workspace runs as a non-root uid unless the profile explicitly opts
+    # in to root.  Used only by the Docker provider; E2B/Local ignore it.
+    allow_root_user: bool = False
 
 
 @dataclass
@@ -353,6 +359,12 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
             hub.register("runner_docker", docker)
         except ImportError:
             _log.warning("Docker dependency not installed; skipping Docker provider")
+        except ValueError as exc:
+            # FAR-1038: TLS validation failure during provider registration
+            # is a configuration error — surface it as a warning (the provider
+            # stays unregistered; a dispatch attempt later raises
+            # ProviderNotConfiguredError with remediation).
+            _log.warning("Docker provider not registered (TLS required): %s", exc)
 
     return hub
 

@@ -162,6 +162,115 @@ An unregistered-but-bound provider raises `ProviderNotConfiguredError`
 (surfaced as the typed dispatch-unbound error) naming `MODULO_DOCKER_HOST`
 — never a silent fallback.
 
+## Container hardening (enforced defaults)
+
+Every workspace container is provisioned with these confinement mechanisms
+applied at create-time. They are NOT optional per-profile — they are
+hardened defaults that cannot be silently widened.
+
+### Non-root user (FAR-1036)
+
+Every workspace container runs as uid 1001:1001 by default, regardless of
+the image's declared user. This is the single biggest containment primitive
+against a compromised agent session.
+
+**Opt-out**: set `spec.allow_root_user = True` on the profile to skip the
+non-root stamp. This is logged as a WARNING (`running as root
+(allow_root_user=True) — this weakens the security boundary`). Images that
+genuinely cannot run as an arbitrary uid (e.g. images that bind-mount
+host-owned paths owned by root) must use this opt-out; the opt-out is
+explicit and auditable.
+
+### Seccomp profile (FAR-1037)
+
+Every workspace container asserts Docker's built-in default seccomp profile
+(`seccomp=builtin`). This blocks ~44 syscalls that are unnecessary
+for container workloads (e.g. `mount`, `reboot`, `ptrace`).
+
+`builtin` is the daemon sentinel that selects the built-in default profile
+(moby's `config.SeccompProfileDefault`), not a profile name: the daemon
+JSON-decodes any other non-`unconfined` value as an inline profile, so a
+value such as `seccomp=default` fails container creation with
+"Decoding seccomp profile failed".
+
+The profile is **non-relaxable**: the `_SECURITY_OPT` constant includes
+`seccomp=builtin` and the `_build_container_config` method copies it
+verbatim. A configuration that widens it (e.g. `seccomp=unconfined`) would
+require modifying the source constant, which is a code change visible in
+review.
+
+### AppArmor confinement (FAR-1037)
+
+Every workspace container asserts AppArmor's default profile
+(`apparmor=docker-default`). On hosts with AppArmor enabled, this confines
+the container to the standard Docker profile (file network mediation,
+capability restrictions). On hosts without AppArmor, Docker silently ignores
+the `apparmor=` option — this is a documented degradation, not a silent
+failure: the seccomp profile still applies.
+
+### Other hardening defaults
+
+- `no-new-privileges:true` — prevents privilege escalation via setuid binaries
+- `cap_drop: ALL` — drops every Linux capability
+- `read-only rootfs` with tmpfs `/home/user` (512 MB) and `/tmp` (128 MB)
+- 1.0 CPU / 1 GiB resource limits
+
+## Docker endpoint TLS (FAR-1038)
+
+The Docker endpoint (`MODULO_DOCKER_HOST` / `DOCKER_HOST`) is validated at
+provider registration time:
+
+| Endpoint type | TLS required? | Rationale |
+|---|---|---|
+| `None` or unset | No | Default local socket — no network transit |
+| `unix://...` | No | Local socket — no network transit |
+| `tcp://localhost:2375` | No | Loopback — does not traverse a network |
+| `tcp://127.x.y.z:PORT` | No | IPv4 loopback — does not traverse a network |
+| `tcp://[::1]:PORT` | No | IPv6 loopback — does not traverse a network |
+| `tcp://docker-socket-proxy:2375` | No | Shipped compose-internal proxy on a private bridge |
+| Any other `tcp://...` | **Yes** | Remote TCP carries exec streams, inspect responses, and env-injected credentials in cleartext |
+
+**What counts as "local"**: unix sockets, loopback TCP endpoints
+(`localhost`, `127.x.y.z`, `::1`), and the shipped compose-internal hostname
+on the shipped port (`tcp://docker-socket-proxy:2375`). A bare hostname on
+the compose network (`tcp://my-service:2375`) is NOT treated as local — it
+could be a different host on a different network segment. The
+`docker-socket-proxy` exemption is pinned to port `2375`: the same host on
+any other port is remote and requires TLS. If in doubt, the rule requires TLS.
+
+**Single enforcement point**: the same validation runs for BOTH Docker
+consumers — the runtime provider at registration and the orphan reconciler
+when it constructs its engine client — so a remote cleartext endpoint cannot
+slip through one path while being rejected on the other.
+
+**Escape hatch**: operators who need a non-loopback, non-TLS endpoint (e.g. a
+socket proxy on a private bridge) can set
+`MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT=1`. This logs a prominent warning at
+provider construction but permits the endpoint. See
+`docs/security/bundled-runner-operator-guide.md` §8 for caveats.
+
+**How TLS is detected**: the validation checks `DOCKER_TLS_VERIFY` and
+`DOCKER_CERT_PATH` environment variables. A remote endpoint without either
+set is rejected at registration with an actionable error:
+
+```
+Remote Docker endpoint 'tcp://remote-host:2375' requires TLS.  Set
+DOCKER_TLS_VERIFY=1 and DOCKER_CERT_PATH to a directory containing
+client certificates (cert.pem, key.pem, ca.pem), or use a local unix
+socket / the compose-internal proxy instead.
+```
+
+**Supported TLS configurations**:
+
+- **Server TLS** (one-way): `DOCKER_TLS_VERIFY=1` + `DOCKER_CERT_PATH`
+  containing `ca.pem`. Verifies the remote engine's certificate.
+- **Mutual TLS** (two-way): `DOCKER_TLS_VERIFY=1` + `DOCKER_CERT_PATH`
+  containing `ca.pem`, `cert.pem`, and `key.pem`. Both client and server
+  authenticate.
+
+See `docs/security/bundled-runner-operator-guide.md` §8 for operator-facing
+setup instructions.
+
 ## What is NOT (yet) enforced
 
 Honest inventory of D4 boundaries that are documented rather than

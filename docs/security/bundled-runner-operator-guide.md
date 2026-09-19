@@ -163,6 +163,91 @@ Everything else — hardening, labels, reconciler scoping — behaves
 identically; the reconciler's machine-identity label isolates multiple
 deployments sharing one engine.
 
+**FAR-1038: TLS is required for remote TCP endpoints.** A remote engine
+endpoint without TLS is rejected at provider registration with an actionable
+error. **Loopback** TCP endpoints (`tcp://localhost:2375`,
+`tcp://127.0.0.1:2375`, `tcp://[::1]:2375`) are exempt because they do not
+traverse a network — this is a legitimate, common configuration (Docker
+Desktop, Docker-in-Docker, CI rigs). Local unix sockets and the shipped
+compose-internal proxy (`tcp://docker-socket-proxy:2375`) are also exempt.
+The `docker-socket-proxy` exemption is pinned to the shipped port `2375`;
+the same hostname on any other port is treated as remote. The gate is
+enforced for both Docker consumers — provider registration and the orphan
+reconciler — so a rejected endpoint is rejected on every path.
+
+### Loopback endpoints (no TLS needed)
+
+These endpoints are treated as local because loopback does not traverse a
+network:
+
+| Endpoint | Notes |
+|---|---|
+| `tcp://localhost:2375` | Docker Desktop default, DinD, CI rigs |
+| `tcp://127.0.0.1:2375` | Explicit IPv4 loopback |
+| `tcp://[::1]:2375` | Explicit IPv6 loopback |
+
+No TLS configuration is needed for these. `DOCKER_HOST=tcp://localhost:2375`
+works out of the box.
+
+### Escape hatch: `MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT`
+
+For operators who need a non-loopback, non-TLS endpoint (e.g. a socket proxy
+on a private bridge at a hostname other than `docker-socket-proxy`), set:
+
+```bash
+export MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT=1
+```
+
+This bypasses the TLS check but **logs a prominent warning** at provider
+construction:
+
+```
+WARNING: INSECURE: Docker endpoint 'tcp://my-proxy:2375' accepted without TLS
+(MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT is set) — credentials will be
+transmitted in cleartext
+```
+
+**Caveats:**
+- All Docker API traffic (exec streams, inspect responses, env-injected
+  credentials) is transmitted in cleartext over the network.
+- This is appropriate only for endpoints on isolated private networks where
+  sniffing risk is acceptable (e.g. a dedicated Docker bridge on a single
+  host).
+- For production remote engines, prefer TLS (mutual or server-only) over the
+  escape hatch.
+
+### TLS configuration
+
+To configure TLS for a remote engine:
+
+```bash
+# 1. Generate or obtain client certificates
+#    - ca.pem:   Certificate Authority that signed the engine's cert
+#    - cert.pem: Client certificate (for mutual TLS)
+#    - key.pem:  Client private key (for mutual TLS)
+
+# 2. Place them in a directory
+mkdir -p /etc/modulo/docker-certs
+cp ca.pem cert.pem key.pem /etc/modulo/docker-certs/
+
+# 3. Set environment variables (in your .env, docker-compose.yml, or systemd unit)
+export DOCKER_TLS_VERIFY=1
+export DOCKER_CERT_PATH=/etc/modulo/docker-certs
+export MODULO_DOCKER_HOST=tcp://remote-engine-host:2376
+```
+
+**Server TLS** (one-way): only `ca.pem` is required in `DOCKER_CERT_PATH`.
+The client verifies the engine's certificate but the engine does not
+authenticate the client.
+
+**Mutual TLS** (two-way): all three files (`ca.pem`, `cert.pem`,
+`key.pem`) must be present. Both client and server authenticate — this is
+the recommended configuration for production remote engines.
+
+The Docker daemon must be configured with TLS enabled (`--tlsverify
+--tlscacert=ca.pem --tlscert=server-cert.pem --tlskey=server-key.pem`)
+and typically listens on port 2376 (TLS) instead of 2375 (plaintext).
+
 ## 9. Rollback
 
 - Disable the tier: unset the `runner` profile (the overlay is opt-in) —
