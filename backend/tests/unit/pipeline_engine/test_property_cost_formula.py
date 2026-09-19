@@ -150,20 +150,30 @@ class TestFormulaProperties:
             validate_formula(formula, VALID_IDENTS)
 
     @given(
-        formula=st.sampled_from(["(x + y) * (a - b)"]),
-        params=params_strategy,
+        x=st.decimals(min_value=Decimal(1), max_value=Decimal(1000), places=2),
+        y=st.decimals(min_value=Decimal(1), max_value=Decimal(1000), places=2),
     )
-    @settings(max_examples=30, deadline=None)
-    def test_negative_final_result_raises(self, formula: str, params: dict) -> None:
-        """A negative final result raises CostFormulaError (eval_error)."""
-        try:
-            result = evaluate_formula(formula, params, VALID_IDENTS)
-        except CostFormulaError as e:
-            if "negative" in str(e):
-                return  # Expected path
-            return
-        if result < 0:
-            pytest.fail(f"Negative result {result} was not rejected")
+    @settings(max_examples=50, deadline=None)
+    def test_negative_final_result_raises(self, x: Decimal, y: Decimal) -> None:
+        """A negative final result raises CostFormulaError (code ``eval_error``)."""
+        assume(x < y)
+        with pytest.raises(CostFormulaError) as exc_info:
+            evaluate_formula("x - y", {"x": x, "y": y}, VALID_IDENTS)
+        assert exc_info.value.code == "eval_error"
+        assert "negative" in str(exc_info.value)
+
+    @given(
+        x=st.decimals(min_value=Decimal(1), max_value=Decimal(1000), places=2),
+        y=st.decimals(min_value=Decimal(1), max_value=Decimal(1000), places=2),
+        z=st.decimals(min_value=Decimal(1), max_value=Decimal(1000), places=2),
+    )
+    @settings(max_examples=50, deadline=None)
+    def test_negative_intermediate_result_is_allowed(self, x: Decimal, y: Decimal, z: Decimal) -> None:
+        """Only the final value is checked: a negative subexpression is allowed."""
+        assume(x < y)
+        assume(x - y + z >= 0)
+        result = evaluate_formula("(x - y) + z", {"x": x, "y": y, "z": z}, VALID_IDENTS)
+        assert result == x - y + z
 
     @given(
         formula=simple_valid_formulas,
