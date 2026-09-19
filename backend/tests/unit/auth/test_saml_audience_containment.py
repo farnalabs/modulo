@@ -319,7 +319,7 @@ class TestRequestDataAcsDerivation:
     def test_no_acs_url_falls_back_to_legacy_localhost(self) -> None:
         data = ModuloSamlAuth._get_request_data()
         assert data["http_host"] == "localhost"
-        assert data["script_name"] == ""
+        assert not data["script_name"]
         assert data["https"] == "off"
 
 
