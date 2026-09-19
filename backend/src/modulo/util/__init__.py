@@ -62,13 +62,17 @@ def sanitise_log_value(value: object, limit: int = DEFAULT_LOG_LIMIT) -> str:
 # - ``none``       → not a named network; opt-in via egress_policy instead
 # - ``default``    → Docker alias for ``bridge``
 #
-# Accepted pattern: a plain Docker network *name* — lowercase alphanumeric
-# with dots, dashes, and underscores (Docker's actual character set is
-# wider, but deployment-owned bridge networks never need exotic characters).
+# Accepted pattern: a plain Docker network *name* — Docker's own name
+# charset, a leading alphanumeric followed by alphanumerics, dots, dashes,
+# or underscores.  The character class is matched against the value exactly
+# as returned (case preserved), so what is validated is what reaches Docker.
 #
 # None / empty → provider default (the deployment-owned bridge).
 
-_NETWORK_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9._-]{1,127})?$")
+_NETWORK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+#: Cap (in code points) on the offending value echoed in the validation error.
+_NETWORK_ERROR_VALUE_LIMIT = 64
 
 _DANGEROUS_NETWORK_MODES: frozenset[str] = frozenset(
     {
@@ -88,8 +92,11 @@ class WorkspaceNetworkValidationError(ValueError):
 
     def __init__(self, value: str) -> None:
         self.value = value
+        # Bound and sanitise the echoed value: it is request-controlled input
+        # and must not be able to forge log lines or bloat a 422 detail.
+        safe = sanitise_log_value(value, _NETWORK_ERROR_VALUE_LIMIT)
         super().__init__(
-            f"workspace_network value {value!r} is not a valid named Docker network — "
+            f"workspace_network value {safe!r} is not a valid named Docker network — "
             "the following network modes are explicitly rejected: host, container:*, bridge, none, default. "
             "Use a deployment-owned bridge network name (e.g. 'modulo-runner-workspace')."
         )
@@ -114,7 +121,8 @@ def validate_workspace_network(value: str | None) -> str | None:
     # Reject container:* (shares another container's network namespace).
     if low.startswith("container:"):
         raise WorkspaceNetworkValidationError(stripped)
-    # Validate against the safe-name pattern.
-    if not _NETWORK_NAME_RE.match(low):
+    # Validate the exact value that will be returned, so validation and the
+    # value handed to Docker can never diverge (case is preserved).
+    if not _NETWORK_NAME_RE.match(stripped):
         raise WorkspaceNetworkValidationError(stripped)
     return stripped

@@ -97,6 +97,27 @@ class TestValidateWorkspaceNetwork:
         with pytest.raises(WorkspaceNetworkValidationError):
             validate_workspace_network("host:8080")
 
+    def test_single_character_name_accepted(self) -> None:
+        """Single-character names are valid Docker network names and accepted."""
+        assert validate_workspace_network("a") == "a"
+
+    def test_valid_mixed_case_name_preserved(self) -> None:
+        """Mixed-case names are valid Docker names; the exact value is returned."""
+        assert validate_workspace_network("My-Network") == "My-Network"
+
+    def test_error_message_bounds_offending_value(self) -> None:
+        """The echoed offending value is capped so a 422 detail cannot bloat."""
+        huge = "a" * 500
+        with pytest.raises(WorkspaceNetworkValidationError) as exc_info:
+            validate_workspace_network(huge)
+        assert huge not in str(exc_info.value)
+
+    def test_error_message_sanitises_newlines(self) -> None:
+        """Control characters in the offending value cannot forge log lines."""
+        with pytest.raises(WorkspaceNetworkValidationError) as exc_info:
+            validate_workspace_network("bad\nname")
+        assert "\n" not in str(exc_info.value)
+
 
 # ---------------------------------------------------------------------------
 # _workspace_spec_for_dispatch — dispatch-time defence in depth
