@@ -569,13 +569,15 @@ const domainInput = ref('')
 const domainError = ref<string | null>(null)
 
 /** Shared helper for all domain-entry paths (Enter, blur, submit, paste).
- *  Splits on commas and/or whitespace, normalises each token, validates,
- *  deduplicates within the batch AND against existing entries, and emits a
- *  SINGLE update:data with all valid domains collected so far. Invalid tokens
- *  are surfaced as errors without discarding the valid prefix. */
-function addDomainsFromText(raw: string) {
-  const parts = raw.split(/[, ]+/).map(s => s.trim()).filter(Boolean)
-  if (!parts.length) return
+ *  Splits on commas and/or whitespace (including tabs/newlines), normalises
+ *  each token, validates, deduplicates within the batch AND against existing
+ *  entries, and emits a SINGLE update:data with all valid domains collected so
+ *  far. Invalid tokens are surfaced as errors without discarding the valid
+ *  prefix. Returns true when every token was valid (or the input was empty),
+ *  false when at least one token was rejected. */
+function addDomainsFromText(raw: string): boolean {
+  const parts = raw.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
+  if (!parts.length) return true
   const domains = [...props.data.allowed_domains]
   let firstError: DomainErrorKey | null = null
   for (const part of parts) {
@@ -593,14 +595,16 @@ function addDomainsFromText(raw: string) {
     emitUpdate({ ...props.data, allowed_domains: domains })
   }
   if (firstError) {
-    // Keep the original text in the input so (a) the user can recover the
-    // rejected tokens, and (b) changing domainInput would fire the watcher
-    // that clears domainError before the next render.
+    // Leave domainInput untouched on typed paths so the user can recover the
+    // rejected tokens, and so the domainInput watcher does not clear
+    // domainError before the next render. On the paste path the rejected text
+    // was never inserted, so there is nothing to recover.
     domainError.value = t(firstError)
-  } else {
-    domainError.value = null
-    domainInput.value = ''
+    return false
   }
+  domainError.value = null
+  domainInput.value = ''
+  return true
 }
 
 function addDomain() {
@@ -610,38 +614,29 @@ function addDomain() {
 /**
  * Fix #4: Commit any pending domain input that hasn't been added yet.
  * Called on blur, before save, and when leaving domains mode.
- * Uses the same splitting logic as addDomain so typed comma/space-separated
- * input is handled identically to paste.
- * Returns true if the pending value was valid (or empty), false if invalid.
+ * Delegates to addDomainsFromText so typed comma/space-separated input is
+ * handled identically to the Enter and paste paths.
+ * Returns true if every pending token was valid (or the input was empty),
+ * false if any token was rejected.
  */
 function commitPendingDomain(): boolean {
-  const raw = domainInput.value.trim()
-  if (!raw) return true
-  // Split before checking — matches the Enter/paste paths
-  const parts = raw.split(/[, ]+/).map(s => s.trim()).filter(Boolean)
-  const hasInvalid = parts.some(p => !!validateDomain(p))
-  if (hasInvalid) {
-    addDomainsFromText(raw)
-    return false
-  }
-  addDomainsFromText(raw)
-  return true
+  return addDomainsFromText(domainInput.value)
 }
 
 /**
  * Handle paste: delegate to the shared multi-domain helper.
- * Prevent default when the paste contains commas or spaces so the browser
- * does not insert the raw multi-domain text into the input (which would
- * trigger the domainInput watcher and clear any error we just set).
+ * Prevent default when the paste contains any separator (comma, space, tab or
+ * newline) so the browser does not insert the raw multi-domain text into the
+ * input (which would trigger the domainInput watcher and clear any error we
+ * just set).
  */
 function handleDomainPaste(e: ClipboardEvent) {
   const pasted = e.clipboardData?.getData('text') ?? ''
-  if (/[, ]/.test(pasted)) {
+  if (!pasted) return
+  if (/[\s,]/.test(pasted)) {
     e.preventDefault()
   }
-  if (pasted) {
-    addDomainsFromText(pasted)
-  }
+  addDomainsFromText(pasted)
 }
 
 function removeDomain(idx: number) {

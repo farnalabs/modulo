@@ -595,7 +595,7 @@ describe('SsoProviderForm', () => {
     expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(true)
   })
 
-﻿  // ── FAR-1016: multi-domain splitting on every entry path ──────────
+  // ── FAR-1016: multi-domain splitting on every entry path ──────────
   it('adds space-separated domains on Enter (FAR-1016)', async () => {
     const Harness = defineComponent({
       components: { SsoProviderForm },
@@ -638,6 +638,33 @@ describe('SsoProviderForm', () => {
 
     const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
     expect(payload.allowed_domains).toEqual(['seed.com', 'a.com', 'b.com'])
+  })
+
+  it('splits a tab/newline-separated paste (FAR-1016)', async () => {
+    const Harness = defineComponent({
+      components: { SsoProviderForm },
+      setup() {
+        const data = reactive(makeData({ auto_provision: true, allowed_domains: ['seed.com'] }))
+        return {
+          data,
+          onUpdate: (value: SsoFormState) => Object.assign(data, value),
+        }
+      },
+      template: '<SsoProviderForm :data="data" :saving="false" submit-label="Save" saving-label="Saving..." :error="null" :presets="[]" @update:data="onUpdate" />',
+    })
+    const wrapper = mount(Harness, { global: { stubs: { Select: SelectStub } } })
+    const input = wrapper.find('[data-testid="sso-domain-input"]')
+
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: { getData: () => 'a.com\tb.com\nc.com' },
+    })
+    input.element.dispatchEvent(pasteEvent)
+    await nextTick()
+
+    const payload = wrapper.findComponent(SsoProviderForm).emitted('update:data')!.at(-1)![0] as SsoFormState
+    expect(payload.allowed_domains).toEqual(['seed.com', 'a.com', 'b.com', 'c.com'])
+    expect(wrapper.find('[data-testid="sso-domain-error"]').exists()).toBe(false)
   })
 
   it('adds space-separated domains on blur (FAR-1016)', async () => {
