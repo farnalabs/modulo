@@ -5,7 +5,7 @@ import contextlib
 import json
 import uuid
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -14,6 +14,7 @@ import pytest
 from defusedxml import ElementTree
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from lxml import etree as lxml_etree
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import (
@@ -119,6 +120,81 @@ def _mock_session(scalar: object = None) -> AsyncMock:
     result.scalars.return_value.all.return_value = []
     session.execute.return_value = result
     return session
+
+
+_NS_SAML = "urn:oasis:names:tc:SAML:2.0:assertion"
+_NS_SAMLP = "urn:oasis:names:tc:SAML:2.0:protocol"
+_NS_STATUS = "urn:oasis:names:tc:SAML:2.0:status"
+
+
+def _build_xsd_compliant_saml_response(
+    *,
+    audience: str,
+    destination: str | None = None,
+    recipient: str | None = None,
+    name_id_value: str = "user@example.com",
+) -> str:
+    """Build a minimal but XSD-compliant SAML Response with fresh timestamps.
+
+    Used by tests that drive the REAL python3-saml strict validation through
+    saml_process_response (only the XML signature step is mocked there —
+    xmlsec signing cannot round-trip on Windows).
+    """
+    s = f"{{{_NS_SAML}}}"
+    n = f"{{{_NS_SAMLP}}}"
+    now = datetime.now(UTC)
+    instant = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    nooa = (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    nb = (now - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    dummy = lxml_etree.Element("root")
+    r = lxml_etree.SubElement(dummy, f"{n}Response")
+    r.set("ID", "_resp_kitchen_sink")
+    r.set("Version", "2.0")
+    r.set("IssueInstant", instant)
+    if destination:
+        r.set("Destination", destination)
+    st = lxml_etree.SubElement(r, f"{n}Status")
+    sc = lxml_etree.SubElement(st, f"{n}StatusCode")
+    sc.set("Value", f"{_NS_STATUS}:Success")
+    a = lxml_etree.SubElement(r, f"{s}Assertion")
+    a.set("ID", "_assert_kitchen_sink")
+    a.set("Version", "2.0")
+    a.set("IssueInstant", instant)
+    lxml_etree.SubElement(a, f"{s}Issuer").text = "https://idp.example.com"
+    subj = lxml_etree.SubElement(a, f"{s}Subject")
+    nid = lxml_etree.SubElement(subj, f"{s}NameID")
+    nid.text = name_id_value
+    nid.set("Format", "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress")
+    sc2 = lxml_etree.SubElement(subj, f"{s}SubjectConfirmation")
+    sc2.set("Method", "urn:oasis:names:tc:SAML:2.0:cm:bearer")
+    scd = lxml_etree.SubElement(sc2, f"{s}SubjectConfirmationData")
+    scd.set("NotOnOrAfter", nooa)
+    if recipient:
+        scd.set("Recipient", recipient)
+    conds = lxml_etree.SubElement(a, f"{s}Conditions")
+    conds.set("NotBefore", nb)
+    conds.set("NotOnOrAfter", nooa)
+    if audience is not None:
+        ar = lxml_etree.SubElement(conds, f"{s}AudienceRestriction")
+        lxml_etree.SubElement(ar, f"{s}Audience").text = audience
+    asn = lxml_etree.SubElement(a, f"{s}AuthnStatement")
+    asn.set("AuthnInstant", instant)
+    asn.set("SessionIndex", "_s1")
+    cx = lxml_etree.SubElement(asn, f"{s}AuthnContext")
+    cl = lxml_etree.SubElement(cx, f"{s}AuthnContextClassRef")
+    cl.text = "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport"
+    astmt = lxml_etree.SubElement(a, f"{s}AttributeStatement")
+    at = lxml_etree.SubElement(astmt, f"{s}Attribute")
+    at.set("Name", "email")
+    av = lxml_etree.SubElement(at, f"{s}AttributeValue")
+    av.text = name_id_value
+    atm = lxml_etree.SubElement(astmt, f"{s}Attribute")
+    atm.set("Name", "displayName")
+    avm = lxml_etree.SubElement(atm, f"{s}AttributeValue")
+    avm.text = "Test User"
+    dummy.remove(r)
+    return lxml_etree.tostring(r, xml_declaration=True, encoding="UTF-8").decode()
 
 
 # ---------------------------------------------------------------------------
@@ -1022,6 +1098,54 @@ class TestSamlProcessResponse:
             mock_fetch.return_value = self.SAMPLE_IDP_METADATA
             with pytest.raises(ValueError, match="Destination does not match"):
                 await saml_process_response(encoded, settings, session, session)
+
+    async def test_saml_process_response_accepts_real_public_acs_destination(self) -> None:
+        """FAR-1011: a real-IdP-shaped response whose Destination equals the
+        ACS URL derived from ``modulo_public_url`` must now authenticate.
+
+        Reproduced as REJECTED before the fix (strict-mode current_url was
+        hardcoded ``http://localhost``, so python3-saml's Destination check
+        failed for any real https host). Only the XML signature step is
+        mocked here — the real handler and python3-saml validation run.
+        """
+        from onelogin.saml2.response import OneLogin_Saml2_Response
+        from onelogin.saml2.utils import OneLogin_Saml2_Utils
+
+        from modulo.auth.sso import saml_process_response
+
+        settings = _override(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+            modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
+            modulo_public_url="https://app.example.com",
+        )
+        session = _mock_session()
+
+        acs = "https://app.example.com/api/v1/auth/saml/acs"
+        entity_id = "modulo"  # settings.modulo_saml_entity_id default
+        xml = _build_xsd_compliant_saml_response(
+            destination=acs,
+            recipient=acs,
+            audience=entity_id,
+        )
+        encoded = base64.b64encode(xml.encode()).decode()
+
+        with (
+            patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+            patch.object(OneLogin_Saml2_Utils, "validate_sign", return_value=True),
+            patch.object(
+                OneLogin_Saml2_Response,
+                "process_signed_elements",
+                return_value=["{urn:oasis:names:tc:SAML:2.0:protocol}Response"],
+            ),
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_fetch.return_value = self.SAMPLE_IDP_METADATA
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
+            mock_tok.return_value = {"access_token": "at-saml"}
+            result = await saml_process_response(encoded, settings, session, session)
+            assert result["access_token"] == "at-saml"
 
 
 class TestSamlFetchIdpMetadata:
