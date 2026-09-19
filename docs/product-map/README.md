@@ -360,6 +360,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > alien/corrupt ciphertext `ValueError`, and the real factory default /
 > unknown-name / unlicensed-`vault`-fallback logic (forced exactly as the unit
 > suite does). `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-19):** closed `feat-apply`'s "No BDD feature file"
+> gap (`configure/apply.md`). Registered `cli/apply.feature` into the executing
+> BDD suite from the new `steps/test_apply_cli.py`, driving the REAL
+> `modulo.cli.apply` seams network-free and DB-free — the loader / `ApplyConfig`
+> validators (single + multi-document YAML merge, duplicate names within and
+> across documents, empty file, trigger forward-references), refs-only secrets
+> (`resolve_secret_refs`), the plan engine (created / unchanged / updated /
+> blocked, incl. provider mismatch + immutable schema versions), the executor
+> against a respx-mocked API (dry-run report, real-apply block on an unresolved
+> env ref, health-check verification moving a stored-but-broken backend to
+> `failed`), and the `--diff` drift surface (read-only `mode=drift` report,
+> node-level `drift_detail`, `has_drift` gate, `drift create` / `drift summary`
+> rendering). `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
