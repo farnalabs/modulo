@@ -1105,6 +1105,12 @@ async def test_create_gate_with_required_team_id():
         session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG, required_team_id=_TEAM
     )
     session.add.assert_called_once()
+    added = session.add.call_args[0][0]
+    assert added.organisation_id == _ORG
+    assert added.run_id == _RUN
+    assert added.gate_id == _GATE
+    assert added.pipeline_id == _PIPELINE
+    assert added.required_team_id == _TEAM
     assert result.required_team_id == _TEAM
 
 
