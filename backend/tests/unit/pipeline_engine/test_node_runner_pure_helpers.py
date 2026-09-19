@@ -8,6 +8,7 @@ required-team-id normaliser.
 """
 
 import asyncio
+import json
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -91,12 +92,14 @@ class TestClaimTokenAttemptSuffix:
 
     def test_dispatch_marker_json_embeds_attempt_key(self) -> None:
         # D8 (FAR-594): the marker vocabulary moved to
-        # runner_capacity.build_dispatch_marker — the tier-less shape is
-        # unchanged (no provider key → Docker-tier attribution, fail-safe).
+        # runner_capacity.build_dispatch_marker — provider is REQUIRED (FAR-995).
         from modulo.core.runner_capacity import build_dispatch_marker
 
-        marker = build_dispatch_marker("run:1:node:a:2")
-        assert marker == '{"state": "dispatching", "attempt_key": "run:1:node:a:2"}'
+        marker = build_dispatch_marker("run:1:node:a:2", "runner_docker")
+        parsed = json.loads(marker)
+        assert parsed["state"] == "dispatching"
+        assert parsed["attempt_key"] == "run:1:node:a:2"
+        assert parsed["provider"] == "runner_docker"
 
 
 # ---------------------------------------------------------------------------

@@ -5524,7 +5524,7 @@ async def _sandbox_acquire_dispatch_marker(
     org_id: str,
     run_id: str,
     node_id: str,
-    provider: str | None = None,
+    provider: str,
 ) -> str | None:
     """D8 atomic dispatch gate + marker (FAR-594): check capacity and claim the
     dispatch slot in ONE transaction, immediately before provisioning.
@@ -5534,9 +5534,10 @@ async def _sandbox_acquire_dispatch_marker(
     flag-on), lock-free count over the narrowed running-only population, then
     the fenced marker UPDATE commits the reservation. Applied to EVERY
     sandbox_agent dispatch regardless of sandbox_mode and provider tier; the
-    marker carries ``provider``/``written_at`` (tier-less callers attribute to
-    the Docker tier — the only provider that reaches this helper without an
-    explicit provider is the Bundled Runner path).
+    marker carries ``provider``/``written_at``.
+
+    ``provider`` is REQUIRED (FAR-995) — every call site must pass its value
+    explicitly so the type-checker enforces correct attribution.
 
     Returns the attempt key on success, ``None`` when fenced (claim superseded
     or run not running — the caller MUST NOT create a sandbox). Raises
@@ -5548,7 +5549,6 @@ async def _sandbox_acquire_dispatch_marker(
     fails — qa F11).
     """
     from modulo.core.runner_capacity import (
-        RUNNER_PROVIDER_DOCKER,
         RunnerCapacityDeniedError,
         acquire_runner_dispatch_slot,
     )
@@ -5571,7 +5571,7 @@ async def _sandbox_acquire_dispatch_marker(
             run_id=run_id,
             claim_token=claim_lease,
             node_id=node_id,
-            provider=provider or RUNNER_PROVIDER_DOCKER,
+            provider=provider,
         )
     except RunnerCapacityDeniedError as exc:
         raise SandboxCapacityExceededError(str(exc)) from exc
@@ -5588,7 +5588,7 @@ async def _sandbox_acquire_dispatch_marker(
         org_id=org_id,
         run_id=run_id,
         node_id=node_id,
-        provider=provider or RUNNER_PROVIDER_DOCKER,
+        provider=provider,
     )
 
 
@@ -5599,7 +5599,7 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
     org_id: str,
     run_id: str,
     node_id: str,
-    provider: str | None = None,
+    provider: str,
 ) -> str | None:
     """The legacy best-effort dispatch-marker write (pre-D8 shape, provider-aware).
 
@@ -5614,6 +5614,9 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
     them makes the UPDATE match zero rows and the attempt key is never
     persisted for a superseded claim.
 
+    ``provider`` is REQUIRED (FAR-995) — every call site must pass its value
+    explicitly so the type-checker enforces correct attribution.
+
     Fail-open contract (qa F11): a DB error here must never fail the
     dispatch — the marker write is best-effort BY DESIGN. Any exception
     (never a cancellation) logs ``sandbox_agent.best_effort_marker_failed``
@@ -5625,7 +5628,7 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
     dispatch over a marker write would turn a DB hiccup into a dispatch
     outage.
     """
-    from modulo.core.runner_capacity import RUNNER_PROVIDER_DOCKER, build_dispatch_marker
+    from modulo.core.runner_capacity import build_dispatch_marker
 
     if session_factory is None or not claim_lease:
         return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
@@ -5667,7 +5670,7 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
                     "oid": str(org_uuid),
                     "tok": claim_lease,
                     "sid": None,
-                    "marker": build_dispatch_marker(key, provider or RUNNER_PROVIDER_DOCKER),
+                    "marker": build_dispatch_marker(key, provider),
                 },
             )
             if result.fetchone() is None:
@@ -5700,12 +5703,12 @@ async def _sandbox_store_dispatch_marker_sandbox(
     org_id: str,
     run_id: str,
     attempt_key: str | None,
-    provider: str | None = None,
+    provider: str,
 ) -> None:
     """Persist the real sandbox id onto the runs row after a successful create.
 
-    ``provider`` re-stamps the D8 tier attribution on the rewritten marker
-    (omitted → Docker-tier attribution, the Bundled Runner path's shape).
+    ``provider`` re-stamps the D8 tier attribution on the rewritten marker.
+    Required (FAR-995) — every call site must pass its value explicitly.
     """
     if session_factory is None or not claim_lease:
         return
@@ -5718,7 +5721,7 @@ async def _sandbox_store_dispatch_marker_sandbox(
         return
     from sqlalchemy import text as _sql_text
 
-    from modulo.core.runner_capacity import RUNNER_PROVIDER_DOCKER, build_dispatch_marker
+    from modulo.core.runner_capacity import build_dispatch_marker
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async with session_factory() as session, session.begin():
@@ -5734,7 +5737,7 @@ async def _sandbox_store_dispatch_marker_sandbox(
                 "oid": str(org_uuid),
                 "tok": claim_lease,
                 "sid": sandbox_id_value,
-                "marker": build_dispatch_marker(attempt_key or "", provider or RUNNER_PROVIDER_DOCKER),
+                "marker": build_dispatch_marker(attempt_key or "", provider),
             },
         )
 
@@ -5746,7 +5749,7 @@ async def _sandbox_store_script_lease(
     org_id: str,
     run_id: str,
     attempt_key: str | None,
-    provider: str | None = None,
+    provider: str,
 ) -> None:
     """FAR-296 Phase 2 fencing lease: record the script-mode execution claim.
 
@@ -5758,8 +5761,8 @@ async def _sandbox_store_script_lease(
     status so a superseded original cannot stamp a lease on a successor's
     row. Fail-open (no session factory / claim lease / org) — the lease
     is a safety backstop, never a correctness dependency. ``provider``
-    re-stamps the D8 tier attribution (omitted → Docker-tier, matching the
-    Bundled Runner path's call shape).
+    re-stamps the D8 tier attribution.  Required (FAR-995) — every call
+    site must pass its value explicitly.
     """
     if session_factory is None or not claim_lease:
         return
@@ -5774,7 +5777,6 @@ async def _sandbox_store_script_lease(
 
     from modulo.core.runner_capacity import (
         MARKER_STATE_SCRIPT_EXECUTING,
-        RUNNER_PROVIDER_DOCKER,
     )
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
@@ -5794,7 +5796,7 @@ async def _sandbox_store_script_lease(
                     {
                         "state": MARKER_STATE_SCRIPT_EXECUTING,
                         "attempt_key": attempt_key or "",
-                        "provider": provider or RUNNER_PROVIDER_DOCKER,
+                        "provider": provider,
                         "written_at": datetime.now(UTC).isoformat(),
                     }
                 ),
@@ -7112,11 +7114,17 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     agent_id = _parse_uuid_opt(node_def.get("agent_id"))
     await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id, node_def=node_def)
 
-    # D8 (FAR-594): the provider tier attribution for the dispatch marker,
-    # resolved with the route. The Bundled Runner path attributes below via
-    # the gate default (runner_docker); the legacy path is E2B (route "e2b"
-    # or the historical "none" default).
-    _resolved_provider: str | None = None
+    # D8 (FAR-594): the provider tier attribution for the dispatch marker.
+    # Every path that reaches this point is the legacy E2B route ("e2b" or the
+    # historical "none" default) — the Bundled Runner returns above (it
+    # attributes via its own dispatch route).  The attribution is unconditional
+    # rather than a conditional fallback, so a future provider branch that
+    # forgets to set the variable would produce a type error, not a silent
+    # default (FAR-995).  Import is local to match this file's lazy-import
+    # convention for runner_capacity.
+    from modulo.core.runner_capacity import RUNNER_PROVIDER_E2B
+
+    _resolved_provider: str = RUNNER_PROVIDER_E2B
 
     # D4 dispatch adapter (FAR-590): branch on the PIPELINE-LEVEL bound
     # profile's provider_type (the validated, same-org-enforced
@@ -7134,7 +7142,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             resolve_sandbox_dispatch_route,
             validate_e2b_dispatch_timeout,
         )
-        from modulo.core.runner_capacity import RUNNER_PROVIDER_E2B
 
         _ctx = get_conformance_ctx()
         _env_profile_id = _ctx[2] if _ctx else None
@@ -7150,7 +7157,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 _dc_replace(config, schema_validator_mode=schema_validator_mode),
                 _route,
             )
-        _resolved_provider = RUNNER_PROVIDER_E2B
         if _route.provider_type == "e2b":
             validate_e2b_dispatch_timeout(sandbox_timeout)
 

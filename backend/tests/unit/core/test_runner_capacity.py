@@ -18,6 +18,7 @@ from modulo.core.runner_capacity import (
     MARKER_STATE_SCRIPT_EXECUTING,
     RUNNER_PROVIDER_DOCKER,
     RUNNER_PROVIDER_E2B,
+    RUNNER_PROVIDER_LOCAL,
     RunnerCapacityDecision,
     RunnerCapacityDeniedError,
     RunnerMarkerSweepError,
@@ -156,10 +157,10 @@ def test_sweep_dedup_keys_distinct_from_per_org_keys() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_dispatch_marker_tierless_is_legacy_compatible() -> None:
-    marker = build_dispatch_marker("run:1:node:a:2")
-    parsed = json.loads(marker)
-    assert parsed == {"state": "dispatching", "attempt_key": "run:1:node:a:2"}
+def test_build_dispatch_marker_requires_provider() -> None:
+    """FAR-995: provider is a required argument — omitting it raises TypeError."""
+    with pytest.raises(TypeError, match="provider"):
+        build_dispatch_marker("run:1:node:a:2")  # type: ignore[call-arg]
 
 
 def test_build_dispatch_marker_carries_provider_and_written_at() -> None:
@@ -171,6 +172,42 @@ def test_build_dispatch_marker_carries_provider_and_written_at() -> None:
     assert parse_marker_written_at(marker) is not None
 
 
+def test_build_dispatch_marker_docker_provider() -> None:
+    """FAR-995: pin the Docker provider value in the marker."""
+    marker = build_dispatch_marker("k", RUNNER_PROVIDER_DOCKER)
+    parsed = json.loads(marker)
+    assert parsed["provider"] == "runner_docker"
+    assert parsed["state"] == "dispatching"
+
+
+def test_build_dispatch_marker_local_provider() -> None:
+    """FAR-995: pin the local provider value in the marker."""
+    marker = build_dispatch_marker("k", RUNNER_PROVIDER_LOCAL)
+    parsed = json.loads(marker)
+    assert parsed["provider"] == "local"
+    assert parsed["state"] == "dispatching"
+
+
+def test_build_dispatch_marker_always_includes_provider_and_written_at() -> None:
+    """FAR-995: every marker carries provider + written_at — no tier-less shape."""
+    for provider in (RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_E2B, RUNNER_PROVIDER_LOCAL):
+        marker = build_dispatch_marker("k", provider)
+        parsed = json.loads(marker)
+        assert "provider" in parsed, f"provider missing for {provider}"
+        assert "written_at" in parsed, f"written_at missing for {provider}"
+        assert parsed["provider"] == provider
+
+
+def test_build_dispatch_marker_rejects_empty_provider() -> None:
+    """FAR-995: empty/whitespace-only provider must not silently write a meaningless marker."""
+    with pytest.raises(ValueError, match="provider must be a non-empty string"):
+        build_dispatch_marker("k", "")
+    with pytest.raises(ValueError, match="provider must be a non-empty string"):
+        build_dispatch_marker("k", "   ")
+    with pytest.raises(ValueError, match="provider must be a non-empty string"):
+        build_dispatch_marker("k", "\t\n")
+
+
 def test_tombstone_is_capacity_neutral_state() -> None:
     tombstone = build_hitl_tombstone()
     assert parse_marker_state(tombstone) == MARKER_STATE_CLEARED_AT_HITL
@@ -179,7 +216,7 @@ def test_tombstone_is_capacity_neutral_state() -> None:
 
 def test_fence_detection_only_for_script_executing() -> None:
     assert marker_is_fence_component(json.dumps({"state": MARKER_STATE_SCRIPT_EXECUTING, "attempt_key": "k"}))
-    assert not marker_is_fence_component(build_dispatch_marker("k"))
+    assert not marker_is_fence_component(build_dispatch_marker("k", RUNNER_PROVIDER_DOCKER))
     assert not marker_is_fence_component("dispatching")  # legacy bare literal
     assert not marker_is_fence_component(None)
 
@@ -398,7 +435,9 @@ async def test_gate_denies_at_capacity_with_marker_rolled_back(monkeypatch: pyte
     monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
 
     with pytest.raises(RunnerCapacityDeniedError, match="at capacity"):
-        await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1")
+        await acquire_runner_dispatch_slot(
+            factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
+        )
 
     # The denied transaction never reached the marker UPDATE (rolled back).
     assert not any("UPDATE runs SET sandbox_dispatch_state" in s for s in executed)
@@ -407,7 +446,9 @@ async def test_gate_denies_at_capacity_with_marker_rolled_back(monkeypatch: pyte
 async def test_gate_fenced_when_claim_superseded(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_gate(monkeypatch, flag_on=False)
     factory = _fake_session({"claim_count": None})  # own-row SELECT answers no row
-    slot = await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1")
+    slot = await acquire_runner_dispatch_slot(
+        factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
+    )
     assert slot.status == "fenced"
     assert slot.attempt_key is None
     assert slot.marker_set is False
@@ -499,7 +540,9 @@ async def test_gate_lock_timeout_degrades_to_retryable_denial(monkeypatch: pytes
     factory = MagicMock(return_value=session_cm)
 
     with caplog_at_level_warning() as caplog_ctx, pytest.raises(RunnerCapacityDeniedError):
-        await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1")
+        await acquire_runner_dispatch_slot(
+            factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
+        )
     assert any("runner.capacity.lock_degraded" in m for m in caplog_ctx.messages)
 
 
@@ -536,7 +579,9 @@ async def test_gate_deadlock_is_distinct_alarm(monkeypatch: pytest.MonkeyPatch) 
     factory = MagicMock(return_value=session_cm)
 
     with caplog_at_level_error() as caplog_ctx, pytest.raises(RunnerCapacityDeniedError):
-        await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1")
+        await acquire_runner_dispatch_slot(
+            factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
+        )
     assert any("runner.capacity.deadlock_degraded" in m for m in caplog_ctx.messages)
 
 
@@ -596,8 +641,75 @@ def caplog_at_level_error() -> Any:
 
 async def test_gate_missing_claim_context_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_gate(monkeypatch, flag_on=True)
-    slot = await acquire_runner_dispatch_slot(MagicMock(), org_id=_ORG, run_id=_RUN, claim_token=None, node_id="n1")
+    slot = await acquire_runner_dispatch_slot(
+        MagicMock(), org_id=_ORG, run_id=_RUN, claim_token=None, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
+    )
     assert slot.status == "fail_open"
+
+
+# ---------------------------------------------------------------------------
+# FAR-995: marker-content provider assertions
+# ---------------------------------------------------------------------------
+
+
+async def test_acquire_slot_marker_carrying_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-995: the marker written by acquire_runner_dispatch_slot carries the
+    explicit provider value passed by the caller."""
+    _patch_gate(monkeypatch, flag_on=True)
+    captured_markers: list[str] = []
+
+    class _CapturingSession:
+        def __init__(self) -> None:
+            self._claim_count = 7
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *args: object) -> bool:
+            return False
+
+        def begin(self) -> Self:
+            return self
+
+        async def execute(self, stmt: Any, params: Any | None = None) -> Any:
+            stmt_text = str(stmt) if hasattr(stmt, "__str__") else ""
+            if "claim_count" in stmt_text:
+                r = MagicMock()
+                r.fetchone.return_value = (self._claim_count,)
+                return r
+            if "set_config" in stmt_text:
+                return MagicMock()
+            if "pg_advisory_xact_lock" in stmt_text:
+                return MagicMock()
+            if "count(" in stmt_text.lower():
+                r = MagicMock()
+                r.scalar_one.return_value = 0
+                return r
+            if "concurrency_limit" in stmt_text.lower():
+                r = MagicMock()
+                r.scalar_one.return_value = (4, True)
+                return r
+            if "UPDATE runs SET sandbox_dispatch_state" in stmt_text:
+                captured_markers.append(params.get("marker", ""))
+                r = MagicMock()
+                r.fetchone.return_value = ("run-id",)
+                return r
+            return MagicMock()
+
+    def factory() -> _CapturingSession:
+        return _CapturingSession()
+
+    for provider_val in (RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_E2B, RUNNER_PROVIDER_LOCAL):
+        slot = await acquire_runner_dispatch_slot(
+            factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=provider_val
+        )
+        assert slot.status == "acquired"
+        assert captured_markers, f"no marker captured for provider={provider_val}"
+        parsed = json.loads(captured_markers[-1])
+        assert parsed["provider"] == provider_val, (
+            f"marker provider mismatch: expected {provider_val}, got {parsed.get('provider')}"
+        )
+        assert "written_at" in parsed, f"written_at missing for provider={provider_val}"
 
 
 # ---------------------------------------------------------------------------
@@ -703,7 +815,7 @@ def _sweep_kwargs(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "status": "complete",
         "error_code": None,
-        "marker_json": build_dispatch_marker("k"),
+        "marker_json": build_dispatch_marker("k", RUNNER_PROVIDER_DOCKER),
         "stale_reference": _NOW - timedelta(hours=30),
         "now": _NOW,
         "stale_seconds": 25 * 3600,
