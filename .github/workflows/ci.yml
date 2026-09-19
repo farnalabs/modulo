@@ -235,6 +235,18 @@ jobs:
             [ -z "$f" ] && continue
             base="${f##*/}"
             case "$base" in
+              test_tier1b_*.py)
+                # The Tier 1b testcontainers suites own dedicated CI jobs with
+                # boot budgets sized for their real readiness windows: the light
+                # set runs in tier1b-light (--timeout=900) and the heavy set
+                # (gitlab, vllm, tgi) is nightly-only in tier1b-nightly
+                # (--timeout=3600). Feeding them to this job's --timeout=300
+                # turns their real boot (sonarqube 600s, gitlab 1800s) into
+                # pytest-timeout ERRORs (PR #773). Light coverage is unaffected:
+                # tier1b-light runs on every PR regardless of changed paths.
+                echo "  (skip) Tier 1b suite has a dedicated CI job: ${f}"
+                continue
+                ;;
               test_*.py|*_test.py) ;;
               *)
                 echo "  (skip) not a collectable test module: ${f}"
