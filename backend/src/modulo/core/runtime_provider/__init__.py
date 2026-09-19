@@ -15,7 +15,25 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from modulo.util import WorkspaceNetworkValidationError, validate_workspace_network
+
 _log = logging.getLogger(__name__)
+
+# Re-export for callers that import from this module.
+__all__ = [
+    "ExecProcess",
+    "ExecResult",
+    "ExecStreamChunk",
+    "ProviderNotConfiguredError",
+    "RuntimeProvider",
+    "UnknownProviderTypeError",
+    "WorkspaceNetworkValidationError",
+    "WorkspaceSpec",
+    "build_hub",
+    "create_default_hub",
+    "env_var_for_provider_type",
+    "validate_workspace_network",
+]
 
 if TYPE_CHECKING:
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
