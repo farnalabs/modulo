@@ -21,7 +21,8 @@ unit-tests:
   - backend/tests/unit/cli/test_apply_trigger.py
   - backend/tests/unit/cli/test_apply_drift.py
   - backend/tests/unit/api/test_apply_api_key_auth.py
-bdd: []
+bdd:
+  - backend/tests/bdd/features/cli/apply.feature
 depends-on:
   - feat-schemas
   - feat-model-backends
@@ -112,13 +113,27 @@ schemas, model-backends, pipelines and triggers features.
 
 ## Known Gaps
 
-- **No BDD feature file** — the CLI is covered by the unit + golden-snapshot
-  suites (`backend/tests/unit/cli/*`, `backend/tests/unit/cli/golden/*.json`);
-  there is no pytest-bdd surface for `modulo apply`.
 - **`--diff` graph detail is pipeline-only** — drift in schemas / model
   backends / triggers reports at the top level with no per-entity breakdown.
 
 ## QA History
+- 2026-09-19: **improve-architecture (product-map walk)** — closed the
+  "No BDD feature file" gap. Registered `cli/apply.feature` into the executing
+  BDD suite from the new `steps/test_apply_cli.py`, driving the REAL
+  `modulo.cli.apply` seams network-free and DB-free: the loader / `ApplyConfig`
+  validators (single + multi-document YAML merge, duplicate names within and
+  across documents, empty config, trigger forward-references), refs-only
+  secrets (`resolve_secret_refs`: env-ref resolution, missing-var and
+  `secretref://` blocks), the plan engine (created / unchanged / updated /
+  blocked — provider mismatch + immutable schema versions), the executor
+  against a respx-mocked API (dry-run report, real-apply exit semantics on a
+  blocked ref, and the health-check verification that moves a stored-but-broken
+  backend into `failed` while the create POST is still sent), and the drift
+  surface (`--diff` mode labelled `drift` and read-only with no write requests,
+  node-level `drift_detail` breakdown, `has_drift` gate semantics, and the
+  `drift create` / `drift summary` rendering). `_ORPHANED_BDD_FEATURES` stays
+  empty.
+
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/model-backends`, `/settings/triggers`
