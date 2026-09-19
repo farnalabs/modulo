@@ -56,6 +56,21 @@ params_strategy = st.fixed_dictionaries(
 )
 
 
+@st.composite
+def negative_intermediate_cases(draw: st.DrawFn) -> tuple[Decimal, Decimal, Decimal]:
+    """Build ``(x, y, z)`` with ``x < y`` and ``(x - y) + z >= 0``.
+
+    Constructed rather than filtered so Hypothesis does not spend its budget
+    generating then discarding inputs (which trips the ``filter_too_much``
+    health check).
+    """
+    x = draw(st.decimals(min_value=Decimal(1), max_value=Decimal(900), places=2))
+    gap = draw(st.decimals(min_value=Decimal("0.01"), max_value=Decimal(100), places=2))
+    y = x + gap
+    z = draw(st.decimals(min_value=gap, max_value=Decimal(1000), places=2))
+    return x, y, z
+
+
 class TestFormulaProperties:
     """Properties for the formula parser and evaluator."""
 
@@ -162,16 +177,11 @@ class TestFormulaProperties:
         assert exc_info.value.code == "eval_error"
         assert "negative" in str(exc_info.value)
 
-    @given(
-        x=st.decimals(min_value=Decimal(1), max_value=Decimal(1000), places=2),
-        y=st.decimals(min_value=Decimal(1), max_value=Decimal(1000), places=2),
-        z=st.decimals(min_value=Decimal(1), max_value=Decimal(1000), places=2),
-    )
+    @given(case=negative_intermediate_cases())
     @settings(max_examples=50, deadline=None)
-    def test_negative_intermediate_result_is_allowed(self, x: Decimal, y: Decimal, z: Decimal) -> None:
+    def test_negative_intermediate_result_is_allowed(self, case: tuple[Decimal, Decimal, Decimal]) -> None:
         """Only the final value is checked: a negative subexpression is allowed."""
-        assume(x < y)
-        assume(x - y + z >= 0)
+        x, y, z = case
         result = evaluate_formula("(x - y) + z", {"x": x, "y": y, "z": z}, VALID_IDENTS)
         assert result == x - y + z
 
