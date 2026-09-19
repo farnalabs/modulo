@@ -68,7 +68,7 @@ def sanitise_log_value(value: object, limit: int = DEFAULT_LOG_LIMIT) -> str:
 #
 # None / empty → provider default (the deployment-owned bridge).
 
-_NETWORK_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9._-]{0,127})?$")
+_NETWORK_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9._-]{1,127})?$")
 
 _DANGEROUS_NETWORK_MODES: frozenset[str] = frozenset(
     {
