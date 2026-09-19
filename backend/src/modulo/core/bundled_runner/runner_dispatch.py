@@ -130,8 +130,8 @@ async def resolve_sandbox_dispatch_route(
     - ``e2b`` -> e2b route (the caller applies the LOUD timeout validation
       before provisioning).
     - ``runner_docker`` -> hub-resolved Docker provider (the registration
-      matrix per ADR 029: a ``MODULO_RUNNER_*`` var or a Docker endpoint
-      env registers the provider), plus the locked-ephemeral check.
+      matrix per ADR 029: ``MODULO_DOCKER_HOST`` or ``DOCKER_HOST``
+      registers the provider), plus the locked-ephemeral check.
     - ``local`` / ``local_docker`` -> dispatch-unbound: typed config error
       (the D4 upgrade rule — never silently activated).
     """

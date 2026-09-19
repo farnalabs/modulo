@@ -212,6 +212,7 @@ When upgrading, check for changes to:
 3. **Changed defaults** – review [`docs/configuration-reference.md`](./configuration-reference.md) for current defaults
 4. **New service dependencies** – e.g., Redis becoming required for new features
 5. **API changes** – breaking endpoint changes are documented in release notes
+6. **Provider registration changes (FAR-996)** – Docker providers are now registered exclusively via `MODULO_DOCKER_HOST` or `DOCKER_HOST`. An unrelated `MODULO_RUNNER_*` variable (e.g. `MODULO_RUNNER_TEMPLATE_ID`) no longer registers the Docker provider. If your `runner_docker` pipelines were relying on a `MODULO_RUNNER_*` variable to register Docker, you must now set `MODULO_DOCKER_HOST` (or `DOCKER_HOST`) and restart. The error message on `ProviderNotConfiguredError` already names the required env var.
 
 ---
 

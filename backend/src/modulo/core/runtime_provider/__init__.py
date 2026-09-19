@@ -21,30 +21,6 @@ if TYPE_CHECKING:
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
 
 
-class UnknownProviderTypeError(RuntimeError):
-    """A profile's ``provider_type`` is not in the known provider vocabulary.
-
-    Raised by :meth:`RuntimeProviderHub.resolve` when the profile's explicit
-    ``provider_type`` does not match any value in the ``PROVIDER_TYPES``
-    vocabulary.  This is distinct from :class:`ProviderNotConfiguredError`
-    (a known type whose registration env var is unset).
-
-    The ``valid_types`` field carries the full vocabulary so callers can
-    surface actionable remediation copy.
-    """
-
-    def __init__(self, provider_type: str, valid_types: frozenset[str]) -> None:
-        self.provider_type = provider_type
-        self.valid_types = valid_types
-        sorted_types = ", ".join(sorted(valid_types))
-        message = (
-            f"Unknown provider_type '{provider_type}'. "
-            f"Valid types are: {sorted_types}. "
-            "Update the environment profile to use a valid provider type."
-        )
-        super().__init__(message)
-
-
 class ProviderNotConfiguredError(RuntimeError):
     """A profile's ``provider_type`` is known but has no registered runtime provider.
 
@@ -73,6 +49,36 @@ class ProviderNotConfiguredError(RuntimeError):
         else:
             message = f"No runtime provider registered for provider_type '{provider_type}'."
         super().__init__(message)
+
+
+class UnknownProviderTypeError(ProviderNotConfiguredError):
+    """A profile's ``provider_type`` is not in the known provider vocabulary.
+
+    Subclasses :class:`ProviderNotConfiguredError` so that every existing
+    ``except ProviderNotConfiguredError`` handler automatically catches
+    unknown-type errors too — the two failure modes (unknown type vs. known
+    but unregistered) share the same remediation surface (update the profile).
+
+    Raised by :meth:`RuntimeProviderHub.resolve` when the profile's explicit
+    ``provider_type`` does not match any value in the ``PROVIDER_TYPES``
+    vocabulary.  This is distinct from a plain
+    :class:`ProviderNotConfiguredError` (a known type whose registration env
+    var is unset) in carrying the ``valid_types`` vocabulary for actionable
+    remediation copy.
+    """
+
+    def __init__(self, provider_type: str, valid_types: frozenset[str]) -> None:
+        self.valid_types = valid_types
+        sorted_types = ", ".join(sorted(valid_types))
+        message = (
+            f"Unknown provider_type '{provider_type}'. "
+            f"Valid types are: {sorted_types}. "
+            "Update the environment profile to use a valid provider type."
+        )
+        # Initialise parent to set self.provider_type and self.env_var,
+        # then override the message with the more specific unknown-type copy.
+        super().__init__(provider_type, env_var=None)
+        self.args = (message,)
 
 
 # ---------------------------------------------------------------------------

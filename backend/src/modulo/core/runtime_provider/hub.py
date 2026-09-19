@@ -19,6 +19,18 @@ _log = logging.getLogger(__name__)
 _PROVIDER_CLOSE_TIMEOUT_S = 60
 
 
+def _is_unknown_provider_type(provider_type: str) -> bool:
+    """Return True when *provider_type* is not in the known vocabulary at all.
+
+    A type that is neither in ``PROVIDER_TYPES`` nor mapped by
+    ``env_var_for_provider_type`` is truly unknown — callers should raise
+    :class:`UnknownProviderTypeError`.  A type that IS in the vocabulary
+    (or has a documented env var) is merely unregistered and should raise
+    :class:`ProviderNotConfiguredError` instead.
+    """
+    return provider_type not in PROVIDER_TYPES and env_var_for_provider_type(provider_type) is None
+
+
 class RuntimeProviderHub:
     """Central registry for RuntimeProvider implementations.
 
@@ -114,7 +126,7 @@ class RuntimeProviderHub:
             # Distinguish unknown type (not in PROVIDER_TYPES and not a
             # documented alias) from known but unregistered (in PROVIDER_TYPES
             # or _PROVIDER_ENV_VARS but env var not set).
-            if provider_type not in PROVIDER_TYPES and env_var_for_provider_type(provider_type) is None:
+            if _is_unknown_provider_type(provider_type):
                 raise UnknownProviderTypeError(provider_type, PROVIDER_TYPES)
 
             raise ProviderNotConfiguredError(
@@ -137,7 +149,7 @@ class RuntimeProviderHub:
                 continue
             provider_type = provider_config.get("type", provider_name)
             match provider_type:
-                case "local_docker" | "runner_docker":
+                case "local_docker" | "runner_docker" | "docker":
                     from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 
                     docker_host = provider_config.get("docker_host")
@@ -163,7 +175,7 @@ class RuntimeProviderHub:
                     except ValueError:
                         _log.warning("Provider '%s' already registered, skipping", provider_name)
                 case _:
-                    if provider_type not in PROVIDER_TYPES and env_var_for_provider_type(provider_type) is None:
+                    if _is_unknown_provider_type(provider_type):
                         raise UnknownProviderTypeError(provider_type, PROVIDER_TYPES)
                     _log.warning(
                         "Known provider type '%s' not handled in initialise; skipping",
