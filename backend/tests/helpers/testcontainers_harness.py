@@ -175,28 +175,34 @@ def start_tier1b_container(spec: ContainerSpec) -> ContainerHandle:
     if spec.container_port is not None:
         container.with_exposed_ports(spec.container_port)
     container.start()
+    # From this point on the container EXISTS — any failure (port-mapping
+    # read, probe poll/timeout) must stop it before the exception propagates,
+    # or a red test leaks a live container on the host.
+    try:
+        host_port = None if spec.container_port is None else int(container.get_exposed_port(spec.container_port))
+        handle = ContainerHandle(spec=spec, host_port=host_port, _docker_container=container)
 
-    host_port = None if spec.container_port is None else int(container.get_exposed_port(spec.container_port))
-    handle = ContainerHandle(spec=spec, host_port=host_port, _docker_container=container)
-
-    deadline = time.monotonic() + spec.ready_timeout_seconds
-    probe = spec.probe
-    if probe is not None:
-        last_reason = "probe did not run"
-        while time.monotonic() < deadline:
-            try:
-                last_reason = probe(host_port)
-            except Tier1bFixtureError:
-                raise
-            except Exception as exc:  # probe bugs must never kill the poll loop
-                last_reason = f"probe raised {type(exc).__name__}: {exc}"
-            if last_reason is None:
-                break
-            time.sleep(spec.poll_interval_seconds)
-        else:
-            handle.stop()
-            raise Tier1bFixtureError(
-                f"Fixture {spec.image!r} did not become ready within "
-                f"{spec.ready_timeout_seconds:.0f}s. Last probe failure: {last_reason}"
-            )
-    return handle
+        deadline = time.monotonic() + spec.ready_timeout_seconds
+        probe = spec.probe
+        if probe is not None:
+            last_reason = "probe did not run"
+            while time.monotonic() < deadline:
+                try:
+                    last_reason = probe(host_port)
+                except Tier1bFixtureError:
+                    raise
+                except Exception as exc:  # probe bugs must never kill the poll loop
+                    last_reason = f"probe raised {type(exc).__name__}: {exc}"
+                if last_reason is None:
+                    break
+                time.sleep(spec.poll_interval_seconds)
+            else:
+                raise Tier1bFixtureError(
+                    f"Fixture {spec.image!r} did not become ready within "
+                    f"{spec.ready_timeout_seconds:.0f}s. Last probe failure: {last_reason}"
+                )
+        return handle
+    except Exception:  # teardown must fire on ANY failure above (pytest.skip's Skipped is an Exception subclass)
+        with contextlib.suppress(Exception):
+            container.stop()
+        raise

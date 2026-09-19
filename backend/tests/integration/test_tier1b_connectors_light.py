@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import secrets
+import string
 import time
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -75,7 +76,25 @@ def _now_suffix() -> str:
 
 
 def _random_password() -> str:
-    return secrets.token_urlsafe(16)
+    """Password that GUARANTEES the n8n owner-setup policy: >=8 chars with at
+    least one upper-case letter, one lower-case letter and one digit.
+
+    Build one guaranteed character per class first, fill the rest from the
+    full class-union alphabet, then shuffle with a CSPRNG so every run is
+    random — ``secrets.token_urlsafe`` alone has no per-class guarantee and
+    intermittently 400s owner setup ('Password must contain at least 1
+    number.').
+    """
+    alphabet = string.ascii_uppercase + string.ascii_lowercase + string.digits
+    # secrets.SystemRandom().shuffle gives an unbiased Fisher-Yates shuffle.
+    chars = [
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.digits),
+        *(secrets.choice(alphabet) for _ in range(21)),
+    ]
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
 
 
 def _poll_until(predicate: Callable[[], Any], timeout: float, message: str) -> None:
@@ -102,8 +121,30 @@ def _wait_for_exec_file(handle: ContainerHandle, path: str, timeout: float = 120
 
 
 _LIST_PROBE_OK_200: Callable[[int], str | None] = probe_http("/api/v1/version")
-_LIST_PROBE_HEALTH: Callable[[int], str | None] = probe_http("/healthz")
 _LIST_PROBE_GRAFANA: Callable[[int], str | None] = probe_http("/api/health")
+# n8n: /healthz answers 200 (empty) long before n8n's internal database has
+# finished migrating; owner/setup then 503s with 'Database is not ready!'.
+# /healthz/readiness returns 200 {"status":"ok"} ONLY once the DB is usable —
+# poll that, never /healthz.
+_LIST_PROBE_N8N_READINESS: Callable[[int], str | None] = probe_http("/healthz/readiness")
+
+
+def _assert_n8n_rest_json(client: httpx.Client, timeout_seconds: float, message: str) -> None:
+    """Poll n8n's REST surface until /rest/settings answers with REAL JSON.
+
+    n8n serves 200-with-text 'n8n is starting up. Please wait' on the REST
+    surface (e.g. around first-run restarts); never trust the early 200.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "poll did not run"
+    while time.monotonic() < deadline:
+        try:
+            if isinstance(client.get("/rest/settings", timeout=60.0).json(), dict):
+                return
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+        time.sleep(3.0)
+    raise AssertionError(f"Timed out waiting for {message} (after {timeout_seconds:.0f}s): {last_error}")
 
 
 # ── gitea ───────────────────────────────────────────────────────────────────
@@ -127,50 +168,53 @@ def gitea_service() -> Iterator[ContainerHandle]:
             ready_timeout_seconds=240,
         )
     )
-    handle.exec(
-        [
-            "gitea",
-            "admin",
-            "user",
-            "create",
-            "--admin",
-            "--username",
-            ADMIN,
-            "--password",
-            admin_password,
-            "--email",
-            "modulo-admin@ci.local",
-            "--must-change-password=false",
-        ],
-        user="git",
-    )
-    # Mint an API token via the real REST API, then seed one repo.
-    resp = httpx.post(
-        f"{handle.base_url}/api/v1/users/{ADMIN}/tokens",
-        auth=(ADMIN, admin_password),
-        json={"name": "modulo-ci", "scopes": ["all"]},
-        timeout=60.0,
-    )
-    resp.raise_for_status()
-    token = resp.json()["sha1"]
-    repo_resp = httpx.post(
-        f"{handle.base_url}/api/v1/user/repos",
-        auth=(ADMIN, admin_password),
-        json={"name": "modulo-tier1b", "private": False, "auto_init": False},
-        timeout=60.0,
-    )
-    repo_resp.raise_for_status()
-    # Drop a file so the connector's file read path has real data too.
-    file_resp = httpx.post(
-        f"{handle.base_url}/api/v1/repos/{ADMIN}/modulo-tier1b/contents/README.md",
-        auth=(ADMIN, admin_password),
-        json={"content": "IyBtb2R1bG8gdGllciBkZW1vIChtYXJrZG93biBib2R5KQo=\n", "message": "seed readme"},
-        timeout=60.0,
-    )
-    file_resp.raise_for_status()
-    handle.tokens_gitea = token  # type: ignore[attr-defined]
-    yield handle
-    handle.stop()
+    admin_password = _random_password()
+    try:
+        handle.exec(
+            [
+                "gitea",
+                "admin",
+                "user",
+                "create",
+                "--admin",
+                "--username",
+                ADMIN,
+                "--password",
+                admin_password,
+                "--email",
+                "modulo-admin@ci.local",
+                "--must-change-password=false",
+            ],
+            user="git",
+        )
+        # Mint an API token via the real REST API, then seed one repo.
+        resp = httpx.post(
+            f"{handle.base_url}/api/v1/users/{ADMIN}/tokens",
+            auth=(ADMIN, admin_password),
+            json={"name": "modulo-ci", "scopes": ["all"]},
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        token = resp.json()["sha1"]
+        repo_resp = httpx.post(
+            f"{handle.base_url}/api/v1/user/repos",
+            auth=(ADMIN, admin_password),
+            json={"name": "modulo-tier1b", "private": False, "auto_init": False},
+            timeout=60.0,
+        )
+        repo_resp.raise_for_status()
+        # Drop a file so the connector's file read path has real data too.
+        file_resp = httpx.post(
+            f"{handle.base_url}/api/v1/repos/{ADMIN}/modulo-tier1b/contents/README.md",
+            auth=(ADMIN, admin_password),
+            json={"content": "IyBtb2R1bG8gdGllciBkZW1vIChtYXJrZG93biBib2R5KQo=\n", "message": "seed readme"},
+            timeout=60.0,
+        )
+        file_resp.raise_for_status()
+        handle.tokens_gitea = token  # type: ignore[attr-defined]
+        yield handle
+    finally:
+        handle.stop()
 
 
 @pytest.fixture(scope="session")
@@ -231,71 +275,65 @@ def n8n_service() -> Iterator[ContainerHandle]:
                 # authenticated REST call 401s.
                 "N8N_SECURE_COOKIE": "false",
             },
-            probe=_LIST_PROBE_HEALTH,
+            probe=_LIST_PROBE_N8N_READINESS,
             ready_timeout_seconds=300,
         )
     )
     owner_password = _random_password()
-    with httpx.Client(base_url=handle.base_url) as client:
-        # n8n serves 200-with-text "n8n is starting up. Please wait" on the
-        # REST surface for a while after /healthz answers its probe — poll
-        # the setup endpoint until it answers with REAL JSON, never trust an
-        # early HTTP 200.
-        _poll_until(
-            lambda: isinstance(client.get("/rest/settings", timeout=60.0).json(), dict),
-            timeout=300,
-            message="n8n REST surface to answer with JSON",
-        )
-        setup = client.post(
-            "/rest/owner/setup",
-            json={
-                "firstName": "Modulo",
-                "lastName": "CI",
-                "email": "modulo-admin@example.com",
-                "password": owner_password,
-            },
-        )
-        try:
-            setup.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise AssertionError(f"n8n owner setup failed: {exc} body={exc.response.text[:400]!r}") from exc
-        # n8n RESTARTS after first-run owner setup — never trust the early
-        # "n8n is starting up. Please wait" text; poll until REST is JSON.
-        _poll_until(
-            lambda: isinstance(client.get("/rest/settings", timeout=60.0).json(), dict),
-            timeout=300,
-            message="n8n REST surface to answer with JSON again after owner-setup restart",
-        )
-        login = client.post(
-            "/rest/login", json={"emailOrLdapLoginId": "modulo-admin@example.com", "password": owner_password}
-        )
-        try:
-            login.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise AssertionError(f"n8n owner login failed: {exc} body={exc.response.text[:400]!r}") from exc
-        # Create a public API key under the just-created owner session.
-        key_resp = client.post(
-            "/rest/api-keys",
-            json={
-                "label": "modulo-ci",
-                "apiType": "public",
-                "active": True,
-                "expiresAt": None,
-                # ApiKey scopes must be valid role scopes ("{resource}:{act}")
-                # the owner role owns — n8n rejects any other spelling.
-                "scopes": ["workflow:read", "workflow:create", "workflow:list"],
-            },
-        )
-        payload: dict[str, Any] = key_resp.json() if key_resp.status_code == 200 else {}
-        data = payload.get("data") if isinstance(payload, dict) else None
-        # The JWT lives under ``data.rawApiKey`` (the outer ``apiKey`` is masked).
-        api_key = data.get("rawApiKey", "") if isinstance(data, dict) else ""
-        handle.public_api_key = api_key  # type: ignore[attr-defined]
-        handle.owner_password = owner_password  # type: ignore[attr-defined]
-    if not api_key:
-        raise AssertionError(f"n8n API key mint failed ({key_resp.status_code}): {key_resp.text!r}")
-    yield handle
-    handle.stop()
+    try:
+        with httpx.Client(base_url=handle.base_url) as client:
+            _assert_n8n_rest_json(client, timeout_seconds=300, message="n8n REST surface to answer with JSON")
+            setup = client.post(
+                "/rest/owner/setup",
+                json={
+                    "firstName": "Modulo",
+                    "lastName": "CI",
+                    "email": "modulo-admin@example.com",
+                    "password": owner_password,
+                },
+            )
+            try:
+                setup.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise AssertionError(f"n8n owner setup failed: {exc} body={exc.response.text[:400]!r}") from exc
+            # n8n RESTARTS after first-run owner setup — never trust the early
+            # "n8n is starting up. Please wait" text; poll until REST is JSON.
+            _assert_n8n_rest_json(
+                client,
+                timeout_seconds=300,
+                message="n8n REST surface to answer with JSON again after owner-setup restart",
+            )
+            login = client.post(
+                "/rest/login", json={"emailOrLdapLoginId": "modulo-admin@example.com", "password": owner_password}
+            )
+            try:
+                login.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise AssertionError(f"n8n owner login failed: {exc} body={exc.response.text[:400]!r}") from exc
+            # Create a public API key under the just-created owner session.
+            key_resp = client.post(
+                "/rest/api-keys",
+                json={
+                    "label": "modulo-ci",
+                    "apiType": "public",
+                    "active": True,
+                    "expiresAt": None,
+                    # ApiKey scopes must be valid role scopes ("{resource}:{act}")
+                    # the owner role owns — n8n rejects any other spelling.
+                    "scopes": ["workflow:read", "workflow:create", "workflow:list"],
+                },
+            )
+            payload: dict[str, Any] = key_resp.json() if key_resp.status_code == 200 else {}
+            data = payload.get("data") if isinstance(payload, dict) else None
+            # The JWT lives under ``data.rawApiKey`` (the outer ``apiKey`` is masked).
+            api_key = data.get("rawApiKey", "") if isinstance(data, dict) else ""
+            handle.public_api_key = api_key  # type: ignore[attr-defined]
+            handle.owner_password = owner_password  # type: ignore[attr-defined]
+        if not api_key:
+            raise AssertionError(f"n8n API key mint failed ({key_resp.status_code}): {key_resp.text!r}")
+        yield handle
+    finally:
+        handle.stop()
 
 
 @pytest.fixture(scope="session")
@@ -346,19 +384,21 @@ def jenkins_service() -> Iterator[ContainerHandle]:
         "<builders><hudson.tasks.Shell><command>echo modulo-tier1b-ok</command></hudson.tasks.Shell></builders>"
         "</project>"
     )
-    with httpx.Client(base_url=handle.base_url, auth=("admin", initial_password), timeout=60.0) as client:
-        # CSRF: every Jenkins POST needs the crumb, tied to the SAME
-        # session (cookies) that issued it — fetch it on the live client.
-        crumb = client.get("/crumbIssuer/api/json").json()["crumb"]
-        client.headers.update({"Content-Type": "application/xml", "Jenkins-Crumb": crumb})
-        # Modern Jenkins requires the `name` query parameter (not `item`).
-        create_resp = client.post("/createItem?name=modulo-tier1b", content=freestyle_xml.encode())
-        try:
-            create_resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise AssertionError(f"jenkins job create failed: {exc} body={create_resp.text[:500]!r}") from exc
-    yield handle
-    handle.stop()
+    try:
+        with httpx.Client(base_url=handle.base_url, auth=("admin", initial_password), timeout=60.0) as client:
+            # CSRF: every Jenkins POST needs the crumb, tied to the SAME
+            # session (cookies) that issued it — fetch it on the live client.
+            crumb = client.get("/crumbIssuer/api/json").json()["crumb"]
+            client.headers.update({"Content-Type": "application/xml", "Jenkins-Crumb": crumb})
+            # Modern Jenkins requires the `name` query parameter (not `item`).
+            create_resp = client.post("/createItem?name=modulo-tier1b", content=freestyle_xml.encode())
+            try:
+                create_resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise AssertionError(f"jenkins job create failed: {exc} body={create_resp.text[:500]!r}") from exc
+        yield handle
+    finally:
+        handle.stop()
 
 
 @pytest.fixture(scope="session")
@@ -406,45 +446,51 @@ def sonarqube_service() -> Iterator[ContainerHandle]:
             ready_timeout_seconds=600,
         )
     )
-    _poll_until(
-        lambda: httpx.get(f"{handle.base_url}/api/system/status", timeout=60.0).json().get("status") == "UP",
-        timeout=420,
-        message="SonarQube web status to reach UP",
-    )
-    bootstrap_password = _random_password()
-    # Read timeout 60s: change_password hits the DB while ES is still warming.
-    with httpx.Client(base_url=handle.base_url, auth=("admin", "admin"), timeout=60.0) as client:
-        # SonarQube's default admin ships with password "admin". Reset it to
-        # a per-run secret first (the documented API path also works while
-        # the password is "overdue for change"), then mint a user token.
-        pw_change = client.post(
-            "/api/users/change_password",
-            params={"login": "admin", "previousPassword": "admin", "password": bootstrap_password},
+    try:
+        _poll_until(
+            lambda: httpx.get(f"{handle.base_url}/api/system/status", timeout=60.0).json().get("status") == "UP",
+            timeout=420,
+            message="SonarQube web status to reach UP",
         )
-        if pw_change.status_code not in (204, 400):  # 400 = already changed to the secret
-            pw_change.raise_for_status()
-    # Mint the token with a FRESH client (Basic auth, no cookies): SonarQube
-    # rejects cookie-authenticated POSTs without an X-XSRF-TOKEN header, and
-    # the change_password response leaves a session cookie in the first
-    # client that would make the token call a misleading 401.
-    with httpx.Client(base_url=handle.base_url, auth=("admin", bootstrap_password), timeout=60.0) as client:
-        token_resp = client.post("/api/user_tokens/generate", params={"name": "modulo-ci"})
-        try:
-            token_resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise AssertionError(f"SonarQube token generation failed: {exc} body={token_resp.text[:400]!r}") from exc
-        admin_token = token_resp.json()["token"]
-    project_key = f"modulo-tier1b-{_now_suffix()}"
-    with httpx.Client(base_url=handle.base_url, auth=(admin_token, ""), timeout=60.0) as client:
-        project_resp = client.post("/api/projects/create", params={"project": project_key, "name": "Modulo Tier 1b"})
-        try:
-            project_resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise AssertionError(f"sonar project create failed: {exc}") from exc
-    handle.sonar_token = admin_token  # type: ignore[attr-defined]
-    handle.sonar_project_key = project_key  # type: ignore[attr-defined]
-    yield handle
-    handle.stop()
+        bootstrap_password = _random_password()
+        # Read timeout 60s: change_password hits the DB while ES is still warming.
+        with httpx.Client(base_url=handle.base_url, auth=("admin", "admin"), timeout=60.0) as client:
+            # SonarQube's default admin ships with password "admin". Reset it to
+            # a per-run secret first (the documented API path also works while
+            # the password is "overdue for change"), then mint a user token.
+            pw_change = client.post(
+                "/api/users/change_password",
+                params={"login": "admin", "previousPassword": "admin", "password": bootstrap_password},
+            )
+            if pw_change.status_code not in (204, 400):  # 400 = already changed to the secret
+                pw_change.raise_for_status()
+        # Mint the token with a FRESH client (Basic auth, no cookies): SonarQube
+        # rejects cookie-authenticated POSTs without an X-XSRF-TOKEN header, and
+        # the change_password response leaves a session cookie in the first
+        # client that would make the token call a misleading 401.
+        with httpx.Client(base_url=handle.base_url, auth=("admin", bootstrap_password), timeout=60.0) as client:
+            token_resp = client.post("/api/user_tokens/generate", params={"name": "modulo-ci"})
+            try:
+                token_resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise AssertionError(
+                    f"SonarQube token generation failed: {exc} body={token_resp.text[:400]!r}"
+                ) from exc
+            admin_token = token_resp.json()["token"]
+        project_key = f"modulo-tier1b-{_now_suffix()}"
+        with httpx.Client(base_url=handle.base_url, auth=(admin_token, ""), timeout=60.0) as client:
+            project_resp = client.post(
+                "/api/projects/create", params={"project": project_key, "name": "Modulo Tier 1b"}
+            )
+            try:
+                project_resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise AssertionError(f"sonar project create failed: {exc}") from exc
+        handle.sonar_token = admin_token  # type: ignore[attr-defined]
+        handle.sonar_project_key = project_key  # type: ignore[attr-defined]
+        yield handle
+    finally:
+        handle.stop()
 
 
 @pytest.fixture(scope="session")
@@ -497,26 +543,28 @@ def grafana_service() -> Iterator[ContainerHandle]:
             ready_timeout_seconds=240,
         )
     )
-    with httpx.Client(base_url=handle.base_url, auth=("admin", admin_password), timeout=60.0) as client:
-        sa_resp = client.post("/api/serviceaccounts", json={"name": "modulo-ci", "role": "Admin"})
-        sa_resp.raise_for_status()
-        sa_id = sa_resp.json()["id"]
-        tok_resp = client.post(f"/api/serviceaccounts/{sa_id}/tokens", json={"name": "modulo-ci-token"})
-        tok_resp.raise_for_status()
-        sa_token = tok_resp.json()["key"]
-        assert sa_token, f"grafana service-account token missing: {tok_resp.text!r}"
-        uid = f"modulo-tier1b-{secrets.token_hex(3)}"
-        dash_resp = client.post(
-            "/api/dashboards/db",
-            json={
-                "dashboard": {"uid": uid, "title": "Upstream schema", "tags": ["tier1b"], "panels": []},
-                "overwrite": True,
-            },
-        )
-        dash_resp.raise_for_status()
-    handle.grafana_token = sa_token  # type: ignore[attr-defined]
-    yield handle
-    handle.stop()
+    try:
+        with httpx.Client(base_url=handle.base_url, auth=("admin", admin_password), timeout=60.0) as client:
+            sa_resp = client.post("/api/serviceaccounts", json={"name": "modulo-ci", "role": "Admin"})
+            sa_resp.raise_for_status()
+            sa_id = sa_resp.json()["id"]
+            tok_resp = client.post(f"/api/serviceaccounts/{sa_id}/tokens", json={"name": "modulo-ci-token"})
+            tok_resp.raise_for_status()
+            sa_token = tok_resp.json()["key"]
+            assert sa_token, f"grafana service-account token missing: {tok_resp.text!r}"
+            uid = f"modulo-tier1b-{secrets.token_hex(3)}"
+            dash_resp = client.post(
+                "/api/dashboards/db",
+                json={
+                    "dashboard": {"uid": uid, "title": "Upstream schema", "tags": ["tier1b"], "panels": []},
+                    "overwrite": True,
+                },
+            )
+            dash_resp.raise_for_status()
+        handle.grafana_token = sa_token  # type: ignore[attr-defined]
+        yield handle
+    finally:
+        handle.stop()
 
 
 @pytest.fixture(scope="session")

@@ -75,7 +75,7 @@ async def _invoke_once(backend: OpenAICompatibleBackend) -> str:
 
 
 @pytest.fixture(scope="session")
-def ollama_service() -> ContainerHandle:
+def ollama_service() -> Iterator[ContainerHandle]:
     try:
         handle = start_tier1b_container(
             ContainerSpec(
@@ -90,9 +90,11 @@ def ollama_service() -> ContainerHandle:
         pytest.skip(f"Tier 1b ollama fixture unavailable on this Docker host (recorded skip): {exc}")
     # Pull a tiny real model inside the container (bounded by the harness's
     # exec handling); then start serving via the OpenAI-compatible route.
-    handle.exec(["ollama", "pull", "qwen2:0.5b"])
-    yield handle
-    handle.stop()
+    try:
+        handle.exec(["ollama", "pull", "qwen2:0.5b"])
+        yield handle
+    finally:
+        handle.stop()
 
 
 async def test_ollama_health_and_completion(ollama_service: ContainerHandle) -> None:
@@ -124,37 +126,41 @@ def llamacpp_service() -> Iterator[ContainerHandle]:
         shutil.rmtree(model_dir, ignore_errors=True)
         pytest.skip(f"Tier 1b llamacpp model seed unavailable (recorded skip): {exc}")
     try:
-        handle = start_tier1b_container(
-            ContainerSpec(
-                # 2025+: llama.cpp containers moved to the org namespace
-                # ghcr.io/ggml-org/llama.cpp (ghcr.io/ggerganov no longer ships a :server tag).
-                image="ghcr.io/ggml-org/llama.cpp:server",
-                container_port=8080,
-                # Recorded live contract (verified against ggml-org/llama.cpp:server):
-                # this build cannot fetch a model over HTTP (-m <URL> fails with
-                # gguf_init_from_file "No such file or directory"), so the GGUF is
-                # downloaded on the host and bind-mounted read-write into /models.
-                command=[
-                    "-m",
-                    "/models/qwen2.5-0.5b.gguf",
-                    "--host",
-                    "0.0.0.0",  # noqa: S104 - container server must bind all interfaces inside the container
-                    "--port",
-                    "8080",
-                    "--threads",
-                    "2",
-                ],
-                probe=probe_http("/health"),
-                ready_timeout_seconds=900,
-                volumes=[(str(model_dir), "/models")],
+        try:
+            handle = start_tier1b_container(
+                ContainerSpec(
+                    # 2025+: llama.cpp containers moved to the org namespace
+                    # ghcr.io/ggml-org/llama.cpp (ghcr.io/ggerganov no longer ships a :server tag).
+                    image="ghcr.io/ggml-org/llama.cpp:server",
+                    container_port=8080,
+                    # Recorded live contract (verified against ggml-org/llama.cpp:server):
+                    # this build cannot fetch a model over HTTP (-m <URL> fails with
+                    # gguf_init_from_file "No such file or directory"), so the GGUF is
+                    # downloaded on the host and bind-mounted read-write into /models.
+                    command=[
+                        "-m",
+                        "/models/qwen2.5-0.5b.gguf",
+                        "--host",
+                        "0.0.0.0",  # noqa: S104 - container server must bind all interfaces inside the container
+                        "--port",
+                        "8080",
+                        "--threads",
+                        "2",
+                    ],
+                    probe=probe_http("/health"),
+                    ready_timeout_seconds=900,
+                    volumes=[(str(model_dir), "/models")],
+                )
             )
-        )
-    except Tier1bFixtureError as exc:
+        except Tier1bFixtureError as exc:
+            shutil.rmtree(model_dir, ignore_errors=True)
+            pytest.skip(f"Tier 1b llamacpp fixture unavailable on this Docker host (recorded skip): {exc}")
+        try:
+            yield handle
+        finally:
+            handle.stop()
+    finally:
         shutil.rmtree(model_dir, ignore_errors=True)
-        pytest.skip(f"Tier 1b llamacpp fixture unavailable on this Docker host (recorded skip): {exc}")
-    yield handle
-    handle.stop()
-    shutil.rmtree(model_dir, ignore_errors=True)
 
 
 async def test_llamacpp_health_and_completion(llamacpp_service: ContainerHandle) -> None:
@@ -182,29 +188,33 @@ def localai_service() -> ContainerHandle:
         shutil.rmtree(model_dir, ignore_errors=True)
         pytest.skip(f"Tier 1b localai model seed unavailable (recorded skip): {exc}")
     try:
-        handle = start_tier1b_container(
-            ContainerSpec(
-                image="localai/localai:latest-cpu",
-                container_port=8080,
-                command=["run", "qwen2"],
-                env={
-                    # The image entrypoint rebuilds local-ai from source unless
-                    # REBUILD=false — a multi-minute make cycle we must never hit.
-                    "REBUILD": "false",
-                    "MODELS_PATH": "/build/models",
-                    "THREADS": "2",
-                },
-                volumes=[(str(model_dir), "/build/models")],
-                probe=probe_http("/readyz"),
-                ready_timeout_seconds=900,
+        try:
+            handle = start_tier1b_container(
+                ContainerSpec(
+                    image="localai/localai:latest-cpu",
+                    container_port=8080,
+                    command=["run", "qwen2"],
+                    env={
+                        # The image entrypoint rebuilds local-ai from source unless
+                        # REBUILD=false — a multi-minute make cycle we must never hit.
+                        "REBUILD": "false",
+                        "MODELS_PATH": "/build/models",
+                        "THREADS": "2",
+                    },
+                    volumes=[(str(model_dir), "/build/models")],
+                    probe=probe_http("/readyz"),
+                    ready_timeout_seconds=900,
+                )
             )
-        )
-    except Tier1bFixtureError as exc:
+        except Tier1bFixtureError as exc:
+            shutil.rmtree(model_dir, ignore_errors=True)
+            pytest.skip(f"Tier 1b localai fixture unavailable on this Docker host (recorded skip): {exc}")
+        try:
+            yield handle
+        finally:
+            handle.stop()
+    finally:
         shutil.rmtree(model_dir, ignore_errors=True)
-        pytest.skip(f"Tier 1b localai fixture unavailable on this Docker host (recorded skip): {exc}")
-    yield handle
-    handle.stop()
-    shutil.rmtree(model_dir, ignore_errors=True)
 
 
 async def test_localai_health_and_completion(localai_service: ContainerHandle) -> None:
