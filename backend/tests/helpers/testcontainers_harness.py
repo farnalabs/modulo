@@ -162,19 +162,32 @@ def start_tier1b_container(spec: ContainerSpec) -> ContainerHandle:
     from testcontainers.core.docker_client import DockerClient
     from testcontainers.core.generic import DockerContainer
 
-    DockerClient().client.ping()  # raises when there is no Docker daemon
-
     container = DockerContainer(spec.image)
-    for key, value in spec.env.items():
-        container.with_env(key, value)
-    if spec.command:
-        command = spec.command if isinstance(spec.command, list) else spec.command.split()
-        container.with_command(command)
-    for host_dir, mount_path in spec.volumes or []:
-        container.with_volume_mapping(host_dir, mount_path, spec.volume_mode)
-    if spec.container_port is not None:
-        container.with_exposed_ports(spec.container_port)
-    container.start()
+    try:
+        DockerClient().client.ping()  # raises when there is no Docker daemon
+
+        for key, value in spec.env.items():
+            container.with_env(key, value)
+        if spec.command:
+            command = spec.command if isinstance(spec.command, list) else spec.command.split()
+            container.with_command(command)
+        for host_dir, mount_path in spec.volumes or []:
+            container.with_volume_mapping(host_dir, mount_path, spec.volume_mode)
+        if spec.container_port is not None:
+            container.with_exposed_ports(spec.container_port)
+        container.start()
+    except Exception as exc:
+        # Docker-level unavailability (no daemon, image pull/start failure — e.g.
+        # a multi-GB pull exhausting the runner's disk) is a FIXTURE problem, not
+        # a test failure: every Tier 1b fixture translates Tier1bFixtureError into
+        # a loud, recorded pytest.skip. Without this wrap the raw docker error
+        # (docker.errors.ImageNotFound / requests.HTTPError) escapes and ERRORs
+        # every dependent test instead of skipping it (observed on PR #773).
+        with contextlib.suppress(Exception):
+            container.stop()
+        raise Tier1bFixtureError(
+            f"Fixture {spec.image!r} could not be started on this Docker host: {type(exc).__name__}: {exc}"
+        ) from exc
     # From this point on the container EXISTS — any failure (port-mapping
     # read, probe poll/timeout) must stop it before the exception propagates,
     # or a red test leaks a live container on the host.
