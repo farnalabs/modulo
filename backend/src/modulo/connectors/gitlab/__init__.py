@@ -1043,23 +1043,67 @@ class GitLabConnector(ConnectorBase):
                 raise ValueError(f"Unsupported GitLab write resource: {payload.resource!r}")
 
     async def _write_file(self, payload: ConnectorPayload) -> dict[str, Any]:
-        """Create/update a repository file."""
+        """Create or update a repository file.
+
+        Probes file existence first: creates (POST) when the path does not
+        yet exist, and updates (PUT) when it does.  When the caller supplies
+        an explicit ``sha`` the probe is skipped and a PUT is issued directly
+        (the caller is signalling they hold the current SHA).
+        """
         project = self._require_filter(payload.data, "project", payload.resource)
         path = self._require_filter(payload.data, "path", payload.resource)
         _validate_path(path, payload.resource)
         encoded = _project_path(project)
-        body: dict[str, Any] = {
-            "branch": payload.data.get("ref", payload.data.get("branch", "main")),
-            "content": payload.data["content"],
-            "commit_message": payload.data.get("message", "Update via Modulo"),
-        }
-        if payload.data.get("sha"):
-            body["sha"] = payload.data["sha"]
-        r = await self._call_api(
-            "PUT",
-            f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
-            json=body,
-        )
+        branch = payload.data.get("ref", payload.data.get("branch", "main"))
+        content = payload.data["content"]
+        message = payload.data.get("message", "Update via Modulo")
+        explicit_sha = payload.data.get("sha")
+        file_url = f"/projects/{encoded}/repository/files/{quote(path, safe='')}"
+
+        # When the caller supplies an explicit SHA they hold the current
+        # version — issue a PUT directly (same behaviour as before).
+        if explicit_sha:
+            body: dict[str, Any] = {
+                "branch": branch,
+                "content": content,
+                "commit_message": message,
+                "sha": explicit_sha,
+            }
+            r = await self._call_api("PUT", file_url, json=body)
+            return _safe_json_object(r)
+
+        # Probe existence so we can choose the correct HTTP method.
+        # GET returns 200 + the current SHA when the file exists, or
+        # 404 when it does not.  GitLab requires POST to create a file
+        # and PUT to update one — PUT on a non-existent path returns 400.
+        existing_sha: str | None = None
+        try:
+            probe = await self._call_api("GET", file_url, params={"ref": branch})
+            probe_data = _safe_json_object(probe)
+            existing_sha = probe_data.get("sha")
+        except ValueError:
+            # Non-retryable errors (404 file-not-found, 400 bad-ref, …)
+            # indicate the file does not exist or the ref is invalid.
+            # Fall through to POST; GitLab will report a real error if
+            # the ref itself is bad.
+            existing_sha = None
+
+        if existing_sha:
+            body = {
+                "branch": branch,
+                "content": content,
+                "commit_message": message,
+                "sha": existing_sha,
+            }
+            r = await self._call_api("PUT", file_url, json=body)
+        else:
+            body = {
+                "branch": branch,
+                "content": content,
+                "commit_message": message,
+            }
+            r = await self._call_api("POST", file_url, json=body)
+
         return _safe_json_object(r)
 
     @staticmethod
