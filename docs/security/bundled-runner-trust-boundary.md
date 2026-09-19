@@ -196,14 +196,23 @@ provider registration time:
 |---|---|---|
 | `None` or unset | No | Default local socket — no network transit |
 | `unix://...` | No | Local socket — no network transit |
+| `tcp://localhost:2375` | No | Loopback — does not traverse a network |
+| `tcp://127.x.y.z:PORT` | No | IPv4 loopback — does not traverse a network |
+| `tcp://[::1]:PORT` | No | IPv6 loopback — does not traverse a network |
 | `tcp://docker-socket-proxy:2375` | No | Shipped compose-internal proxy on a private bridge |
 | Any other `tcp://...` | **Yes** | Remote TCP carries exec streams, inspect responses, and env-injected credentials in cleartext |
 
-**What counts as "local"**: only unix sockets and the shipped
-compose-internal hostname (`docker-socket-proxy`). A bare hostname on the
-compose network (`tcp://my-service:2375`) is NOT treated as local — it
-could be a different host on a different network segment. If in doubt, the
-rule requires TLS.
+**What counts as "local"**: unix sockets, loopback TCP endpoints
+(`localhost`, `127.x.y.z`, `::1`), and the shipped compose-internal hostname
+(`docker-socket-proxy`). A bare hostname on the compose network
+(`tcp://my-service:2375`) is NOT treated as local — it could be a different
+host on a different network segment. If in doubt, the rule requires TLS.
+
+**Escape hatch**: operators who need a non-loopback, non-TLS endpoint (e.g. a
+socket proxy on a private bridge) can set
+`MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT=1`. This logs a prominent warning at
+provider construction but permits the endpoint. See
+`docs/security/bundled-runner-operator-guide.md` §8 for caveats.
 
 **How TLS is detected**: the validation checks `DOCKER_TLS_VERIFY` and
 `DOCKER_CERT_PATH` environment variables. A remote endpoint without either

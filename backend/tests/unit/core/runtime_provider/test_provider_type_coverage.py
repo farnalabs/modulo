@@ -100,7 +100,7 @@ def test_docker_registered_when_modulo_docker_host_set(monkeypatch: pytest.Monke
     """Docker is registered when MODULO_DOCKER_HOST is set."""
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("DOCKER_HOST", raising=False)
-    monkeypatch.setenv("MODULO_DOCKER_HOST", "unix:///var/run/docker.sock")
+    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://localhost:2375")
 
     hub = build_hub()
     assert hub.get("runner_docker") is not None
@@ -110,7 +110,7 @@ def test_docker_registered_when_docker_host_set(monkeypatch: pytest.MonkeyPatch)
     """Docker is registered when DOCKER_HOST is set."""
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
-    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+    monkeypatch.setenv("DOCKER_HOST", "tcp://localhost:2375")
 
     hub = build_hub()
     assert hub.get("runner_docker") is not None

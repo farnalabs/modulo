@@ -6,10 +6,49 @@ import pytest
 
 from modulo.core.runtime_provider.docker import (
     _COMPOSE_INTERNAL_HOST,
+    _is_insecure_endpoint_allowed,
     _is_local_endpoint,
+    _is_loopback_hostname,
     _is_tls_configured,
     _validate_docker_endpoint_tls,
 )
+
+# ---------------------------------------------------------------------------
+# _is_loopback_hostname
+# ---------------------------------------------------------------------------
+
+
+class TestIsLoopbackHostname:
+    def test_localhost_is_loopback(self) -> None:
+        assert _is_loopback_hostname("localhost") is True
+
+    def test_localhost_case_insensitive(self) -> None:
+        assert _is_loopback_hostname("Localhost") is True
+        assert _is_loopback_hostname("LOCALHOST") is True
+
+    def test_bare_ipv6_loopback(self) -> None:
+        assert _is_loopback_hostname("::1") is True
+
+    def test_bracketed_ipv6_loopback(self) -> None:
+        assert _is_loopback_hostname("[::1]") is True
+
+    def test_loopback_127_0_0_1(self) -> None:
+        assert _is_loopback_hostname("127.0.0.1") is True
+
+    def test_loopback_127_range(self) -> None:
+        assert _is_loopback_hostname("127.255.255.255") is True
+        assert _is_loopback_hostname("127.0.0.50") is True
+
+    def test_non_loopback_ip(self) -> None:
+        assert _is_loopback_hostname("192.168.1.1") is False
+        assert _is_loopback_hostname("10.0.0.1") is False
+        assert _is_loopback_hostname("172.16.0.1") is False
+
+    def test_non_loopback_hostname(self) -> None:
+        assert _is_loopback_hostname("engine") is False
+        assert _is_loopback_hostname("docker-socket-proxy") is False
+        assert _is_loopback_hostname("remote-host") is False
+
 
 # ---------------------------------------------------------------------------
 # _is_local_endpoint
@@ -35,15 +74,30 @@ class TestIsLocalEndpoint:
     def test_compose_internal_proxy_case_insensitive(self) -> None:
         assert _is_local_endpoint(f"tcp://{_COMPOSE_INTERNAL_HOST.upper()}:2375") is True
 
+    def test_localhost_tcp_is_local(self) -> None:
+        """Loopback: tcp://localhost:2375 does not traverse a network — no TLS."""
+        assert _is_local_endpoint("tcp://localhost:2375") is True
+
+    def test_127_0_0_1_tcp_is_local(self) -> None:
+        assert _is_local_endpoint("tcp://127.0.0.1:2375") is True
+
+    def test_ipv6_loopback_tcp_is_local(self) -> None:
+        assert _is_local_endpoint("tcp://[::1]:2375") is True
+
+    def test_loopback_any_port_is_local(self) -> None:
+        assert _is_local_endpoint("tcp://localhost:2376") is True
+        assert _is_local_endpoint("tcp://127.0.0.1:2376") is True
+
     def test_remote_tcp_is_not_local(self) -> None:
         assert _is_local_endpoint("tcp://remote-host:2375") is False
 
     def test_remote_ip_is_not_local(self) -> None:
         assert _is_local_endpoint("tcp://192.168.1.100:2375") is False
 
-    def test_localhost_tcp_is_not_local(self) -> None:
-        """A bare tcp://localhost:2375 is NOT compose-internal — require TLS."""
-        assert _is_local_endpoint("tcp://localhost:2375") is False
+    def test_remote_private_ip_is_not_local(self) -> None:
+        """RFC 1918 addresses are private but NOT loopback."""
+        assert _is_local_endpoint("tcp://10.0.0.5:2375") is False
+        assert _is_local_endpoint("tcp://172.16.0.1:2375") is False
 
     def test_docker_host_header_stripped(self) -> None:
         """The docker:// or tcp:// prefix is handled by urlparse."""
@@ -84,6 +138,33 @@ class TestIsTlsConfigured:
 
 
 # ---------------------------------------------------------------------------
+# _is_insecure_endpoint_allowed (escape hatch)
+# ---------------------------------------------------------------------------
+
+
+class TestIsInsecureEndpointAllowed:
+    def test_not_set_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
+        assert _is_insecure_endpoint_allowed() is False
+
+    def test_set_to_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "1")
+        assert _is_insecure_endpoint_allowed() is True
+
+    def test_set_to_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "true")
+        assert _is_insecure_endpoint_allowed() is True
+
+    def test_set_to_false_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "false")
+        assert _is_insecure_endpoint_allowed() is False
+
+    def test_set_to_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "0")
+        assert _is_insecure_endpoint_allowed() is False
+
+
+# ---------------------------------------------------------------------------
 # _validate_docker_endpoint_tls
 # ---------------------------------------------------------------------------
 
@@ -98,21 +179,30 @@ class TestValidateDockerEndpointTls:
     def test_compose_internal_passes(self) -> None:
         _validate_docker_endpoint_tls(f"tcp://{_COMPOSE_INTERNAL_HOST}:2375")
 
+    def test_loopback_passes(self) -> None:
+        """Loopback TCP endpoints do not traverse a network — no TLS required."""
+        _validate_docker_endpoint_tls("tcp://localhost:2375")
+        _validate_docker_endpoint_tls("tcp://127.0.0.1:2375")
+        _validate_docker_endpoint_tls("tcp://[::1]:2375")
+
     def test_remote_no_tls_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
+        monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
         with pytest.raises(ValueError, match="requires TLS"):
             _validate_docker_endpoint_tls("tcp://remote-host:2375")
 
     def test_remote_no_tls_error_message_is_actionable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
+        monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
         with pytest.raises(ValueError, match="DOCKER_TLS_VERIFY") as exc_info:
             _validate_docker_endpoint_tls("tcp://10.0.0.5:2375")
         msg = str(exc_info.value)
         assert "10.0.0.5:2375" in msg
         assert "DOCKER_CERT_PATH" in msg
         assert "bundled-runner-operator-guide" in msg
+        assert "MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT" in msg
 
     def test_remote_with_tls_verify_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOCKER_TLS_VERIFY", "1")
@@ -124,6 +214,19 @@ class TestValidateDockerEndpointTls:
         monkeypatch.setenv("DOCKER_CERT_PATH", "/certs")
         _validate_docker_endpoint_tls("tcp://remote-host:2375")
 
+    def test_remote_with_escape_hatch_passes_and_logs(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
+        monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
+        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "1")
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            _validate_docker_endpoint_tls("tcp://10.0.0.5:2375")
+        assert "INSECURE" in caplog.text
+        assert "10.0.0.5:2375" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # DockerRuntimeProvider constructor — FAR-1038 registration gate
@@ -134,6 +237,7 @@ class TestDockerProviderTlsValidation:
     def test_constructor_rejects_remote_no_tls(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
+        monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
         from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 
         with pytest.raises(ValueError, match="requires TLS"):
@@ -151,9 +255,37 @@ class TestDockerProviderTlsValidation:
         p = DockerRuntimeProvider(docker_host=f"tcp://{_COMPOSE_INTERNAL_HOST}:2375")
         assert p._docker_host == f"tcp://{_COMPOSE_INTERNAL_HOST}:2375"
 
+    def test_constructor_accepts_loopback(self) -> None:
+        """DOCKER_HOST=tcp://localhost:2375 is a legitimate common config."""
+        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+
+        p = DockerRuntimeProvider(docker_host="tcp://localhost:2375")
+        assert p._docker_host == "tcp://localhost:2375"
+
+    def test_constructor_accepts_127_0_0_1(self) -> None:
+        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+
+        p = DockerRuntimeProvider(docker_host="tcp://127.0.0.1:2375")
+        assert p._docker_host == "tcp://127.0.0.1:2375"
+
+    def test_constructor_accepts_ipv6_loopback(self) -> None:
+        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+
+        p = DockerRuntimeProvider(docker_host="tcp://[::1]:2375")
+        assert p._docker_host == "tcp://[::1]:2375"
+
     def test_constructor_accepts_remote_with_tls(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOCKER_TLS_VERIFY", "1")
         monkeypatch.setenv("DOCKER_CERT_PATH", "/certs")
+        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+
+        p = DockerRuntimeProvider(docker_host="tcp://remote-host:2375")
+        assert p._docker_host == "tcp://remote-host:2375"
+
+    def test_constructor_accepts_remote_with_escape_hatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
+        monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
+        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "1")
         from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 
         p = DockerRuntimeProvider(docker_host="tcp://remote-host:2375")

@@ -236,7 +236,10 @@ async def test_docker_source_filters_on_deployment_identity(monkeypatch: pytest.
     monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "deployment-a")
     client = MagicMock()
     client.containers.list = AsyncMock(return_value=[])
-    source = runner_reconciler._DockerWorkspaceSource("unix:///var/run/docker.sock")
+    # Original endpoint: tcp://engine:2375 (non-loopback).  _DockerWorkspaceSource
+    # does NOT validate TLS — it stores the host string and passes it to
+    # aiodocker lazily.  The test mocks the client, so no real connection occurs.
+    source = runner_reconciler._DockerWorkspaceSource("tcp://engine:2375")
     source._client = client
 
     listed = await source.list_labelled_workspaces()
@@ -260,7 +263,8 @@ async def test_docker_source_parses_labels_into_ages() -> None:
         },
     )
     client.containers.list = AsyncMock(return_value=[listing])
-    source = runner_reconciler._DockerWorkspaceSource("unix:///var/run/docker.sock")
+    # Original endpoint: tcp://engine:2375 — no TLS validation in this source.
+    source = runner_reconciler._DockerWorkspaceSource("tcp://engine:2375")
     source._client = client
 
     entries = await source.list_labelled_workspaces()

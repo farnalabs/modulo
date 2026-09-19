@@ -85,7 +85,7 @@ class TestBuildHub:
     def test_registers_runner_docker_when_host_env_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
         monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
-        monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+        monkeypatch.setenv("DOCKER_HOST", "tcp://localhost:2375")
 
         hub = build_hub()
 
@@ -94,7 +94,7 @@ class TestBuildHub:
     def test_registers_runner_docker_when_modulo_docker_host_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
-        monkeypatch.setenv("MODULO_DOCKER_HOST", "unix:///var/run/docker.sock")
+        monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://localhost:2375")
 
         hub = build_hub()
 
@@ -142,7 +142,7 @@ class TestBuildHub:
 
     def test_skips_docker_on_import_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-        monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+        monkeypatch.setenv("DOCKER_HOST", "tcp://localhost:2375")
 
         real_import = cast(Any, __import__)
 
@@ -246,7 +246,7 @@ def test_retry_failure_signal_alone_registers_runner_docker(
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
     monkeypatch.delenv("DOCKER_HOST", raising=False)
-    monkeypatch.setenv("MODULO_DOCKER_HOST", "unix:///var/run/docker.sock")
+    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://localhost:2375")
 
     hub = build_hub()
     assert isinstance(hub.get("runner_docker"), DockerRuntimeProvider)
