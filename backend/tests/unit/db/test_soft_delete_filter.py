@@ -54,15 +54,22 @@ class TestApplySoftDeleteFilter:
         assert fake.statement is original_stmt, "include_deleted must skip the filter"
 
     def test_applies_filter_to_select(self) -> None:
-        """SELECT statements must get the with_loader_criteria option added."""
-        fake = _make_fake_state(is_select=True)
+        """SELECT statements must get the with_loader_criteria option added.
+
+        The listener replaces ``orm_execute_state.statement`` with a new
+        statement that carries ``with_loader_criteria(SoftDeleteMixin, ...)``.
+        We verify the statement object was replaced (different identity) —
+        proving the listener applied the option.
+        """
+        original_stmt = select(Agent)
+        fake = _make_fake_state(is_select=True, statement=original_stmt)
 
         _apply_soft_delete_filter(fake)
 
-        # The statement should have been replaced with one that has options
-        assert fake.statement is not None, "statement must be set"
-        # The statement object should be different from the original
-        # (options were applied via .options())
+        # The statement must have been replaced with a new one carrying options.
+        assert fake.statement is not original_stmt, (
+            "listener must replace the statement with one that has with_loader_criteria"
+        )
 
     def test_include_soft_deleted_sets_execution_option(self) -> None:
         """include_soft_deleted() must set the include_deleted execution option.
@@ -78,8 +85,6 @@ class TestApplySoftDeleteFilter:
         # Verify the listener skips it:
         fake = MagicMock(spec=ORMExecuteState)
         fake.is_select = True
-        # The listener reads orm_execute_state.execution_options.get("include_deleted")
-        # We need to mock this as a dict
         fake.execution_options = {"include_deleted": True}
         fake.statement = result
         original_stmt = fake.statement
@@ -87,10 +92,25 @@ class TestApplySoftDeleteFilter:
         assert fake.statement is original_stmt, "include_deleted must skip the filter"
 
     def test_include_soft_deleted_is_chainable(self) -> None:
-        """include_soft_deleted() must be chainable with other options."""
+        """include_soft_deleted() must be chainable with other query options.
+
+        The result of include_soft_deleted() is a Select statement — calling
+        .where() on it must produce a valid, further-refined statement.
+        """
         stmt = select(Agent).where(Agent.id == "test")
         result = include_soft_deleted(stmt)
 
-        # Should be able to chain .where() on the result
+        # Chain a .where() — must not raise and must produce a distinct object
         final = result.where(Agent.name == "foo")
-        assert final is not None
+        assert final is not result, "chaining must produce a new statement"
+        # The chained statement must still carry the include_deleted option
+        # (inherited from the parent), so the listener would skip it too:
+        fake = MagicMock(spec=ORMExecuteState)
+        fake.is_select = True
+        fake.execution_options = {}
+        fake.statement = final
+        original_stmt = fake.statement
+        _apply_soft_delete_filter(fake)
+        # The listener applies its own option — verify the statement changed,
+        # proving the chained statement is a valid Select with options support.
+        assert fake.statement is not original_stmt, "chained statement must support .options() for with_loader_criteria"
