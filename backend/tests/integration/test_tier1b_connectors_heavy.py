@@ -189,3 +189,30 @@ async def test_gitlab_write_file_then_read(gitlab_connector: GitLabConnector) ->
         ConnectorQuery(resource="file", filters={"project": GITLAB_PROJECT, "path": "tier1b/marker.md", "ref": "main"})
     )
     assert isinstance(read.records, list), "gitlab file read must return real records"
+
+
+async def test_gitlab_write_file_create_new_path(gitlab_connector: GitLabConnector) -> None:
+    """Create a file at a path that does NOT already exist — exercises the POST path.
+
+    This is the core FAR-1018 regression: the old code only issued PUT, which
+    fails with 400 "A file with this name doesn't exist" on real GitLab CE.
+    """
+    path = f"tier1b/create-test-{secrets.token_hex(4)}.md"
+    content = "created by connector\n"
+    write = await gitlab_connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={
+                "project": GITLAB_PROJECT,
+                "path": path,
+                "ref": "main",
+                "content": content,
+                "commit_message": "tier1b: create new file via connector",
+            },
+        )
+    )
+    assert isinstance(write, dict), f"expected dict from gitlab file create, got {type(write).__name__}"
+    read = await gitlab_connector.query(
+        ConnectorQuery(resource="file", filters={"project": GITLAB_PROJECT, "path": path, "ref": "main"})
+    )
+    assert isinstance(read.records, list), "gitlab file read must return real records"
