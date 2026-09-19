@@ -571,6 +571,26 @@ surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
 
 All tenant isolation is at the database layer via `SET LOCAL app.organisation_id` inside transactions. Every query runs within the org scope. This prevents cross-tenant leaks even if application-level scoping is bypassed. Team-visibility resources return 404 (not 403) for non-members – no existence enumeration.
 
+### Soft-Delete Scoping (FAR-1025)
+
+Soft-deleted rows (models inheriting `SoftDeleteMixin`) are **automatically excluded** from every ORM SELECT via a global `do_orm_execute` listener registered at startup (`modulo.db.soft_delete`). The listener injects `WHERE deleted_at IS NULL` through `with_loader_criteria`, so new read paths automatically exclude soft-deleted rows without requiring an explicit hand-written predicate.
+
+**Opt-out convention:** Legitimate read paths that must see soft-deleted rows (restore flows, historical lookups, purge operations, version resolution) opt out per-statement:
+
+```python
+from modulo.db.soft_delete import include_soft_deleted
+
+stmt = include_soft_deleted(select(Model).where(Model.id == uid))
+```
+
+Or equivalently:
+
+```python
+stmt = select(Model).where(Model.id == uid).execution_options(include_deleted=True)
+```
+
+The opt-out is scoped to the individual statement and does not leak across concurrent operations on the same session. Existing hand-written `deleted_at.is_(None)` predicates are now redundant but harmless — they are left in place to avoid risky churn.
+
 ### Run-Execution Service Identity (ADR 038)
 
 When a pipeline runs, the run executes with the **pipeline owner's authority** — not the triggering user's grants. This is a service identity scoped to the pipeline's `owner_team_id` (or the org when `owner_team_id` is NULL).

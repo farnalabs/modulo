@@ -3212,12 +3212,15 @@ async def _load_eval_def(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> 
     this module's convention.
     """
     from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.db.soft_delete import include_soft_deleted
 
     return (
         await s.execute(
-            select(EvalDefinition).where(
-                EvalDefinition.id == eid,
-                EvalDefinition.organisation_id == org_id,
+            include_soft_deleted(
+                select(EvalDefinition).where(
+                    EvalDefinition.id == eid,
+                    EvalDefinition.organisation_id == org_id,
+                )
             )
         )
     ).scalar_one_or_none()

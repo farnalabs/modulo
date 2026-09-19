@@ -17,6 +17,7 @@ from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.agent import Agent
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.soft_delete import include_soft_deleted
 from modulo.util.uuid import coerce_uuid
 
 _log = logging.getLogger(__name__)
@@ -82,6 +83,12 @@ async def get_agent(session: AsyncSession, agent_id: uuid.UUID) -> Agent | None:
     return result.scalar_one_or_none()
 
 
+async def _get_agent_for_write(session: AsyncSession, agent_id: uuid.UUID) -> Agent | None:
+    """Load an agent by ID, including soft-deleted rows (for update/delete)."""
+    result = await session.execute(include_soft_deleted(select(Agent).where(Agent.id == agent_id)))
+    return result.scalar_one_or_none()
+
+
 async def list_agents(
     session: AsyncSession,
     *,
@@ -126,7 +133,7 @@ async def update_agent(
     agent_id: uuid.UUID,
     updates: dict[str, Any],
 ) -> Agent | None:
-    agent = await get_agent(session, agent_id)
+    agent = await _get_agent_for_write(session, agent_id)
     if agent is None:
         return None
     apply_updates(agent, updates)
@@ -135,7 +142,7 @@ async def update_agent(
 
 
 async def delete_agent(session: AsyncSession, agent_id: uuid.UUID) -> bool:
-    agent = await get_agent(session, agent_id)
+    agent = await _get_agent_for_write(session, agent_id)
     if agent is None:
         return False
     await session.delete(agent)
@@ -157,7 +164,7 @@ async def add_prompt_version(
 
     Returns None if the agent is not found.
     """
-    result = await session.execute(select(Agent).where(Agent.id == agent_id).with_for_update())
+    result = await session.execute(include_soft_deleted(select(Agent).where(Agent.id == agent_id).with_for_update()))
     agent = result.scalar_one_or_none()
     if agent is None:
         return None
@@ -224,7 +231,7 @@ async def rollback_prompt_version(
     the target version's template as the active prompt_template.
     Returns None if agent or target version not found.
     """
-    result = await session.execute(select(Agent).where(Agent.id == agent_id).with_for_update())
+    result = await session.execute(include_soft_deleted(select(Agent).where(Agent.id == agent_id).with_for_update()))
     agent = result.scalar_one_or_none()
     if agent is None:
         return None

@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger.append_only import register_append_only_guard
 from modulo.db.rls import register_rls_reset_hook, register_tenant_filter
+from modulo.db.soft_delete import register_soft_delete_filter
 from modulo.settings import get_settings
 
 __all__ = [
@@ -58,6 +59,7 @@ def _register_global_hooks_once() -> None:
             return
         register_append_only_guard()
         register_tenant_filter()
+        register_soft_delete_filter()
         _GLOBAL_HOOKS_REGISTERED = True
 
 
