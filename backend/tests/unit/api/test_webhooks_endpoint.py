@@ -435,6 +435,52 @@ def test_receive_webhook_duplicate_returns_400(client: TestClient) -> None:
     assert "Duplicate" in resp.json()["detail"]
 
 
+def test_receive_webhook_ci_failure_coalesced_acks_202_and_commits(client: TestClient) -> None:
+    """A CI-failure coalesce is a HANDLED no-op, not a rejected duplicate. The
+    engine writes the ``coalesced`` TriggerEvent + the coalesce dedup marker
+    row inside the transaction and raises ``CiFailureCoalescedError``; the
+    route catches in-transaction (so the writes COMMIT — a rolled-back audit
+    would lose the suppression record, FAR-1034) and acks the sender with a
+    handled 202 — a 4xx would make the retrying sender loop on the very
+    duplicates the gate exists to quiet. No run, no background dispatch."""
+    from modulo.core.trigger_engine import CiFailureCoalescedError
+
+    session = _make_mock_session()
+    begin_cm = session.begin.return_value
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            m.side_effect = CiFailureCoalescedError("ci-failure:pr:777:sha:abc123")
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": "1700000000"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["run_id"] is None
+    assert body["status"] == "coalesced"
+    assert "suppressed" in body["detail"]
+    # The engine's coalesced TriggerEvent + dedup marker rows COMMIT (no
+    # exception escapes the inner try → aexit sees (None, None, None)).
+    aexit = begin_cm.__aexit__
+    assert aexit.await_count == 1
+    exc_tuple = aexit.await_args.args
+    assert exc_tuple == (None, None, None)
+    dispatch.assert_not_called()
+
+
 def test_receive_webhook_guardrail_blocked_returns_400_and_commits(client: TestClient) -> None:
     """A block-action guardrail at the trigger boundary maps to a 400 AND the
     transaction commits (the ``guardrail_blocked`` TriggerEvent + stored raw
