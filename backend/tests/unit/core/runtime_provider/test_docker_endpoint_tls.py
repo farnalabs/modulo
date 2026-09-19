@@ -171,19 +171,19 @@ class TestIsInsecureEndpointAllowed:
 
 class TestValidateDockerEndpointTls:
     def test_none_endpoint_passes(self) -> None:
-        _validate_docker_endpoint_tls(None)  # should not raise
+        assert _validate_docker_endpoint_tls(None) is None
 
     def test_unix_socket_passes(self) -> None:
-        _validate_docker_endpoint_tls("unix:///var/run/docker.sock")
+        assert _validate_docker_endpoint_tls("unix:///var/run/docker.sock") is None
 
     def test_compose_internal_passes(self) -> None:
-        _validate_docker_endpoint_tls(f"tcp://{_COMPOSE_INTERNAL_HOST}:2375")
+        assert _validate_docker_endpoint_tls(f"tcp://{_COMPOSE_INTERNAL_HOST}:2375") is None
 
     def test_loopback_passes(self) -> None:
         """Loopback TCP endpoints do not traverse a network — no TLS required."""
-        _validate_docker_endpoint_tls("tcp://localhost:2375")
-        _validate_docker_endpoint_tls("tcp://127.0.0.1:2375")
-        _validate_docker_endpoint_tls("tcp://[::1]:2375")
+        assert _validate_docker_endpoint_tls("tcp://localhost:2375") is None
+        assert _validate_docker_endpoint_tls("tcp://127.0.0.1:2375") is None
+        assert _validate_docker_endpoint_tls("tcp://[::1]:2375") is None
 
     def test_remote_no_tls_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
@@ -207,12 +207,12 @@ class TestValidateDockerEndpointTls:
     def test_remote_with_tls_verify_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOCKER_TLS_VERIFY", "1")
         monkeypatch.setenv("DOCKER_CERT_PATH", "/certs")
-        _validate_docker_endpoint_tls("tcp://remote-host:2375")
+        assert _validate_docker_endpoint_tls("tcp://remote-host:2375") is None
 
     def test_remote_with_only_cert_path_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.setenv("DOCKER_CERT_PATH", "/certs")
-        _validate_docker_endpoint_tls("tcp://remote-host:2375")
+        assert _validate_docker_endpoint_tls("tcp://remote-host:2375") is None
 
     def test_remote_with_escape_hatch_passes_and_logs(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

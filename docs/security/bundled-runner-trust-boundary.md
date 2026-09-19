@@ -162,11 +162,17 @@ explicit and auditable.
 ### Seccomp profile (FAR-1037)
 
 Every workspace container asserts Docker's built-in default seccomp profile
-(`seccomp=docker/default`). This blocks ~44 syscalls that are unnecessary
+(`seccomp=builtin`). This blocks ~44 syscalls that are unnecessary
 for container workloads (e.g. `mount`, `reboot`, `ptrace`).
 
+`builtin` is the daemon sentinel that selects the built-in default profile
+(moby's `config.SeccompProfileDefault`), not a profile name: the daemon
+JSON-decodes any other non-`unconfined` value as an inline profile, so a
+value such as `seccomp=default` fails container creation with
+"Decoding seccomp profile failed".
+
 The profile is **non-relaxable**: the `_SECURITY_OPT` constant includes
-`seccomp=docker/default` and the `_build_container_config` method copies it
+`seccomp=builtin` and the `_build_container_config` method copies it
 verbatim. A configuration that widens it (e.g. `seccomp=unconfined`) would
 require modifying the source constant, which is a code change visible in
 review.

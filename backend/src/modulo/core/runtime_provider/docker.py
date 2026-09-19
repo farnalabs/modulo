@@ -45,9 +45,16 @@ _CAP_DROP = ["ALL"]
 # an explicit seccomp profile (Docker's built-in default) and AppArmor
 # confinement (the host default profile).  These are *assertive* defaults —
 # a config that widens them (e.g. seccomp=unconfined) is rejected.
+#
+# ``seccomp=builtin`` is the daemon sentinel (moby's
+# ``config.SeccompProfileDefault``) that selects Docker's built-in default
+# profile.  It is NOT a profile name: the daemon JSON-decodes any other
+# non-``unconfined`` value as an inline profile, so e.g. ``seccomp=default``
+# or ``seccomp=docker/default`` fail at container start with
+# "Decoding seccomp profile failed".
 _SECURITY_OPT = [
     "no-new-privileges:true",
-    "seccomp=docker/default",
+    "seccomp=builtin",
     "apparmor=docker-default",
 ]
 # FAR-1036: non-root user for EVERY workspace container.  Images that
