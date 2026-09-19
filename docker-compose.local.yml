@@ -6,8 +6,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       POSTGRES_DB: modulo
     ports:
-      - "5434:5432"
-      - "5432:5432"
+      - "127.0.0.1:5434:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata_local:/var/lib/postgresql/data
     healthcheck:
@@ -19,7 +19,7 @@ services:
   redis-local:
     image: redis:8-alpine
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
 
   # SAQ runs worker — executes run jobs (plan F8 local dev). Runs against
   # db-local/redis-local inside the compose network. Command override only; the
@@ -73,7 +73,7 @@ services:
     image: otel/opentelemetry-collector-contrib:latest
     command: ["--config=/etc/otel-collector.yml"]
     ports:
-      - "4317:4317"
+      - "127.0.0.1:4317:4317"
     volumes:
       - ./configs/otel-collector.yml:/etc/otel-collector.yml
       - otel_data:/var/log/otel
@@ -86,7 +86,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=7d"
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - prometheus_data:/prometheus
     depends_on:
@@ -97,7 +97,7 @@ services:
       - observability
     image: grafana/grafana:latest
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
