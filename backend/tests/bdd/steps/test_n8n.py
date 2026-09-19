@@ -74,15 +74,15 @@ def when_health_check(n8n_connector):
     global _last_health_result, _last_error
     with respx.mock:
         if _given_unreachable:
-            respx.get(f"{BASE_URL}/rest/workflows", params={"limit": 1}).mock(
+            respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
                 side_effect=httpx.ConnectError("connection refused")
             )
         elif _given_invalid:
-            respx.get(f"{BASE_URL}/rest/workflows", params={"limit": 1}).mock(
+            respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
                 return_value=httpx.Response(401, text="Unauthorized")
             )
         else:
-            respx.get(f"{BASE_URL}/rest/workflows", params={"limit": 1}).mock(
+            respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
                 return_value=httpx.Response(200, json={"data": []})
             )
         try:
@@ -130,7 +130,7 @@ def when_query_with_id(n8n_connector, resource, item_id):
     path_map = {"workflow": "workflows", "execution": "executions", "credential": "credentials"}
     api_resource = path_map.get(resource, resource)
     with respx.mock:
-        respx.get(f"{BASE_URL}/rest/{api_resource}/{item_id}").mock(
+        respx.get(f"{BASE_URL}/api/v1/{api_resource}/{item_id}").mock(
             return_value=httpx.Response(200, json={"data": {"id": item_id, "name": f"{resource} {item_id}"}})
         )
         try:
@@ -153,7 +153,7 @@ def when_write_resource(n8n_connector, resource, name):
     global _last_write_result, _last_error
     with respx.mock:
         if resource == "workflow" and name:
-            respx.post(f"{BASE_URL}/rest/workflows").mock(
+            respx.post(f"{BASE_URL}/api/v1/workflows").mock(
                 return_value=httpx.Response(201, json={"data": {"id": "W1", "name": name, "active": False}})
             )
         elif resource in {"credential", "invalid_resource"}:
@@ -174,7 +174,7 @@ def when_write_credential(n8n_connector, resource, name, cred_type):
     global _last_write_result, _last_error
     with respx.mock:
         if name and cred_type:
-            respx.post(f"{BASE_URL}/rest/credentials").mock(
+            respx.post(f"{BASE_URL}/api/v1/credentials").mock(
                 return_value=httpx.Response(201, json={"data": {"id": "C1", "name": name, "type": cred_type}})
             )
         try:
@@ -220,7 +220,7 @@ def when_write_update(n8n_connector, resource, item_id, name):
     global _last_write_result, _last_error
     with respx.mock:
         if resource == "workflow_update" and item_id:
-            respx.put(f"{BASE_URL}/rest/workflows/{item_id}").mock(
+            respx.put(f"{BASE_URL}/api/v1/workflows/{item_id}").mock(
                 return_value=httpx.Response(200, json={"data": {"id": item_id, "name": name}})
             )
         try:
@@ -267,12 +267,12 @@ def then_write_is_error():
 
 def _mock_list_endpoint(resource, **params):
     endpoint_map = {
-        "workflows": "/rest/workflows",
-        "executions": "/rest/executions",
-        "webhooks": "/rest/webhooks",
-        "credentials": "/rest/credentials",
-        "tags": "/rest/tags",
-        "nodes": "/rest/node-types",
+        "workflows": "/api/v1/workflows",
+        "executions": "/api/v1/executions",
+        "webhooks": "/api/v1/webhooks",
+        "credentials": "/api/v1/credentials",
+        "tags": "/api/v1/tags",
+        "nodes": "/api/v1/node-types",
     }
     endpoint = endpoint_map.get(resource)
     if not endpoint:
@@ -289,11 +289,11 @@ def _mock_list_endpoint(resource, **params):
 
 def _mock_write_single(resource, item_id):
     route_map = {
-        "workflow_activate": ("post", f"/rest/workflows/{item_id}/activate", {"id": item_id, "active": True}),
-        "workflow_deactivate": ("post", f"/rest/workflows/{item_id}/deactivate", {"id": item_id, "active": False}),
-        "workflow_delete": ("delete", f"/rest/workflows/{item_id}", {"id": item_id, "deleted": True}),
-        "execution_delete": ("delete", f"/rest/executions/{item_id}", {"id": item_id, "deleted": True}),
-        "execution_retry": ("post", f"/rest/executions/{item_id}/retry", {"id": item_id, "status": "running"}),
+        "workflow_activate": ("post", f"/api/v1/workflows/{item_id}/activate", {"id": item_id, "active": True}),
+        "workflow_deactivate": ("post", f"/api/v1/workflows/{item_id}/deactivate", {"id": item_id, "active": False}),
+        "workflow_delete": ("delete", f"/api/v1/workflows/{item_id}", {"id": item_id, "deleted": True}),
+        "execution_delete": ("delete", f"/api/v1/executions/{item_id}", {"id": item_id, "deleted": True}),
+        "execution_retry": ("post", f"/api/v1/executions/{item_id}/retry", {"id": item_id, "status": "running"}),
     }
     if resource not in route_map:
         return

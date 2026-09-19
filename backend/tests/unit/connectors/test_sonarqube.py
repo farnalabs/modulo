@@ -26,6 +26,23 @@ def local_connector():
 
 
 @respx.mock
+async def test_auth_uses_basic_token_as_username(connector):
+    """SonarQube user tokens authenticate as the Basic-auth username with an
+    empty password — ``Authorization: Bearer`` is not supported by the API."""
+    import base64
+
+    route = respx.get(f"{API_BASE}/system/health").mock(
+        return_value=httpx.Response(200, json={"health": "GREEN"}),
+    )
+    result = await connector.health_check()
+    assert result.ok is True
+    auth_header = route.calls.last.request.headers["Authorization"]
+    assert auth_header.startswith("Basic "), f"expected Basic auth, got {auth_header[:12]!r}"
+    decoded = base64.b64decode(auth_header.split(" ", 1)[1]).decode()
+    assert decoded == f"{TOKEN}:", f"token must be the username with an empty password, got {decoded!r}"
+
+
+@respx.mock
 async def test_health_check_green(connector):
     respx.get(f"{API_BASE}/system/health").mock(
         return_value=httpx.Response(200, json={"health": "GREEN"}),

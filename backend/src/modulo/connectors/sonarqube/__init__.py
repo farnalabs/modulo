@@ -56,7 +56,13 @@ class SonarQubeConnector(ConnectorBase):
         return ConnectorType.SONARQUBE
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._token}"}
+        return {}
+
+    def _auth(self) -> httpx.BasicAuth:
+        # SonarQube's REST API does not support ``Authorization: Bearer``;
+        # user tokens authenticate as the Basic-auth username with an empty
+        # password (https://docs.sonarsource.com/sonarqube-server/user-guide/tokens).
+        return httpx.BasicAuth(self._token, "")
 
     def _client(self) -> httpx.AsyncClient:
         # PINNED TRANSPORT (FAR-512): validate + resolve the base_url's host
@@ -68,6 +74,7 @@ class SonarQubeConnector(ConnectorBase):
             self._base_url,
             base_url=self._api_base,
             headers=self._headers(),
+            auth=self._auth(),
             timeout=30,
         )
 
