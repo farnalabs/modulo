@@ -58,9 +58,11 @@ async def test_eval_coverage_gaps_includes_deleted_at_filter():
     eval_defs_result.all.return_value = []
 
     call_count = {"n": 0}
+    captured_stmts: list[Any] = []
 
-    async def _scripted_execute(*_args: Any, **_kwargs: Any) -> Any:
+    async def _scripted_execute(stmt: Any, *_args: Any, **_kwargs: Any) -> Any:
         call_count["n"] += 1
+        captured_stmts.append(stmt)
         if call_count["n"] == 1:
             return pipelines_result
         return eval_defs_result
@@ -74,12 +76,11 @@ async def test_eval_coverage_gaps_includes_deleted_at_filter():
     assert len(gaps) == 1
     assert gaps[0].node_id == "node-1"
 
-    # Check the eval defs query (second call) has deleted_at in WHERE
-    # We need to capture the second execute call's statement
-    # Since we can't easily get call_args for the second call in a side_effect,
-    # we verify via the first call's result shape that the pipeline query worked,
-    # and the second call's WHERE clause is what matters.
-    # Instead, re-verify with a direct session mock that captures all calls.
+    # The second statement is the eval defs query; its WHERE clause must
+    # exclude soft-deleted definitions.
+    assert len(captured_stmts) >= 2
+    where_clause = str(captured_stmts[1].whereclause)
+    assert "deleted_at" in where_clause, f"Expected 'deleted_at' in WHERE clause but got: {where_clause}"
 
 
 async def test_eval_coverage_gaps_soft_deleted_excluded_from_coverage():
