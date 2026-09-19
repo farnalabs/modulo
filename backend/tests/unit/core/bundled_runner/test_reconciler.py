@@ -236,7 +236,7 @@ async def test_docker_source_filters_on_deployment_identity(monkeypatch: pytest.
     monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "deployment-a")
     client = MagicMock()
     client.containers.list = AsyncMock(return_value=[])
-    source = runner_reconciler._DockerWorkspaceSource("tcp://engine:2375")
+    source = runner_reconciler._DockerWorkspaceSource("unix:///var/run/docker.sock")
     source._client = client
 
     listed = await source.list_labelled_workspaces()
@@ -260,7 +260,7 @@ async def test_docker_source_parses_labels_into_ages() -> None:
         },
     )
     client.containers.list = AsyncMock(return_value=[listing])
-    source = runner_reconciler._DockerWorkspaceSource("tcp://engine:2375")
+    source = runner_reconciler._DockerWorkspaceSource("unix:///var/run/docker.sock")
     source._client = client
 
     entries = await source.list_labelled_workspaces()

@@ -120,7 +120,7 @@ async def test_legacy_inert_local_docker_provider_is_dispatch_unbound() -> None:
 async def test_runner_docker_route_resolves_hub_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """With the registration signal set, the hub resolves the Docker provider."""
     monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "unit-test-machine")
-    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://localhost:2375")
+    monkeypatch.setenv("MODULO_DOCKER_HOST", "unix:///var/run/docker.sock")
     route = await resolve_sandbox_dispatch_route(
         _session_factory_returning(_profile("runner_docker")), _ORG, _PROFILE_ID
     )

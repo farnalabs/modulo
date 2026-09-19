@@ -11,6 +11,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import urlparse
 
 import aiodocker
 
@@ -39,10 +40,19 @@ _TMPFS_TMP = "/tmp"  # noqa: S108 # nosec B108  # NOSONAR - container-side tmpfs
 _TMPFS_TMP_SIZE = "size=128m,mode=1777"
 # Dropped capabilities + no-new-privileges (no cap_add is granted).
 _CAP_DROP = ["ALL"]
-_SECURITY_OPT = ["no-new-privileges:true"]
-# The bundled runner image runs as the non-root `runner` uid (1001).
+# FAR-1037: explicit confinement profiles.  Every workspace container gets
+# an explicit seccomp profile (Docker's built-in default) and AppArmor
+# confinement (the host default profile).  These are *assertive* defaults —
+# a config that widens them (e.g. seccomp=unconfined) is rejected.
+_SECURITY_OPT = [
+    "no-new-privileges:true",
+    "seccomp=docker/default",
+    "apparmor=docker-default",
+]
+# FAR-1036: non-root user for EVERY workspace container.  Images that
+# genuinely cannot run as an arbitrary uid must set
+# ``spec.allow_root_user = True`` — this is logged as a warning.
 _RUNNER_USER = "1001:1001"
-_IMAGES_WITH_RUNNER_USER = ("modulo-runner",)
 # Dedicated workspace bridge network default (compose overlay-declared).
 _DEFAULT_WORKSPACE_NETWORK = "modulo-runner-workspace"
 # Deployment-identity label (reconciler machine scoping, ADR 029): sourced
@@ -50,6 +60,68 @@ _DEFAULT_WORKSPACE_NETWORK = "modulo-runner-workspace"
 # one engine must not destroy each other's workspaces.
 _DEPLOYMENT_IDENTITY_ENV = "MODULO_RUNNER_MACHINE_ID"
 _DEPLOYMENT_IDENTITY_LABEL = "modulo.machine.id"
+
+# --- FAR-1038: TLS enforcement for remote Docker endpoints ---------------
+# The shipped compose overlay uses ``tcp://docker-socket-proxy:2375`` on a
+# private bridge network — that is the only non-unix endpoint that is
+# exempt from the TLS requirement.  Bare hostnames on the compose network
+# are NOT safe to assume as local — only the known overlay name is exempt.
+_COMPOSE_INTERNAL_HOST = "docker-socket-proxy"
+# Environment variables that signal TLS is configured for a Docker endpoint.
+_TLS_ENV_VARS = ("DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")
+
+
+# ---------------------------------------------------------------------------
+# FAR-1038: TLS enforcement for remote Docker endpoints
+# ---------------------------------------------------------------------------
+
+
+def _is_local_endpoint(endpoint: str | None) -> bool:
+    """Return True if *endpoint* is a local (non-remote) Docker endpoint.
+
+    Local endpoints:
+    - ``None`` or empty (default local socket)
+    - ``unix://`` sockets
+    - The shipped compose-internal ``tcp://docker-socket-proxy:2375``
+
+    Everything else (any other ``tcp://`` host) is remote and MUST use TLS.
+    """
+    if not endpoint:
+        return True
+    parsed = urlparse(endpoint if "://" in endpoint else f"unix://{endpoint}")
+    scheme = parsed.scheme.lower()
+    if scheme in ("unix", ""):
+        return True
+    return bool(scheme == "tcp" and parsed.hostname and parsed.hostname.lower() == _COMPOSE_INTERNAL_HOST)
+
+
+def _is_tls_configured() -> bool:
+    """Return True if the process environment signals Docker TLS is configured."""
+    for var in _TLS_ENV_VARS:
+        val = os.environ.get(var, "").strip()
+        if val and val not in ("0", "false", "False"):
+            return True
+    return False
+
+
+def _validate_docker_endpoint_tls(endpoint: str | None) -> None:
+    """Validate that a remote Docker endpoint has TLS configured.
+
+    Raises ``ValueError`` with an actionable message when a non-local TCP
+    endpoint is used without TLS.  Local (unix / None) and compose-internal
+    endpoints are always accepted.
+    """
+    if _is_local_endpoint(endpoint):
+        return
+    if _is_tls_configured():
+        return
+    raise ValueError(
+        f"Remote Docker endpoint '{endpoint}' requires TLS.  "
+        "Set DOCKER_TLS_VERIFY=1 and DOCKER_CERT_PATH to a directory "
+        "containing client certificates (cert.pem, key.pem, ca.pem), "
+        "or use a local unix socket / the compose-internal proxy instead. "
+        "See docs/security/bundled-runner-operator-guide.md §8 for details."
+    )
 
 
 def _route_by_channel(channel: Any, data: Any) -> tuple[bytes, bytes]:
@@ -132,6 +204,9 @@ class DockerRuntimeProvider(RuntimeProvider):
     2. ``MODULO_DOCKER_HOST`` environment variable
     3. ``DOCKER_HOST`` environment variable
     4. ``None`` (local socket — default)
+
+    FAR-1038: remote (non-local) TCP endpoints require TLS.  Local endpoints
+    (unix sockets) and the shipped compose-internal proxy are exempt.
     """
 
     provider_id = "runner_docker"
@@ -146,6 +221,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         workspace_network: str = _DEFAULT_WORKSPACE_NETWORK,
     ) -> None:
         self._docker_host = docker_host or os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
+        _validate_docker_endpoint_tls(self._docker_host)
         self._default_image = default_image
         self._create_timeout = create_timeout
         self._start_timeout = start_timeout
@@ -234,13 +310,15 @@ class DockerRuntimeProvider(RuntimeProvider):
         env: list[str],
         network_mode: str,
         workspace_labels: dict[str, str],
+        *,
+        allow_root_user: bool = False,
     ) -> dict[str, Any]:
         """Build the container create config (D4 hardening defaults, ADR 029)."""
         host_config: dict[str, Any] = {
             "AutoRemove": True,
             "Memory": memory_mb * 1024 * 1024,
             # D4 hardening: 1.0 CPU default, read-only rootfs, tmpfs
-            # workdir/tmp, dropped caps, no-new-privileges.
+            # workdir/tmp, dropped caps, no-new-privileges, seccomp, AppArmor.
             "NanoCpus": int(_DEFAULT_HARDENING_CPU * 1_000_000_000),
             "ReadonlyRootfs": True,
             "Tmpfs": {
@@ -258,9 +336,11 @@ class DockerRuntimeProvider(RuntimeProvider):
             "Labels": workspace_labels,
             "HostConfig": host_config,
         }
-        # Non-root user at provision. Only stamped on first-party runner
-        # images (generic base images carry no runner user).
-        if any(marker in image.lower() for marker in _IMAGES_WITH_RUNNER_USER):
+        # FAR-1036: non-root user at provision for ALL images by default.
+        # Only skipped when the profile explicitly opts in to root via
+        # ``allow_root_user=True`` (images that genuinely cannot run as an
+        # arbitrary uid).
+        if not allow_root_user:
             config["User"] = _RUNNER_USER
         return config
 
@@ -303,11 +383,13 @@ class DockerRuntimeProvider(RuntimeProvider):
         subsequent ``exec_command`` calls. Auto-removal is enabled.
 
         Hardening defaults (FAR-590 D4 / ADR 029 — applied at provision):
-        non-root user (runner uid 1001 on modulo-runner images), read-only
-        rootfs + tmpfs workdir/tmp with adequate sizing, dropped caps +
-        no-new-privileges, 1.0 CPU / 1 GiB resources, dedicated workspace
-        bridge network (``none`` opt-in per profile), structured labels from
-        ``spec.workspace_metadata`` + the machine deployment-identity label.
+        non-root user (uid 1001, FAR-1036 default for ALL images unless
+        ``spec.allow_root_user`` is set), read-only rootfs + tmpfs workdir/tmp
+        with adequate sizing, dropped caps + no-new-privileges + explicit
+        seccomp and AppArmor profiles (FAR-1037), 1.0 CPU / 1 GiB resources,
+        dedicated workspace bridge network (``none`` opt-in per profile),
+        structured labels from ``spec.workspace_metadata`` + the machine
+        deployment-identity label.
         """
         client = await self._get_client()
         image = spec.image_ref.strip() if spec.image_ref else self._default_image
@@ -318,7 +400,22 @@ class DockerRuntimeProvider(RuntimeProvider):
         env = self._build_container_env(spec.labels)
         workspace_labels = self._build_workspace_labels(spec)
         network_mode = self._resolve_network_mode(spec)
-        config = self._build_container_config(image, memory_mb, env, network_mode, workspace_labels)
+
+        # FAR-1036: log when root-user opt-out is used.
+        if spec.allow_root_user:
+            _log.warning(
+                "workspace image %s running as root (allow_root_user=True) — this weakens the security boundary",
+                image,
+            )
+
+        config = self._build_container_config(
+            image,
+            memory_mb,
+            env,
+            network_mode,
+            workspace_labels,
+            allow_root_user=spec.allow_root_user,
+        )
 
         try:
             await self._pull_image_best_effort(client, image)

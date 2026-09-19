@@ -687,3 +687,132 @@ async def test_get_workspace_status_cancellation_propagates(
 
     with pytest.raises(asyncio.CancelledError):
         await provider.get_workspace_status(ref)
+
+
+# ------------------------------------------------------------------
+# FAR-1036: non-root user for ALL images (default)
+# ------------------------------------------------------------------
+
+
+async def test_create_workspace_non_root_user_for_non_runner_image(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """FAR-1036: a NON-modulo-runner image must get the non-root user stamp."""
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        image_ref="python:3.13-slim",
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert config["User"] == "1001:1001"
+
+
+async def test_create_workspace_non_root_user_for_runner_image(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """FAR-1036: the modulo-runner image must still get the non-root user stamp."""
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        image_ref="modulo-runner:opencode",
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert config["User"] == "1001:1001"
+
+
+async def test_create_workspace_root_user_opt_in(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1036: allow_root_user=True skips the non-root stamp and logs a warning."""
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        image_ref="custom-base:latest",
+        allow_root_user=True,
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert "User" not in config
+    assert "running as root (allow_root_user=True)" in caplog.text
+
+
+async def test_create_workspace_default_image_gets_non_root_user(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """FAR-1036: even the default python:3.13-slim image gets the non-root user."""
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        image_ref="",
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    assert config["User"] == "1001:1001"
+
+
+# ------------------------------------------------------------------
+# FAR-1037: explicit seccomp + AppArmor profiles
+# ------------------------------------------------------------------
+
+
+async def test_create_workspace_has_seccomp_profile(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """FAR-1037: every workspace container must have an explicit seccomp profile."""
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    security_opt = config["HostConfig"]["SecurityOpt"]
+    assert any(entry.startswith("seccomp=") for entry in security_opt), (
+        f"Expected a seccomp= entry in SecurityOpt, got: {security_opt}"
+    )
+
+
+async def test_create_workspace_has_apparmor_profile(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """FAR-1037: every workspace container must have an explicit AppArmor profile."""
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    security_opt = config["HostConfig"]["SecurityOpt"]
+    assert any(entry.startswith("apparmor=") for entry in security_opt), (
+        f"Expected an apparmor= entry in SecurityOpt, got: {security_opt}"
+    )
+
+
+async def test_create_workspace_no_new_privileges_preserved(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """FAR-1037: no-new-privileges must remain in SecurityOpt."""
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    security_opt = config["HostConfig"]["SecurityOpt"]
+    assert "no-new-privileges:true" in security_opt

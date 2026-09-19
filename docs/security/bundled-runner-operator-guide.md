@@ -163,6 +163,41 @@ Everything else — hardening, labels, reconciler scoping — behaves
 identically; the reconciler's machine-identity label isolates multiple
 deployments sharing one engine.
 
+**FAR-1038: TLS is required for remote TCP endpoints.** A remote engine
+endpoint without TLS is rejected at provider registration with an actionable
+error. Local unix sockets and the shipped compose-internal proxy
+(`tcp://docker-socket-proxy:2375`) are exempt.
+
+To configure TLS for a remote engine:
+
+```bash
+# 1. Generate or obtain client certificates
+#    - ca.pem:   Certificate Authority that signed the engine's cert
+#    - cert.pem: Client certificate (for mutual TLS)
+#    - key.pem:  Client private key (for mutual TLS)
+
+# 2. Place them in a directory
+mkdir -p /etc/modulo/docker-certs
+cp ca.pem cert.pem key.pem /etc/modulo/docker-certs/
+
+# 3. Set environment variables (in your .env, docker-compose.yml, or systemd unit)
+export DOCKER_TLS_VERIFY=1
+export DOCKER_CERT_PATH=/etc/modulo/docker-certs
+export MODULO_DOCKER_HOST=tcp://remote-engine-host:2376
+```
+
+**Server TLS** (one-way): only `ca.pem` is required in `DOCKER_CERT_PATH`.
+The client verifies the engine's certificate but the engine does not
+authenticate the client.
+
+**Mutual TLS** (two-way): all three files (`ca.pem`, `cert.pem`,
+`key.pem`) must be present. Both client and server authenticate — this is
+the recommended configuration for production remote engines.
+
+The Docker daemon must be configured with TLS enabled (`--tlsverify
+--tlscacert=ca.pem --tlscert=server-cert.pem --tlskey=server-key.pem`)
+and typically listens on port 2376 (TLS) instead of 2375 (plaintext).
+
 ## 9. Rollback
 
 - Disable the tier: unset the `runner` profile (the overlay is opt-in) —

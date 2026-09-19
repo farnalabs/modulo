@@ -69,7 +69,7 @@ def test_split_exec_frame_aiodocker_message_shape() -> None:
 
 
 def _stream_provider() -> tuple[DockerRuntimeProvider, MagicMock]:
-    provider = DockerRuntimeProvider(docker_host="tcp://engine:2375")
+    provider = DockerRuntimeProvider(docker_host="unix:///var/run/docker.sock")
     client = MagicMock()
     stream = MagicMock()
     container = MagicMock()
