@@ -25,6 +25,7 @@ from modulo.core.bundled_runner.runner_dispatch import (
     resolve_sandbox_dispatch_route,
     validate_e2b_dispatch_timeout,
 )
+from modulo.util import WorkspaceNetworkValidationError
 
 _ORG = uuid.uuid4()
 _PROFILE_ID = uuid.uuid4()
@@ -265,3 +266,60 @@ def test_run_broker_for_unknown_run_returns_none() -> None:
 
 def test_run_broker_for_invalid_id_returns_none() -> None:
     assert _run_broker_for("not-a-uuid") is None
+
+
+# ---------------------------------------------------------------------------
+# workspace_network validation at dispatch (FAR-1020)
+# ---------------------------------------------------------------------------
+
+
+def test_workspace_spec_rejects_host_network_mode() -> None:
+    """Structural test: _workspace_spec_for_dispatch must reject host."""
+    profile = _profile("runner_docker", config_json={"workspace_network": "host"})
+    with pytest.raises(WorkspaceNetworkValidationError, match="host"):
+        _workspace_spec_for_dispatch(
+            profile,
+            org_id=_ORG,
+            run_id="run-123",
+            node_id="node-9",
+            run_uuid=uuid.uuid4(),
+        )
+
+
+def test_workspace_spec_rejects_container_sharing() -> None:
+    """Structural test: _workspace_spec_for_dispatch must reject container:*."""
+    profile = _profile("runner_docker", config_json={"workspace_network": "container:abc123"})
+    with pytest.raises(WorkspaceNetworkValidationError, match="container:"):
+        _workspace_spec_for_dispatch(
+            profile,
+            org_id=_ORG,
+            run_id="run-123",
+            node_id="node-9",
+            run_uuid=uuid.uuid4(),
+        )
+
+
+def test_workspace_spec_rejects_bridge_network() -> None:
+    """Structural test: _workspace_spec_for_dispatch must reject bridge."""
+    profile = _profile("runner_docker", config_json={"workspace_network": "bridge"})
+    with pytest.raises(WorkspaceNetworkValidationError, match="bridge"):
+        _workspace_spec_for_dispatch(
+            profile,
+            org_id=_ORG,
+            run_id="run-123",
+            node_id="node-9",
+            run_uuid=uuid.uuid4(),
+        )
+
+
+def test_workspace_spec_rejects_default_network() -> None:
+    """Structural test: _workspace_spec_for_dispatch must reject default."""
+    profile = _profile("runner_docker", config_json={"workspace_network": "default"})
+    with pytest.raises(WorkspaceNetworkValidationError, match="default"):
+        _workspace_spec_for_dispatch(
+            profile,
+            org_id=_ORG,
+            run_id="run-123",
+            node_id="node-9",
+            run_uuid=uuid.uuid4(),
+        )

@@ -594,11 +594,17 @@ async def test_engine_kill_via_dind_fails_client_never_success() -> None:
         )
 
     dind_client = await _dind_ready(dind_host)
+    # dind has no compose networks, so create a dedicated NAMED bridge for the
+    # workspace. FAR-1020 rejects the bare 'bridge' network MODE at the provider
+    # boundary, so the nested engine needs a real named network to attach to.
+    dind_network = f"runner-ci-kill-{uuid.uuid4().hex[:8]}"
     try:
         # Pre-pull into the nested store (first-run cost lives here, not in
         # the assertion — spike surprise #6).
         with contextlib.suppress(Exception):
             await dind_client.images.pull("alpine:3.20")
+
+        await dind_client.networks.create({"Name": dind_network, "Driver": "bridge"})
 
         provider = DockerRuntimeProvider(docker_host=dind_host, default_image="alpine:3.20")
         # dind's dockerd occasionally drops a connection during internal
@@ -609,7 +615,7 @@ async def test_engine_kill_via_dind_fails_client_never_success() -> None:
         for _attempt in range(2):
             try:
                 spec = _spec(None)
-                spec.workspace_network = "bridge"  # dind has no compose networks
+                spec.workspace_network = dind_network
                 ref = await provider.create_workspace(spec)
                 process = await provider.exec_command_stream(ref, ["sh", "-c", "echo nested; sleep 30"])
                 break
@@ -642,6 +648,11 @@ async def test_engine_kill_via_dind_fails_client_never_success() -> None:
         with pytest.raises((aiodocker.exceptions.DockerError, OSError, RuntimeError, TimeoutError)):
             await provider.exec_command(ref, ["echo", "after-death"], cmd_timeout=5)
     finally:
+        # The engine was killed mid-test, so this delete is usually a no-op;
+        # best-effort cleanup keeps a surviving engine free of the network.
+        with contextlib.suppress(Exception):
+            network = await dind_client.networks.get(dind_network)
+            await network.delete()
         with contextlib.suppress(Exception):
             await dind_client.close()
 

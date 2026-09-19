@@ -17,7 +17,7 @@ documented.
 | Backend + SAQ workers | `modulo/backend` | Trusted: holds org credentials, drives the engine |
 | Docker socket proxy | `lscr.io/linuxserver/socket-proxy` (digest-pinned in `deploy/compose/runner.yml`) | Filtered Docker API endpoint — accident prevention, NOT containment of a compromised backend |
 | Runner workspaces | `modulo-runner:opencode` (first-party, digest-pinned per minor) | Untrusted: runs agent-authored commands/LLM sessions |
-| Workspace network | `modulo-runner-workspace` (compose-declared bridge) | The ONLY network a workspace joins |
+| Workspace network | `modulo-runner-workspace` (compose-declared bridge) | The ONLY network a workspace joins — validated at CRUD, dispatch, and provider boundary (FAR-1020) |
 
 ## Workspace egress surface (what an agent can reach)
 
@@ -41,6 +41,25 @@ access (git, package registries, model APIs). A per-profile opt-in sets
 `network_policy: none`, which provisions the workspace with
 `--network=none` (loopback only). Per-profile egress allowlists are deferred
 (tracked separately).
+
+**workspace_network validation (FAR-1020).** The `workspace_network` value in
+an environment profile's `config_json` is validated at three layers:
+
+1. **CRUD boundary** — the `create_environment_profile` and
+   `update_environment_profile` CRUD functions reject dangerous values
+   before any DB write.
+2. **Dispatch** — `_workspace_spec_for_dispatch` validates the value read
+   from the DB, so a value written directly (bypassing the API) cannot
+   reach the container.
+3. **Provider** — `DockerRuntimeProvider._resolve_network_mode` validates
+   the final resolved value before it becomes `HostConfig.NetworkMode`.
+
+The deny-list explicitly rejects: `host` (host network namespace),
+`container:*` (shares another container's network), `bridge` (default Docker
+bridge), `none` (opt-in via `egress_policy` instead), and `default` (Docker
+alias for `bridge`). Only plain deployment-owned bridge network names are
+accepted. The validation function `validate_workspace_network` lives in
+`modulo.util` and is the single source of truth.
 
 **Host-published ports are reachable from workspaces.** The default compose
 publishes Postgres (5432) and Redis (6379) on host ports; an

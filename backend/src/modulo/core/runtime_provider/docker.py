@@ -222,10 +222,19 @@ class DockerRuntimeProvider(RuntimeProvider):
         ``none`` is opt-in per profile; the default (outbound permitted —
         the tier's purpose) attaches the dedicated workspace bridge, never
         the compose/backend network that hosts the Docker endpoint.
+
+        Defense-in-depth (FAR-1020): the network name is validated here
+        even though CRUD and dispatch already validate it — a value written
+        directly to the DB could bypass those gates.
         """
+        from modulo.util import validate_workspace_network
+
         if (spec.egress_policy or "").strip().lower() == "none":
             return "none"
-        return spec.workspace_network or self._workspace_network
+        resolved = spec.workspace_network or self._workspace_network
+        # Validate at the provider boundary — fail-closed.
+        validate_workspace_network(resolved)
+        return resolved
 
     @staticmethod
     def _build_container_config(

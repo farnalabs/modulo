@@ -477,7 +477,20 @@ async def _kill_local_container_by_label(label: str) -> None:
                 await container.kill()
 
 
-def _workspace_spec() -> WorkspaceSpec:
+async def _create_dind_workspace_network(url: str) -> str:
+    """Create a dedicated NAMED bridge on the nested dind engine.
+
+    The engine-kill scenario provisions a workspace inside dind, which has no
+    compose networks. FAR-1020 rejects the bare 'bridge' network MODE at the
+    provider boundary, so the scenario needs a real named network to attach to.
+    """
+    name = f"runner-ci-strip-{uuid.uuid4().hex[:8]}"
+    async with aiodocker.Docker(url=url) as docker:
+        await docker.networks.create({"Name": name, "Driver": "bridge"})
+    return name
+
+
+def _workspace_spec(network: str) -> WorkspaceSpec:
     return WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),
         organisation_id=uuid.uuid4(),
@@ -493,7 +506,7 @@ def _workspace_spec() -> WorkspaceSpec:
             "modulo.run.id": "strip-e2e-run-1",
             "modulo.org.id": "strip-e2e-org-1",
         },
-        workspace_network="bridge",  # dind has no compose networks
+        workspace_network=network,
     )
 
 
@@ -658,13 +671,14 @@ async def test_engine_kill_flips_strip_and_emits_notification_and_error_event(
             "environment, so the healthy→unreachable transition cannot be exercised."
         )
     await _ensure_image_present(dind_host, _IMAGE_REF)
+    dind_network = await _create_dind_workspace_network(dind_host)
 
     provider = DockerRuntimeProvider(docker_host=dind_host, default_image=_IMAGE_REF)
     ref: str | None = None
     try:
         for _attempt in range(2):
             try:
-                ref = await provider.create_workspace(_workspace_spec())
+                ref = await provider.create_workspace(_workspace_spec(dind_network))
                 break
             except aiodocker.exceptions.DockerError:
                 await asyncio.sleep(2.0)
