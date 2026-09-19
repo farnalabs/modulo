@@ -792,7 +792,14 @@ async def _load_eval_suite(session: AsyncSession, record: Any, org_id: uuid.UUID
     if run is None:
         return []
     eval_rows = (
-        (await session.execute(select(EvalDefinition).where(EvalDefinition.pipeline_id == run.pipeline_id)))
+        (
+            await session.execute(
+                select(EvalDefinition).where(
+                    EvalDefinition.pipeline_id == run.pipeline_id,
+                    EvalDefinition.deleted_at.is_(None),
+                )
+            )
+        )
         .scalars()
         .all()
     )

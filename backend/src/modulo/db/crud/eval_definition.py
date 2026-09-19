@@ -17,7 +17,10 @@ async def list_eval_definitions(
     cursor: str | None = None,
     limit: int = 20,
 ) -> PageResult[EvalDefinition]:
-    q = select(EvalDefinition).where(EvalDefinition.organisation_id == org_id)
+    q = select(EvalDefinition).where(
+        EvalDefinition.organisation_id == org_id,
+        EvalDefinition.deleted_at.is_(None),
+    )
     if pipeline_id is not None:
         q = q.where(EvalDefinition.pipeline_id == pipeline_id)
     q = q.order_by(EvalDefinition.name)

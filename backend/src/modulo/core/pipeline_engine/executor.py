@@ -2256,6 +2256,7 @@ class PipelineExecutor:
         eval_stmt = select(EvalDefinition).where(
             EvalDefinition.pipeline_id == pipeline_id,
             EvalDefinition.node_id.isnot(None),
+            EvalDefinition.deleted_at.is_(None),
         )
         return list((await session.execute(eval_stmt)).scalars().all())
 
@@ -5364,6 +5365,7 @@ class PipelineExecutor:
             EvalDefinition.suite_id.isnot(None),
             EvalDefinition.pass_threshold.isnot(None),
             EvalDefinition.eval_type != "guardrail",
+            EvalDefinition.deleted_at.is_(None),
         )
         result = await session.execute(stmt)
         suite_defs = result.scalars().all()
@@ -5377,6 +5379,7 @@ class PipelineExecutor:
             eval_stmt = select(EvalDefinition).where(
                 EvalDefinition.suite_id == suite_id,
                 EvalDefinition.pipeline_id == pipeline_id,
+                EvalDefinition.deleted_at.is_(None),
             )
             eval_result = await session.execute(eval_stmt)
             defs_in_suite = eval_result.scalars().all()
