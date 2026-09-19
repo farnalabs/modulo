@@ -67,6 +67,28 @@ async def list_plugins_endpoint(
         ) from None
 
 
+@router.get("/{plugin_id}", dependencies=[require_feature("plugin_management")])
+async def plugin_detail_endpoint(
+    plugin_id: str,
+    _principal: TenantPrincipal = require_permission("plugin.list"),
+) -> PluginResponse:
+    """Return the full manifest for a single installed plugin plus its health status."""
+    try:
+        registry = get_plugin_registry()
+        manifest = registry.get_plugin(plugin_id)
+        if manifest is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plugin not found")
+        return _to_response(manifest, registry.health_check(plugin_id)[plugin_id])
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to retrieve plugin detail for %s", _sanitise_log_value(plugin_id))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get plugin detail",
+        ) from None
+
+
 @router.get("/{plugin_id}/health", dependencies=[require_feature("plugin_management")])
 async def plugin_health_endpoint(
     plugin_id: str,
