@@ -40,17 +40,20 @@ the containment claim to hold.
 access (git, package registries, model APIs). A per-profile opt-in sets
 `network_policy: none`, which provisions the workspace with
 `--network=none` (loopback only). Per-profile egress allowlists are deferred
-(tracked separately).
+(tracked as FAR-1039).
 
-**Host-published ports are reachable from workspaces.** The default compose
-publishes Postgres (5432) and Redis (6379) on host ports; an
-egress-permitted workspace can target the host and therefore those ports.
-The hardening remedy is a named acceptance criterion with a CI guard (not
-best-effort): the default compose rebinds to `127.0.0.1:` host bindings, and
-any port that cannot be rebound is enumerated here with the reason.
-Operator mitigation until that guard lands: firewall the host ports from the
-Docker bridge subnets, or run the engine on a separate host. (The `saq-system`
-SAQ web UI already binds `127.0.0.1:8081` in the base compose.)
+**Host-published ports are loopback-bound (enforced).** The default compose
+rebinds all host-published ports to `127.0.0.1:` (FAR-1035). An
+egress-permitted workspace targeting the host hits only the loopback
+interface and cannot reach Postgres, Redis, or the app server on the host.
+A guard test (`test_compose_loopback_ports`) verifies this on every CI
+run and fails if any default compose file publishes a port on a non-loopback
+address.
+
+The sole exception is `deploy/compose/docker-compose.prod.yml`'s
+`${PORT:-80}:80` binding on the `modulo` service — the production app
+must be reachable from outside.  That file is excluded from the guard;
+its port policy is documented here, not in the test.
 
 ## Docker endpoint filtering (the socket proxy)
 
@@ -152,7 +155,15 @@ mechanically guarded here:
   network/pid/ipc, no unrestricted `cap_add` in overlay services; no host
   ports for the proxy) — the overlay conforms today; the CI job that
   enforces it is the same GA/CI item.
-- **The default-compose `127.0.0.1:` rebind** — acceptance criterion above;
-  a CI guard is the named remedy.
 - **Egress allowlists per profile** — deferred (the `none` opt-in IS
-  enforced at provision).
+  enforced at provision; allowlists tracked as FAR-1039).
+
+### Enforced
+
+- **Default-compose `127.0.0.1:` rebind** — enforced by guard test
+  `test_compose_loopback_ports` (FAR-1035).  Every host-published port in
+  `docker-compose.yml`, `docker-compose.local.yml`, and
+  `deploy/compose/docker-compose.test.yml` must bind to `127.0.0.1`.
+  The sole documented exception is `deploy/compose/docker-compose.prod.yml`
+  (`${PORT:-80}:80` on the `modulo` service — the production app must be
+  externally reachable).
