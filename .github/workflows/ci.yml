@@ -338,6 +338,24 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
+      - name: Free up disk space
+        # The Tier 1b suites pull many container images and the runner's local
+        # disk is the binding constraint: on ubicloud-standard-2 the suite has
+        # been observed with 0-2 MB free, which aborts Docker pulls and kills
+        # the shared Postgres Testcontainer mid-run (teardown ERRORs, PR #773).
+        # Remove preinstalled toolchains the suite never uses. Fail-open: a
+        # missing path or absent passwordless sudo is not an error.
+        shell: bash
+        run: |
+          echo "disk before:"; df -h / || true
+          for path in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+                      /usr/local/share/boost /usr/local/share/powershell; do
+            if [ -d "$path" ]; then
+              echo "removing $path"; sudo -n rm -rf "$path" || true
+            fi
+          done
+          sudo -n apt-get clean || true
+          echo "disk after:"; df -h / || true
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
           python-version: "3.12"
