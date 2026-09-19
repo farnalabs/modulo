@@ -2712,7 +2712,9 @@ async def _eval_summary(session: AsyncSession) -> EvalDashboardSummary:
     ).where(non_guardrail_eval_results_clause())
     summary_row = (await session.execute(summary_q)).one()
 
-    defs_q = select(func.count(EvalDefinition.id)).select_from(EvalDefinition)
+    defs_q = (
+        select(func.count(EvalDefinition.id)).select_from(EvalDefinition).where(EvalDefinition.deleted_at.is_(None))
+    )
     total_defs = (await session.execute(defs_q)).scalar() or 0
 
     total_results = summary_row.total_results or 0
@@ -2773,6 +2775,7 @@ async def _eval_by_type(session: AsyncSession, org_id: uuid.UUID) -> list[TypeBr
         .where(
             EvalDefinition.organisation_id == org_id,
             EvalDefinition.eval_type != "guardrail",
+            EvalDefinition.deleted_at.is_(None),
         )
         .group_by(
             EvalDefinition.eval_type,

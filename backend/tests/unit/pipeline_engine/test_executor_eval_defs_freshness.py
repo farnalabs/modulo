@@ -430,9 +430,11 @@ async def test_check_eval_suites_excludes_soft_deleted():
     q3_result.scalars.return_value = scalars_results
 
     call_count = {"n": 0}
+    captured_stmts: list[Any] = []
 
-    async def _scripted_execute(*_args: Any, **_kwargs: Any) -> Any:
+    async def _scripted_execute(stmt: Any, *_args: Any, **_kwargs: Any) -> Any:
         call_count["n"] += 1
+        captured_stmts.append(stmt)
         if call_count["n"] == 1:
             return q1_result
         if call_count["n"] == 2:
@@ -451,3 +453,14 @@ async def test_check_eval_suites_excludes_soft_deleted():
     assert results[0].passed is True
     assert results[0].passed_evals == 1
     assert results[0].total_evals == 1
+
+    # Verify the WHERE clause of BOTH suite queries includes deleted_at.
+    # Query 1: suite-defs with pass_threshold; Query 2: per-suite defs.
+    # Without the FAR-1009 filter the WHERE clause omits deleted_at and these
+    # assertions fail — the test would still pass on aggregate output alone
+    # because the mock returns the same rows either way.
+    assert len(captured_stmts) >= 2
+    where_1 = str(captured_stmts[0].whereclause)
+    where_2 = str(captured_stmts[1].whereclause)
+    assert "deleted_at" in where_1, f"Suite-defs query WHERE clause missing deleted_at filter: {where_1}"
+    assert "deleted_at" in where_2, f"Per-suite defs query WHERE clause missing deleted_at filter: {where_2}"

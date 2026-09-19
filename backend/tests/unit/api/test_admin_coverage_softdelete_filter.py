@@ -2,6 +2,8 @@
 
 Covers:
   - ``admin._eval_coverage_gaps`` (eval coverage gap analysis)
+  - ``admin._eval_summary`` (dashboard definition count)
+  - ``admin._eval_by_type`` (dashboard type breakdown)
 
 The test asserts the emitted WHERE clause contains ``deleted_at`` so a future
 regression that drops the filter is caught. Uses a mocked session — no DB
@@ -166,3 +168,79 @@ async def test_eval_coverage_gaps_where_clause_contains_deleted_at():
     eval_stmt = captured_stmts[1]
     where_clause = str(eval_stmt.whereclause)
     assert "deleted_at" in where_clause, f"Expected 'deleted_at' in WHERE clause but got: {where_clause}"
+
+
+# ---------------------------------------------------------------------------
+# admin._eval_summary — dashboard definition count
+# ---------------------------------------------------------------------------
+
+
+async def test_eval_summary_where_clause_contains_deleted_at():
+    """_eval_summary must add deleted_at IS NULL to the definitions count query.
+
+    This is the direct regression guard: if the filter is dropped, the total
+    definitions count on the dashboard includes soft-deleted rows.
+    """
+    from modulo.api.routes.admin import _eval_summary
+
+    # First call: summary_q (EvalResult counts); second: defs_q (EvalDefinition count)
+    summary_result = MagicMock()
+    summary_result.one.return_value = MagicMock(total_results=10, passed=8, failed=2)
+
+    defs_result = MagicMock()
+    defs_result.scalar.return_value = 5
+
+    call_count = {"n": 0}
+    captured_stmts: list[Any] = []
+
+    async def _scripted_execute(stmt: Any, *_args: Any, **_kwargs: Any) -> Any:
+        call_count["n"] += 1
+        captured_stmts.append(stmt)
+        if call_count["n"] == 1:
+            return summary_result
+        return defs_result
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = _scripted_execute
+
+    await _eval_summary(session)
+
+    # The second statement is the eval definitions count query
+    assert len(captured_stmts) >= 2
+    defs_stmt = captured_stmts[1]
+    where_clause = str(defs_stmt.whereclause)
+    assert "deleted_at" in where_clause, f"Expected 'deleted_at' in defs WHERE clause but got: {where_clause}"
+
+
+# ---------------------------------------------------------------------------
+# admin._eval_by_type — dashboard type breakdown
+# ---------------------------------------------------------------------------
+
+
+async def test_eval_by_type_where_clause_contains_deleted_at():
+    """_eval_by_type must add deleted_at IS NULL to the WHERE.
+
+    This is the direct regression guard: if the filter is dropped, soft-deleted
+    definitions still appear in the type breakdown.
+    """
+    from modulo.api.routes.admin import _eval_by_type
+
+    org_id = uuid.uuid4()
+
+    by_type_result = MagicMock()
+    by_type_result.all.return_value = []
+
+    captured_stmts: list[Any] = []
+
+    async def _scripted_execute(stmt: Any, *_args: Any, **_kwargs: Any) -> Any:
+        captured_stmts.append(stmt)
+        return by_type_result
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = _scripted_execute
+
+    await _eval_by_type(session, org_id)
+
+    assert len(captured_stmts) >= 1
+    where_clause = str(captured_stmts[0].whereclause)
+    assert "deleted_at" in where_clause, f"Expected 'deleted_at' in by_type WHERE clause but got: {where_clause}"

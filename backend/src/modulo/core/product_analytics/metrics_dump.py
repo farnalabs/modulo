@@ -343,7 +343,9 @@ async def _count_entities(session: AsyncSession, org_ids: list[uuid.UUID]) -> di
     counts["triggers"] = result.scalar_one() or 0
 
     result = await session.execute(
-        select(func.count()).select_from(EvalDefinition).where(EvalDefinition.organisation_id.in_(org_ids))
+        select(func.count())
+        .select_from(EvalDefinition)
+        .where(EvalDefinition.organisation_id.in_(org_ids), EvalDefinition.deleted_at.is_(None))
     )
     counts["eval_definitions"] = result.scalar_one() or 0
 
