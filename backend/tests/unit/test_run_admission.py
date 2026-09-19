@@ -407,6 +407,72 @@ class TestDeriveWebhookCoalesceKey:
         assert derive_webhook_coalesce_key(push_a) == derive_webhook_coalesce_key(push_b)
 
 
+class TestDeriveCiFailureCoalesceKey:
+    def test_ci_failure_payload_derives_key(self) -> None:
+        payload = {
+            "branchName": "prompt-pr-1",
+            "prNumber": 777,
+            "headSha": "abc123",
+            "runUrl": "https://github.com/farnalabs/modulo/actions/runs/1",
+            "failureDescription": "CI checks failed on PR #777",
+        }
+        assert ra.derive_ci_failure_coalesce_key(payload) == "ci-failure:pr:777:sha:abc123"
+
+    def test_key_stable_across_volatile_fields(self) -> None:
+        # Each CI-failure event carries a DIFFERENT runUrl (the GitHub run id of
+        # the CI run that failed) — the exact volatility that defeated the whole
+        # payload-hash dedup. The coalesce key must ignore it.
+        first = {
+            "branchName": "b",
+            "prNumber": 3,
+            "headSha": "sha111",
+            "runUrl": "https://github.com/o/r/actions/runs/1001",
+            "failureDescription": "flaky",  # description text also varies
+        }
+        second = {
+            "branchName": "b",
+            "prNumber": 3,
+            "headSha": "sha111",
+            "runUrl": "https://github.com/o/r/actions/runs/1002",
+            "failureDescription": "flaky again",
+        }
+        assert ra.derive_ci_failure_coalesce_key(first) == ra.derive_ci_failure_coalesce_key(second)
+
+    def test_new_head_sha_derives_different_key(self) -> None:
+        a = {"prNumber": 5, "headSha": "old", "branchName": "b"}
+        b = {"prNumber": 5, "headSha": "new", "branchName": "b"}
+        assert ra.derive_ci_failure_coalesce_key(a) != ra.derive_ci_failure_coalesce_key(b)
+
+    def test_main_failure_payload_derives_key(self) -> None:
+        # prNumber: 0 is the notify-main-failure shape; coalescing at the same
+        # main SHA is desirable, so it must derive a key, not None.
+        payload = {"branchName": "main", "prNumber": 0, "headSha": "main-sha-9"}
+        assert ra.derive_ci_failure_coalesce_key(payload) == "ci-failure:pr:0:sha:main-sha-9"
+
+    def test_manual_dispatch_without_head_sha_returns_none(self) -> None:
+        # branch-fixer.yml is a manual workflow_dispatch with no PR/head context
+        # — an intentional fire must never be suppressed.
+        payload = {"branchName": "branch-x", "prNumber": 42, "failureDescription": "manual look"}
+        assert ra.derive_ci_failure_coalesce_key(payload) is None
+
+    def test_merge_queue_payload_returns_none(self) -> None:
+        # merge-queue.yml dispatches merge-conflict / migration-collision bodies
+        # with a repository + phase and NO prNumber — never coalesced.
+        for payload in (
+            {"repository": "farnalabs/modulo", "phase": "merge-conflict", "conflictPrs": "1 2", "runUrl": "u"},
+            {"repository": "farnalabs/modulo", "phase": "migration-collision", "collisionPrs": "9", "runUrl": "u"},
+        ):
+            assert ra.derive_ci_failure_coalesce_key(payload) is None
+
+    def test_malformed_payload_returns_none(self) -> None:
+        assert ra.derive_ci_failure_coalesce_key(None) is None
+        assert ra.derive_ci_failure_coalesce_key({"prNumber": 1}) is None  # no headSha
+        assert ra.derive_ci_failure_coalesce_key({"headSha": "sha"}) is None  # no prNumber
+        assert ra.derive_ci_failure_coalesce_key({"prNumber": "not-int", "headSha": "sha"}) is None
+        assert ra.derive_ci_failure_coalesce_key({"prNumber": True, "headSha": "sha"}) is None
+        assert ra.derive_ci_failure_coalesce_key({"prNumber": 1, "headSha": ""}) is None
+
+
 class TestCoalesceEnabled:
     def test_default_on(self) -> None:
         assert coalesce_enabled(None) is True

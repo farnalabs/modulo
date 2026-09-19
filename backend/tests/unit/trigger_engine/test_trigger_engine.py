@@ -22,6 +22,7 @@ import asyncio
 import datetime
 import hashlib
 import hmac
+import json
 import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -30,9 +31,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from modulo.core.trigger_engine import (
+    _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS,
+    _CI_FAILURE_COALESCE_WINDOW_SECONDS,
+    _DEDUP_TTL_SECONDS,
+    CiFailureCoalescedError,
     ConcurrentRunLimitError,
     DuplicateWebhookError,
     HmacValidationError,
@@ -634,6 +639,27 @@ class TestTryInsertDedup:
         with pytest.raises(IntegrityError):
             await engine._try_insert_dedup(session, uuid.uuid4(), uuid.uuid4(), "hash-1")
 
+    async def test_default_ttl_is_five_minutes(self) -> None:
+        engine = TriggerEngine()
+        session = self._session()
+        before = datetime.datetime.now(datetime.UTC)
+        await engine._try_insert_dedup(session, uuid.uuid4(), uuid.uuid4(), "hash-1")
+        after = datetime.datetime.now(datetime.UTC)
+        expires_at = session.add.call_args.args[0].expires_at
+        assert datetime.timedelta(seconds=_DEDUP_TTL_SECONDS - 5) <= expires_at - before
+        assert expires_at - after <= datetime.timedelta(seconds=_DEDUP_TTL_SECONDS)
+
+    async def test_custom_ttl_overrides_default(self) -> None:
+        engine = TriggerEngine()
+        session = self._session()
+        before = datetime.datetime.now(datetime.UTC)
+        await engine._try_insert_dedup(session, uuid.uuid4(), uuid.uuid4(), "hash-1", ttl_seconds=3600)
+        after = datetime.datetime.now(datetime.UTC)
+        expires_at = session.add.call_args.args[0].expires_at
+        # The clicked-in custom window (FAR-1034) must be reflected in the row.
+        assert datetime.timedelta(seconds=3600 - 5) <= expires_at - before
+        assert expires_at - after <= datetime.timedelta(seconds=3600)
+
 
 # ---------------------------------------------------------------------------
 # TriggerEngine.evaluate_condition — sync-friendly one-off evaluation
@@ -990,6 +1016,307 @@ async def test_handle_webhook_logs_trigger_event(
         )
     found = any(getattr(c[0][0], "validation_result", None) == expected_vr for c in session.add.call_args_list)
     assert found
+
+
+# ---------------------------------------------------------------------------
+# TriggerEngine.handle_webhook — FAR-1034 CI-failure coalescing
+# ---------------------------------------------------------------------------
+
+
+def _ci_payload(*, pr: int, sha: str, run_url: str, description: str = "CI checks failed") -> dict[str, Any]:
+    """Shape sent by ci.yml's notify-pr-failure / notify-main-failure jobs."""
+    return {
+        "branchName": f"prompt-pr-{pr}",
+        "prNumber": pr,
+        "headSha": sha,
+        "runUrl": run_url,
+        "failureDescription": description,
+    }
+
+
+class TestCiFailureCoalesce:
+    """FAR-1034 — a repeat CI-failure (Branch Fixer) delivery with the SAME
+    PR + head SHA within the coalesce window must be a NO-OP (no second run).
+
+    The canonical byte-dedup cannot catch these: every event carries the
+    volatile ``runUrl`` of the CI run that failed, so the payload hashes always
+    differ. The assertion is on the RUN COUNT at the run-creation seam
+    (``create_run``), not merely on a mock having been called.
+    """
+
+    @staticmethod
+    async def _deliver(session: AsyncMock, trigger: MagicMock, payload: dict[str, Any]) -> Any:
+        return await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=json.dumps(payload).encode(),
+            raw_payload=payload,
+            hmac_signature=None,
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
+
+    @staticmethod
+    def _dedup_patch(ci_results: list[bool], ci_calls: list[Any]) -> AsyncMock:
+        """Patch the dedup insertion seam.
+
+        Byte-hash dedup stays fresh (each CI event's runUrl differs so its
+        canonical hash differs — the entire premise of FAR-1034), while the
+        ci-failure key returns the scripted fresh/duplicate results. The ci
+        call is the one that passes a ``ttl_seconds`` (the canonical dedup call
+        never does) — that is how the seam identifies it AND how the tests
+        assert the window plumbing.
+        """
+
+        def _decide(session, trigger_id, org_id, payload_hash, ttl_seconds=None):
+            if ttl_seconds is not None:
+                ci_calls.append((str(payload_hash), ttl_seconds))
+                return ci_results.pop(0)
+            return True
+
+        return AsyncMock(side_effect=_decide)
+
+    async def test_second_delivery_for_same_pr_and_head_is_noop(self) -> None:
+        trigger = _make_trigger()
+        session2 = _make_session(trigger=trigger, active_run_count=0)
+        run_mock = MagicMock()
+        run_mock.id = uuid.uuid4()
+        ci_calls: list[Any] = []
+
+        with (
+            patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
+            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True, False], ci_calls)),
+        ):
+            run1, te1, _ = await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=777, sha="abc123", run_url=".../runs/1001"),
+            )
+            # A SECOND delivery, SAME PR + head, DIFFERENT runUrl + description.
+            with pytest.raises(CiFailureCoalescedError):
+                await self._deliver(
+                    session2,
+                    trigger,
+                    _ci_payload(pr=777, sha="abc123", run_url=".../runs/1002", description="still failing"),
+                )
+
+        # The proof: ONE run minted across TWO deliveries — the second was a no-op.
+        assert mock_create.call_count == 1
+        assert run1.id == run_mock.id
+        assert te1.validation_result == "accepted"
+        # The suppressed delivery was AUDITED (coalesced event), not silently dropped.
+        found_coalesced = any(
+            getattr(c[0][0], "validation_result", None) == "coalesced"
+            and str(getattr(c[0][0], "error_detail", "")).startswith("ci_failure_coalesced:ci-failure:pr:777")
+            for c in session2.add.call_args_list
+        )
+        assert found_coalesced
+        # Both deliveries used the SAME dedup marker — a SHA-256 digest of the
+        # stable (pr, sha) identity. The readable key never touches the
+        # VARCHAR(64) column; the TTL is the default 1h window.
+        ci_key = "ci-failure:pr:777:sha:abc123"
+        assert [h for h, _ in ci_calls] == [hashlib.sha256(ci_key.encode()).hexdigest()] * 2
+        assert {ttl for _, ttl in ci_calls} == {_CI_FAILURE_COALESCE_WINDOW_SECONDS}
+
+    async def test_new_head_sha_within_window_creates_new_run(self) -> None:
+        trigger = _make_trigger()
+        run1_mock, run2_mock = MagicMock(), MagicMock()
+        run1_mock.id, run2_mock.id = uuid.uuid4(), uuid.uuid4()
+
+        with (
+            patch("modulo.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
+            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True, True], [])),
+        ):
+            run1, _, _ = await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=777, sha="abc111", run_url=".../runs/1"),
+            )
+            # A genuinely NEW commit must ALWAYS launch a fresh fixer run, even
+            # inside the window.
+            run2, _, _ = await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=777, sha="abc222", run_url=".../runs/2"),
+            )
+
+        assert mock_create.call_count == 2
+        assert run1.id != run2.id
+
+    async def test_same_head_sha_different_pr_each_creates_run(self) -> None:
+        trigger = _make_trigger()
+        run1_mock, run2_mock = MagicMock(), MagicMock()
+        run1_mock.id, run2_mock.id = uuid.uuid4(), uuid.uuid4()
+
+        with (
+            patch("modulo.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
+            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True, True], [])),
+        ):
+            await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=777, sha="abc", run_url=".../runs/1"),
+            )
+            await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=778, sha="abc", run_url=".../runs/2"),
+            )
+
+        assert mock_create.call_count == 2
+
+    async def test_dedup_marker_is_fixed_width_hex(self) -> None:
+        # Regression: webhook_dedup_hashes.payload_hash is VARCHAR(64). The
+        # canonical dedup stores 64-hex digests; a READABLE ci key carrying a
+        # 40-char head SHA + 6-digit PR number would overflow it (a DataError,
+        # NOT an IntegrityError → 503 on EVERY delivery). The gate must hash
+        # the key so the stored marker is always 64 hex chars.
+        trigger = _make_trigger()
+        ci_calls: list[Any] = []
+
+        with (
+            patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True], ci_calls)),
+        ):
+            await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=100_000, sha="a" * 40, run_url="u"),
+            )
+
+        marker, _ttl = ci_calls[0]
+        assert len(marker) == 64
+        assert all(c in "0123456789abcdef" for c in marker)
+        assert marker == hashlib.sha256(("ci-failure:pr:100000:sha:" + "a" * 40).encode()).hexdigest()
+
+    async def test_dedup_write_failure_fails_open(self) -> None:
+        # The suppression gate is best-effort: if the coalesce marker cannot be
+        # recorded, the delivery must FAIL OPEN (log + launch), never drop a
+        # run the pre-change code would have launched.
+        trigger = _make_trigger()
+        run_mock = MagicMock()
+        run_mock.id = uuid.uuid4()
+
+        def _flaky(session, trigger_id, org_id, payload_hash, ttl_seconds=None):
+            if ttl_seconds is not None:
+                raise SQLAlchemyError("simulated gate write failure")
+            return True
+
+        with (
+            patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
+            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch.object(TriggerEngine, "_try_insert_dedup", new=AsyncMock(side_effect=_flaky)),
+        ):
+            run, _, _ = await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=42, sha="sha1", run_url="u1"),
+            )
+
+        assert mock_create.call_count == 1
+        assert run.id == run_mock.id
+
+    async def test_configurable_coalesce_window_used_as_ttl(self) -> None:
+        trigger = _make_trigger(extra_config={"ci_failure_coalesce_window_seconds": 900})
+        ci_calls: list[Any] = []
+
+        with (
+            patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True], ci_calls)),
+        ):
+            await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=1, sha="s", run_url="u"),
+            )
+
+        assert ci_calls == [(hashlib.sha256(b"ci-failure:pr:1:sha:s").hexdigest(), 900)]
+
+    @pytest.mark.parametrize(
+        ("configured", "expected_ttl"),
+        [
+            ("not-a-number", _CI_FAILURE_COALESCE_WINDOW_SECONDS),
+            (-5, 1),
+            (0, 1),
+            (10**12, _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS),
+        ],
+    )
+    async def test_bad_window_config_falls_back_or_clamps(self, configured, expected_ttl) -> None:
+        trigger = _make_trigger(extra_config={"ci_failure_coalesce_window_seconds": configured})
+        ci_calls: list[Any] = []
+
+        with (
+            patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True], ci_calls)),
+        ):
+            await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=2, sha="s", run_url="u"),
+            )
+
+        assert ci_calls[0][1] == expected_ttl
+
+    async def test_coalesce_kill_switch_disables_gate(self) -> None:
+        # config_json.coalesce_pending=false is the shared kill switch for every
+        # coalesce — turning it off must restore the old fire-always behaviour.
+        trigger = _make_trigger(extra_config={"coalesce_pending": False})
+        run1_mock, run2_mock = MagicMock(), MagicMock()
+        run1_mock.id, run2_mock.id = uuid.uuid4(), uuid.uuid4()
+
+        with (
+            patch("modulo.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
+            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            # Empty scripted results: if the gate consulted the ci key at all, the
+            # pop(0) would raise IndexError and the test would fail loudly.
+            patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([], [])),
+        ):
+            await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=5, sha="s", run_url="u1"),
+            )
+            await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=5, sha="s", run_url="u2"),
+            )
+
+        assert mock_create.call_count == 2
+
+    async def test_payload_without_head_sha_is_never_suppressed(self) -> None:
+        # branch-fixer.yml manual dispatch sends no headSha → the key is None →
+        # the gate must not run and every (intentional) manual fire launches.
+        trigger = _make_trigger()
+        run1_mock, run2_mock = MagicMock(), MagicMock()
+        run1_mock.id, run2_mock.id = uuid.uuid4(), uuid.uuid4()
+        ci_calls: list[Any] = []
+
+        with (
+            patch("modulo.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
+            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([], ci_calls)),
+        ):
+            await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                _ci_payload(pr=9, sha="", run_url="u1"),
+            )
+            await self._deliver(
+                _make_session(trigger=trigger, active_run_count=0),
+                trigger,
+                {"branchName": "prompt-pr-9", "prNumber": 9, "runUrl": "u2", "failureDescription": "manual"},
+            )
+
+        assert mock_create.call_count == 2
+        assert ci_calls == []
 
 
 async def test_handle_webhook_busy_lock_not_acquired() -> None:
