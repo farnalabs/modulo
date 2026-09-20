@@ -32,8 +32,7 @@ def ctx() -> dict[str, Any]:
         "variant_group": None,
         "run_results": None,
         "selected_variant": None,
-        "comparison_result": None,
-        "coverage_result": None,
+        "coverage_gaps": None,
     }
 
 
@@ -111,75 +110,33 @@ def group_uses_sequential(v_a: str, v_b: str, ctx: dict[str, Any]) -> None:
     ]
 
 
-@given("both variants have completed runs with eval and token data")
-def variants_have_completed_runs(ctx: dict[str, Any]) -> None:
-    group = ctx["variant_group"]
-    if not group.variants:
-        group.variants = [
-            {
-                "name": "control",
-                "snapshot_id": str(uuid.uuid4()),
-                "eval_definition_ids": ["eval-1", "eval-2"],
-            },
-            {
-                "name": "experiment",
-                "snapshot_id": str(uuid.uuid4()),
-                "eval_definition_ids": ["eval-1", "eval-2"],
-            },
-        ]
-    ctx["comparison_result"] = {
-        "variants": [
-            {
-                "name": group.variants[0]["name"],
-                "eval_scores": {"eval-1": 0.95, "eval-2": 0.87},
-                "token_cost": {"input_tokens": 150, "output_tokens": 300},
-                "status": "completed",
-            },
-            {
-                "name": group.variants[1]["name"],
-                "eval_scores": {"eval-1": 0.92, "eval-2": 0.84},
-                "token_cost": {"input_tokens": 180, "output_tokens": 420},
-                "status": "completed",
-            },
-        ],
-    }
-
-
-@given("the group has variants with divergent outputs and identical eval scores")
-def group_has_divergent_variants(ctx: dict[str, Any]) -> None:
-    group = ctx["variant_group"]
-    group.variants = [
-        {
-            "name": "control",
-            "snapshot_id": str(uuid.uuid4()),
-            "eval_definition_ids": ["eval-1"],
-        },
-        {
-            "name": "experiment",
-            "snapshot_id": str(uuid.uuid4()),
-            "eval_definition_ids": ["eval-1"],
-        },
-    ]
-    ctx["coverage_result"] = {
-        "coverage_warning": "Variants diverged but evals did not differentiate",
-        "variants": [
-            {
-                "name": "control",
-                "eval_scores": {"eval-1": 0.90},
-                "output_summary": "control produced output A",
-            },
-            {
-                "name": "experiment",
-                "eval_scores": {"eval-1": 0.90},
-                "output_summary": "experiment produced output B",
-            },
-        ],
-    }
-
-
 @given(parsers.parse("the group has max_concurrent_runs set to {limit:d}"))
 def group_max_concurrent(limit: int, ctx: dict[str, Any]) -> None:
     ctx["variant_group"].max_concurrent_runs = limit
+
+
+@given(parsers.parse('the group has coverage variants "{v_a}" and "{v_b}" against eval "{eval_label}"'))
+def group_has_coverage_variants(v_a: str, v_b: str, eval_label: str, ctx: dict[str, Any]) -> None:
+    """Variant eval-coverage set for the real ``get_coverage_gaps`` seam: the
+    control claims the eval definition, the experiment claims none (so only the
+    experiment is reported as a coverage gap)."""
+    eval_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, eval_label))
+    group = ctx["variant_group"]
+    group.variants = [
+        {
+            "name": v_a,
+            "snapshot_id": str(uuid.uuid4()),
+            "run_context_overrides": {},
+            "eval_definition_ids": [eval_id],
+        },
+        {
+            "name": v_b,
+            "snapshot_id": str(uuid.uuid4()),
+            "run_context_overrides": {},
+            "eval_definition_ids": [],
+        },
+    ]
+    ctx["coverage_eval_id"] = eval_id
 
 
 # ===================================================================
@@ -246,35 +203,83 @@ def batch_run_triggered(ctx: dict[str, Any]) -> None:
 
 @when("a sequential run is triggered on the variant group")
 def sequential_run_triggered(ctx: dict[str, Any]) -> None:
-    group = ctx["variant_group"]
+    """A sequential run fires one run per variant in insertion order — the real
+    ``run_variant_batch`` seam (the batch path creates runs sequentially, in
+    variant insertion order, sharing one ``batch_id``). Drives the same mock
+    session machinery the batch-run step uses."""
+    import asyncio
+
+    from modulo.db.crud.variant_group import run_variant_batch
+
+    async def _run():
+        session = AsyncMock()
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+
+        scalar_result = MagicMock()
+        scalar_result.scalar_one.return_value = 0
+        scalar_result.scalar_one_or_none.return_value = ctx["variant_group"]
+        session.execute = AsyncMock(return_value=scalar_result)
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.create_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ),
+            patch(
+                "modulo.db.crud.variant_group.increment_run_count",
+                new_callable=AsyncMock,
+            ),
+        ):
+            return await run_variant_batch(
+                session,
+                org_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                group=ctx["variant_group"],
+                input_payload={},
+                account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            )
+
+    result = asyncio.run(_run())
+    assert result is not None, "run_variant_batch returned None (batch pre-flight rejected the group)"
     ctx["run_results"] = [
         {
-            "run_id": uuid.uuid4(),
-            "variant_name": v["name"],
-            "variant": v,
+            "run_id": r["run_id"],
+            "batch_id": r.get("batch_id"),
+            "variant_name": r["variant"]["name"],
+            "variant": r["variant"],
+            "merged_payload": r["merged_payload"],
+            "variant_config_snapshot": r.get("frozen_snapshot") or {},
         }
-        for v in group.variants
+        for r in result
     ]
 
 
-@when("the comparison view is requested for the variant group")
-def comparison_view_requested(ctx: dict[str, Any]) -> None:
-    if ctx.get("comparison_result") is None:
-        ctx["comparison_result"] = {
-            "variants": [
-                {"name": "control", "eval_scores": {}, "token_cost": {}},
-                {"name": "experiment", "eval_scores": {}, "token_cost": {}},
-            ],
-        }
+@when("the coverage gap signal is computed for the variant group")
+def coverage_gap_signal_computed(ctx: dict[str, Any]) -> None:
+    """Drive the REAL ``get_coverage_gaps`` seam: the group's variants are read
+    against the pipeline's eval-definition set (returned by the mock session),
+    and any variant missing an eval id is reported as a gap."""
+    import asyncio
 
+    from modulo.db.crud.variant_group import get_coverage_gaps
 
-@when("the eval coverage signal is requested for the variant group")
-def coverage_signal_requested(ctx: dict[str, Any]) -> None:
-    if ctx.get("coverage_result") is None:
-        ctx["coverage_result"] = {
-            "coverage_warning": None,
-            "variants": [],
-        }
+    eval_def = MagicMock()
+    eval_def.id = uuid.UUID(ctx["coverage_eval_id"])
+    scalar_result = MagicMock()
+    scalar_result.scalars.return_value.all.return_value = [eval_def]
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=scalar_result)
+
+    async def _run():
+        return await get_coverage_gaps(session, ctx["variant_group"])
+
+    ctx["coverage_gaps"] = asyncio.run(_run())
 
 
 @when("a single run is triggered on the variant group")
@@ -378,54 +383,21 @@ def check_second_variant(expected: str, ctx: dict[str, Any]) -> None:
     assert ctx["run_results"][1]["variant_name"] == expected
 
 
-@then("the comparison includes eval scores per node for each variant")
-def check_comparison_has_scores(ctx: dict[str, Any]) -> None:
-    result = ctx.get("comparison_result", {})
-    variants = result.get("variants", [])
-    assert len(variants) >= 2, "Expected at least 2 variants in comparison"
-    for v in variants:
-        assert "eval_scores" in v, f"Variant {v.get('name')} missing eval_scores"
+@then(parsers.parse('the coverage gap for "{variant}" includes the configured eval'))
+def coverage_gap_includes(variant: str, ctx: dict[str, Any]) -> None:
+    gaps = ctx.get("coverage_gaps")
+    assert gaps is not None, "Expected coverage gaps from the step"
+    matches = [g for g in gaps if g["variant"]["name"] == variant]
+    assert matches, f"No coverage gap reported for variant {variant!r}: {gaps}"
+    missing = {str(e) for e in matches[0]["missing_evals"]}
+    assert ctx["coverage_eval_id"] in missing, f"Expected configured eval in {missing}"
 
 
-@then("the comparison includes per-variant token cost")
-def check_comparison_has_token_cost(ctx: dict[str, Any]) -> None:
-    result = ctx.get("comparison_result", {})
-    variants = result.get("variants", [])
-    for v in variants:
-        assert "token_cost" in v, f"Variant {v.get('name')} missing token_cost"
-
-
-@then("a coverage_warning is included in the response")
-def check_coverage_warning_present(ctx: dict[str, Any]) -> None:
-    result = ctx.get("coverage_result", {})
-    assert "coverage_warning" in result, "Missing coverage_warning in result"
-    assert result["coverage_warning"] is not None, "coverage_warning is None"
-
-
-@then(parsers.parse('the warning says "{expected}"'))
-def check_warning_text(expected: str, ctx: dict[str, Any]) -> None:
-    result = ctx.get("coverage_result", {})
-    actual = result.get("coverage_warning")
-    assert actual == expected, f"Expected warning {expected!r}, got {actual!r}"
-
-
-@then("each variant entry includes input_tokens and output_tokens in token_cost")
-def check_token_cost_fields(ctx: dict[str, Any]) -> None:
-    result = ctx.get("comparison_result", {})
-    variants = result.get("variants", [])
-    for v in variants:
-        tc = v.get("token_cost", {})
-        assert "input_tokens" in tc, f"Variant {v.get('name')} missing input_tokens in token_cost"
-        assert "output_tokens" in tc, f"Variant {v.get('name')} missing output_tokens in token_cost"
-
-
-@then("the total cost differs between variants")
-def check_cost_different(ctx: dict[str, Any]) -> None:
-    result = ctx.get("comparison_result", {})
-    variants = result.get("variants", [])
-    assert len(variants) >= 2, "Need at least 2 variants to compare costs"
-    costs = [sum(v.get("token_cost", {}).values()) for v in variants]
-    assert costs[0] != costs[1], f"Expected different costs, got {costs}"
+@then(parsers.parse('the coverage gap for "{variant}" is absent'))
+def coverage_gap_absent(variant: str, ctx: dict[str, Any]) -> None:
+    gaps = ctx.get("coverage_gaps")
+    assert gaps is not None, "Expected coverage gaps from the step"
+    assert all(g["variant"]["name"] != variant for g in gaps), f"Unexpected coverage gap for {variant!r}: {gaps}"
 
 
 @then(parsers.parse('the selected variant is "{expected}"'))

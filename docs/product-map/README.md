@@ -392,6 +392,31 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `Content-Disposition: attachment`), the concurrency slot-utilisation series
 > and the advisory-only guardrail scorecard. `_ORPHANED_BDD_FEATURES` stays
 > empty.
+>
+> **Closed this walk (2026-09-20):** closed `feat-lifecycle-maps`'s "No BDD for
+> lifecycle map journey detail view" gap (`pipelines/lifecycle-maps.md`).
+> Registered the new `lifecycle_maps/journeys.feature` into the executing BDD
+> suite (steps in `steps/test_lifecycle_maps.py`), driving the real
+> `/journeys`, `/journeys/{kind}/{ref}` and `/journeys/self-report` routes with
+> only the DB seam functions patched: journey detail returns the current stage +
+> run history shape, unknown journey → 404, keyset-paginated journey list with
+> `next_cursor` + `ref`-filter pass-through, and the advisory self-report
+> accepted/unmatched/rejected counters with the real
+> `validate_and_normalise_reported_refs` (a malformed entry is counted, never a
+> whole-request 422) plus a matched journey advanced with `status="complete"`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-20):** closed `feat-variants`'s "BDD scenarios
+> tagged `@awaiting-implementation`" gap (`improve/variants.md`). The
+> sequential-order scenario now drives the REAL `run_variant_batch` seam (runs
+> created in variant insertion order under one `batch_id`) and the eval-coverage
+> draft was re-anchored to the REAL `get_coverage_gaps` seam; the two per-node
+> eval-score / per-token breakdown comparison drafts were removed — they assert
+> a wire shape the product does not ship (`get_batch_compare`'s per-run
+> `eval_pass_rate` / `eval_count` / `total_tokens` / `total_cost_usd` +
+> frozen-snapshot override-diff contract is already locked by the batch-scope
+> comparison scenarios). No `@awaiting-implementation` scenarios remain.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

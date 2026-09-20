@@ -18,6 +18,7 @@ bdd:
   - backend/tests/bdd/features/lifecycle_maps/versioning.feature
   - backend/tests/bdd/features/lifecycle_maps/library.feature
   - backend/tests/bdd/features/lifecycle_maps/graduation.feature
+  - backend/tests/bdd/features/lifecycle_maps/journeys.feature
 depends-on:
   - feat-pipelines
 status: covered
@@ -53,8 +54,10 @@ edges representing transitions between stages.
 - [x] Stage graduation advances work items through stages with audit logging
       (`backend/tests/bdd/features/lifecycle_maps/graduation.feature`)
 - [x] Journey tracking with keyset pagination (cursor-based) for unattributed
-      journeys, stage grouping, and self-report endpoint
-      (`backend/tests/unit/api/test_lifecycle_maps_routes.py`)
+      journeys, stage grouping, journey-detail run history, and self-report
+      endpoint
+      (`backend/tests/bdd/features/lifecycle_maps/journeys.feature`,
+      `backend/tests/unit/api/test_lifecycle_maps_routes.py`)
 - [x] Canonical work-item ref canonicalisation (GitHub, Linear, JIRA) with
       deterministic uuid5 derivation ensures same ref forms collapse to same
       journey row (`backend/tests/unit/db/test_lifecycle_refs.py`)
@@ -65,9 +68,30 @@ edges representing transitions between stages.
 
 ## Known Gaps
 
-- No BDD for lifecycle map journey detail view; coverage is via unit tests.
+None acknowledged: the journey surface (map journey list with keyset pagination,
+journey-detail run history, and the advisory self-report counters) is now locked
+by the executing `journeys.feature` BDD surface, driving the real
+`/journeys`, `/journeys/{kind}/{ref}` and `/journeys/self-report` routes with
+only the DB seam functions patched (`validate_and_normalise_reported_refs` runs
+for real, so malformed-entry rejection is asserted end to end). The
+journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
 
 ## QA History
+
+- 2026-09-20: **improve-architecture (product-map walk)** — closed the "No BDD
+  for lifecycle map journey detail view" gap. Registered
+  `backend/tests/bdd/features/lifecycle_maps/journeys.feature` into the
+  executing BDD suite (steps in `steps/test_lifecycle_maps.py`), driving the
+  REAL `/api/v1/lifecycle-maps/{id}/journeys`,
+  `/journeys/{kind}/{ref}` and `/journeys/self-report` routes with only the DB
+  seam functions patched (`get_lifecycle_map`, `list_map_journeys`,
+  `get_map_journey`, `list_journey_runs`, `confirm_reported_refs`,
+  `advance_journeys`): journey detail returns the current stage + run history
+  shape, unknown journey → 404, keyset-paginated list with `next_cursor` and
+  `ref`-filter pass-through, self-report accepted/unmatched/rejected counters
+  with the REAL `validate_and_normalise_reported_refs` (a malformed entry is
+  counted, never a whole-request 422) — and a matched journey is advanced with
+  `status="complete"`. `_ORPHANED_BDD_FEATURES` stays empty.
 
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `FilterBar` search surface (`components/shared/FilterBar.vue` static testids

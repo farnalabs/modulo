@@ -13,7 +13,6 @@ Feature: Variant Groups — Weighted Multi-Run, Comparison, and Eval Coverage
     And the second run has variant_name "experiment"
     And each batch run merges its variant's run_context_overrides into the input payload
 
-  @awaiting-implementation
   Scenario: Sequential execution order matches insertion order
     Given a variant group "seq-test" configured for pipeline "deploy-service"
     And the group uses sequential strategy with variants "step-a" and "step-b"
@@ -22,29 +21,12 @@ Feature: Variant Groups — Weighted Multi-Run, Comparison, and Eval Coverage
     And the first run has variant_name "step-a"
     And the second run has variant_name "step-b"
 
-  @awaiting-implementation
-  Scenario: Variant comparison returns eval scores per node and token cost
-    Given a variant group "compare-test" configured for pipeline "deploy-service"
-    And both variants have completed runs with eval and token data
-    When the comparison view is requested for the variant group
-    Then the comparison includes eval scores per node for each variant
-    And the comparison includes per-variant token cost
-
-  @awaiting-implementation
-  Scenario: Eval coverage gap is detected when variants diverge but evals match
+  Scenario: Eval coverage gaps report the missing eval definitions per variant
     Given a variant group "cover-test" configured for pipeline "deploy-service"
-    And the group has variants with divergent outputs and identical eval scores
-    When the eval coverage signal is requested for the variant group
-    Then a coverage_warning is included in the response
-    And the warning says "Variants diverged but evals did not differentiate"
-
-  @awaiting-implementation
-  Scenario: Comparison shows token cost breakdown per variant
-    Given a variant group "cost-test" configured for pipeline "deploy-service"
-    And both variants have completed runs with eval and token data
-    When the comparison view is requested for the variant group
-    Then each variant entry includes input_tokens and output_tokens in token_cost
-    And the total cost differs between variants
+    And the group has coverage variants "control" and "experiment" against eval "eval-1"
+    When the coverage gap signal is computed for the variant group
+    Then the coverage gap for "experiment" includes the configured eval
+    And the coverage gap for "control" is absent
 
   Scenario: Zero-weight variant is not selected in weighted mode
     Given a variant group "zero-test" configured for pipeline "deploy-service"

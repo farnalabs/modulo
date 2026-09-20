@@ -30,10 +30,19 @@ by the `variant_batch_compare` feature flag.
       (`tests/bdd/features/variants/variant_groups.feature`)
 - [x] A batch run triggers one run per variant in insertion order with variant names
       carried through the run record
+      (`tests/bdd/features/variants/variant_groups.feature`)
+- [x] Sequential execution fires one run per variant in variant insertion order,
+      driving the real `run_variant_batch` seam (insertion order preserved,
+      one shared `batch_id`)
+      (`tests/bdd/features/variants/variant_groups.feature`)
 - [x] Variant groups can be listed, fetched, updated, deleted and restored
       (ownership asserted per organisation, `api/routes/variants.py`)
-- [x] Comparison surfaces include per-node eval scores, prompt diffs and coverage gaps
-      (`prompt_diffs`, `coverage_gaps`, `batch_compare` endpoints)
+- [x] Comparison surfaces include coverage gaps, prompt diffs and the batch-compare
+      summary (`prompt_diffs`, `coverage_gaps`, `batch_compare` endpoints)
+- [x] Eval coverage gaps report the pipeline eval definitions each variant is
+      missing, driving the real `get_coverage_gaps` seam (a variant claiming the
+      eval is not flagged)
+      (`tests/bdd/features/variants/variant_groups.feature`)
 - [x] The variant batch-compare UI is gated by the `variant_batch_compare` feature flag
       and hard-replaces the legacy AB-test view when enabled (frontend router guard)
 - [x] Variant groups are created and batch-fired from the inline builder on
@@ -42,10 +51,34 @@ by the `variant_batch_compare` feature flag.
 
 ## Known Gaps
 
-- BDD scenarios for sequential execution order and eval-score comparison are tagged
-  `@awaiting-implementation` in `variant_groups.feature`.
+None acknowledged: the `@awaiting-implementation` draft scenarios in
+`variant_groups.feature` (tracked since the 2026-08-27 walk) are resolved. The
+sequential-order scenario now drives the real `run_variant_batch` seam (one run
+per variant, in insertion order, as the batch path ships); the eval-coverage
+scenario drives the real `get_coverage_gaps` seam (a variant missing a pipeline
+eval definition is reported as a gap). The two per-node eval-score / per-token
+breakdown comparison drafts described wire shapes the product does not ship —
+`get_batch_compare` returns a per-run `eval_pass_rate` / `eval_count` /
+`total_tokens` / `total_cost_usd` / frozen-snapshot override-diff contract that
+the batch-scope comparison scenarios already lock — so they were removed rather
+than left as false coverage promises.
 
 ## QA History
+
+- 2026-09-20: **improve-architecture (product-map walk)** — closed the
+  "BDD scenarios tagged `@awaiting-implementation`" gap
+  (`variant_groups.feature`). The sequential-order scenario now drives the REAL
+  `run_variant_batch` seam with the same mock-session machinery as the batch-run
+  scenario (runs created sequentially in variant insertion order under one
+  `batch_id`), and the eval-coverage draft was re-anchored to the REAL
+  `get_coverage_gaps` seam (missing `eval_definition_ids` per variant — a
+  variant that claims the eval is not flagged). The two per-node eval-score /
+  per-token breakdown comparison drafts were removed: they asserted a wire shape
+  the product does not ship (`get_batch_compare` returns per-run
+  `eval_pass_rate` / `eval_count` / `total_tokens` / `total_cost_usd` and the
+  frozen-snapshot override diff, which the batch-scope comparison scenarios
+  already lock) — leaving them tagged would keep false coverage promises in the
+  suite. No `@awaiting-implementation` scenarios remain in the feature.
 
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids

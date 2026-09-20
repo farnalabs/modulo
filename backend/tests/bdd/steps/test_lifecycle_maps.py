@@ -19,6 +19,8 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/lifecycle_maps/library.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/lifecycle_maps/graduation.feature")
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../features/lifecycle_maps/journeys.feature")
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -803,3 +805,236 @@ def assert_stage_type(stage_type: str, ctx: dict[str, Any]) -> None:
     stages = lm.content_json.get("stages", [])
     for s in stages:
         assert s.get("type") == stage_type, f"Expected stage type '{stage_type}', got '{s.get('type')}'"
+
+
+# ===================================================================
+#  Journey detail / list / self-report BDD surface (FAR-574)
+#
+#  These steps drive the REAL route handlers with only the DB seam
+#  functions patched (``get_lifecycle_map`` / ``list_map_journeys`` /
+#  ``get_map_journey`` / ``list_journey_runs`` / ``confirm_reported_refs``
+#  / ``advance_journeys``), so the scenarios pin the wire contract the
+#  journey-detail view consumes: summary + current-stage shape, run
+#  history, keyset pagination and filter pass-through, the advisory
+#  self-report counters. ``validate_and_normalise_reported_refs`` runs
+#  for real, so a malformed entry is counted (never a whole-request 422).
+# ===================================================================
+
+
+def _make_journey_row(
+    map_id: uuid.UUID,
+    kind: str,
+    ref: str,
+    *,
+    stage_id: str = "Build",
+) -> MagicMock:
+    """A journey row shaped exactly as ``_build_journey_summary`` reads it."""
+    j = MagicMock()
+    j.map_id = map_id
+    j.map_version = 1
+    j.stage_id = stage_id
+    j.stage_name = stage_id
+    j.position = 0
+    j.kind = kind
+    j.ref = ref
+    j.canonical_work_item_id = uuid.uuid4()
+    j.latest_status = latest_status
+    j.latest_provenance = "agent"
+    j.run_count = 0
+    j.latest_terminal_run_id = None
+    j.updated_at = datetime.now(UTC)
+    return j
+
+
+def _make_journey_run_row(trigger_type: str) -> MagicMock:
+    r = MagicMock()
+    r.id = uuid.uuid4()
+    r.status = "complete"
+    r.completed_at = datetime.now(UTC)
+    r.trigger_type = trigger_type
+    return r
+
+
+@given(parsers.parse('lifecycle map "{name}" exists'))
+def lifecycle_map_exists_bare(name: str, ctx: dict[str, Any], request: Any) -> None:
+    lm = _make_lifecycle_map(name=name)
+    ctx["lifecycle_map"] = lm
+    request.node._lifecycle_map = lm
+
+
+@given(parsers.parse('lifecycle map "{name}" has journey "{kind}" "{ref}" at stage "{stage_id}"'))
+def lifecycle_map_has_journey(
+    name: str, kind: str, ref: str, stage_id: str, ctx: dict[str, Any], request: Any
+) -> None:
+    lm = _make_lifecycle_map(name=name)
+    ctx["lifecycle_map"] = lm
+    request.node._lifecycle_map = lm
+    journey = _make_journey_row(lm.id, kind, ref, stage_id=stage_id)
+    ctx["journey"] = journey
+    request.node._journey = journey
+
+
+@given(parsers.parse('lifecycle map "{name}" has no journey "{kind}" "{ref}"'))
+def lifecycle_map_has_no_journey(name: str, kind: str, ref: str, ctx: dict[str, Any], request: Any) -> None:
+    lm = _make_lifecycle_map(name=name)
+    ctx["lifecycle_map"] = lm
+    request.node._lifecycle_map = lm
+    ctx["journey"] = None
+
+
+@given(parsers.parse('the journey has run history with provenance "{p1}" and "{p2}"'))
+def journey_has_run_history(p1: str, p2: str, ctx: dict[str, Any]) -> None:
+    ctx["journey_runs"] = [_make_journey_run_row(p1), _make_journey_run_row(p2)]
+
+
+@when(parsers.parse('I get the journey detail for "{kind}" "{ref}"'))
+def get_journey_detail(kind: str, ref: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    lm = ctx.get("lifecycle_map", _make_lifecycle_map())
+    journey = ctx.get("journey")
+    runs = ctx.get("journey_runs", [])
+    journey_result = None if journey is None else (journey, False)
+    with (
+        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
+        patch("modulo.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=journey_result)),
+        patch("modulo.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=runs)),
+    ):
+        resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}/journeys/{kind}/{ref}")
+    _store_response(request, ctx, resp)
+
+
+@when(parsers.parse('I list the map journeys filtered by ref "{ref}"'))
+def list_map_journeys_filtered(ref: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    lm = ctx.get("lifecycle_map", _make_lifecycle_map())
+    journey_1 = _make_journey_row(lm.id, "issue", "FAR-100", stage_id="Build")
+    journey_2 = _make_journey_row(lm.id, "github_pr", "123", stage_id="Merge")
+    stub = AsyncMock(return_value=([(journey_1, False), (journey_2, True)], "cursor-token"))
+    with (
+        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
+        patch("modulo.api.routes.lifecycle_maps.list_map_journeys", new=stub),
+    ):
+        resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}/journeys", params={"ref": ref})
+    _store_response(request, ctx, resp)
+    ctx["list_journeys_stub"] = stub
+
+
+@when(parsers.parse('I self-report work item "{kind}" "{ref}" as complete'))
+def self_report_work_item(kind: str, ref: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    lm = ctx.get("lifecycle_map", _make_lifecycle_map())
+
+    async def _fake_advance(
+        session: Any,
+        organisation_id: Any,
+        run_id: Any = None,
+        pipeline_id: Any = None,
+        refs: Any = None,
+        status: str = "complete",
+        completed_at: Any = None,
+        run_created_at: Any = None,
+        explicit_stage: Any = None,
+    ) -> int:
+        ctx["self_report_advance_status"] = status
+        ctx["self_report_refs"] = refs
+        return 1
+
+    with (
+        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
+        patch(
+            "modulo.api.routes.lifecycle_maps.confirm_reported_refs",
+            new=AsyncMock(return_value=([{"kind": kind, "ref": ref, "source": "agent"}], 0)),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.advance_journeys", new=_fake_advance),
+    ):
+        resp = client.post(
+            f"/api/v1/lifecycle-maps/{lm.id}/journeys/self-report",
+            json={"work_item_refs": [{"kind": kind, "ref": ref}]},
+        )
+    _store_response(request, ctx, resp)
+
+
+@when(parsers.parse('I self-report the work item refs "{kind}" "{ref}" and a malformed entry'))
+def self_report_ref_and_malformed(kind: str, ref: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    lm = ctx.get("lifecycle_map", _make_lifecycle_map())
+
+    async def _fake_advance(
+        session: Any,
+        organisation_id: Any,
+        run_id: Any = None,
+        pipeline_id: Any = None,
+        refs: Any = None,
+        status: str = "complete",
+        completed_at: Any = None,
+        run_created_at: Any = None,
+        explicit_stage: Any = None,
+    ) -> int:
+        return 0
+
+    with (
+        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
+        patch(
+            "modulo.api.routes.lifecycle_maps.confirm_reported_refs",
+            new=AsyncMock(return_value=([], 1)),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.advance_journeys", new=_fake_advance),
+    ):
+        resp = client.post(
+            f"/api/v1/lifecycle-maps/{lm.id}/journeys/self-report",
+            json={"work_item_refs": [{"kind": kind, "ref": ref}, {"kind": "issue"}]},
+        )
+    _store_response(request, ctx, resp)
+
+
+@then(parsers.parse('the journey detail has kind "{kind}" and ref "{ref}"'))
+def journey_detail_kind_ref(kind: str, ref: str, request: Any) -> None:
+    data = request.node._resp.json()
+    assert data.get("kind") == kind, f"Expected kind {kind!r}, got {data.get('kind')!r}"
+    assert data.get("ref") == ref, f"Expected ref {ref!r}, got {data.get('ref')!r}"
+
+
+@then(parsers.parse('the journey detail reports current stage "{stage_id}"'))
+def journey_detail_current_stage(stage_id: str, request: Any) -> None:
+    data = request.node._resp.json()
+    current = data.get("current_stage")
+    assert current is not None, "Expected a current_stage on the journey detail"
+    assert current.get("stage_id") == stage_id, f"Expected stage {stage_id!r}, got {current.get('stage_id')!r}"
+
+
+@then(parsers.parse('the journey detail reports {count:d} runs with provenance "{p1}" and "{p2}"'))
+def journey_detail_run_history(count: int, p1: str, p2: str, request: Any) -> None:
+    data = request.node._resp.json()
+    runs = data.get("runs", [])
+    assert len(runs) == count, f"Expected {count} run history entries, got {len(runs)}"
+    assert {r.get("provenance") for r in runs} == {p1, p2}, [r.get("provenance") for r in runs]
+
+
+@then("the journey list contains 2 journeys")
+def journey_list_count(request: Any) -> None:
+    data = request.node._resp.json()
+    items = data.get("items", [])
+    assert len(items) == 2, f"Expected 2 journey summaries, got {len(items)}"
+
+
+@then("the journey list carries a non-null next_cursor")
+def journey_list_cursor(request: Any) -> None:
+    data = request.node._resp.json()
+    assert data.get("next_cursor") == "cursor-token", data
+
+
+@then(parsers.parse('the journey list was filtered by ref "{ref}"'))
+def journey_list_filtered_by_ref(ref: str, ctx: dict[str, Any]) -> None:
+    stub = ctx.get("list_journeys_stub")
+    assert stub is not None, "list_map_journeys was not invoked by the step"
+    assert stub.await_args is not None, "list_map_journeys was never awaited"
+    assert stub.await_args.kwargs.get("ref") == ref, stub.await_args.kwargs
+
+
+@then(parsers.parse('the self-report counts "{accepted:d}" accepted and "{unmatched:d}" unmatched and "{rejected:d}" rejected'))
+def self_report_counts(accepted: int, unmatched: int, rejected: int, request: Any) -> None:
+    data = request.node._resp.json()
+    assert data.get("accepted") == accepted, data
+    assert data.get("unmatched") == unmatched, data
+    assert data.get("rejected") == rejected, data
+
+
+@then(parsers.parse('the matched journey was advanced with status "{status}"'))
+def self_report_advance_status(status: str, ctx: dict[str, Any]) -> None:
+    assert ctx.get("self_report_advance_status") == status, f"Expected advance status {status!r}, got {ctx!r}"
