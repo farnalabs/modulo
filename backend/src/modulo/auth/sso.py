@@ -1207,6 +1207,15 @@ async def saml_process_response(
     compatibility. Provider resolution uses the system session (``modulo_system``
     role, instance-global); JIT provisioning writes via the app session,
     RLS-scoped to the resolved provider's org (or first-org fallback).
+
+    Replay posture (accepted, FAR-1006 review): responses are processed as
+    HTTP-POST bearer assertions without ``InResponseTo``/AuthnRequest-ID
+    correlation. There is no cross-request store of outstanding AuthnRequest
+    IDs, so an observed (network-captured, TLS-terminated) Response could be
+    replayed within its ``NotOnOrAfter`` window. This matches the standard
+    web-SSO bearer choice python3-saml itself implements; hardening it
+    (per-runtime AuthnRequest store) is tracked as a future defence-in-depth
+    item, not required for correctness here.
     """
     idp_metadata, entity_id, sp_key, sp_cert, db_saml = await _resolve_saml_config(
         system_session, app_session, settings, provider_id=provider_id
