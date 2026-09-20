@@ -104,11 +104,21 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   which is not yet shipped; orgs that configure per-model `self_reported`
   components get that granularity today. `pipeline` granularity is fully
   implemented from `runs` (per-pipeline sums of `total_cost_usd`).
-- **No BDD for the ceiling / scheduled-report / anomaly / cost-component surfaces** —
-  `cost_controls.feature` covers only token budget, org/team spend limits and the
-  circuit breaker; the rest are unit-only.
 
 ## QA History
+- 2026-09-20: **improve-architecture (product-map walk)** — closed the "No BDD for
+  the ceiling / scheduled-report / anomaly / cost-component surfaces" gap.
+  `cost_controls.feature` gained executing scenarios for the FAR-391 `/ceiling`
+  surface (GET remaining-budget arithmetic, PUT set/clear semantics with explicit
+  null preserving the other ceiling, negative 422, cents-stored write), the
+  run-finalize ceiling gate (`_ledger_block`: org ceiling -> `cost_ceiling_exceeded`
+  with `org_spend_ceiling_exceeded`, per-run ceiling -> `run_cost_ceiling_exceeded`,
+  within-ceiling cumulative increment), scheduled-report CRUD (create 201 / missing
+  recipients 422 / list / delete 204 / missing 404), spend-anomaly detection
+  (fresh spike persisted with a real dismissible id, dismiss 204, missing 404) and
+  cost-component CRUD (create 201 / duplicate 409 / self_reported-with-formula 422 /
+  list / delete 204). Steps drive the real routes/controllers with mocked DB reads
+  (`test_cost_controls.py`).
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/costs`, `/admin/costs/components`, `/admin/costs/controls`,
