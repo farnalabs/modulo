@@ -2427,6 +2427,7 @@ class TestSsoJoinGate:
 
         assert _sso_verified_domain("plainname") is None
         assert _sso_verified_domain("a@b") == "b"
+        assert _sso_verified_domain("a@b@BAD.com") == "bad.com"
 
 
 # ---------------------------------------------------------------------------
