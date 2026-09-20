@@ -54,7 +54,7 @@ async def test_list_environment_profiles_include_deleted() -> None:
     result = await list_environment_profiles(session, include_deleted=True)
 
     assert result.total == 2
-    assert result.items == []
+    assert not result.items
 
 
 async def test_list_environment_profiles_include_deleted_cursor() -> None:
