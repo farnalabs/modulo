@@ -2696,7 +2696,7 @@ class TestSamlProviderScoping:
         own Destination check rejects the response before our audience check
         when Destination doesn't match the handler's ACS URL.
         """
-        from modulo.auth.saml_handler import ModuloSamlAuth
+        from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 
         # Build a response whose audience is provider A's entity_id
         response_audience = "https://app.example.com/api/v1/auth/saml/okta-a"
@@ -2704,7 +2704,7 @@ class TestSamlProviderScoping:
         encoded = base64.b64encode(xml.encode()).decode()
 
         # _enforce_audience_restriction rejects when entity_id not in audiences
-        with pytest.raises(Exception, match="audience"):
+        with pytest.raises(SamlAuthError, match="audience"):
             ModuloSamlAuth._enforce_audience_restriction(encoded, "https://app.example.com/api/v1/auth/saml/okta-b")
 
     def test_response_for_provider_a_accepted_at_provider_a(self) -> None:
@@ -2715,5 +2715,9 @@ class TestSamlProviderScoping:
         xml = _build_xsd_compliant_saml_response(audience=response_audience)
         encoded = base64.b64encode(xml.encode()).decode()
 
-        # Should not raise — entity_id matches the audience
-        ModuloSamlAuth._enforce_audience_restriction(encoded, "https://app.example.com/api/v1/auth/saml/okta-a")
+        # entity_id matches the audience, so the containment check accepts the
+        # response and returns None (it raises SamlAuthError on any mismatch).
+        result = ModuloSamlAuth._enforce_audience_restriction(
+            encoded, "https://app.example.com/api/v1/auth/saml/okta-a"
+        )
+        assert result is None
