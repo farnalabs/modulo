@@ -368,17 +368,10 @@ async def test_org_login_slug_allowed_when_multi_org_enabled() -> None:
     mock_session.execute = mock_execute
 
     # Mock list_enabled_oidc_providers
-    with (
-        patch(
-            "modulo.api.routes.org_login.list_enabled_oidc_providers",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
-        patch(
-            "modulo.api.routes.org_login.is_saml_available",
-            new_callable=AsyncMock,
-            return_value=False,
-        ),
+    with patch(
+        "modulo.api.routes.org_login.list_enabled_oidc_providers",
+        new_callable=AsyncMock,
+        return_value=[],
     ):
         app.dependency_overrides[get_settings] = lambda: settings
         app.dependency_overrides[get_db_session] = lambda: mock_session
