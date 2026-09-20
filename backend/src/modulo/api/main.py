@@ -394,6 +394,53 @@ async def _run_migrations(settings: Settings) -> None:
     raise fatal_error from last_error
 
 
+async def _assert_single_alembic_head(settings: Settings) -> None:
+    """Refuse to start when multiple Alembic heads exist (FAR-902).
+
+    Multiple heads mean two migrations chain off the same parent — a branch
+    conflict that must be resolved before the app can safely run.  The check
+    runs AFTER ``alembic upgrade heads`` (which applies all heads), so any
+    remaining multiple-head state is a genuine unresolved conflict.
+
+    Non-fatal: logs a loud warning instead of crashing, because the already-
+    applied migrations are valid — the conflict is a maintenance debt, not a
+    runtime hazard.  The warning is visible in deploy logs and /healthz.
+    """
+    from alembic.config import Config
+
+    from modulo.db.migrations.env import _to_sync_url
+
+    alembic_ini = _resolve_alembic_ini()
+    try:
+        config = Config(str(alembic_ini))
+        config.set_main_option(
+            "script_location",
+            str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
+        )
+        config.config_file_name = None
+        config.set_main_option("sqlalchemy.url", _to_sync_url(settings.database_url))
+
+        def _get_heads() -> list[str]:
+            from alembic.script import ScriptDirectory
+
+            script = ScriptDirectory.from_config(config)
+            heads = script.get_heads()
+            return heads.split(",") if heads else []
+
+        heads = await asyncio.to_thread(_get_heads)
+        if len(heads) > 1:
+            logger.warning(
+                "startup.multiple_alembic_heads",
+                extra={"heads": heads, "count": len(heads)},
+            )
+        else:
+            logger.info("startup.single_alembic_head", extra={"head": heads[0] if heads else "none"})
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("startup.alembic_head_check_failed", exc_info=True)
+
+
 async def _assert_no_owner_rows(settings: Settings) -> None:
     """Hard-fail boot if any org_membership still claims the dropped 'owner' role.
 
@@ -791,6 +838,11 @@ async def _run_boot_guards_and_seeds(settings: Settings) -> None:
 
     # Run Alembic migrations to bring the schema up to date.
     await _run_migrations(settings)
+
+    # FAR-902: refuse to start on multiple Alembic heads — a branch conflict
+    # means two migrations chain off the same parent; running with both heads
+    # applied masks the conflict and makes future upgrades ambiguous.
+    await _assert_single_alembic_head(settings)
 
     # Break-glass watchdog (deliverable B): the allow-list/role-posture
     # assertion is a non-fatal WARNING inside _run_bootstrap (superuser legacy

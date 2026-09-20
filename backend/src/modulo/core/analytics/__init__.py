@@ -236,6 +236,48 @@ async def _fact_workspace_inputs_count(session: AsyncSession, run: Run) -> int |
         return None
 
 
+async def _fact_enforcement_aggregates(
+    session: AsyncSession,
+    run: Run,
+) -> Any:
+    """Aggregate per-attempt enforcement records for a terminal run (FAR-902).
+
+    Reads all non-``__final__`` rows with ``schema_enforcement_json IS NOT
+    NULL`` from ``run_node_outputs`` for this run and aggregates them via the
+    pure :func:`aggregate_run_enforcement` function.  Returns ``None`` when
+    no enforcement records exist (run had no schema enforcement).
+
+    Best-effort: a read failure degrades to ``None`` -- never raises.  This is
+    a telemetry path inside the fail-open ``record_run_facts`` guard.
+    """
+    from modulo.core.pipeline_engine.schema_enforcement import aggregate_run_enforcement
+    from modulo.db.models.run_node_outputs import RunNodeOutput
+
+    try:
+        rows = (
+            (
+                await session.execute(
+                    select(RunNodeOutput.schema_enforcement_json).where(
+                        RunNodeOutput.run_id == run.id,
+                        RunNodeOutput.schema_enforcement_json.isnot(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return None
+        return aggregate_run_enforcement([r for r in rows if isinstance(r, dict)])
+    except Exception:
+        _log.warning(
+            "analytics.enforcement_aggregation_failed",
+            extra={"run_id": str(run.id)},
+            exc_info=True,
+        )
+        return None
+
+
 def _derive_graph_dimensions(
     graph_json: Any,
 ) -> tuple[int, int, int | None]:
@@ -339,6 +381,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
         node_count, sandbox_agent_node_count, max_node_timeout_seconds = await _snapshot_graph_dimensions(session, run)
         blobs = await _fact_run_blobs(session, run)
         workspace_inputs_count = await _fact_workspace_inputs_count(session, run)
+        enforcement = await _fact_enforcement_aggregates(session, run)
         values: dict[str, Any] = {
             "run_id": run.id,
             "organisation_id": run.organisation_id,
@@ -379,6 +422,12 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "completed_at": run.completed_at,
             "total_queue_wait_ms": _fact_total_queue_wait_ms(run),
             "workspace_inputs_count": workspace_inputs_count,
+            # FAR-902: schema enforcement aggregate counters — aggregated
+            # from per-attempt enforcement records on run_node_outputs.
+            "enforcement_native_count": enforcement.native_count if enforcement else None,
+            "enforcement_verbatim_count": enforcement.verbatim_count if enforcement else None,
+            "enforcement_repair_count": enforcement.repair_count if enforcement else None,
+            "enforcement_wasted_count": enforcement.wasted_count if enforcement else None,
         }
         async with session.begin_nested():
             stmt = pg_insert(RunDailyFact).values(**values)
@@ -416,6 +465,10 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
                 "completed_at": stmt.excluded.completed_at,
                 "total_queue_wait_ms": stmt.excluded.total_queue_wait_ms,
                 "workspace_inputs_count": stmt.excluded.workspace_inputs_count,
+                "enforcement_native_count": stmt.excluded.enforcement_native_count,
+                "enforcement_verbatim_count": stmt.excluded.enforcement_verbatim_count,
+                "enforcement_repair_count": stmt.excluded.enforcement_repair_count,
+                "enforcement_wasted_count": stmt.excluded.enforcement_wasted_count,
             }
             await session.execute(stmt.on_conflict_do_update(index_elements=[RunDailyFact.run_id], set_=update_cols))
     except asyncio.CancelledError:
