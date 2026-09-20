@@ -272,7 +272,7 @@ def coverage_gap_signal_computed(ctx: dict[str, Any]) -> None:
     eval_def = MagicMock()
     eval_def.id = uuid.UUID(ctx["coverage_eval_id"])
     scalar_result = MagicMock()
-    scalar_result.scalars.return_value.all.return_value = [eval_def]
+    scalar_result.scalars.return_value = [eval_def]
     session = AsyncMock()
     session.execute = AsyncMock(return_value=scalar_result)
 

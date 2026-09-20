@@ -827,6 +827,7 @@ def _make_journey_row(
     ref: str,
     *,
     stage_id: str = "Build",
+    latest_status: str = "complete",
 ) -> MagicMock:
     """A journey row shaped exactly as ``_build_journey_summary`` reads it."""
     j = MagicMock()
@@ -863,9 +864,7 @@ def lifecycle_map_exists_bare(name: str, ctx: dict[str, Any], request: Any) -> N
 
 
 @given(parsers.parse('lifecycle map "{name}" has journey "{kind}" "{ref}" at stage "{stage_id}"'))
-def lifecycle_map_has_journey(
-    name: str, kind: str, ref: str, stage_id: str, ctx: dict[str, Any], request: Any
-) -> None:
+def lifecycle_map_has_journey(name: str, kind: str, ref: str, stage_id: str, ctx: dict[str, Any], request: Any) -> None:
     lm = _make_lifecycle_map(name=name)
     ctx["lifecycle_map"] = lm
     request.node._lifecycle_map = lm
@@ -1027,7 +1026,11 @@ def journey_list_filtered_by_ref(ref: str, ctx: dict[str, Any]) -> None:
     assert stub.await_args.kwargs.get("ref") == ref, stub.await_args.kwargs
 
 
-@then(parsers.parse('the self-report counts "{accepted:d}" accepted and "{unmatched:d}" unmatched and "{rejected:d}" rejected'))
+@then(
+    parsers.parse(
+        'the self-report counts "{accepted:d}" accepted and "{unmatched:d}" unmatched and "{rejected:d}" rejected'
+    )
+)
 def self_report_counts(accepted: int, unmatched: int, rejected: int, request: Any) -> None:
     data = request.node._resp.json()
     assert data.get("accepted") == accepted, data
