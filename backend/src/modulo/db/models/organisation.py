@@ -18,7 +18,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base
+from modulo.db.models.base import Base, SoftDeleteMixin
 
 # The nil-UUID sentinel organisation backing unauthenticated public error
 # ingest (seeded by migration 0171). It is infrastructure, not a customer org:
@@ -39,7 +39,7 @@ ORPHAN_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 MODULO_REGISTRY_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
-class Organisation(Base):
+class Organisation(SoftDeleteMixin, Base):
     __tablename__ = "organisations"
     __table_args__ = (
         CheckConstraint("status IN ('active', 'suspended', 'deleted')", name="ck_organisations_status"),
@@ -69,7 +69,6 @@ class Organisation(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
     )
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # created_by is deliberately NOT a foreign key: the first organisation must
     # exist before its first user, so a FK to accounts.id would block bootstrap
     # ordering. Migration 0245_drop_organisations_created_by_fk drops the

@@ -630,22 +630,33 @@ class TestExportEntity:
 # ── _export_organisation ────────────────────────────────────────────────────
 
 
+class _OrgSession:
+    """Session double for ``_export_organisation``.
+
+    FAR-1025: the export resolves the org via ``execute(select(...))`` (with the
+    soft-delete filter opted out) rather than ``session.get``, so the double
+    returns a scalar result carrying the scripted org row.
+    """
+
+    def __init__(self, org: object | None) -> None:
+        self._org = org
+
+    async def execute(self, stmt: object) -> MagicMock:
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = self._org
+        return result
+
+
 class TestExportOrganisation:
     async def test_serialises_found_org(self, org_id: uuid.UUID) -> None:
-        class _OrgSession:
-            async def get(self, model: object, pk: object) -> MockModel:
-                return MockModel(id=org_id, name="Acme", slug="acme")
+        session = _OrgSession(MockModel(id=org_id, name="Acme", slug="acme"))
 
-        result = await _export_organisation(_OrgSession(), org_id)
+        result = await _export_organisation(session, org_id)
         assert result == {"id": str(org_id), "name": "Acme", "slug": "acme"}
 
     async def test_missing_org_exits(self, org_id: uuid.UUID) -> None:
-        class _OrgSession:
-            async def get(self, model: object, pk: object) -> None:
-                return None
-
         with pytest.raises(SystemExit) as exc:
-            await _export_organisation(_OrgSession(), org_id)
+            await _export_organisation(_OrgSession(None), org_id)
         assert "not found" in str(exc.value)
 
 

@@ -215,7 +215,13 @@ async def _export_entity(
 
 
 async def _export_organisation(session: Any, org_id: uuid.UUID) -> dict[str, Any]:
-    org = await session.get(Organisation, org_id)
+    """Export an org by ID, including soft-deleted orgs (migration tool)."""
+    from sqlalchemy import select as sa_select
+
+    from modulo.db.soft_delete import include_soft_deleted
+
+    result = await session.execute(include_soft_deleted(sa_select(Organisation).where(Organisation.id == org_id)))
+    org = result.scalar_one_or_none()
     if org is None:
         msg = f"Organisation {org_id} not found"
         raise SystemExit(msg)

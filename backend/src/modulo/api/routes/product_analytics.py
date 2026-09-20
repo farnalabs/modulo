@@ -34,9 +34,9 @@ from modulo.core.product_analytics.consent import (
     set_level,
 )
 from modulo.core.product_analytics.constants import DEFAULT_LEVEL
-from modulo.db.crud.organisation import get_organisation
 from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
+from modulo.db.soft_delete import include_soft_deleted
 
 _log = logging.getLogger(__name__)
 
@@ -86,12 +86,16 @@ async def _get_org_or_404(
 
     When *for_update* is True, acquires a FOR UPDATE row lock to make
     check-then-act sequences atomic within the enclosing transaction.
+
+    FAR-1025: both paths opt out of the global soft-delete filter -- a
+    pending-deletion org is still operationally live; the consent check
+    must still work during the confirmation window.
     """
+    stmt = include_soft_deleted(select(Organisation).where(Organisation.id == org_id))
     if for_update:
-        result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
-        org = result.scalar_one_or_none()
-    else:
-        org = await get_organisation(session, org_id)
+        stmt = stmt.with_for_update()
+    result = await session.execute(stmt)
+    org = result.scalar_one_or_none()
     if org is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

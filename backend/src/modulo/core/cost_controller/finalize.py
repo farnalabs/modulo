@@ -1216,8 +1216,16 @@ async def _ledger_block(
     # halted (never resumed to spawn further billable steps), and an org at its
     # lifetime budget stops spawning new runs. On the success path the org's
     # consumed total is incremented by this run's cost.
+    # FAR-1025: opt out of the global soft-delete filter — a pending-deletion
+    # org (deleted_at stamped at initiate, before confirm) is still
+    # operationally live.  Skipping the ceiling check and accrual here means
+    # runs bill past the org's ceiling and lifetime spend under-counts.
+    from modulo.db.soft_delete import include_soft_deleted
+
     org_row = (
-        await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
+        await session.execute(
+            include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
+        )
     ).scalar_one_or_none()
     if org_row is not None:
         # Use the same ROUND_HALF_UP cents conversion as the API boundary so the

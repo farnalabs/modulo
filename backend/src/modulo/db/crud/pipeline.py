@@ -41,6 +41,7 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.soft_delete import include_soft_deleted
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _log = logging.getLogger(__name__)
@@ -143,8 +144,7 @@ async def get_pipeline(
     callers SHOULD pass it.
     """
     stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
-    if not include_deleted:
-        stmt = stmt.where(Pipeline.deleted_at.is_(None))
+    stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(Pipeline.deleted_at.is_(None))
     if organisation_id is not None:
         stmt = stmt.where(Pipeline.organisation_id == organisation_id)
     result = await session.execute(stmt)
@@ -181,8 +181,7 @@ async def list_pipelines(
     team_id: uuid.UUID | None = None,
 ) -> PageResult[Pipeline]:
     base = select(Pipeline)
-    if not include_deleted:
-        base = base.where(Pipeline.deleted_at.is_(None))
+    base = include_soft_deleted(base) if include_deleted else base.where(Pipeline.deleted_at.is_(None))
     if not include_archived:
         base = base.where(Pipeline.archived_at.is_(None))
     if folder_id is not None:
@@ -222,7 +221,10 @@ async def list_pipelines(
             count_where.append(Pipeline.folder_id == folder_id)
         if team_id is not None:
             count_where.append(team_scope_clause(Pipeline.owner_team_id, team_id))
-        total = (await session.execute(select(func.count()).select_from(Pipeline).where(*count_where))).scalar_one()
+        count_stmt = select(func.count()).select_from(Pipeline).where(*count_where)
+        if include_deleted:
+            count_stmt = include_soft_deleted(count_stmt)
+        total = (await session.execute(count_stmt)).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(

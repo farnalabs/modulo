@@ -83,10 +83,14 @@ async def resolve_eval_definition_version(
     """
     if pinned_version is not None:
         return pinned_version
+    from modulo.db.soft_delete import include_soft_deleted
+
     result = await session.execute(
-        select(EvalDefinition).where(
-            EvalDefinition.id == eval_id,
-            EvalDefinition.organisation_id == org_id,
+        include_soft_deleted(
+            select(EvalDefinition).where(
+                EvalDefinition.id == eval_id,
+                EvalDefinition.organisation_id == org_id,
+            )
         )
     )
     row = result.scalar_one_or_none()

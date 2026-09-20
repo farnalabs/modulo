@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models import Agent, CollectionInstall, CollectionInstallEntity, Pipeline, Schema
+from modulo.db.soft_delete import include_soft_deleted
 
 __all__ = ["uninstall_collection"]
 
@@ -82,7 +83,7 @@ async def _check_unmodified(
             return False
         return bool(entity.collection_install_id == install_id)
     if entity_type == "pipeline":
-        entity = await session.scalar(select(Pipeline).where(Pipeline.id == entity_id))
+        entity = await session.scalar(include_soft_deleted(select(Pipeline).where(Pipeline.id == entity_id)))
         if entity is None:
             return False
         return bool(entity.collection_install_id == install_id)
@@ -104,7 +105,7 @@ async def _delete_entity(
         if entity is not None:
             await session.delete(entity)
     elif entity_type == "pipeline":
-        entity = await session.scalar(select(Pipeline).where(Pipeline.id == entity_id))
+        entity = await session.scalar(include_soft_deleted(select(Pipeline).where(Pipeline.id == entity_id)))
         if entity is not None:
             await session.delete(entity)
 
@@ -124,7 +125,7 @@ async def _detach_entity(
         if entity is not None:
             entity.collection_install_id = None
     elif entity_type == "pipeline":
-        entity = await session.scalar(select(Pipeline).where(Pipeline.id == entity_id))
+        entity = await session.scalar(include_soft_deleted(select(Pipeline).where(Pipeline.id == entity_id)))
         if entity is not None:
             entity.collection_install_id = None
 
@@ -144,7 +145,7 @@ async def _entity_exists(
     if entity_type == "agent":
         return await session.scalar(select(Agent).where(Agent.id == entity_id)) is not None
     if entity_type == "pipeline":
-        return await session.scalar(select(Pipeline).where(Pipeline.id == entity_id)) is not None
+        return await session.scalar(include_soft_deleted(select(Pipeline).where(Pipeline.id == entity_id))) is not None
     return False
 
 

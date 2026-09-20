@@ -29,13 +29,13 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, String, Uuid, text
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class EvalDataset(OrgScoped):
+class EvalDataset(SoftDeleteMixin, OrgScoped):
     """A named, versioned collection of eval input cases owned by an org (or team)."""
 
     __tablename__ = "eval_datasets"
@@ -65,7 +65,6 @@ class EvalDataset(OrgScoped):
     # skipped-with-audit path rather than a dangling row. A second admin-only
     # purge step (see ``purge_soft_deleted_eval_cases``) actually removes
     # soft-deleted rows.
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
 
     __table_args__ = (
@@ -81,7 +80,7 @@ class EvalDataset(OrgScoped):
     )
 
 
-class EvalCase(OrgScoped):
+class EvalCase(SoftDeleteMixin, OrgScoped):
     """A single repeatable input for an eval dataset — stored DATA-ONLY, verbatim.
 
     ``input_payload`` is the canonical payload store (mirrors
@@ -105,7 +104,6 @@ class EvalCase(OrgScoped):
     expected_output: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
 
     __table_args__ = (
@@ -164,5 +162,10 @@ def purge_soft_deleted_eval_cases(session: Any, older_than: datetime) -> int:
     """
     from sqlalchemy import delete
 
-    result = session.execute(delete(EvalCase).where(EvalCase.deleted_at.is_not(None), EvalCase.deleted_at < older_than))
+    result = session.execute(
+        delete(EvalCase).where(
+            EvalCase.deleted_at.is_not(None),
+            EvalCase.deleted_at < older_than,
+        )
+    )
     return result.rowcount or 0

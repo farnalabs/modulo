@@ -30,7 +30,24 @@ class TimestampMixin:
 class SoftDeleteMixin:
     """Mixin that adds soft-delete support. Set deleted_at to mark as deleted.
 
-    Queries should filter ``WHERE deleted_at IS NULL`` unless explicitly requesting deleted records.
+    A global ORM ``do_orm_execute`` listener (registered by
+    :func:`~modulo.db.soft_delete.register_soft_delete_filter`) automatically
+    applies ``WHERE deleted_at IS NULL`` to every SELECT that targets a model
+    inheriting this mixin. Call sites that legitimately need to see soft-deleted
+    rows (restore, purge, historical lookups, version resolution) must opt out::
+
+        from modulo.db.soft_delete import include_soft_deleted
+
+        stmt = include_soft_deleted(select(Model).where(...))
+
+    Or equivalently::
+
+        stmt = select(Model).execution_options(include_deleted=True)
+
+    **Every model with a ``deleted_at`` column MUST inherit this mixin.**
+    The architecture test ``tests/architecture/test_soft_delete_mixin_coverage.py``
+    enforces this invariant — a model declaring ``deleted_at`` without the mixin
+    is a CI failure.
     """
 
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)

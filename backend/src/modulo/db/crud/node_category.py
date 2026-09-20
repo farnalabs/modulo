@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.node_category import NodeCategory
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.soft_delete import include_soft_deleted
 
 
 class NodeCategoryInUseError(ValueError):
@@ -69,8 +70,7 @@ async def get_node_category(
         NodeCategory.id == category_id,
         NodeCategory.organisation_id == org_id,
     )
-    if not include_deleted:
-        stmt = stmt.where(NodeCategory.deleted_at.is_(None))
+    stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(NodeCategory.deleted_at.is_(None))
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -88,9 +88,10 @@ async def list_node_categories(
     if not include_deleted:
         where_conditions.append(NodeCategory.deleted_at.is_(None))
     try:
-        total = (
-            await session.execute(select(func.count()).select_from(NodeCategory).where(*where_conditions))
-        ).scalar_one()
+        count_stmt = select(func.count()).select_from(NodeCategory).where(*where_conditions)
+        if include_deleted:
+            count_stmt = include_soft_deleted(count_stmt)
+        total = (await session.execute(count_stmt)).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     stmt = (
@@ -100,6 +101,8 @@ async def list_node_categories(
         .offset(offset)
         .limit(page_size)
     )
+    if include_deleted:
+        stmt = include_soft_deleted(stmt)
     items = list((await session.execute(stmt)).scalars())
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 

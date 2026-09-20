@@ -69,6 +69,7 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_execution_context, set_rls_org
+from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -911,10 +912,12 @@ async def _select_demo_org(session: AsyncSession) -> Organisation | None:
     recency tiebreaker.)
     """
     result = await session.execute(
-        select(Organisation)
-        .where(Organisation.slug == DEMO_ORG_SLUG)
-        .order_by(Organisation.deleted_at.is_not(None), Organisation.created_at.desc())
-        .limit(1)
+        include_soft_deleted(
+            select(Organisation)
+            .where(Organisation.slug == DEMO_ORG_SLUG)
+            .order_by(Organisation.deleted_at.is_not(None), Organisation.created_at.desc())
+            .limit(1)
+        )
     )
     return result.scalars().first()
 

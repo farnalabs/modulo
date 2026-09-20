@@ -1956,8 +1956,14 @@ class PipelineExecutor:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
+                # FAR-1025: opt out of the global soft-delete filter — a
+                # pending-deletion org (deleted_at stamped at initiate) is still
+                # operationally live.  Skipping here means the pre-dispatch
+                # ceiling gate returns None and the run proceeds unchecked.
+                from modulo.db.soft_delete import include_soft_deleted
+
                 org = (
-                    await session.execute(select(Organisation).where(Organisation.id == org_id))
+                    await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))
                 ).scalar_one_or_none()
                 if org is None:
                     return None
@@ -3230,7 +3236,14 @@ class PipelineExecutor:
             await set_rls_execution_context(session)
 
             # Load pipeline for runaway protection limits.
-            pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
+            # FAR-1025: opt out of the global soft-delete filter -- an in-flight
+            # run's pipeline may have been soft-deleted; runaway protection must
+            # still apply.
+            from modulo.db.soft_delete import include_soft_deleted
+
+            pipeline_result = await session.execute(
+                include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id))
+            )
             pipeline = pipeline_result.scalar_one_or_none()
             if pipeline is None:
                 raise RunNotFoundError(run_id)
@@ -4310,7 +4323,14 @@ class PipelineExecutor:
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
-            pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == run.pipeline_id))
+            # FAR-1025: opt out of the global soft-delete filter -- an in-flight
+            # run's pipeline may have been soft-deleted; the pipeline must still
+            # be loadable for graph construction.
+            from modulo.db.soft_delete import include_soft_deleted
+
+            pipeline_result = await session.execute(
+                include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id))
+            )
             pipeline = pipeline_result.scalar_one()
             snapshot_result = await session.execute(
                 select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)

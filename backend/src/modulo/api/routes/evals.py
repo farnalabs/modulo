@@ -75,6 +75,7 @@ from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.soft_delete import include_soft_deleted
 
 _CODE_EVALS_CREATE_EVAL_DEFINITION = "evals.create_eval_definition"
 _CODE_EVAL_LIST = "eval.list"
@@ -690,9 +691,11 @@ async def eval_timeseries(
 
             eval_def = (
                 await session.execute(
-                    select(EvalDefinition).where(
-                        EvalDefinition.id == eval_id,
-                        EvalDefinition.organisation_id == principal.organisation_id,
+                    include_soft_deleted(
+                        select(EvalDefinition).where(
+                            EvalDefinition.id == eval_id,
+                            EvalDefinition.organisation_id == principal.organisation_id,
+                        )
                     )
                 )
             ).scalar_one_or_none()
@@ -1518,9 +1521,11 @@ async def get_eval_definition(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await session.execute(
-                select(EvalDefinition).where(
-                    EvalDefinition.id == eval_id,
-                    EvalDefinition.organisation_id == principal.organisation_id,
+                include_soft_deleted(
+                    select(EvalDefinition).where(
+                        EvalDefinition.id == eval_id,
+                        EvalDefinition.organisation_id == principal.organisation_id,
+                    )
                 )
             )
             eval_def = result.scalar_one_or_none()
@@ -1573,9 +1578,11 @@ async def update_eval_definition(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await session.execute(
-                select(EvalDefinition).where(
-                    EvalDefinition.id == eval_id,
-                    EvalDefinition.organisation_id == principal.organisation_id,
+                include_soft_deleted(
+                    select(EvalDefinition).where(
+                        EvalDefinition.id == eval_id,
+                        EvalDefinition.organisation_id == principal.organisation_id,
+                    )
                 )
             )
             eval_def = result.scalar_one_or_none()
@@ -1662,9 +1669,11 @@ async def delete_eval_definition(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await session.execute(
-                select(EvalDefinition).where(
-                    EvalDefinition.id == eval_id,
-                    EvalDefinition.organisation_id == principal.organisation_id,
+                include_soft_deleted(
+                    select(EvalDefinition).where(
+                        EvalDefinition.id == eval_id,
+                        EvalDefinition.organisation_id == principal.organisation_id,
+                    )
                 )
             )
             eval_def = result.scalar_one_or_none()
@@ -2021,9 +2030,11 @@ async def _fetch_eval_definitions(
             defs_rows = (
                 (
                     await session.execute(
-                        select(EvalDefinition).where(
-                            EvalDefinition.id.in_(eval_ids),
-                            EvalDefinition.organisation_id == principal.organisation_id,
+                        include_soft_deleted(
+                            select(EvalDefinition).where(
+                                EvalDefinition.id.in_(eval_ids),
+                                EvalDefinition.organisation_id == principal.organisation_id,
+                            )
                         )
                     )
                 )

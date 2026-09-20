@@ -1,20 +1,19 @@
 """VariantBatchState — lightweight persistence for variant batch metadata (FAR-775)."""
 
 import uuid
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Text, Uuid
+from sqlalchemy import JSON, ForeignKey, Text, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import Base, TimestampMixin
+from modulo.db.models.base import Base, SoftDeleteMixin, TimestampMixin
 
 if TYPE_CHECKING:
     from modulo.db.models.organisation import Organisation
 
 
-class VariantBatchState(Base, TimestampMixin):
+class VariantBatchState(SoftDeleteMixin, Base, TimestampMixin):
     """Lightweight persistence row for a variant batch.
 
     Batches predating FAR-775 have no stored row — the route synthesizes
@@ -47,9 +46,5 @@ class VariantBatchState(Base, TimestampMixin):
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),
         nullable=False,
-    )
-    deleted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
     )
     organisation: Mapped["Organisation"] = relationship()

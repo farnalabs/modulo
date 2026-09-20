@@ -175,7 +175,14 @@ async def _fetch_locked_run(session: AsyncSession, run_id: uuid.UUID) -> Run:
     if run is None:
         raise RecoveryNotAllowedError(run_id, "not_found")
 
-    await session.execute(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update())
+    # FAR-1025: opt out of the global soft-delete filter -- an in-flight
+    # run's pipeline may have been soft-deleted; the pipeline lock must still
+    # be acquired for recovery.
+    from modulo.db.soft_delete import include_soft_deleted
+
+    await session.execute(
+        include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update())
+    )
 
     # Re-fetch the run after the lock to get the latest status.
     run = await get_run(session, run_id)
@@ -404,7 +411,14 @@ async def guardrail_override(
     if run is None:
         raise GuardrailOverrideError(run_id, "run not found")
 
-    await session.execute(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update())
+    # FAR-1025: opt out of the global soft-delete filter -- an in-flight
+    # run's pipeline may have been soft-deleted; the pipeline lock must still
+    # be acquired for guardrail override.
+    from modulo.db.soft_delete import include_soft_deleted
+
+    await session.execute(
+        include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update())
+    )
 
     run = await get_run(session, run_id)
     if run is None:

@@ -300,7 +300,9 @@ async def _load_pipeline_rate_limit(session: AsyncSession, pipeline_id: uuid.UUI
     from modulo.db.models.pipeline import Pipeline
 
     await set_rls_execution_context(session)
-    pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
+    from modulo.db.soft_delete import include_soft_deleted
+
+    pipe_result = await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id)))
     pipeline = pipe_result.scalar_one_or_none()
     return pipeline.rate_limit_config if pipeline is not None else None
 
