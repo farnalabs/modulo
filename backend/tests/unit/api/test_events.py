@@ -256,12 +256,18 @@ class TestUntrackConnection:
 
     @pytest.mark.asyncio
     async def test_noop_for_missing_org(self):
-        await _untrack_connection("nonexistent", asyncio.Queue())
+        q = asyncio.Queue()
+        await _untrack_connection("nonexistent", q)
+        assert q.qsize() == 0
 
     @pytest.mark.asyncio
     async def test_noop_for_missing_queue(self):
-        await _track_connection("org-nq", "user-1", asyncio.Queue(), max_org=10, max_user=5)
-        await _untrack_connection("org-nq", asyncio.Queue())  # different queue object
+        q1 = asyncio.Queue()
+        await _track_connection("org-nq", "user-1", q1, max_org=10, max_user=5)
+        q2 = asyncio.Queue()
+        await _untrack_connection("org-nq", q2)  # different queue object
+        assert "org-nq" in _active_connections
+        assert q1 in _active_connections["org-nq"]
 
     @pytest.mark.asyncio
     async def test_empty_org_deleted(self):

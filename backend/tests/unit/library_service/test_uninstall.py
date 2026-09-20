@@ -341,6 +341,7 @@ class TestDetachEntity:
         session = AsyncMock()
         session.scalar = AsyncMock(return_value=None)
         await _detach_entity(session, "agent", _entity_id())
+        session.scalar.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_pipeline_found(self):
@@ -356,6 +357,7 @@ class TestDetachEntity:
         session = AsyncMock()
         session.scalar = AsyncMock(return_value=None)
         await _detach_entity(session, "pipeline", _entity_id())
+        session.scalar.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_unknown_type_noop(self):
@@ -457,8 +459,8 @@ class TestUninstallCollection:
         session.flush = AsyncMock()
 
         result = await uninstall_collection(session, org, iid)
-        assert result["deleted"] == []
-        assert result["detached"] == []
+        assert not result["deleted"]
+        assert not result["detached"]
         assert result["install_id"] == str(iid)
         session.delete.assert_awaited_once_with(inst)
         session.flush.assert_awaited_once()
@@ -516,7 +518,7 @@ class TestUninstallCollection:
         # _UNINSTALL_ORDER = ["pipeline", "agent", "schema"] — agent (idx 1) before schema (idx 2)
         assert result["deleted"][0]["entity_type"] == "agent"
         assert result["deleted"][1]["entity_type"] == "schema"
-        assert result["detached"] == []
+        assert not result["detached"]
 
     @pytest.mark.asyncio
     async def test_modified_entities_are_detached(self):
@@ -556,7 +558,7 @@ class TestUninstallCollection:
         session.flush = AsyncMock()
 
         result = await uninstall_collection(session, org, iid)
-        assert result["deleted"] == []
+        assert not result["deleted"]
         assert len(result["detached"]) == 1
         assert result["detached"][0]["entity_type"] == "schema"
         assert modified_entity.collection_install_id is None
@@ -576,8 +578,8 @@ class TestUninstallCollection:
         session.flush = AsyncMock()
 
         result = await uninstall_collection(session, org, iid)
-        assert result["deleted"] == []
-        assert result["detached"] == []
+        assert not result["deleted"]
+        assert not result["detached"]
 
     @pytest.mark.asyncio
     async def test_uninstall_order_pipelines_before_agents_before_schemas(self):
@@ -634,8 +636,8 @@ class TestUninstallCollection:
         session.flush = AsyncMock()
 
         result = await uninstall_collection(session, org, iid)
-        assert result["deleted"] == []
-        assert result["detached"] == []
+        assert not result["deleted"]
+        assert not result["detached"]
 
     @pytest.mark.asyncio
     async def test_mixed_delete_and_detach(self):

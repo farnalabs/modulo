@@ -520,7 +520,7 @@ def test_sanitize_event_non_string_detail_passes_through():
 def test_sanitize_event_no_payload():
     """RunEvent with empty payload dict — no crash."""
     data = _sanitize_event(_event({}))
-    assert data["payload"] == {}
+    assert not data["payload"]
 
 
 def test_sanitize_event_payload_not_dict():
