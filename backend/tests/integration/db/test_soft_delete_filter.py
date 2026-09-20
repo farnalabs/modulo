@@ -32,6 +32,8 @@ from modulo.db.soft_delete import (
     register_soft_delete_filter,
 )
 
+pytestmark = [pytest.mark.integration]
+
 # ---------------------------------------------------------------------------
 # Test-only declarative base — COMPLETELY SEPARATE from the app Base
 # ---------------------------------------------------------------------------
