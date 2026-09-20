@@ -333,6 +333,51 @@ async def _resolve_saml_for_route(
         raise _SAML_NOT_FOUND
 
 
+async def _saml_login_redirect(
+    acs_url: str,
+    settings: Settings,
+    system_session: AsyncSession,
+    session: AsyncSession,
+    *,
+    provider_id: str | None = None,
+    unexpected_error_tag: str,
+) -> Response:
+    """Generate the IdP redirect for a SAML login, mapping DB errors to HTTP errors.
+
+    Shared by the legacy single-tenant ``/saml/login`` route and the
+    per-provider ``/saml/{provider_id}/login`` route so the error-mapping
+    contract (`ValueError` -> 400, missing table -> 501, DB error -> 503,
+    unexpected -> 500) stays identical in both call sites.
+    """
+    try:
+        async with session.begin():
+            auth_url, _ = await saml_get_auth_url(settings, acs_url, system_session, session, provider_id=provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+    except ProgrammingError as exc:
+        _log.warning("SAML login failed — DB table missing: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SAML login DB error: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception(unexpected_error_tag)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+    return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
+
+
 @router.post("/saml/acs/{provider_id}")
 @handle_db_errors("sso.saml_acs_provider")
 async def saml_acs_provider(
@@ -362,7 +407,12 @@ async def saml_acs_provider(
         async with session.begin():
             tokens = await saml_process_response(raw_saml, settings, system_session, session, provider_id=provider_id)
     except ValueError as exc:
-        _log.warning("SAML ACS failed for provider %s: %s", provider_id, exc, exc_info=True)
+        _log.warning(
+            "SAML ACS failed for provider %s: %s",
+            sanitise_log_value(provider_id),
+            sanitise_log_value(exc),
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
@@ -463,33 +513,14 @@ async def saml_login_provider(
     public_url = settings.modulo_public_url.rstrip("/")
     acs_url = f"{public_url}/api/v1/auth/saml/acs/{provider_id}"
 
-    try:
-        async with session.begin():
-            auth_url, _ = await saml_get_auth_url(settings, acs_url, system_session, session, provider_id=provider_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
-    except ProgrammingError as exc:
-        _log.warning("SAML login failed — DB table missing: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        _log.warning("SAML login DB error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    except HTTPException:
-        raise
-    except Exception as e:
-        _log.exception("sso.saml_login_provider.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
-
-    return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
+    return await _saml_login_redirect(
+        acs_url,
+        settings,
+        system_session,
+        session,
+        provider_id=provider_id,
+        unexpected_error_tag="sso.saml_login_provider.unexpected_error",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -510,33 +541,13 @@ async def saml_login(
     public_url = settings.modulo_public_url.rstrip("/")
     acs_url = f"{public_url}/api/v1/auth/saml/acs"
 
-    try:
-        async with session.begin():
-            auth_url, _ = await saml_get_auth_url(settings, acs_url, system_session, session)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
-    except ProgrammingError as exc:
-        _log.warning("SAML login failed — DB table missing: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        _log.warning("SAML login DB error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    except HTTPException:
-        raise
-    except Exception as e:
-        _log.exception("sso.saml_login.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
-
-    return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
+    return await _saml_login_redirect(
+        acs_url,
+        settings,
+        system_session,
+        session,
+        unexpected_error_tag="sso.saml_login.unexpected_error",
+    )
 
 
 @router.post("/saml/acs")
