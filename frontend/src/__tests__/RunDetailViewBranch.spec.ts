@@ -442,10 +442,9 @@ describe('RunDetailView — branch coverage sweep', () => {
       outputs_json: { n1: { output: null } },
     })
     const ioRow = wrapper.find('[data-testid="run-detail-io-row"]')
+    expect(ioRow.exists()).toBe(true)
     // Empty output should show no-output message
-    if (ioRow.exists()) {
-      expect(wrapper.find('[data-testid="run-detail-no-output"]').exists()).toBe(true)
-    }
+    expect(wrapper.find('[data-testid="run-detail-no-output"]').exists()).toBe(true)
   })
 
   // -- shareSummary: with nodesReportedTokens --
