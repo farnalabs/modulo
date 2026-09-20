@@ -5039,7 +5039,7 @@ features:
         description: Typed JSON schemas, schema editor, inference, and parameter schemas
     feat-sso:
         description: Single sign-on (SSO)
-        status: partial
+        status: covered
         behaviours:
             # SAML per-org (multi-org) — regression coverage in
             # backend/tests/integration/auth/test_saml_per_org_regression.py
