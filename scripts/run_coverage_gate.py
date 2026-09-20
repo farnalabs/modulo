@@ -84,6 +84,11 @@ Branch coverage edge cases:
 - **Zero branches on changed lines** → vacuous pass.  When no branch records
   exist for any changed line, branch coverage is undefined and the branch
   gate passes with a note ("vacuous — no branch records on changed lines").
+  The parsers retain only branch records, so a changed line that has no
+  branch (straight-line code) is indistinguishable from a missing branch
+  record: neither contributes a branch, and neither is scored as 0%.  A
+  straight-line diff therefore passes the branch gate vacuously no matter
+  how many lines it changes.
 - **Branch records present but none taken** → 0%, FAIL.  When branch records
   exist on changed lines but every ``taken`` value is ``"-"`` (never
   executed), branch coverage is 0% and the gate fails.  This is NOT a
@@ -1056,6 +1061,10 @@ class GateResult:
     # Branch coverage fields
     branch_covered: int = 0
     branch_total: int = 0
+    # Changed lines with no branch record.  Diagnostic only: the parsers keep
+    # only branch records, so this cannot distinguish "no branch on the line"
+    # from "branch record missing", and it never drives the pass/fail decision
+    # (a zero ``branch_total`` is a vacuous pass — see ``evaluate``).
     branch_unmeasured: int = 0
     branch_actual_pct: float | None = None
     branch_passed: bool | None = None  # None = no branch data (vacuous)
@@ -1412,11 +1421,19 @@ def evaluate(
     )
     branch_actual_pct: float | None = None
     branch_passed_val: bool | None = None
-    if branch_total == 0 and branch_unmeasured == 0:
+    if branch_total == 0:
+        # No branch records on any changed line: there is no branch to
+        # measure, so the branch gate passes vacuously.  The report parsers
+        # retain only branch records, so a changed line that simply has no
+        # branch (straight-line code) is indistinguishable from one whose
+        # branch record is absent — neither carries a branch into the
+        # denominator.  Treating the former as 0% spuriously failed every
+        # branch-free diff of more than TINY_DIFF_THRESHOLD lines.
+        # ``branch_unmeasured`` is retained as a diagnostic only; it never
+        # drives the pass/fail decision.  Genuinely unexercised branches
+        # still surface as ``branch_total > 0`` with 0% coverage, and a
+        # brand-new untested file still fails the line gate.
         branch_passed_val = None  # vacuous
-    elif branch_total == 0 and branch_unmeasured > 0:
-        branch_actual_pct = 0.0
-        branch_passed_val = False
     else:
         branch_actual_pct = (branch_covered / branch_total) * 100.0
         branch_passed_val = branch_actual_pct >= branch_fail_under

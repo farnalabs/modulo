@@ -1515,6 +1515,79 @@ class TestBranchCoverageEvaluation:
         assert result.branch_passed is None
         assert result.branch_actual_pct is None
 
+    def test_zero_branch_records_with_unmeasured_lines_is_vacuous_pass(self, tmp_path):
+        """``(branch_total=0, branch_unmeasured>0)`` -> vacuous pass, not 0% FAIL.
+
+        Regression for the docstring/code contradiction: a fully line-covered
+        straight-line (branch-free) diff produces no branch records on any
+        changed line, so ``_compute_branch_coverage_from_raw`` returns
+        ``branch_total=0`` with ``branch_unmeasured>0``.  The gate used to score
+        that as 0% and fail any branch-free diff longer than the tiny-diff
+        threshold; the documented intent is a vacuous pass.
+        """
+        fake_report = tmp_path / "coverage.xml"
+        fake_report.write_text("<coverage/>")
+        json_pass = {
+            "src_stats": {
+                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}
+            },
+            "total_num_lines": 50,
+            "total_num_violations": 0,
+            "total_percent_covered": 100.0,
+            "num_changed_lines": 50,
+        }
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 50}),
+            patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+            patch.object(mod, "_get_diff_cover_json", return_value=json_pass),
+            patch.object(mod, "_compute_branch_coverage_from_raw", return_value=(0, 0, 50)),
+        ):
+            result = mod.evaluate("Python", fake_report, "origin/main", 98, branch_fail_under=98)
+        assert result.passed is True
+        assert result.branch_passed is None
+        assert result.branch_actual_pct is None
+        assert result.branch_unmeasured == 50
+        assert "vacuous" in result.summary().lower()
+
+    def test_straight_line_diff_passes_branch_gate_vacuously(self, tmp_path):
+        """A real straight-line diff with no branch records must not 0% FAIL.
+
+        Drives the unpatched ``_compute_branch_coverage_from_raw`` path: the
+        Cobertura report lists the changed file but carries no branch records
+        (every line ``branch="false"``), so ``branch_total`` is 0 while
+        ``branch_unmeasured`` is the changed-line count.  The branch gate must
+        pass vacuously rather than fail the branch-free diff at 0%.
+        """
+        report = tmp_path / "coverage.xml"
+        report.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="src/calc.py"><lines>'
+            '<line number="1" hits="1"/><line number="2" hits="1"/>'
+            '<line number="3" hits="1"/></lines></class></classes></package></packages></coverage>'
+        )
+        json_pass = {
+            "src_stats": {
+                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(1, 51)), "violation_lines": []}
+            },
+            "total_num_lines": 50,
+            "num_changed_lines": 50,
+            "total_percent_covered": 100.0,
+        }
+        git_diff = "@@ -0,0 +1,50 @@\n" + "\n".join(f"+line{i}" for i in range(1, 51)) + "\n"
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 50}),
+            patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+            patch.object(mod, "_get_diff_cover_json", return_value=json_pass),
+            patch.object(mod.subprocess, "run") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
+            result = mod.evaluate("Python", report, "origin/main", 98, branch_fail_under=98)
+        assert result.passed is True
+        assert result.branch_total == 0
+        assert result.branch_unmeasured > 0
+        assert result.branch_passed is None
+        assert result.branch_actual_pct is None
+
 
 # ---------------------------------------------------------------------------
 # Branch parser integration tests
