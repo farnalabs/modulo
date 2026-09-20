@@ -1324,7 +1324,11 @@ class TriggerEngine:
             # execution hatch lets the rate-limit fallback read a team-private
             # pipeline's config.
             await set_rls_execution_context(session)
-            pipe_result = await session.execute(select(Pipeline).where(Pipeline.id == delivery.trigger.pipeline_id))
+            from modulo.db.soft_delete import include_soft_deleted
+
+            pipe_result = await session.execute(
+                include_soft_deleted(select(Pipeline).where(Pipeline.id == delivery.trigger.pipeline_id))
+            )
             pipeline = pipe_result.scalar_one_or_none()
             if pipeline is not None:
                 pipeline_rate_limit = pipeline.rate_limit_config
