@@ -69,8 +69,9 @@ def render_table(report: dict[str, Any]) -> str:
 
     Drift reports (``mode == "drift"``) are explicitly labelled: each verb
     is prefixed (``drift create`` / ``drift update``), the summary line reads
-    ``drift summary``, and pipelines in ``drift_detail`` get a graph
-    breakdown line.
+    ``drift summary``, and ``drift_detail`` renders a graph breakdown line
+    for drifted pipelines and a managed-field breakdown line for drifted
+    schemas / model backends / triggers.
     """
     drift_mode = report.get("mode") == "drift"
     verbs = {
@@ -87,13 +88,17 @@ def render_table(report: dict[str, Any]) -> str:
             lines.append(line)
     lines.extend(f"fail {entry['kind']} {entry['name']!r}: {entry['error']}" for entry in report.get("failed", []))
     lines.extend(f"unchanged {entry['kind']} {entry['name']!r}" for entry in report.get("unchanged", []))
-    for name, breakdown in sorted((report.get("drift_detail") or {}).items()):
+
+    def _counts(section: dict[str, list[str]]) -> str:
+        return f"+{len(section['added'])}/-{len(section['removed'])}/~{len(section['modified'])}"
+
+    for key, breakdown in sorted((report.get("drift_detail") or {}).items()):
+        if "fields" in breakdown:
+            kind, _, name = key.partition(":")
+            lines.append(f"drift detail {kind} {name!r}: {_counts(breakdown['fields'])} fields")
+            continue
         nodes, edges = breakdown["nodes"], breakdown["edges"]
-
-        def _counts(section: dict[str, list[str]]) -> str:
-            return f"+{len(section['added'])}/-{len(section['removed'])}/~{len(section['modified'])}"
-
-        lines.append(f"drift detail pipeline {name!r}: graph {_counts(nodes)} nodes, {_counts(edges)} edges")
+        lines.append(f"drift detail pipeline {key!r}: graph {_counts(nodes)} nodes, {_counts(edges)} edges")
     counts = {s: len(report.get(s, [])) for s in ("created", "updated", "unchanged", "blocked", "failed")}
     label = "drift summary" if drift_mode else "summary"
     lines.append(
