@@ -78,7 +78,7 @@
               :key="provider.provider_id"
               :href="provider.type === 'saml'
                 ? `/api/v1/auth/saml/${provider.provider_id}/login`
-                : `/api/v1/auth/oidc/${provider.provider_id}/login?org=${slug}`"
+                : `/api/v1/auth/oidc/${provider.provider_id}/login`"
               class="flex w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
               :data-testid="`org-login-sso-${provider.provider_id}`"
             >

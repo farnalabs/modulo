@@ -159,9 +159,10 @@ describe('OrgLoginView', () => {
     })
     expect(wrapper.find('[data-testid="org-login-sso-github"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="org-login-sso-google"]').exists()).toBe(true)
-    // Check SSO links include org query param
+    // OIDC link must NOT include a dead ?org= query param — provider_id is globally unique
     const githubLink = wrapper.find('[data-testid="org-login-sso-github"]')
-    expect(githubLink.attributes('href')).toContain('org=test-org')
+    expect(githubLink.attributes('href')).toBe('/api/v1/auth/oidc/github/login')
+    expect(githubLink.attributes('href')).not.toContain('?')
   })
 
   it('login submit includes org_slug in the request', async () => {
@@ -315,9 +316,9 @@ describe('OrgLoginView', () => {
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="org-login-sso-google"]').exists()).toBe(true)
     })
-    // OIDC provider uses OIDC login URL with org param
+    // OIDC provider uses OIDC login URL — no dead ?org= param (provider_id is globally unique)
     const oidcLink = wrapper.find('[data-testid="org-login-sso-google"]')
-    expect(oidcLink.attributes('href')).toBe('/api/v1/auth/oidc/google/login?org=test-org')
+    expect(oidcLink.attributes('href')).toBe('/api/v1/auth/oidc/google/login')
     // SAML provider uses per-provider SAML login URL
     const samlLink = wrapper.find('[data-testid="org-login-sso-okta-saml"]')
     expect(samlLink.attributes('href')).toBe('/api/v1/auth/saml/okta-saml/login')
