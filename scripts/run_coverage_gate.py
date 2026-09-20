@@ -819,28 +819,6 @@ def _parse_added_line_numbers(diff_text: str) -> set[int]:
     return added
 
 
-def _compute_branch_coverage(
-    changed_files: dict[str, int],
-    branch_data: dict[str, dict[int, tuple[int, int]]],
-) -> tuple[int, int, int]:
-    """Compute branch coverage over changed lines that have branch records.
-
-    Returns ``(branch_covered, branch_total, branch_unmeasured)``.
-    """
-    branch_covered = 0
-    branch_total = 0
-    branch_unmeasured = 0
-    for filepath, changed_count in changed_files.items():
-        if filepath in branch_data:
-            line_branches = branch_data[filepath]
-            for covered, total in line_branches.values():
-                branch_covered += covered
-                branch_total += total
-        else:
-            branch_unmeasured += changed_count
-    return branch_covered, branch_total, branch_unmeasured
-
-
 def _match_report_key_to_changed(
     raw_key: str,
     changed_files: Iterable[str],
@@ -1072,8 +1050,12 @@ class GateResult:
         if self.skipped:
             return f"[{self.language}] SKIPPED — {self.skip_reason}"
         if self.tiny_diff:
-            return f"[{self.language}] PASS — tiny diff ({self.changed_lines} lines, ≤{TINY_DIFF_THRESHOLD} threshold)"
-        if self.unmeasured_lines > 0 and not self.passed:
+            # Do not return early: a branch-gate failure must still be visible in
+            # the summary line even when the line gate was tiny-diff exempt.
+            line_part = (
+                f"[{self.language}] PASS — tiny diff ({self.changed_lines} lines, ≤{TINY_DIFF_THRESHOLD} threshold)"
+            )
+        elif self.unmeasured_lines > 0 and not self.passed:
             line_part = (
                 f"[{self.language}] FAIL — {self.actual_pct:.1f}% effective coverage, "
                 f"{self.unmeasured_lines} unmeasured line(s) at 0% < {self.threshold}%"
@@ -1455,9 +1437,9 @@ def _write_summary(results: list[GateResult]) -> None:
             pct = "—"
             bpct = "—"
         elif r.tiny_diff:
-            status = "PASS (tiny)"
+            status = "FAIL (branch)" if r.branch_passed is False else "PASS (tiny)"
             pct = "—"
-            bpct = "—"
+            bpct = f"{r.branch_actual_pct:.1f}%" if r.branch_actual_pct is not None else "—"
         elif r.passed:
             status = "PASS" if (r.branch_passed is not False) else "FAIL (branch)"
             pct = f"{r.actual_pct:.1f}%" if r.actual_pct is not None else "?"

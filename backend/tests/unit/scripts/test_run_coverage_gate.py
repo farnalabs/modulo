@@ -1346,22 +1346,6 @@ class TestParseAddedLineNumbers:
         assert mod._parse_added_line_numbers(diff) == {1, 11}
 
 
-class TestComputeBranchCoverage:
-    def test_no_branch_data_all_unmeasured(self):
-        covered, total, unmeasured = mod._compute_branch_coverage({"src/main.py": 5}, {})
-        assert covered == 0
-        assert total == 0
-        assert unmeasured == 5
-
-    def test_partial_branch_data(self):
-        covered, total, unmeasured = mod._compute_branch_coverage(
-            {"src/main.py": 10}, {"src/main.py": {3: (1, 2), 7: (2, 2)}}
-        )
-        assert covered == 3
-        assert total == 4
-        assert unmeasured == 0
-
-
 # ---------------------------------------------------------------------------
 # Branch coverage: evaluation tests -- the cases that catch the rejected impl
 # ---------------------------------------------------------------------------
