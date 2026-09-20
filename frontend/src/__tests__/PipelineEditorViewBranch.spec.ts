@@ -140,10 +140,12 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     vm.edgeForm.description = 'Too short'
     await nextTick()
 
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockClear()
     await vm.saveEdgeConfig()
     await flushPromises()
     expect(vm.edgeSaveError).toBeTruthy()
     expect(vm.savingEdge).toBe(false)
+    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(0)
     wrapper.unmount()
   })
 
