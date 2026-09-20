@@ -309,7 +309,9 @@ class TestAtomicityAndRollback:
 
     def test_orphan_cleanup_missing_dir(self, tmp_path: Path) -> None:
         """Cleanup of a directory that does not exist is a no-op."""
-        _cleanup_orphan_tmps(tmp_path / "does-not-exist")
+        missing_dir = tmp_path / "does-not-exist"
+        _cleanup_orphan_tmps(missing_dir)
+        assert not missing_dir.exists()
 
     def test_atomic_write_cleans_up_when_fdopen_fails(self, tmp_path: Path) -> None:
         """A failure after mkstemp but before fdopen closes the fd and removes the tmp."""
@@ -323,7 +325,7 @@ class TestAtomicityAndRollback:
         ):
             _atomic_write_json(target, {"a": 1})
         assert not target.exists()
-        assert list(tmp_path.glob("*.tmp")) == []
+        assert not list(tmp_path.glob("*.tmp"))
 
     def test_non_serialisable_schema_is_tolerated(self, tmp_path: Path) -> None:
         """A circular schema falls back to the original and never fails the node."""
