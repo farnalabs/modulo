@@ -353,9 +353,10 @@ class TestMigrationBackfillGrace:
         # chains on top of 0245_drop_organisations_created_by_fk, and 0247_sso_presets (FAR-853)
         # chains on top of 0246_sso_join_gate, and 0248_agent_schema_profile (FAR-900)
         # chains on top of 0247_sso_presets, and 0249_validation_level (FAR-935)
-        # chains on top of 0248_agent_schema_profile, so it is now the single
+        # chains on top of 0248_agent_schema_profile, and 0250_eval_policy_gate (FAR-1060)
+        # chains on top of 0249_validation_level, so it is now the single
         # linear head of the chain.
-        assert heads == ["0249_validation_level"], f"expected a single head, got {heads}"
+        assert heads == ["0250_eval_policy_gate"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

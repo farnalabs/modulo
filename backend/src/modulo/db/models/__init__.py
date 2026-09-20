@@ -15,6 +15,7 @@ from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.error_notification_rule import DeletedDefault, ErrorNotificationRule
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_dataset import (
     EvalCase,
     EvalDataset,
@@ -65,6 +66,8 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_folder import PipelineFolder
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.policy_gate import PolicyGate
+from modulo.db.models.policy_gate_decision import PolicyGateDecision
 from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
 from modulo.db.models.primitive_rating import PrimitiveRating
 from modulo.db.models.publisher import Publisher
@@ -119,6 +122,7 @@ __all__ = [
     "ErrorForwarderConfig",
     "ErrorGroup",
     "ErrorNotificationRule",
+    "Eval",
     "EvalCase",
     "EvalDataset",
     "EvalDefinition",
@@ -161,6 +165,8 @@ __all__ = [
     "PipelineEdge",
     "PipelineFolder",
     "PipelineSnapshot",
+    "PolicyGate",
+    "PolicyGateDecision",
     "PrimitiveAbuseReport",
     "PrimitiveRating",
     "Publisher",
