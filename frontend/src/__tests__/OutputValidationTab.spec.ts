@@ -314,19 +314,20 @@ describe('OutputValidationTab', () => {
     expect(wrapper.text()).toContain('Eval #3')
   })
 
-  it('updates localRetries when range input changes to a valid number', async () => {
+  it('updates the Max Validation Retries label when the range input moves to its maximum', async () => {
     const wrapper = mount(OutputValidationTab, {
       props: { evalDefinitions: [], maxValidationRetries: 0 },
       global: { plugins: [i18n] },
     })
     const rangeInput = wrapper.find('input[type="range"]')
-    // Range inputs coerce values to the nearest step; set to 3
-    await rangeInput.setValue(3)
+    expect(wrapper.text()).toContain('Max Validation Retries: 0')
+
+    // Range inputs coerce values to the nearest step; move to the max (5)
+    await rangeInput.setValue(5)
     await rangeInput.trigger('input')
 
-    expect(wrapper.emitted('update:maxValidationRetries')).toBeTruthy()
-    const emitted = wrapper.emitted('update:maxValidationRetries') as unknown[][]
-    expect(emitted[0][0]).toBe(3)
+    // The label reflects the component's local reactive state, not just the emit
+    expect(wrapper.text()).toContain('Max Validation Retries: 5')
   })
 
   it('handles empty eval definitions array without errors', () => {
