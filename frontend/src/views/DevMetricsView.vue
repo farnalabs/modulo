@@ -4,7 +4,7 @@
       title="Web Vitals Analytics"
       subtitle="Frontend performance metrics — LCP, FCP, CLS, INP, TTFB"
     >
-      <template #actions>
+      <template #right>
         <select
           v-model="selectedDays"
           class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
