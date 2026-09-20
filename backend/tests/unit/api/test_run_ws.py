@@ -502,3 +502,147 @@ async def test_ws_clamps_large_since_event_seq_to_zero():
     # replay_since was called with 0 (clamped), not 99999
     assert fake_broker.last_replay_seq == 0
     assert ws.sent[0] == {"status": "terminal"}
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_event — edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_event_non_string_detail_passes_through():
+    """Non-string values in detail/error/stall_reason are not scrubbed."""
+    payload = {"error": "RuntimeError", "detail": 42, "stall_reason": ["nested", "list"]}
+    data = _sanitize_event(_event(payload))
+    assert data["payload"]["detail"] == 42
+    assert data["payload"]["stall_reason"] == ["nested", "list"]
+
+
+def test_sanitize_event_no_payload():
+    """RunEvent with empty payload dict — no crash."""
+    data = _sanitize_event(_event({}))
+    assert data["payload"] == {}
+
+
+def test_sanitize_event_payload_not_dict():
+    """If payload is not a dict, it passes through untouched."""
+    event = RunEvent(seq=1, event_type="run_failed", run_id=uuid.uuid4(), payload="not-a-dict")  # type: ignore[arg-type]
+    data = _sanitize_event(event)
+    assert data["payload"] == "not-a-dict"
+
+
+def test_sanitize_event_missing_scrub_keys():
+    """Payload with none of the scrub keys — no crash."""
+    payload = {"output": "all good", "node_id": "n1"}
+    data = _sanitize_event(_event(payload))
+    assert data["payload"] == payload
+
+
+@pytest.mark.asyncio
+async def test_sanitize_event_boundary_seq_zero():
+    """since_event_seq=0 replays all buffered events."""
+    ev1 = _event({"x": 1}, seq=1)
+    ev2 = _event({"x": 2}, seq=2)
+    broker = _FakeBroker(replay=[ev1, ev2], live_items=[None])
+    ws = _FakeWebSocket()
+
+    await _forward_run_events(ws, broker, broker.subscribe(), 0)
+    assert len(ws.sent) == 3  # 2 replay + 1 terminal
+
+
+@pytest.mark.asyncio
+async def test_sanitize_event_exact_boundary_seq():
+    """replay_since(N) returns only events with seq > N."""
+    ev6 = _event({"x": 6}, seq=6)
+    broker = _FakeBroker(replay=[ev6], live_items=[None])  # only seq 6 > 5
+    ws = _FakeWebSocket()
+
+    await _forward_run_events(ws, broker, broker.subscribe(), 5)
+    assert len(ws.sent) == 2  # 1 replay + 1 terminal
+    assert ws.sent[0]["payload"]["x"] == 6
+
+
+# ---------------------------------------------------------------------------
+# _forward_run_events — exception during live forwarding
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_forward_exception_during_queue_get():
+    """A non-WebSocketDisconnect exception from queue.get() propagates out."""
+    queue: asyncio.Queue[RunEvent | None] = asyncio.Queue()
+    # Put a non-None item first, then raise on next get
+    queue.put_nowait(_event({"x": 1}))
+
+    broker = _FakeBroker(replay=[])
+    ws = _FakeWebSocket()
+    call_n = 0
+
+    original_get = queue.get
+
+    async def _get_that_raises():
+        nonlocal call_n
+        call_n += 1
+        if call_n == 1:
+            return await original_get()
+        raise RuntimeError("queue broken")
+
+    queue.get = _get_that_raises  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="queue broken"):
+        await _forward_run_events(ws, broker, queue, 0)
+
+
+# ---------------------------------------------------------------------------
+# run_websocket — default since_event_seq=0
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ws_default_since_event_seq_zero():
+    """Default since_event_seq=0 replays all buffered events."""
+    ws = _FakeWebSocket()
+    run_id = uuid.uuid4()
+    payload = {"sub": "u", "org_id": str(uuid.uuid4()), "account_id": str(uuid.uuid4()), "org_role": "admin"}
+    ev = _event({"step": "ok"}, seq=1)
+    fake_broker = _FakeBroker(replay=[ev], live_items=[None])
+
+    with (
+        patch("modulo.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
+        patch("modulo.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("running")),
+        patch("modulo.api.routes.run_ws.get_registry") as mock_get_reg,
+    ):
+        mock_reg = MagicMock()
+        mock_reg.get_or_create.return_value = fake_broker
+        mock_get_reg.return_value = mock_reg
+        # Call without since_event_seq to use default=0
+        await run_websocket(ws, run_id, token="tok")
+
+    assert fake_broker.last_replay_seq == 0
+    assert ws.sent[0]["payload"]["step"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# run_websocket — since_event_seq=10000 (exact boundary, NOT clamped)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ws_since_event_seq_exact_boundary_not_clamped():
+    """since_event_seq=10000 is NOT clamped (only > 10000 is clamped)."""
+    ws = _FakeWebSocket()
+    run_id = uuid.uuid4()
+    payload = {"sub": "u", "org_id": str(uuid.uuid4()), "account_id": str(uuid.uuid4()), "org_role": "admin"}
+    fake_broker = _FakeBroker(replay=[], live_items=[None])
+
+    with (
+        patch("modulo.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
+        patch("modulo.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("running")),
+        patch("modulo.api.routes.run_ws.get_registry") as mock_get_reg,
+    ):
+        mock_reg = MagicMock()
+        mock_reg.get_or_create.return_value = fake_broker
+        mock_get_reg.return_value = mock_reg
+        await run_websocket(ws, run_id, since_event_seq=10000, token="tok")
+
+    # Should NOT be clamped — replay_since(10000) not replay_since(0)
+    assert fake_broker.last_replay_seq == 10000
