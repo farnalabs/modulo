@@ -62,6 +62,7 @@ from dataclasses import dataclass
 from dataclasses import replace as _dc_replace
 from datetime import UTC, datetime
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard
 
 import jinja2
@@ -124,6 +125,7 @@ from modulo.core.run_context.autonomy import (
     should_skip_hitl_gate,
 )
 from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
+from modulo.core.schema_registry.contract import SCHEMA_CONTRACT_VERSION, read_schema_contract_version
 from modulo.core.schema_registry.rendering import SchemaProfile, render_for_profile
 from modulo.db.crud.hitl_gate_config import human_only_effective
 from modulo.db.lifecycle_refs import (
@@ -3318,6 +3320,40 @@ def _extract_provider_id(backend: Any) -> str | None:
     return backend_id.split("/", 1)[0].lower()
 
 
+async def _resolve_provider_id_from_agent(
+    session_factory: Any,
+    agent_id: uuid.UUID,
+) -> str | None:
+    """Resolve the provider identifier from an agent's model backend.
+
+    Reads the Agent row, then the ModelBackend row, and extracts the
+    provider prefix from the backend's ``provider`` field.  Returns
+    ``None`` on any failure (DB error, missing rows) — never raises.
+    """
+    try:
+        from sqlalchemy import select
+
+        from modulo.db.models.agent import Agent
+        from modulo.db.models.model_backend import ModelBackend
+
+        async with session_factory() as session, session.begin():
+            agent = (await session.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
+            if agent is None:
+                return None
+            mb_id = getattr(agent, "model_backend_id", None)
+            if mb_id is None:
+                return None
+            mb = (await session.execute(select(ModelBackend).where(ModelBackend.id == mb_id))).scalar_one_or_none()
+            if mb is None:
+                return None
+            provider = getattr(mb, "provider", None)
+            if isinstance(provider, str) and provider:
+                return provider.lower()
+    except Exception:
+        _log.debug("contract.provider_resolve_failed", extra={"agent_id": str(agent_id)}, exc_info=True)
+    return None
+
+
 def _resolve_schema_profile(node_def: dict[str, Any]) -> "SchemaProfile | None":
     """Resolve the effective ``schema_profile`` for a node.
 
@@ -6470,6 +6506,7 @@ class _SandboxNodeConfig:
     git_credentials: str | None
     wallclock_budget_seconds: int | None
     output_schema_json: dict[str, Any] | None
+    input_schema_json: dict[str, Any] | None
     sandbox_timeout: int
     stall_timeout_override: Any
     context_files: dict[str, str]
@@ -7668,6 +7705,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # provisioning await so the node fails RETRYABLY within this window.
         # The bound applies to the create await AND the rate-limit backoff sleeps
         # so a retry train cannot stack past the window.
+        # FAR-901: set MODULO_SCHEMA_DIR at sandbox creation time (not per-command).
+        # The env var is set unconditionally — the schema files may or may not be
+        # written (they're advisory), but the env var must be present for any
+        # consumer that checks it.
+        _schema_dir_for_sandbox: dict[str, str] = {
+            "MODULO_SCHEMA_DIR": "/home/user/schemas",
+        }
+
         _provision_timeout = _sandbox_provisioning_timeout()
         try:
             while True:
@@ -7696,6 +7741,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             # exists; the e2b SDK has no native allowlist control).
                             # ``selected`` is functionally equivalent to ``deny_all``
                             # until that point lands.
+                            envs=_schema_dir_for_sandbox,
                             metadata=_metadata or None,
                         ),
                         timeout=min(sandbox_timeout, _provision_timeout),
@@ -7761,6 +7807,84 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             write_path = raw_path.removesuffix(".b64") if raw_path.endswith(".b64") else raw_path
             write_content = base64.b64decode(raw_content).decode() if raw_path.endswith(".b64") else raw_content
             await asyncio.wait_for(sandbox.files.write(write_path, write_content), timeout=_SANDBOX_IO_TIMEOUT)
+
+        # FAR-901: write advisory schema contract files into the sandbox.
+        # The contract is ADVISORY — Modulo validates independently; these
+        # files are inputs for the dispatched runtime's own tooling.
+        _sandbox_schema_dir = "/home/user/schemas"
+        _node_schema_profile: SchemaProfile = _resolve_schema_profile(node_def) or "verbatim"
+        # Resolve the provider_id from the node's agent → model backend.
+        _schema_provider_id: str | None = None
+        _schema_agent_id = _parse_uuid_opt(node_def.get("agent_id"))
+        if _schema_agent_id is not None and session_factory is not None:
+            try:
+                _schema_provider_id = await _resolve_provider_id_from_agent(session_factory, _schema_agent_id)
+            except Exception:
+                _log.debug(
+                    "contract.provider_resolve_failed",
+                    extra={"node_id": node_id, "agent_id": str(_schema_agent_id)},
+                )
+        # Write to a LOCAL temp dir, then upload to the sandbox.  The contract
+        # writer is E2B-decoupled — it writes to a real filesystem Path.
+        _contract_local_tmp: Path | None = None
+        try:
+            import tempfile
+
+            from modulo.core.schema_registry.contract import write_schema_contract
+
+            _contract_local_tmp = Path(tempfile.mkdtemp(prefix="schema_contract_"))
+            _contract_result = write_schema_contract(
+                _contract_local_tmp,
+                node_id=node_id,
+                input_schema=config.input_schema_json,
+                output_schema=config.output_schema_json,
+                profile=_node_schema_profile,
+                provider_id=_schema_provider_id,
+            )
+            if _contract_result.warnings:
+                _log.warning(
+                    "contract.write_warnings",
+                    extra={"node_id": node_id, "warnings": _contract_result.warnings},
+                )
+            # Upload the schema files into the sandbox via the file API.
+            if _contract_result.schema_files_written:
+                _local_schema_dir = _contract_local_tmp / "schemas" / node_id
+                if _local_schema_dir.is_dir():
+                    for _schema_file in _local_schema_dir.iterdir():
+                        if _schema_file.is_file():
+                            _file_content = _schema_file.read_text(encoding="utf-8")
+                            _sandbox_rel = f"{_sandbox_schema_dir}/{node_id}/{_schema_file.name}"
+                            await asyncio.wait_for(
+                                sandbox.files.write(_sandbox_rel, _file_content),
+                                timeout=_SANDBOX_IO_TIMEOUT,
+                            )
+                    # LLM mode: inject schema file paths into the rendered prompt.
+                    if sandbox_mode != "script":
+                        _input_schema_path = f"{_sandbox_schema_dir}/{node_id}/input.active.json"
+                        _output_schema_path = f"{_sandbox_schema_dir}/{node_id}/output.active.json"
+                        _schema_injection = (
+                            f"\n\n---\nSchema contract files (advisory — Modulo validates independently):\n"
+                            f"  Input schema:  {_input_schema_path}\n"
+                            f"  Output schema: {_output_schema_path}\n"
+                            f"  Schema dir:    {_sandbox_schema_dir}/{node_id}/\n"
+                            f"  Environment:   MODULO_SCHEMA_DIR={_sandbox_schema_dir}\n"
+                            f"---"
+                        )
+                        rendered_prompt = rendered_prompt + _schema_injection
+                    _schema_files_written_flag = True
+        except Exception:
+            _log.warning(
+                "contract.sandbox_write_failed",
+                extra={"node_id": node_id},
+                exc_info=True,
+            )
+            _schema_files_written_flag = False
+        finally:
+            # Clean up the local temp dir (best-effort).
+            if _contract_local_tmp is not None:
+                import shutil
+
+                shutil.rmtree(_contract_local_tmp, ignore_errors=True)
 
         # FAR-296 mode split: llm mode writes the rendered prompt to
         # prompt.md; script mode writes the FULL run input (no 10KB
@@ -9409,6 +9533,7 @@ def _build_sandbox_node_config(
             "providers have no egress, resource-limit, or sandbox-policy enforcement point for script mode"
         )
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
+    input_schema_json: dict[str, Any] | None = node_def.get("input_schema_json")
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
     stall_timeout_override: Any = node_def.get("stall_timeout_seconds")
     context_files: dict[str, str] = node_def.get("context_files") or {}
@@ -9510,6 +9635,7 @@ def _build_sandbox_node_config(
         git_credentials=git_credentials,
         wallclock_budget_seconds=wallclock_budget_seconds,
         output_schema_json=output_schema_json,
+        input_schema_json=input_schema_json,
         sandbox_timeout=sandbox_timeout,
         stall_timeout_override=stall_timeout_override,
         context_files=context_files,
@@ -9633,12 +9759,19 @@ def _validate_against_schema(
     schema_version: int = 0,
     repair_budget_config: Any = None,
     _repair_invoke_fn: Any | None = None,
+    schema_dir: "Path | None" = None,
+    node_id: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], Any]:
     """Validate *data* against *schema* using Draft202012Validator.
 
     FAR-899: thin mode-switching dispatcher. Repair orchestration lives in
     ``schema_repair.run_repair_loop``; error-summary formatting in
     ``schema_repair.format_error_summary``.
+
+    FAR-901: when *schema_dir* and *node_id* are provided, reads the on-disk
+    schema contract version via :func:`read_schema_contract_version` and
+    compares it against ``SCHEMA_CONTRACT_VERSION``.  A mismatch triggers a
+    warning (lenient) or an invalidation (strict).
 
     Returns:
         ``(outcome, errors, effective_data)`` where outcome is a
@@ -9663,6 +9796,36 @@ def _validate_against_schema(
     # No schema → nothing to validate
     if not isinstance(schema, dict) or not schema:
         return SchemaValidationOutcome.NO_SCHEMA.value, [], data
+
+    # FAR-901: schema contract version check.
+    # When schema_dir + node_id are provided, read the on-disk contract version
+    # via read_schema_contract_version — the real consumer of that function.
+    # Fall back to the in-memory _schema_contract_version key if the on-disk
+    # file is absent or unreadable.
+    _disk_version: int | None = None
+    if schema_dir is not None and node_id is not None:
+        _disk_version = read_schema_contract_version(schema_dir, node_id)
+    _contract_version: int | None = (
+        _disk_version if _disk_version is not None else schema.get("_schema_contract_version")
+    )
+    if isinstance(_contract_version, int) and _contract_version != SCHEMA_CONTRACT_VERSION:
+        if mode == "lenient":
+            _log.warning(
+                "schema_contract.version_mismatch_lenient",
+                extra={
+                    "schema_id": schema_id,
+                    "found": _contract_version,
+                    "expected": SCHEMA_CONTRACT_VERSION,
+                },
+            )
+        else:
+            # Strict mode: invalidate — the schema is stale and must be
+            # re-rendered for the current contract version.
+            raise OutputSchemaValidationError(
+                f"Schema contract version mismatch (schema={schema_id}): "
+                f"found {_contract_version}, expected {SCHEMA_CONTRACT_VERSION} — "
+                "schema must be re-rendered for the current contract version"
+            )
 
     # Run validation
     is_valid, errors = validate_against_schema(data, schema)
