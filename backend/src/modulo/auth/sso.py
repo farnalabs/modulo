@@ -914,12 +914,37 @@ async def _read_system_saml_provider(system_session: AsyncSession | None) -> Sso
         return await get_enabled_saml_provider(system_session)
 
 
+async def _read_system_saml_provider_by_slug(
+    system_session: AsyncSession | None,
+    provider_id: str,
+) -> SsoProvider | None:
+    """Global (cross-org) SAML provider read by slug via the ``modulo_system`` role.
+
+    Returns ``None`` when the system role is unprovisioned (zero rows), the slug
+    does not match any provider, or the matched provider is not an enabled SAML
+    provider.
+    """
+    if system_session is None:
+        return None
+    async with system_session.begin():
+        provider = await get_provider_by_provider_id(system_session, provider_id)
+        if provider is not None and provider.provider_type == "saml" and provider.enabled:
+            return provider
+    return None
+
+
 async def _resolve_saml_config(
     system_session: AsyncSession | None,
     app_session: AsyncSession | None,
     settings: Settings,
+    *,
+    provider_id: str | None = None,
 ) -> tuple[str, str, str | None, str | None, SsoProvider | None]:
     """Resolve SAML IdP config: system (global) read, then app single-org, then env.
+
+    When ``provider_id`` is given, resolves a SPECIFIC provider by its globally
+    unique slug (FAR-1001). When ``None``, resolves the first enabled SAML
+    provider globally (legacy single-tenant convenience).
 
     The pre-auth SAML routes have no user/org claim. IdP config is
     instance-global, so the primary read goes through the ``modulo_system`` role
@@ -938,10 +963,19 @@ async def _resolve_saml_config(
     client (FAR-517) so the connect is pinned to the validated address rather
     than re-resolved at request time.
     """
-    db_saml = await _read_system_saml_provider(system_session)
-    if db_saml is None and app_session is not None:
-        await _set_default_rls_org(app_session)
-        db_saml = await get_enabled_saml_provider(app_session)
+    if provider_id is not None:
+        # Per-provider resolution (FAR-1001): resolve by globally unique slug.
+        db_saml = await _read_system_saml_provider_by_slug(system_session, provider_id)
+        if db_saml is None and app_session is not None:
+            await _set_default_rls_org(app_session)
+            provider_by_slug = await get_provider_by_provider_id(app_session, provider_id)
+            if provider_by_slug is not None and provider_by_slug.provider_type == "saml" and provider_by_slug.enabled:
+                db_saml = provider_by_slug
+    else:
+        db_saml = await _read_system_saml_provider(system_session)
+        if db_saml is None and app_session is not None:
+            await _set_default_rls_org(app_session)
+            db_saml = await get_enabled_saml_provider(app_session)
     if db_saml is not None:
         idp_metadata = db_saml.metadata_xml or None
         if not idp_metadata and db_saml.metadata_url:
@@ -958,7 +992,14 @@ async def _resolve_saml_config(
                 raise ValueError("Failed to fetch SAML IdP metadata from provider metadata_url") from exc
         if not idp_metadata:
             raise ValueError("SAML provider is missing IdP metadata (set metadata_xml or metadata_url)")
-        entity_id = db_saml.entity_id or settings.modulo_saml_entity_id or "modulo"
+        # Per-provider entity_id default (FAR-1001): when the DB provider
+        # has no entity_id set, default to {public_url}/saml/{provider_id}
+        # for per-provider routes, or the legacy env setting for singleton.
+        if provider_id is not None:
+            default_entity = f"{settings.modulo_public_url.rstrip('/')}/api/v1/auth/saml/{provider_id}"
+        else:
+            default_entity = settings.modulo_saml_entity_id or "modulo"
+        entity_id = db_saml.entity_id or default_entity
         sp_key = settings.modulo_saml_sp_private_key or None
         sp_cert = settings.modulo_saml_sp_x509_cert or None
         return idp_metadata, entity_id, sp_key, sp_cert, db_saml
@@ -987,6 +1028,8 @@ async def saml_get_auth_url(
     acs_url: str,
     system_session: AsyncSession | None,
     app_session: AsyncSession | None = None,
+    *,
+    provider_id: str | None = None,
 ) -> tuple[str, str]:
     """Generate a SAML AuthnRequest using python3-saml and return (IdP redirect URL, _).
 
@@ -994,13 +1037,17 @@ async def saml_get_auth_url(
     and encoding. The second return value (request_id) is no longer used by the
     caller but kept for API compatibility.
 
+    When ``provider_id`` is given, resolves the SPECIFIC provider by its globally
+    unique slug (FAR-1001). When ``None``, resolves the first enabled SAML
+    provider globally (legacy single-tenant convenience).
+
     Resolves IdP config through the sso_providers DB table first (preferred, since
     the admin UI writes there); falls back to env-var config for backward
     compatibility. Provider resolution uses the system session (``modulo_system``
     role, instance-global) so multi-org deployments resolve the correct IdP.
     """
     idp_metadata, entity_id, sp_key, sp_cert, _db_saml = await _resolve_saml_config(
-        system_session, app_session, settings
+        system_session, app_session, settings, provider_id=provider_id
     )
     handler = ModuloSamlAuth(
         entity_id=entity_id,
@@ -1067,6 +1114,8 @@ async def saml_process_response(
     settings: Settings,
     system_session: AsyncSession | None,
     app_session: AsyncSession | None,
+    *,
+    provider_id: str | None = None,
 ) -> dict[str, str]:
     """Validate a SAML Response using python3-saml and issue tokens.
 
@@ -1075,6 +1124,10 @@ async def saml_process_response(
     implementation), plus condition validation, audience restriction, and
     clock-skew management.
 
+    When ``provider_id`` is given, resolves the SPECIFIC provider by its globally
+    unique slug (FAR-1001). When ``None``, resolves the first enabled SAML
+    provider globally (legacy single-tenant convenience).
+
     Resolves IdP metadata from the sso_providers DB table first (preferred, since
     the admin UI writes there); falls back to env-var config for backward
     compatibility. Provider resolution uses the system session (``modulo_system``
@@ -1082,7 +1135,7 @@ async def saml_process_response(
     RLS-scoped to the resolved provider's org (or first-org fallback).
     """
     idp_metadata, entity_id, sp_key, sp_cert, db_saml = await _resolve_saml_config(
-        system_session, app_session, settings
+        system_session, app_session, settings, provider_id=provider_id
     )
 
     try:
@@ -1090,7 +1143,12 @@ async def saml_process_response(
     except (ElementTree.ParseError, ValueError) as exc:
         raise ValueError(f"Failed to parse IdP metadata: {exc}") from None
 
-    acs_url = f"{settings.modulo_public_url.rstrip('/')}/api/v1/auth/saml/acs"
+    public_url = settings.modulo_public_url.rstrip("/")
+    # Per-provider ACS URL (FAR-1001) when provider_id is given; legacy
+    # singleton ACS URL for the single-tenant convenience path.
+    acs_url = (
+        f"{public_url}/api/v1/auth/saml/acs/{provider_id}" if provider_id else f"{public_url}/api/v1/auth/saml/acs"
+    )
     _validate_saml_response_destination(saml_response, acs_url)
     handler = ModuloSamlAuth(
         entity_id=entity_id,

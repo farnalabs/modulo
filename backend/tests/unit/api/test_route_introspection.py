@@ -93,6 +93,7 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/auth/refresh"): "auth (no principal)",
     ("POST", "/api/v1/auth/logout"): "auth (refresh-token auth)",
     ("POST", "/api/v1/auth/saml/acs"): "SAML ACS (IdP session)",
+    ("POST", "/api/v1/auth/saml/acs/{provider_id}"): "SAML ACS (IdP session)",
     # FAR-461: pre-enrollment token consumption happens before any principal
     # exists (the token IS the credential), so it cannot carry a permission tag.
     ("POST", "/api/v1/auth/accept-invite"): "auth (no principal - pre-enrollment token consumption)",
