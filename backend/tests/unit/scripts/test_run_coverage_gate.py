@@ -29,6 +29,10 @@ mod = module_from_spec(spec_from_loader("run_coverage_gate", _loader))
 sys.modules[mod.__name__] = mod  # register before exec so @dataclass works
 _loader.exec_module(mod)
 
+_REPO_ROOT = script_path.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from scripts.git_hook_env import GIT_HOOK_CONTEXT_VARS  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Captured real diff-cover 10.5.1 output (--compare-branch=origin/main).
@@ -1113,15 +1117,7 @@ _GIT_TIMEOUT_SECS = 60
 # Git hook-context variables injected by pre-commit / git when running
 # inside a hook.  When these leak into a scratch-repo subprocess, git
 # ignores cwd and targets the real repo — causing the scratch commit to
-# fail.  Strip them from every scratch-repo env.
-_GIT_HOOK_CONTEXT_VARS = (
-    "GIT_DIR",
-    "GIT_INDEX_FILE",
-    "GIT_WORK_TREE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-)
+# fail.  The shared list lives in scripts/git_hook_env.py (FAR-835 review).
 
 
 def _scratch_git_env() -> dict[str, str]:
@@ -1130,7 +1126,7 @@ def _scratch_git_env() -> dict[str, str]:
     Inherits the current process environment but strips git hook-context
     variables that would redirect git commands to the enclosing repo.
     """
-    return {k: v for k, v in os.environ.items() if k not in _GIT_HOOK_CONTEXT_VARS}
+    return {k: v for k, v in os.environ.items() if k not in GIT_HOOK_CONTEXT_VARS}
 
 
 def _git(repo: Path, env: dict[str, str], *args: str) -> None:
@@ -1600,6 +1596,122 @@ class TestBranchParserIntegration:
         assert total == 0
         assert unmeasured == 2
 
+    # ------------------------------------------------------------------
+    # Realistic report-path alignment (the branch gate could only ever pass
+    # vacuously or fail with a false 0% before this fix).
+    # ------------------------------------------------------------------
+    def test_compute_branch_coverage_matches_python_source_root_relative_key(self, tmp_path):
+        """coverage.py emits Cobertura filenames relative to its source root.
+
+        This repo runs ``--cov=src/modulo`` from ``backend/``, so a changed
+        ``backend/src/modulo/core/foo.py`` appears in the report as
+        ``core/foo.py``.  Before the path-alignment fix the lookup was a plain
+        dict get on the repo-relative key, so every branch record was
+        discarded and the file scored 0%.
+        """
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="core/foo.py"><lines>'
+            '<line number="1" hits="1" branch="true" condition-coverage="50% (1/2)">'
+            '<conditions><condition number="0" type="jump" coverage="100%"/>'
+            '<condition number="1" type="jump" coverage="0%"/></conditions></line>'
+            '<line number="2" hits="1" branch="true" condition-coverage="100% (1/1)">'
+            '<conditions><condition number="0" type="jump" coverage="100%"/></conditions></line>'
+            "</lines></class></classes></package></packages></coverage>"
+        )
+        git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
+        with patch.object(mod.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
+                {"backend/src/modulo/core/foo.py": 2}, xml, "origin/main", "Python"
+            )
+        assert covered == 2
+        assert total == 3
+        assert unmeasured == 0
+
+    def test_compute_branch_coverage_matches_python_backend_relative_key(self, tmp_path):
+        """A report path relative to ``backend/`` also aligns to the repo key."""
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="src/modulo/foo.py"><lines>'
+            '<line number="1" hits="1" branch="true" condition-coverage="100% (1/1)">'
+            '<conditions><condition number="0" type="jump" coverage="100%"/></conditions></line>'
+            "</lines></class></classes></package></packages></coverage>"
+        )
+        git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
+        with patch.object(mod.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
+                {"backend/src/modulo/foo.py": 2}, xml, "origin/main", "Python"
+            )
+        assert covered == 1
+        assert total == 1
+        assert unmeasured == 1
+
+    def test_compute_branch_coverage_matches_absolute_js_report_key(self, tmp_path):
+        """The normalised LCOV report carries absolute ``SF:`` paths.
+
+        ``main`` rewrites the frontend report via ``_normalize_js_report``
+        before evaluation, so branch data arrives keyed by absolute path while
+        the diff keys are ``frontend/src/...``.  Before the path-alignment fix
+        a changed JS production file failed the branch gate at a false 0%.
+        """
+        abs_key = (mod.REPO_ROOT / "frontend" / "src" / "app.ts").as_posix()
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text(f"TN:\nSF:{abs_key}\nBRDA:1,0,0,1\nBRDA:1,0,1,-\nBRDA:2,0,0,3\nend_of_record\n")
+        git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
+        with patch.object(mod.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
+                {"frontend/src/app.ts": 2}, lcov, "origin/main", "JavaScript"
+            )
+        assert covered == 2
+        assert total == 3
+        assert unmeasured == 0
+
+    def test_compute_branch_coverage_absolute_js_all_not_taken(self, tmp_path):
+        """Realistic path + every branch ``taken='-'`` -> 0% but NOT unmeasured.
+
+        This is the all-taken-``'-'`` arm of the branch gate: the branches
+        exist on changed lines and were never executed, so the total is real
+        and the coverage is a genuine 0% (not a vacuous pass).
+        """
+        abs_key = (mod.REPO_ROOT / "frontend" / "src" / "app.ts").as_posix()
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text(f"TN:\nSF:{abs_key}\nBRDA:1,0,0,-\nBRDA:1,0,1,-\nend_of_record\n")
+        git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
+        with patch.object(mod.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
+                {"frontend/src/app.ts": 2}, lcov, "origin/main", "JavaScript"
+            )
+        assert covered == 0
+        assert total == 2
+        assert unmeasured == 1
+
+    def test_compute_branch_coverage_no_match_with_realistic_paths(self, tmp_path):
+        """A report file that is not a changed production file stays unmeasured."""
+        abs_key = (mod.REPO_ROOT / "frontend" / "src" / "other.ts").as_posix()
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text(f"TN:\nSF:{abs_key}\nBRDA:1,0,0,1\nend_of_record\n")
+        git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
+        with patch.object(mod.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
+                {"frontend/src/new.ts": 2}, lcov, "origin/main", "JavaScript"
+            )
+        assert covered == 0
+        assert total == 0
+        assert unmeasured == 2
+
+    def test_match_report_key_rejects_ambiguous_suffix(self):
+        """A bare basename matching multiple changed files must not cross-attribute."""
+        changed = ["backend/src/modulo/a/foo.py", "backend/src/modulo/b/foo.py"]
+        assert mod._match_report_key_to_changed("foo.py", changed, "Python") is None
+        assert mod._match_report_key_to_changed("a/foo.py", changed, "Python") == "backend/src/modulo/a/foo.py"
+
 
 # ---------------------------------------------------------------------------
 # Project-wide floor tests
@@ -1636,16 +1748,36 @@ class TestProjectWideMetrics:
     def test_cobertura_empty(self, tmp_path):
         xml = tmp_path / "coverage.xml"
         xml.write_text("<coverage/>")
-        assert mod._compute_project_wide_metrics_cobertura(xml) == (0.0, 0.0)
+        # No branch records at all -> branch is None (absent), not 0.0.
+        assert mod._compute_project_wide_metrics_cobertura(xml) == (0.0, None)
 
     def test_lcov_empty(self, tmp_path):
         lcov = tmp_path / "lcov.info"
         lcov.write_text("TN:\nend_of_record\n")
-        assert mod._compute_project_wide_metrics_lcov(lcov) == (0.0, 0.0)
+        assert mod._compute_project_wide_metrics_lcov(lcov) == (0.0, None)
+
+    def test_cobertura_zero_branch_with_data_is_zero_not_absent(self, tmp_path):
+        """Branch records that exist but are all uncovered report 0.0, not None."""
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>'
+            '<line number="1" hits="0" branch="true" condition-coverage="0% (0/1)">'
+            '<conditions><condition number="0" type="jump" coverage="0%"/></conditions></line>'
+            "</lines></class></classes></package></packages></coverage>"
+        )
+        assert mod._compute_project_wide_metrics_cobertura(xml) == (0.0, 0.0)
 
 
 class TestProjectWideFloor:
-    def test_project_line_below_floor(self, tmp_path):
+    def test_project_below_floor_skipped_when_no_production_changes(self, tmp_path):
+        """No production changes -> all languages skip -> floor is not enforced.
+
+        The project floor is a guard on coverage the PR could have changed.
+        A docs/test-only diff changes no production lines, so the gate skips
+        entirely and the floor (which reflects main's coverage) must not fail
+        the PR.  This is the deliberate all-skipped short-circuit.
+        """
         xml = tmp_path / "coverage.xml"
         lines = "\n".join('<line number="{}" hits="{}"/>'.format(i, "1" if i <= 80 else "0") for i in range(1, 101))
         xml.write_text(
@@ -1654,6 +1786,95 @@ class TestProjectWideFloor:
         )
         with (
             patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 0
+
+    def test_project_line_below_floor_fails(self, tmp_path, capsys):
+        """Production changes + project line coverage below floor -> exit 1.
+
+        The floor-failure path (exit 1) was untested: the old
+        ``test_project_line_below_floor`` drove the all-skipped short-circuit.
+        Here a Python production file changes (tiny diff, so the changed-lines
+        gate passes) while the whole-project line rate (80%) sits below the
+        88% floor -> the run must fail.
+        """
+        xml = tmp_path / "coverage.xml"
+        lines = "\n".join('<line number="{}" hits="{}"/>'.format(i, "1" if i <= 80 else "0") for i in range(1, 101))
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+
+        def fake_changed(compare_branch, language):
+            return {"backend/src/modulo/x.py": 1} if language == "Python" else {}
+
+        with (
+            patch.object(mod, "_get_changed_production_files", side_effect=fake_changed),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "FAIL: Python line" in out
+        assert "WARNING" not in out
+
+    def test_project_branch_zero_with_data_fails(self, tmp_path):
+        """Branch records present but all uncovered (0%) -> floor failure.
+
+        ``pb > 0`` excluded a genuine 0% branch rate from the floor, exactly
+        the "all branches uncovered" case the per-PR branch gate treats as a
+        real failure (not vacuous).  With line coverage above the floor and
+        branch at 0% with data, the run must fail.
+        """
+        xml = tmp_path / "coverage.xml"
+        lines = "\n".join(
+            f'<line number="{i}" hits="1" branch="true" '
+            'condition-coverage="0% (0/1)">'
+            '<conditions><condition number="0" type="jump" '
+            'coverage="0%"/></conditions></line>'
+            for i in range(1, 101)
+        )
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+
+        def fake_changed(compare_branch, language):
+            return {"backend/src/modulo/x.py": 1} if language == "Python" else {}
+
+        with (
+            patch.object(mod, "_get_changed_production_files", side_effect=fake_changed),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1
+
+    def test_project_no_branch_data_does_not_fail(self, tmp_path):
+        """No branch records at all -> branch floor is not enforced."""
+        xml = tmp_path / "coverage.xml"
+        lines = "\n".join(f'<line number="{i}" hits="1"/>' for i in range(1, 101))
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+
+        def fake_changed(compare_branch, language):
+            return {"backend/src/modulo/x.py": 1} if language == "Python" else {}
+
+        with (
+            patch.object(mod, "_get_changed_production_files", side_effect=fake_changed),
             patch(
                 "sys.argv",
                 ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],

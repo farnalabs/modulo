@@ -16,19 +16,11 @@ from pathlib import Path
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 BACKEND_DIR = str(Path(REPO_ROOT) / "backend")
 
-# Git hook-context variables injected by pre-commit / git when running
-# inside a hook.  These must be stripped from the subprocess environment so
-# that any scratch-repo test (e.g. tests that call ``git init`` in a
-# tmp_path) does not inherit the enclosing repo's git context and silently
-# target the wrong repository.
-_GIT_HOOK_CONTEXT_VARS = (
-    "GIT_DIR",
-    "GIT_INDEX_FILE",
-    "GIT_WORK_TREE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-)
+# The shared hook-context helper lives in ``scripts/``; ensure the repo root is
+# importable when this file is executed directly as a script.
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+from scripts.git_hook_env import strip_git_hook_context_vars
 
 
 def _changed_unit_tests() -> list[str]:
@@ -69,8 +61,11 @@ def main() -> int:
     print(f"Running tests for changed files: {' '.join(test_paths)}", file=sys.stderr)
 
     cmd = ["uv", "run", "--no-sync", "python", "-m", "pytest", "--tb=short", "-q", "--timeout=120", *test_paths]
-    env = {k: v for k, v in os.environ.items() if k not in _GIT_HOOK_CONTEXT_VARS}
-    env.setdefault("HOME", env.get("USERPROFILE", ""))
+    env = strip_git_hook_context_vars(os.environ)
+    # Only fall back to USERPROFILE when HOME is genuinely absent (Windows);
+    # an empty HOME breaks uv/git resolution in the subprocess.
+    if "HOME" not in env and "USERPROFILE" in env:
+        env["HOME"] = env["USERPROFILE"]
     result = subprocess.run(cmd, cwd=BACKEND_DIR, check=False, env=env)
     if result.returncode != 0:
         print("FAILED: Changed tests did not pass", file=sys.stderr)

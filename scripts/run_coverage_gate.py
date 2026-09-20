@@ -841,6 +841,75 @@ def _compute_branch_coverage(
     return branch_covered, branch_total, branch_unmeasured
 
 
+def _match_report_key_to_changed(
+    raw_key: str,
+    changed_files: Iterable[str],
+    language: str,
+    js_src_root: str = DEFAULT_JS_SRC_ROOT,
+) -> str | None:
+    """Return the repo-relative changed-file key that *raw_key* names.
+
+    Coverage reports do not carry repo-relative paths.  coverage.py emits
+    Cobertura ``filename`` values relative to its ``source`` root (this repo:
+    ``src/modulo``), and vitest emits LCOV ``SF:`` values relative to
+    ``frontend/`` (the gate normalises the report to absolute paths before
+    evaluation).  The changed-file keys from ``git diff`` are always
+    repo-relative (``backend/src/modulo/...``, ``frontend/src/...``), so a
+    naive ``branch_data.get(filepath)`` never matches and every changed JS /
+    Python production file is scored as ``branch_total == 0`` — a false 0%
+    branch failure regardless of real coverage.  Resolve *raw_key* into the
+    changed-file namespace by exact match, then by a unique path-segment
+    suffix match; return ``None`` when nothing matches.
+    """
+    changed = {path.replace("\\", "/") for path in changed_files}
+    normalized = raw_key.replace("\\", "/")
+    candidates: list[str] = []
+    if Path(normalized).is_absolute():
+        with contextlib.suppress(ValueError, OSError):
+            candidates.append(Path(normalized).resolve().relative_to(REPO_ROOT).as_posix())
+    else:
+        candidates.append(normalized)
+        prefix = "backend" if language == "Python" else js_src_root
+        candidates.append(f"{prefix}/{normalized}")
+
+    for candidate in candidates:
+        if candidate in changed:
+            return candidate
+
+    # The report path may be relative to a deeper source root (coverage.py
+    # relativises to ``src/modulo``), so ``core/foo.py`` names
+    # ``backend/src/modulo/core/foo.py``.  Match on whole path segments and
+    # require a unique hit so a shared basename can never cross-attribute.
+    for candidate in sorted(candidates, key=len, reverse=True):
+        suffix = "/" + candidate.lstrip("/")
+        matches = [path for path in changed if path == candidate or path.endswith(suffix)]
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
+def _normalize_branch_data_keys(
+    branch_data: dict[str, dict[int, tuple[int, int]]],
+    changed_files: Iterable[str],
+    language: str,
+    js_src_root: str = DEFAULT_JS_SRC_ROOT,
+) -> dict[str, dict[int, tuple[int, int]]]:
+    """Re-key raw report branch data onto the repo-relative changed-file keys.
+
+    Report entries that do not correspond to a changed production file can
+    never contribute to the gate and are dropped.  Entries that map to the
+    same changed file are merged, so a report listing a file under more than
+    one spelling counts each line only once.
+    """
+    normalized: dict[str, dict[int, tuple[int, int]]] = {}
+    for raw_key, line_branches in branch_data.items():
+        target = _match_report_key_to_changed(raw_key, changed_files, language, js_src_root)
+        if target is None:
+            continue
+        normalized.setdefault(target, {}).update(line_branches)
+    return normalized
+
+
 def _compute_branch_coverage_from_raw(
     changed_files: dict[str, int],
     report_path: Path | None,
@@ -850,7 +919,10 @@ def _compute_branch_coverage_from_raw(
     """Parse raw coverage report and compute branch coverage on changed lines.
 
     Uses ``git diff --unified=0`` to find the exact added line numbers, then
-    intersects with branch records from the raw report.
+    intersects with branch records from the raw report.  Report file keys are
+    re-aligned to the repo-relative changed-file keys (see
+    :func:`_normalize_branch_data_keys`) because the report's paths come from
+    a different working directory than the diff.
 
     Returns ``(branch_covered, branch_total, branch_unmeasured)``.
     """
@@ -880,7 +952,10 @@ def _compute_branch_coverage_from_raw(
         except Exception:  # noqa: S112 — best-effort per-file parse, skip on any error
             continue
 
-    branch_data = _parse_cobertura_branches(report_path) if language == "Python" else _parse_lcov_branches(report_path)
+    raw_branch_data = (
+        _parse_cobertura_branches(report_path) if language == "Python" else _parse_lcov_branches(report_path)
+    )
+    branch_data = _normalize_branch_data_keys(raw_branch_data, changed_files, language)
 
     branch_covered = 0
     branch_total = 0
@@ -903,10 +978,15 @@ def _compute_branch_coverage_from_raw(
     return branch_covered, branch_total, branch_unmeasured
 
 
-def _compute_project_wide_metrics_cobertura(report_path: Path) -> tuple[float, float] | None:
+def _compute_project_wide_metrics_cobertura(report_path: Path) -> tuple[float, float | None] | None:
     """Compute project-wide line and branch coverage from Cobertura XML.
 
     Returns ``(line_pct, branch_pct)`` or ``None`` on parse error.
+    ``branch_pct`` is ``None`` when the report carries no branch records at
+    all (no branch data to measure), which is distinct from ``0.0`` (branch
+    records exist but none are covered).  The caller must not treat the two
+    as equivalent: the project floor is only meaningful when branch data
+    actually exists.
     """
     try:
         tree = ET.parse(str(report_path))  # noqa: S314 — internal trusted report
@@ -928,14 +1008,16 @@ def _compute_project_wide_metrics_cobertura(report_path: Path) -> tuple[float, f
                 if cond.get("coverage") == "100%":
                     covered_conditions += 1
     line_pct = (covered_lines / total_lines * 100.0) if total_lines else 0.0
-    branch_pct = (covered_conditions / total_conditions * 100.0) if total_conditions else 0.0
+    branch_pct = (covered_conditions / total_conditions * 100.0) if total_conditions else None
     return line_pct, branch_pct
 
 
-def _compute_project_wide_metrics_lcov(report_path: Path) -> tuple[float, float] | None:
+def _compute_project_wide_metrics_lcov(report_path: Path) -> tuple[float, float | None] | None:
     """Compute project-wide line and branch coverage from LCOV.
 
     Returns ``(line_pct, branch_pct)`` or ``None`` on parse error.
+    ``branch_pct`` is ``None`` when the report carries no ``BRDA`` records at
+    all — see :func:`_compute_project_wide_metrics_cobertura`.
     """
     try:
         lines = report_path.read_text(encoding="utf-8").splitlines()
@@ -960,7 +1042,7 @@ def _compute_project_wide_metrics_lcov(report_path: Path) -> tuple[float, float]
                 if taken_str not in ("-", "") and float(taken_str) > 0:
                     hit_branches += 1
     line_pct = (hit_lines / total_lines * 100.0) if total_lines else 0.0
-    branch_pct = (hit_branches / total_branches * 100.0) if total_branches else 0.0
+    branch_pct = (hit_branches / total_branches * 100.0) if total_branches else None
     return line_pct, branch_pct
 
 
@@ -1514,31 +1596,33 @@ def main() -> int:
         py_metrics = _compute_project_wide_metrics_cobertura(python_report)
         if py_metrics is not None:
             pl, pb = py_metrics
-            project_metrics.append(f"  Python project-wide: line {pl:.1f}%, branch {pb:.1f}%")
+            branch_display = f"{pb:.1f}%" if pb is not None else "n/a (no branch data)"
+            project_metrics.append(f"  Python project-wide: line {pl:.1f}%, branch {branch_display}")
             if pl < MIN_PROJECT_LINE_COVERAGE:
                 project_floor_failed = True
                 project_metrics.append(
-                    f"  WARNING: Python line {pl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — raise floor or fix coverage"
+                    f"  FAIL: Python line {pl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — coverage regressed below floor"
                 )
-            if pb < MIN_PROJECT_BRANCH_COVERAGE and pb > 0:
+            if pb is not None and pb < MIN_PROJECT_BRANCH_COVERAGE:
                 project_floor_failed = True
                 project_metrics.append(
-                    f"  WARNING: Python branch {pb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — raise floor or fix coverage"
+                    f"  FAIL: Python branch {pb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — coverage regressed below floor"
                 )
     if js_report is not None and js_report.exists():
         js_metrics = _compute_project_wide_metrics_lcov(js_report)
         if js_metrics is not None:
             jl, jb = js_metrics
-            project_metrics.append(f"  JavaScript project-wide: line {jl:.1f}%, branch {jb:.1f}%")
+            branch_display = f"{jb:.1f}%" if jb is not None else "n/a (no branch data)"
+            project_metrics.append(f"  JavaScript project-wide: line {jl:.1f}%, branch {branch_display}")
             if jl < MIN_PROJECT_LINE_COVERAGE:
                 project_floor_failed = True
                 project_metrics.append(
-                    f"  WARNING: JavaScript line {jl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — raise floor or fix coverage"
+                    f"  FAIL: JavaScript line {jl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — coverage regressed below floor"
                 )
-            if jb < MIN_PROJECT_BRANCH_COVERAGE and jb > 0:
+            if jb is not None and jb < MIN_PROJECT_BRANCH_COVERAGE:
                 project_floor_failed = True
                 project_metrics.append(
-                    f"  WARNING: JavaScript branch {jb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — raise floor or fix coverage"
+                    f"  FAIL: JavaScript branch {jb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — coverage regressed below floor"
                 )
 
     # --- Summary ---
