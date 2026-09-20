@@ -51,6 +51,8 @@ bdd:
   - backend/tests/bdd/steps/test_sharepoint_connector.py
   - backend/tests/bdd/features/connectors/swappable_binding.feature
   - backend/tests/bdd/steps/test_pipeline_connector_binding.py
+  - backend/tests/bdd/features/connectors/connector_crud.feature
+  - backend/tests/bdd/steps/test_connector_crud.py
 depends-on:
   - feat-model-backends
 status: covered
@@ -185,15 +187,37 @@ and per-destination rate limiting.
       `extract_connector_bindings` + `GraphValidator.validate_definition`
       surfaces (`swappable_binding.feature`,
       `steps/test_pipeline_connector_binding.py`)
+- [x] The connector instance CRUD lifecycle is BDD-exercised against the real
+      admin API: create (201) Fernet-encrypts credentials at rest and never
+      echoes them, malformed REST credentials / config are rejected at the
+      boundary (422), a connector is retrievable individually and in the
+      paginated list (200) without exposing credentials, PATCH re-encrypts
+      fresh credentials (200), DELETE removes the instance (204), and a
+      foreign-org connector resolves to 404 before any read/update/delete
+      (`connector_crud.feature`, `steps/test_connector_crud.py`)
 
 ## Known Gaps
 
 - Per-item fan-out outcome trace spans are deferred to FAR-404 (operation-level
   OTel spans shipped in v1).
-- No BDD for connector CRUD lifecycle (create/update/delete via admin API);
-  coverage is via unit tests.
 
 ## QA History
+- 2026-09-20: **improve-architecture (product-map walk)** — closed the last
+  `feat-connectors` BDD gap, "No BDD for connector CRUD lifecycle
+  (create/update/delete via admin API)". Registered the new
+  `connectors/connector_crud.feature` into the executing BDD suite from the new
+  `steps/test_connector_crud.py`, driving the real `/api/v1/connectors`
+  create / get / list / PATCH / delete routes with only the DB CRUD + RLS
+  seams patched (the TestClient + mock-org-session pattern of the
+  `test_connector_endpoint.py` unit suite): 9 scenarios — create (201) with
+  credentials Fernet-encrypted at rest and never echoed (the captured
+  ciphertext round-trips to the exact credential), malformed REST credentials
+  (422) and invalid REST `on_unknown` config (422) rejected at the boundary,
+  individual retrieval (200, redacted) and list (200, paginated + redacted),
+  foreign-org fetch 404, PATCH re-encrypting fresh REST credentials into an
+  appended ciphertext (200), and DELETE removing the instance (204) with a
+  foreign-org delete 404 — all collect and execute. `_ORPHANED_BDD_FEATURES`
+  stays empty.
 - 2026-09-16: **improve-architecture (product-map walk)** — closed the last
   connector BDD orphan, `connectors/swappable_binding.feature` (a stale
   placeholder draft whose steps did not exist). It was rewritten into an
