@@ -511,3 +511,320 @@ describe('AdminAuditView — exports', () => {
     expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(false)
   })
 })
+
+// ---- Branch coverage: formatActor various paths ----
+describe('AdminAuditView — formatActor branches', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('renders a dash when actor_user_id is null and no actor label', async () => {
+    mockAuditGet([auditEvent('evt-no-actor', { actor_user_id: null, payload_json: {} })])
+    const wrapper = await mountLoaded()
+    const cell = wrapper.find('[data-testid="admin-audit-event-row-evt-no-actor"]')
+    expect(cell.text()).toContain('—')
+  })
+
+  it('renders the semantic actor label from payload_json', async () => {
+    mockAuditGet([auditEvent('evt-sys', { actor_user_id: null, payload_json: { actor: 'system' } })])
+    const wrapper = await mountLoaded()
+    expect(wrapper.text()).toContain('system')
+  })
+})
+
+// ---- Branch coverage: summarize various paths ----
+describe('AdminAuditView — summarize branches', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('uses the backend summary when present', async () => {
+    mockAuditGet([auditEvent('evt-sum', { payload_json: { summary: 'Custom summary' } })])
+    const wrapper = await mountLoaded()
+    expect(wrapper.text()).toContain('Custom summary')
+  })
+
+  it('falls back to heuristic when no backend summary', async () => {
+    mockAuditGet([auditEvent('evt-heur', { event_type: 'pipeline.created', resource_type: 'pipeline', payload_json: { name: 'My Pipeline' } })])
+    const wrapper = await mountLoaded()
+    expect(wrapper.text()).toContain('Created pipeline')
+    expect(wrapper.text()).toContain('"My Pipeline"')
+  })
+
+  it('falls back to heuristic with no name or display_name', async () => {
+    mockAuditGet([auditEvent('evt-noname', { event_type: 'user.created', resource_type: 'user', payload_json: {} })])
+    const wrapper = await mountLoaded()
+    expect(wrapper.text()).toContain('Created user')
+  })
+
+  it('falls back to heuristic when event_type has no dot', async () => {
+    mockAuditGet([auditEvent('evt-nodot', { event_type: 'customaction', resource_type: 'thing', payload_json: {} })])
+    const wrapper = await mountLoaded()
+    expect(wrapper.text()).toContain('Customaction thing')
+  })
+})
+
+// ---- Branch coverage: badgeClass various event types ----
+describe('AdminAuditView — badgeClass branches', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('applies the correct badge class for each event type prefix', async () => {
+    const eventTypes = [
+      { type: 'pipeline.created', expected: 'badge-context-blue' },
+      { type: 'run.completed', expected: 'badge-status-success' },
+      { type: 'run.failed', expected: 'badge-status-destructive' },
+      { type: 'run.cancelled', expected: 'badge-status-warning' },
+      { type: 'user.created', expected: 'badge-context-purple' },
+      { type: 'team.created', expected: 'badge-context-indigo' },
+      { type: 'schema.created', expected: 'badge-context-cyan' },
+      { type: 'connector.created', expected: 'badge-context-orange' },
+      { type: 'model_backend.created', expected: 'badge-context-pink' },
+      { type: 'sso_provider.created', expected: 'badge-context-slate' },
+      { type: 'settings.updated', expected: 'badge-context-slate' },
+      { type: 'api_key.created', expected: 'badge-context-rose' },
+      { type: 'export.csv', expected: 'badge-context-blue' },
+    ]
+    for (const { type, expected } of eventTypes) {
+      mockAuditGet([auditEvent('evt-' + type.replace('.', '-'), { event_type: type })])
+      const wrapper = mountView()
+      await nextTick()
+      const badge = wrapper.find('.badge')
+      expect(badge.classes()).toContain(expected)
+      wrapper.unmount()
+    }
+  })
+})
+
+// ---- Branch coverage: formatTimestamp null ----
+describe('AdminAuditView — formatTimestamp null', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('renders a dash for null timestamp', async () => {
+    mockAuditGet([auditEvent('evt-null-ts', { created_at: null })])
+    const wrapper = mountView()
+    await nextTick()
+    expect(wrapper.text()).toContain('—')
+  })
+})
+
+// ---- Branch coverage: expanded row conditional branches ----
+describe('AdminAuditView — expanded row conditional branches', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('hides details when payload_json is empty', async () => {
+    mockAuditGet([auditEvent('evt-empty-payload', { payload_json: {} })])
+    const wrapper = await mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-audit-event-row-evt-empty-payload"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(false)
+  })
+
+  it('hides previous_hash and request_id sections when absent', async () => {
+    mockAuditGet([auditEvent('evt-no-hash', { previous_hash: null, request_id: null })])
+    const wrapper = await mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-audit-event-row-evt-no-hash"]').trigger('click')
+    await nextTick()
+    expect(wrapper.text()).not.toContain('Previous Hash')
+    expect(wrapper.text()).not.toContain('Request ID')
+  })
+
+  it('shows previous_hash and request_id when present', async () => {
+    mockAuditGet([auditEvent('evt-with-hash', { previous_hash: 'abc12345', request_id: 'req-999' })])
+    const wrapper = await mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-audit-event-row-evt-with-hash"]').trigger('click')
+    await nextTick()
+    expect(wrapper.text()).toContain('Previous Hash')
+    expect(wrapper.text()).toContain('Request ID')
+    expect(wrapper.text()).toContain('#abc12345')
+  })
+
+  it('hides resource_id when absent', async () => {
+    mockAuditGet([auditEvent('evt-no-res', { resource_id: null })])
+    const wrapper = mountView()
+    await nextTick()
+    const cell = wrapper.find('[data-testid="admin-audit-event-row-evt-no-res"]')
+    expect(cell.text()).toContain('—')
+  })
+})
+
+// ---- Branch coverage: verifyChain catch path ----
+describe('AdminAuditView — verifyChain catch path', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('catches a network error and shows broken chain', async () => {
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/audit/verify') throw new Error('network down')
+      return pagePayload([auditEvent('evt-1')])
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-audit-verify-chain"]').trigger('click')
+    await nextTick()
+    expect(wrapper.text()).toContain('Chain Integrity: ❌ Broken')
+    expect(wrapper.text()).toContain('network down')
+  })
+})
+
+// ---- Branch coverage: exportCsv pagination with empty data ----
+describe('AdminAuditView — exportCsv empty data break', () => {
+  let clickSpy: ReturnType<typeof vi.fn>
+  const originalCreateElement = document.createElement.bind(document)
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    clickSpy = vi.fn()
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url')
+    URL.revokeObjectURL = vi.fn()
+    vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
+      if (tag === 'a') return { href: '', download: '', click: clickSpy } as unknown as HTMLAnchorElement
+      return originalCreateElement(tag)
+    }) as unknown as typeof document.createElement)
+  })
+
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('exportCsv returns no data and stops pagination', async () => {
+    // When the first export page returns undefined data, the loop breaks early.
+    // The CSV is created with only headers (no data rows) and the download still fires.
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/audit/export') return { data: undefined, error: undefined }
+      return pagePayload([auditEvent('evt-1')])
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-audit-export-csv"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    // The download fires even with empty data — the loop breaks but the CSV blob is still created
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ---- Branch coverage: exportJsonl catch path ----
+describe('AdminAuditView — exportJsonl catch path', () => {
+  const originalCreateElement = document.createElement.bind(document)
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url')
+    URL.revokeObjectURL = vi.fn()
+    vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
+      if (tag === 'a') return { href: '', download: '', click: vi.fn() } as unknown as HTMLAnchorElement
+      return originalCreateElement(tag)
+    }) as unknown as typeof document.createElement)
+  })
+
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('catches a network error on JSONL export', async () => {
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/audit/export') throw new Error('network down')
+      return pagePayload([auditEvent('evt-1')])
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-audit-export-jsonl"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    expect(wrapper.text()).toContain('Export failed')
+    expect(wrapper.text()).toContain('network down')
+  })
+})
+
+// ---- Branch coverage: buildQuery various filter combinations ----
+describe('AdminAuditView — buildQuery filter branches', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('includes entity_type in query when filterTargetType is not __all__', async () => {
+    mockAuditGet([auditEvent('evt-1')])
+    const wrapper = await mountLoaded()
+    const vm = wrapper.vm as unknown as { filterTargetType: string }
+    vm.filterTargetType = 'pipeline'
+    await nextTick()
+    const calls = (api.GET as Mock).mock.calls.filter((c: unknown[]) => c[0] === '/api/v1/admin/audit')
+    const q = calls[calls.length - 1][1].params.query
+    expect(q.entity_type).toBe('pipeline')
+  })
+
+  it('excludes entity_type when filterTargetType is __all__', async () => {
+    mockAuditGet([auditEvent('evt-1')])
+    await mountLoaded()
+    const calls = (api.GET as Mock).mock.calls.filter((c: unknown[]) => c[0] === '/api/v1/admin/audit')
+    const q = calls[calls.length - 1][1].params.query
+    expect(q.entity_type).toBeUndefined()
+  })
+})
+
+// ---- Branch coverage: goToPage with null cursor ----
+describe('AdminAuditView — goToPage null guard', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('goToPage with null cursor is a no-op', async () => {
+    mockAuditGet([auditEvent('evt-1')])
+    const wrapper = await mountLoaded()
+    const vm = wrapper.vm as unknown as { goToPage: (c: string | null) => void }
+    vm.goToPage(null)
+    await nextTick()
+    // No crash, page unchanged
+    expect(wrapper.text()).toContain('Page 1')
+  })
+})
+
+// ---- Branch coverage: exportCsv with catch error ----
+describe('AdminAuditView — exportCsv catch path', () => {
+  let clickSpy: ReturnType<typeof vi.fn>
+  const originalCreateElement = document.createElement.bind(document)
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    clickSpy = vi.fn()
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url')
+    URL.revokeObjectURL = vi.fn()
+    vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
+      if (tag === 'a') return { href: '', download: '', click: clickSpy } as unknown as HTMLAnchorElement
+      return originalCreateElement(tag)
+    }) as unknown as typeof document.createElement)
+  })
+
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('catches a network error on CSV export', async () => {
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/audit/export') throw new Error('csv down')
+      return pagePayload([auditEvent('evt-1')])
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-audit-export-csv"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    expect(wrapper.text()).toContain('Export failed')
+    expect(wrapper.text()).toContain('csv down')
+  })
+})

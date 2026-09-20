@@ -539,3 +539,309 @@ describe('RemyChat permission requests', () => {
     expect(approveSpy).toHaveBeenCalledWith('req-4', 'approve')
   })
 })
+
+// ---- Branch coverage: describeArgs various tool types ----
+describe('RemyChat — describeArgs branches', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('describes extract, extract_all, get_page_interactables, get_url, press and go_back tools', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.pendingPermission = {
+      request_id: 'req-1',
+      tools: [
+        { name: 'extract', args: { selector: '[data-testid="name"]' } },
+        { name: 'extract_all', args: { selector: '.items' } },
+        { name: 'get_page_interactables', args: {} },
+        { name: 'get_url', args: {} },
+        { name: 'press', args: { key: 'Escape' } },
+        { name: 'go_back', args: {} },
+      ],
+    }
+    const wrapper = mountChat(false)
+    const text = wrapper.find('.remy-permission-card').text()
+    expect(text).toContain('Read text from name')
+    expect(text).toContain("Read text from all '.items' elements")
+    expect(text).toContain('Discover all clickable')
+    expect(text).toContain('Get current page URL')
+    expect(text).toContain("Press 'Escape' key")
+    expect(text).toContain('Go back to previous page')
+  })
+
+  it('describes wait with selector and unknown tool as empty string', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.pendingPermission = {
+      request_id: 'req-2',
+      tools: [
+        { name: 'wait', args: { selector: '.spinner' } },
+        { name: 'custom_tool', args: {} },
+      ],
+    }
+    const wrapper = mountChat(false)
+    const text = wrapper.find('.remy-permission-card').text()
+    expect(text).toContain("Wait for '.spinner' to appear")
+  })
+})
+
+// ---- Branch coverage: renderMarkdown various paths ----
+describe('RemyChat — renderMarkdown branches', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('renders heading levels 1 and 2', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToken('# H1\n## H2')
+    const wrapper = mountChat(false)
+    const html = wrapper.find('.remy-markdown').html()
+    expect(html).toContain('remy-h1')
+    expect(html).toContain('remy-h2')
+  })
+
+  it('renders italic text', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToken('*italic*')
+    const wrapper = mountChat(false)
+    const html = wrapper.find('.remy-markdown').html()
+    expect(html).toContain('<em>italic</em>')
+  })
+
+  it('renders paragraphs from double newlines', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToken('para one\n\npara two')
+    const wrapper = mountChat(false)
+    const html = wrapper.find('.remy-markdown').html()
+    expect(html).toContain('remy-p')
+  })
+
+  it('wraps plain text in a paragraph tag', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToken('just text')
+    const wrapper = mountChat(false)
+    const html = wrapper.find('.remy-markdown').html()
+    expect(html).toContain('<p class="remy-p">')
+  })
+
+  it('renders fenced code block without language', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToken('```\nno lang\n```')
+    const wrapper = mountChat(false)
+    const html = wrapper.find('.remy-markdown').html()
+    expect(html).toContain('<pre><code')
+    expect(html).toContain('no lang')
+  })
+
+  it('handles empty text gracefully', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToken('')
+    const wrapper = mountChat(false)
+    const html = wrapper.find('.remy-markdown').html()
+    expect(html).toBeTruthy()
+  })
+})
+
+// ---- Branch coverage: toggleToolExpand ----
+describe('RemyChat — toggleToolExpand', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('expands and collapses a tool card', async () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToolCall({ tool_call_id: 'tc-1', tool_name: 'navigate', success: true, result: { path: '/runs' } })
+    const wrapper = mountChat(false)
+
+    // Initially collapsed
+    expect(wrapper.find('.remy-tool-details').exists()).toBe(false)
+
+    // Expand
+    await wrapper.find('.remy-tool-header').trigger('click')
+    expect(wrapper.find('.remy-tool-details').exists()).toBe(true)
+
+    // Collapse
+    await wrapper.find('.remy-tool-header').trigger('click')
+    expect(wrapper.find('.remy-tool-details').exists()).toBe(false)
+  })
+})
+
+// ---- Branch coverage: formatToolDetails various paths ----
+describe('RemyChat — formatToolDetails branches', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('formats tool details with result and error', async () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToolCall({ tool_call_id: 'tc-1', tool_name: 'click', success: false, result: { text: 'found' }, error: 'selector not found' })
+    const wrapper = mountChat(false)
+    await wrapper.find('.remy-tool-header').trigger('click')
+    const details = wrapper.find('.remy-tool-details').text()
+    expect(details).toContain('Result:')
+    expect(details).toContain('Error:')
+    expect(details).toContain('selector not found')
+  })
+
+  it('formats tool details with string result', async () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToolCall({ tool_call_id: 'tc-2', tool_name: 'extract', success: true, result: 'some text' })
+    const wrapper = mountChat(false)
+    await wrapper.find('.remy-tool-header').trigger('click')
+    const details = wrapper.find('.remy-tool-details').text()
+    expect(details).toContain('some text')
+  })
+
+  it('formats tool details without result or error', async () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToolCall({ tool_call_id: 'tc-3', tool_name: 'navigate', success: true })
+    const wrapper = mountChat(false)
+    await wrapper.find('.remy-tool-header').trigger('click')
+    const details = wrapper.find('.remy-tool-details').text()
+    expect(details).toContain('Tool: navigate')
+    expect(details).not.toContain('Result:')
+    expect(details).not.toContain('Error:')
+  })
+})
+
+// ---- Branch coverage: isAnalyticsChartMessage various false paths ----
+describe('RemyChat — isAnalyticsChartMessage false paths', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('does not render analytics card for a non-tool_result message', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToken('not a tool result')
+    const wrapper = mountChat(false)
+    expect(wrapper.find('[data-testid="remy-analytics-card"]').exists()).toBe(false)
+  })
+
+  it('does not render analytics card for a failed tool result', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToolCall({ tool_call_id: 'tc-fail', tool_name: 'query_analytics', success: false, result: {} })
+    const wrapper = mountChat(false)
+    expect(wrapper.find('[data-testid="remy-analytics-card"]').exists()).toBe(false)
+  })
+
+  it('does not render analytics card for a non-query_analytics tool', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToolCall({ tool_call_id: 'tc-nav', tool_name: 'navigate', success: true, result: {} })
+    const wrapper = mountChat(false)
+    expect(wrapper.find('[data-testid="remy-analytics-card"]').exists()).toBe(false)
+  })
+})
+
+// ---- Branch coverage: analyticsDeepLinkFor undefined path ----
+describe('RemyChat — analyticsDeepLinkFor undefined', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('hides deep link when result has no deep_link', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToolCall({
+      tool_call_id: 'tc-nolink',
+      tool_name: 'query_analytics',
+      success: true,
+      result: { group_by: 'day', buckets: [{ date: '2026-01-01', count: 1 }] },
+    })
+    const wrapper = mountChat(false)
+    expect(wrapper.find('.remy-analytics-link').exists()).toBe(false)
+  })
+})
+
+// ---- Branch coverage: copyMessage catch path ----
+describe('RemyChat — copyMessage catch', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('does not throw when clipboard.writeText rejects', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('not allowed'))
+    Object.assign(navigator, { clipboard: { writeText } })
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToken('copy me')
+    const wrapper = mountChat(false)
+    // Should not throw
+    await wrapper.find('.remy-copy-btn').trigger('click')
+    expect(writeText).toHaveBeenCalled()
+  })
+})
+
+// ---- Branch coverage: slash menu empty list and Tab key ----
+describe('RemyChat — slash menu edge cases', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('shows empty message when no commands match the filter', async () => {
+    const wrapper = mountChat(false)
+    await wrapper.find('.remy-input').setValue('/zzzzz')
+    await wrapper.find('.remy-input').trigger('input')
+    expect(wrapper.find('.remy-slash-menu').exists()).toBe(true)
+    expect(wrapper.find('.remy-slash-empty').exists()).toBe(true)
+  })
+
+  it('completes a partial command with Tab key', async () => {
+    const wrapper = mountChat(false)
+    await wrapper.find('.remy-input').setValue('/re')
+    await wrapper.find('.remy-input').trigger('input')
+    await wrapper.find('.remy-input').trigger('keydown', { key: 'Tab' })
+    expect((wrapper.find('.remy-input').element as HTMLTextAreaElement).value).toBe('/rename ')
+  })
+})
+
+// ---- Branch coverage: deleteCurrentSession with remaining sessions ----
+describe('RemyChat — deleteCurrentSession loads first session', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('loads the first remaining session after deleting the current one', async () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.sessions = [{ id: 'session-2', name: 'Session 2' } as any]
+    const loadSpy = vi.spyOn(store, 'loadSession').mockResolvedValue(undefined as never)
+    const wrapper = mountChat(false)
+    await wrapper.find('.remy-input').setValue('/delete')
+    await wrapper.find('.remy-input').trigger('keydown', { key: 'Enter' })
+    await wrapper.find('.remy-delete-confirm button').trigger('click')
+    await flushPromises()
+    expect(loadSpy).toHaveBeenCalledWith('session-2')
+  })
+})
