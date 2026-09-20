@@ -127,13 +127,16 @@ class ModuloSamlAuth:
             "post_data": post_data or {},
         }
 
-    def get_auth_url(self) -> str:
+    def get_auth_url(self, *, return_to: str | None = None) -> str:
         """Generate an AuthnRequest and return the IdP SSO redirect URL.
 
         python3-saml handles:
         - AuthnRequest XML construction with proper namespacing
         - IssueInstant and ID generation
         - Optional signature generation (if SP private key is configured)
+
+        When ``return_to`` is given, it becomes the SAML RelayState parameter
+        in the redirect URL — defense-in-depth for per-provider SAML.
 
         Returns:
             The IdP single sign-on URL with the SAMLRequest parameter.
@@ -143,7 +146,7 @@ class ModuloSamlAuth:
             self._get_request_data(self._acs_url),
             self._settings_dict,
         )
-        return auth.login()  # type: ignore[no-any-return]
+        return auth.login(return_to=return_to)  # type: ignore[no-any-return]
 
     def process_response(self, saml_response: str) -> dict[str, Any]:
         """Validate a SAML Response including XML signature verification.

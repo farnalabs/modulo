@@ -3,6 +3,7 @@
 import base64
 import contextlib
 import json
+import time
 import uuid
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
@@ -27,7 +28,9 @@ from modulo.api.dependencies import (
 from modulo.api.routes.sso import router as sso_router
 from modulo.auth.sso import (
     parse_oidc_providers,
+    sign_saml_relay_state,
     sign_state,
+    verify_saml_relay_state,
     verify_state,
 )
 from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
@@ -2965,3 +2968,236 @@ class TestPerProviderSamlRouteErrorPaths:
             mock_lookup.side_effect = RuntimeError("boom")
             resp = client.get("/api/v1/auth/saml/okta-saml/metadata", follow_redirects=False)
         assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# SAML RelayState signing (FAR-1003)
+# ---------------------------------------------------------------------------
+
+
+class TestSamlRelayStateSigning:
+    """sign_saml_relay_state / verify_saml_relay_state unit tests."""
+
+    def test_sign_and_verify_returns_payload(self) -> None:
+        signed = sign_saml_relay_state("okta-saml", _VALID_32)
+        payload = verify_saml_relay_state(signed, _VALID_32)
+        assert payload is not None
+        assert payload["pid"] == "okta-saml"
+        assert isinstance(payload["ts"], (int, float))
+
+    def test_verify_tampered_returns_none(self) -> None:
+        signed = sign_saml_relay_state("okta-saml", _VALID_32)
+        assert verify_saml_relay_state(signed + "x", _VALID_32) is None
+
+    def test_verify_wrong_key_returns_none(self) -> None:
+        signed = sign_saml_relay_state("okta-saml", _VALID_32)
+        assert verify_saml_relay_state(signed, "b" * 32) is None
+
+    def test_verify_expired_returns_none(self) -> None:
+        signed = sign_saml_relay_state("okta-saml", _VALID_32)
+        # With max_age_seconds=0, anything is expired
+        assert verify_saml_relay_state(signed, _VALID_32, max_age_seconds=0) is None
+
+    def test_verify_future_timestamp_returns_none(self) -> None:
+        # A token minted more than the allowed skew in the future is rejected
+        # (clock-skew / replay-window abuse).
+        payload = json.dumps({"pid": "okta-saml", "ts": int(time.time()) + 3600})
+        encoded = base64.urlsafe_b64encode(payload.encode()).rstrip(b"=").decode()
+        signed = sign_state(encoded, _VALID_32)
+        assert verify_saml_relay_state(signed, _VALID_32) is None
+
+    def test_verify_malformed_returns_none(self) -> None:
+        assert verify_saml_relay_state("no-colon", _VALID_32) is None
+
+    def test_verify_empty_returns_none(self) -> None:
+        assert verify_saml_relay_state("", _VALID_32) is None
+
+    def test_different_providers_different_payloads(self) -> None:
+        signed_a = sign_saml_relay_state("okta-a", _VALID_32)
+        signed_b = sign_saml_relay_state("okta-b", _VALID_32)
+        payload_a = verify_saml_relay_state(signed_a, _VALID_32)
+        payload_b = verify_saml_relay_state(signed_b, _VALID_32)
+        assert payload_a is not None
+        assert payload_b is not None
+        assert payload_a["pid"] == "okta-a"
+        assert payload_b["pid"] == "okta-b"
+
+    def test_verify_non_json_payload_returns_none(self) -> None:
+        # Valid HMAC signature (via sign_state) but the payload is not JSON.
+        encoded = base64.urlsafe_b64encode(b"not json").rstrip(b"=").decode()
+        signed = sign_state(encoded, _VALID_32)
+        assert verify_saml_relay_state(signed, _VALID_32) is None
+
+    def test_verify_json_non_dict_returns_none(self) -> None:
+        # Valid signature + valid JSON, but the payload is a list, not a dict.
+        encoded = base64.urlsafe_b64encode(json.dumps([1, 2, 3]).encode()).rstrip(b"=").decode()
+        signed = sign_state(encoded, _VALID_32)
+        assert verify_saml_relay_state(signed, _VALID_32) is None
+
+    def test_verify_missing_ts_returns_none(self) -> None:
+        # Valid signature + dict payload, but the ts field is absent.
+        encoded = base64.urlsafe_b64encode(json.dumps({"pid": "okta-saml"}).encode()).rstrip(b"=").decode()
+        signed = sign_state(encoded, _VALID_32)
+        assert verify_saml_relay_state(signed, _VALID_32) is None
+
+
+# ---------------------------------------------------------------------------
+# SAML RelayState route integration (FAR-1003)
+# ---------------------------------------------------------------------------
+
+
+class TestSamlRelayStateRouteIntegration:
+    """Per-provider SAML routes: RelayState emitted on login, verified on ACS."""
+
+    def test_login_emits_relay_state_signed_for_provider(self, client: TestClient) -> None:
+        """GET /saml/{slug}/login passes a signed relay_state to saml_get_auth_url."""
+        provider = _make_saml_provider(provider_id="okta-saml")
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        settings = _override(modulo_license_key="lic-123", modulo_saml_enabled=True)
+
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
+        ):
+            mock_lookup.return_value = provider
+            mock_auth.return_value = ("https://idp.okta.com/sso?SAMLRequest=xyz", "")
+            resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
+            assert resp.status_code == 307
+
+            # Verify relay_state was passed to saml_get_auth_url
+            call_kwargs = mock_auth.call_args
+            relay_state = call_kwargs.kwargs.get("relay_state")
+            assert relay_state is not None, "login must pass relay_state to saml_get_auth_url"
+            # Verify it's a valid signed payload for this provider
+            payload = verify_saml_relay_state(relay_state, settings.secret_key)
+            assert payload is not None, "relay_state must be a valid signed token"
+            assert payload["pid"] == "okta-saml"
+
+    def test_acs_accepts_valid_signed_relay_state(self, client: TestClient) -> None:
+        """POST /saml/{slug}/acs accepts a valid signed RelayState for the right provider."""
+        provider = _make_saml_provider(provider_id="okta-saml")
+        settings = _override(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+
+        relay_state = sign_saml_relay_state("okta-saml", settings.secret_key)
+
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = provider
+            mock_process.return_value = {
+                "access_token": "at-rs",
+                "refresh_token": "rt-rs",
+                "token_type": "bearer",
+            }
+            resp = client.post(
+                "/api/v1/auth/saml/acs/okta-saml",
+                data={
+                    "SAMLResponse": base64.b64encode(b"<saml/>").decode(),
+                    "RelayState": relay_state,
+                },
+                follow_redirects=False,
+            )
+            assert resp.status_code == 307
+            assert "access_token=at-rs" in resp.headers["location"]
+
+    def test_acs_rejects_tampered_relay_state(self, client: TestClient) -> None:
+        """POST /saml/{slug}/acs rejects a tampered RelayState."""
+        provider = _make_saml_provider(provider_id="okta-saml")
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = provider
+            resp = client.post(
+                "/api/v1/auth/saml/acs/okta-saml",
+                data={
+                    "SAMLResponse": base64.b64encode(b"<saml/>").decode(),
+                    "RelayState": "tampered.payload.signature",
+                },
+                follow_redirects=False,
+            )
+            assert resp.status_code == 401
+            assert "RelayState" in resp.json()["detail"]
+            mock_process.assert_not_awaited()
+
+    def test_acs_rejects_relay_state_signed_for_different_provider(self, client: TestClient) -> None:
+        """POST /saml/{slug}/acs rejects a RelayState signed for a DIFFERENT provider."""
+        provider = _make_saml_provider(provider_id="okta-saml")
+        settings = _override(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+
+        # Sign for a different provider
+        relay_state = sign_saml_relay_state("different-provider", settings.secret_key)
+
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = provider
+            resp = client.post(
+                "/api/v1/auth/saml/acs/okta-saml",
+                data={
+                    "SAMLResponse": base64.b64encode(b"<saml/>").decode(),
+                    "RelayState": relay_state,
+                },
+                follow_redirects=False,
+            )
+            assert resp.status_code == 401
+            assert "does not match" in resp.json()["detail"]
+            mock_process.assert_not_awaited()
+
+    def test_acs_proceeds_normally_when_relay_state_absent(self, client: TestClient) -> None:
+        """POST /saml/{slug}/acs proceeds normally when RelayState is absent (IdP-initiated SSO).
+
+        This is the critical regression guard: absence-tolerance is deliberate.
+        """
+        provider = _make_saml_provider(provider_id="okta-saml")
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = provider
+            mock_process.return_value = {
+                "access_token": "at-idp",
+                "refresh_token": "rt-idp",
+                "token_type": "bearer",
+            }
+            # No RelayState in the form data
+            resp = client.post(
+                "/api/v1/auth/saml/acs/okta-saml",
+                data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 307
+            assert "access_token=at-idp" in resp.headers["location"]
+            mock_process.assert_awaited_once()
+
+    def test_legacy_singleton_path_unchanged_no_relay_state(self, client: TestClient) -> None:
+        """Legacy /saml/acs does NOT verify RelayState — preserves backward compatibility."""
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+
+        with (
+            patch("modulo.api.routes.sso._get_enabled_saml_global", new_callable=AsyncMock),
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_process.return_value = {
+                "access_token": "at-legacy",
+                "refresh_token": "rt-legacy",
+                "token_type": "bearer",
+            }
+            resp = client.post(
+                "/api/v1/auth/saml/acs",
+                data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 307
+            assert "access_token=at-legacy" in resp.headers["location"]
+            # Legacy path doesn't pass relay_state arg
+            call_kwargs = mock_process.call_args
+            assert "relay_state" not in call_kwargs.kwargs
