@@ -179,8 +179,8 @@ async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
-async def system_session(system_engine: AsyncEngine) -> AsyncSession:
+@pytest.fixture
+def system_session(system_engine: AsyncEngine) -> AsyncSession:
     """Session on the ``modulo_system`` role — mirrors ``get_system_db_session``."""
     return AsyncSession(bind=system_engine, autobegin=False, expire_on_commit=False)
 
