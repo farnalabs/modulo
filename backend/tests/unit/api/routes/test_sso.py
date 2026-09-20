@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import Request
 
-from modulo.api.routes.sso import oidc_callback
+from modulo.api.routes.sso import _resolve_saml_for_route, oidc_callback
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
@@ -124,8 +124,6 @@ async def test_saml_app_fallback_opens_scoped_transaction_when_caller_has_none()
     session only allows ``execute()`` inside ``begin()``, so the pre-fix path
     fails loudly while the fixed one binds inside its own scoped transaction.
     """
-    from modulo.api.routes.sso import _resolve_saml_for_route
-
     fake = _AutobeginAwareSession()
     provider = SimpleNamespace(provider_type="saml", enabled=True)
 
