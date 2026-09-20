@@ -57,7 +57,6 @@ from modulo.connectors.snyk import SnykConnector
 from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
 from modulo.connectors.trello import TrelloConnector
-from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core.connector_hub import _build_connector
 
@@ -138,7 +137,6 @@ _BUILD_CASES: list[tuple[str, dict[str, Any], dict[str, Any], type[ConnectorBase
     ("sonarqube", {}, {"token": "sq_token"}, SonarQubeConnector, ConnectorType.SONARQUBE),
     ("codeclimate", {}, {"token": "cc2_token"}, CodeClimateConnector, ConnectorType.CODECLIMATE),
     ("snyk", {}, {"token": "snyk_token"}, SnykConnector, ConnectorType.SNYK),
-    ("trivy", {}, {"token": "trivy_token"}, TrivyConnector, ConnectorType.TRIVY),
     ("n8n", {}, {"token": "n8n_token"}, N8NConnector, ConnectorType.N8N),
 ]
 

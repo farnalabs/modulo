@@ -269,10 +269,9 @@ register_conformance_connector("rest", "rest_connector")
 # test_pypi_contract.py) and are NOT registered for the shared conformance
 # suite.
 #
-# NOTE — trivy and codeclimate are REST API clients that require a running
-# remote service (Trivy server, Code Climate API).  trivy accepts an optional
-# token; codeclimate requires an API token.  Neither is a local scanner.
-# Both are excluded from conformance because they need live network access.
+# NOTE — codeclimate is a REST API client that requires a running
+# remote service (Code Climate API).  codeclimate requires an API token.
+# It is excluded from conformance because it needs live network access.
 
 
 @pytest.fixture

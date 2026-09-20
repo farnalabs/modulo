@@ -1,6 +1,6 @@
 """Tier 1b (FAR-934) — container-hosted connectors, per-PR LIGHT set.
 
-Covers: gitea, jenkins, n8n, sonarqube, grafana, teamcity, trivy,
+Covers: gitea, jenkins, n8n, sonarqube, grafana, teamcity,
 codeclimate.  The heavy set (gitlab — multi-GB image, slow boot) lives in
 ``test_tier1b_connectors_heavy.py`` and runs only in the nightly job.
 
@@ -39,8 +39,7 @@ from modulo.connectors.n8n import N8NConnector
 from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
 
-# The trivy connector is intentionally NOT exercised end-to-end here — see
-# test_trivy_connector_roundtrip_recorded_skip below for the recorded skip.
+# ── codeclimate (official CLI container; connector target is SaaS-only) ─────
 from tests.helpers.testcontainers_harness import (
     ContainerHandle,
     ContainerSpec,
@@ -690,71 +689,6 @@ async def test_teamcity_write_build_type(teamcity_connector: TeamCityConnector) 
     )
     ids = {record.get("id") for record in result.records}
     assert build_type_id in ids, f"TeamCity buildType roundtrip failed; real build types: {ids!r}"
-
-
-# ── trivy ───────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture(scope="session")
-def trivy_container() -> Iterator[ContainerHandle]:
-    """Start the real trivy server container (vuln DB download included).
-
-    Trivy 0.74's server downloads its vulnerability database at boot —
-    observed 4-5 minutes on this host — so the readiness window must be generous.
-    """
-    try:
-        handle = start_tier1b_container(
-            ContainerSpec(
-                image="aquasec/trivy:latest",
-                container_port=8080,
-                command=["server", "--listen", "0.0.0.0:8080"],
-                # ``/healthz`` is the ONLY healthy path on trivy 0.74's server
-                # (verified live: /trivy/v1/health, /trivy/v1/plugins,
-                # /trivy/v1/connection-test all answer HTTP 404; real client
-                # <-> server scans DO work via trivy's own CLI over --server).
-                probe=probe_http("/healthz"),
-                ready_timeout_seconds=600,
-            )
-        )
-    except Tier1bFixtureError as exc:
-        pytest.skip(f"Tier 1b trivy fixture unavailable on this Docker host (recorded skip): {exc}")
-    yield handle
-    handle.stop()
-
-
-async def test_trivy_server_container_serves_healthz(trivy_container: ContainerHandle) -> None:
-    """Container-level proof: the official trivy image really serves its server API here."""
-    async with httpx.AsyncClient(base_url=trivy_container.base_url) as client:
-        resp = await client.get("/healthz", timeout=15)
-    assert resp.status_code == 200, f"trivy server healthz failed: HTTP {resp.status_code}"
-    assert resp.text == "ok", f"unexpected healthz body: {resp.text[:80]!r}"
-
-
-async def test_trivy_connector_roundtrip(trivy_container: ContainerHandle) -> None:
-    """Exercise the Trivy *connector* against the real server, or record the skip.
-
-    Verified live against aquasec/trivy 0.74.0: the connector targets REST endpoints
-    that don't exist on the real server — GET /trivy/v1/health, /trivy/v1/plugins,
-    /trivy/v1/database/metadata and POST /trivy/v1/connection-test all answer HTTP 404;
-    only /healthz (200 "ok") is exposed, and the genuine client<->server contract works
-    through the trivy CLI. Re-pointing the connector at the real REST surface (or running
-    the CLI in-container) is production work outside this branch's allowlist.
-    When the connector is re-targeted and the server serves /trivy/v1/*, the probe
-    below flips and this test exercises the connector for real.
-    """
-    async with httpx.AsyncClient(base_url=trivy_container.base_url) as client:
-        surface = await client.get("/trivy/v1/health", timeout=15)
-    if surface.status_code == 404:
-        pytest.skip(
-            "TrivyConnector endpoints are HTTP 404 on the real aquasec/trivy 0.74.0 server "
-            "recorded skip (FAR-934); connector re-targeting is a production fix follow-up"
-        )
-    # The REST surface exists here: drive the real connector surface end-to-end.
-    from modulo.connectors.trivy import TrivyConnector
-
-    connector = TrivyConnector(token="unused-local-server", base_url=trivy_container.base_url)
-    health = await connector.health_check()
-    assert health.ok, f"trivy connector health failed against real server: {health}"
 
 
 # ── codeclimate (official CLI container; connector target is SaaS-only) ─────

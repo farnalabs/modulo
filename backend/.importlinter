@@ -187,7 +187,6 @@ ignore_imports =
     modulo.connectors.youtrack -> modulo.core.ssrf
     modulo.connectors.sonarqube -> modulo.core.ssrf
     modulo.connectors.teamcity -> modulo.core.ssrf
-    modulo.connectors.trivy -> modulo.core.ssrf
     modulo.connectors.onepassword -> modulo.core.ssrf
     modulo.connectors.sentry -> modulo.core.ssrf
     modulo.connectors.azure_key_vault -> modulo.core.ssrf
