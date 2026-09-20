@@ -68,7 +68,7 @@
     <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
 
     <div class="flex items-center gap-2">
-      <Button :disabled="!form.name.trim() || saving" @click="save">
+      <Button :disabled="!form.name.trim() || saving" data-testid="node-category-save" @click="save">
         {{
           saving
             ? "Saving..."

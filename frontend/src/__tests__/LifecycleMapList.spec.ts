@@ -3,8 +3,12 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 
+const routeState = vi.hoisted(() => ({
+  query: {} as Record<string, string>,
+}))
+
 vi.mock('vue-router', () => ({
-  useRoute: vi.fn(() => ({ params: {}, query: {}, meta: {}, name: 'lifecycle-maps' })),
+  useRoute: vi.fn(() => ({ params: {}, query: routeState.query, meta: {}, name: 'lifecycle-maps' })),
   useRouter: vi.fn(() => ({ push: routerPushMock })),
 }))
 
@@ -67,6 +71,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.clearAllMocks()
+  routeState.query = {}
 })
 
 describe('LifecycleMapList', () => {
@@ -821,10 +826,7 @@ describe('LifecycleMapList card content', () => {
 
 describe('LifecycleMapList query param auto-open', () => {
   it('opens create dialog when ?create=true is in the route query', async () => {
-    vi.mock('vue-router', () => ({
-      useRoute: vi.fn(() => ({ params: {}, query: { create: 'true' }, meta: {}, name: 'lifecycle-maps' })),
-      useRouter: vi.fn(() => ({ push: routerPushMock })),
-    }))
+    routeState.query = { create: 'true' }
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
     const wrapper = mount(LifecycleMapList, {

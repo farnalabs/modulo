@@ -146,9 +146,7 @@ describe('NodeCategoryEditor', () => {
     const wrapper = mount(NodeCategoryEditor, {
       global: { plugins: [i18n] },
     })
-    // Save button is the first button in the actions div
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     expect(saveButton?.attributes('disabled')).toBeDefined()
   })
 
@@ -159,8 +157,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('Test')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     expect(saveButton?.attributes('disabled')).toBeUndefined()
   })
 
@@ -173,8 +170,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('New Category')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await flushPromises()
 
@@ -208,8 +204,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('Updated Name')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Update Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await flushPromises()
 
@@ -235,8 +230,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('New Category')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await flushPromises()
 
@@ -253,8 +247,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('Duplicate Name')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await flushPromises()
 
@@ -270,8 +263,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('Test')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await flushPromises()
 
@@ -287,8 +279,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('Test')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await flushPromises()
 
@@ -317,8 +308,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('Test')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await wrapper.vm.$nextTick()
 
@@ -338,8 +328,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('Test')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
 
     // First save - fails
     await saveButton!.trigger('click')
@@ -365,8 +354,7 @@ describe('NodeCategoryEditor', () => {
     const textarea = wrapper.find('textarea')
     await textarea.setValue('  Spaced Desc  ')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await flushPromises()
 
@@ -387,8 +375,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('Test')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await flushPromises()
 
@@ -408,8 +395,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('Test')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await flushPromises()
 
@@ -465,8 +451,7 @@ describe('NodeCategoryEditor', () => {
     const nameInput = wrapper.find('input[type="text"]')
     await nameInput.setValue('Test')
 
-    const buttons = wrapper.findAll('button')
-    const saveButton = buttons.find((b) => b.text().includes('Create Category'))
+    const saveButton = wrapper.find('[data-testid="node-category-save"]')
     await saveButton!.trigger('click')
     await wrapper.vm.$nextTick()
 
