@@ -23,6 +23,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _resolve_provider_id_from_agent,
     make_sandbox_agent_fn,
 )
+from modulo.core.schema_registry.contract import ContractWriteResult
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_ID = str(uuid.uuid4())
@@ -184,6 +185,29 @@ async def test_contract_write_failure_is_best_effort() -> None:
 
     assert result["output"]["status"] == "completed"
     assert not [path for path in _written_paths(sandbox) if "/home/user/schemas/" in path]
+
+
+async def test_contract_write_warnings_are_logged_but_do_not_fail() -> None:
+    """Warnings returned by the contract writer are advisory, never fatal."""
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _sandbox_mock()
+    writer_result = ContractWriteResult(
+        schema_files_written=False,
+        warnings=["input:const_string_exceeds_256_chars"],
+    )
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch(
+            "modulo.core.pipeline_engine.node_runner.write_schema_contract",
+            return_value=writer_result,
+        ),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
 
 
 class _FakeResult:

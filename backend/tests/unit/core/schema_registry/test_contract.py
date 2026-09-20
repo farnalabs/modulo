@@ -20,6 +20,7 @@ import pytest
 
 from modulo.core.schema_registry.contract import (
     SCHEMA_CONTRACT_VERSION,
+    _atomic_write_json,
     _cleanup_orphan_tmps,
     cleanup_schema_contract,
     list_schema_nodes,
@@ -239,6 +240,108 @@ class TestAtomicityAndRollback:
         assert not canonical_path.exists()
         assert any("rolled_back" in w for w in result.warnings)
 
+    def test_rollback_failure_is_logged(self, tmp_path: Path) -> None:
+        """When the rollback unlink itself fails, the failure is swallowed."""
+        original_atomic = __import__(
+            "modulo.core.schema_registry.contract", fromlist=["_atomic_write_json"]
+        )._atomic_write_json
+        call_count = 0
+
+        def mock_atomic(path: Path, data: dict[str, Any]) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise OSError("simulated active failure")
+            original_atomic(path, data)
+
+        with (
+            patch("modulo.core.schema_registry.contract._atomic_write_json", side_effect=mock_atomic),
+            patch.object(Path, "unlink", side_effect=OSError("simulated unlink failure")),
+        ):
+            result = write_schema_contract(
+                tmp_path,
+                node_id="n1",
+                input_schema=_SAMPLE_INPUT_SCHEMA,
+                output_schema=None,
+                profile="verbatim",
+                provider_id=None,
+            )
+        assert any("active_write_failed_rolled_back" in w for w in result.warnings)
+
+    def test_outer_write_failure_is_swallowed(self, tmp_path: Path) -> None:
+        """A failure before any file write (mkdir) never fails the node."""
+        with patch.object(Path, "mkdir", side_effect=OSError("simulated mkdir failure")):
+            result = write_schema_contract(
+                tmp_path,
+                node_id="n1",
+                input_schema=_SAMPLE_INPUT_SCHEMA,
+                output_schema=None,
+                profile="verbatim",
+                provider_id=None,
+            )
+        assert result.schema_files_written is False
+        assert "write_failed" in result.warnings
+
+    def test_orphan_cleanup_exception_is_swallowed(self, tmp_path: Path) -> None:
+        """A throwing cleanup must not propagate out of the writer."""
+        with patch(
+            "modulo.core.schema_registry.contract._cleanup_orphan_tmps",
+            side_effect=RuntimeError("simulated cleanup failure"),
+        ):
+            result = write_schema_contract(
+                tmp_path,
+                node_id="n1",
+                input_schema=_SAMPLE_INPUT_SCHEMA,
+                output_schema=None,
+                profile="verbatim",
+                provider_id=None,
+            )
+        assert result.schema_files_written is True
+
+    def test_orphan_cleanup_tolerates_unlink_error(self, tmp_path: Path) -> None:
+        """An unlink OSError during cleanup is tolerated (best-effort)."""
+        schema_dir = tmp_path / "schemas" / "n1"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "orphan.tmp").write_text("stale")
+        with patch.object(Path, "unlink", side_effect=OSError("simulated unlink failure")):
+            _cleanup_orphan_tmps(schema_dir)
+        assert (schema_dir / "orphan.tmp").exists()
+
+    def test_orphan_cleanup_missing_dir(self, tmp_path: Path) -> None:
+        """Cleanup of a directory that does not exist is a no-op."""
+        _cleanup_orphan_tmps(tmp_path / "does-not-exist")
+
+    def test_atomic_write_cleans_up_when_fdopen_fails(self, tmp_path: Path) -> None:
+        """A failure after mkstemp but before fdopen closes the fd and removes the tmp."""
+        target = tmp_path / "out.json"
+        with (
+            patch(
+                "modulo.core.schema_registry.contract.os.fdopen",
+                side_effect=OSError("simulated fdopen failure"),
+            ),
+            pytest.raises(OSError, match="simulated fdopen failure"),
+        ):
+            _atomic_write_json(target, {"a": 1})
+        assert not target.exists()
+        assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_non_serialisable_schema_is_tolerated(self, tmp_path: Path) -> None:
+        """A circular schema falls back to the original and never fails the node."""
+        circular: dict[str, Any] = {"type": "object"}
+        circular["self"] = circular
+        result = write_schema_contract(
+            tmp_path,
+            node_id="n1",
+            input_schema=circular,
+            output_schema=None,
+            profile="verbatim",
+            provider_id=None,
+        )
+        assert any("schema_not_serialisable" in w for w in result.warnings)
+        # The circular input can't be serialised, so its canonical write fails
+        # and is reported rather than raised.
+        assert any("canonical_write_failed" in w for w in result.warnings)
+
 
 # ---------------------------------------------------------------------------
 # Sanitisation
@@ -352,6 +455,26 @@ class TestSanitisation:
         assert "properties" in canonical
         assert "required" in canonical
 
+    def test_free_text_stripped_inside_lists(self, tmp_path: Path) -> None:
+        """Free-text keywords nested in list-valued keywords are stripped too."""
+        schema: dict[str, Any] = {
+            "allOf": [
+                {"type": "object", "description": "nested", "title": "Nested"},
+            ],
+        }
+        write_schema_contract(
+            tmp_path,
+            node_id="n1",
+            input_schema=schema,
+            output_schema=None,
+            profile="verbatim",
+            provider_id=None,
+        )
+        canonical = json.loads((tmp_path / "schemas" / "n1" / "input.canonical.json").read_text())
+        assert "description" not in canonical["allOf"][0]
+        assert "title" not in canonical["allOf"][0]
+        assert canonical["allOf"][0]["type"] == "object"
+
 
 # ---------------------------------------------------------------------------
 # Active vs canonical for verbatim and provider-strict
@@ -399,6 +522,44 @@ class TestActiveVsCanonical:
         # (They may be equal if the schema has no provider-unsupported keywords.)
         assert isinstance(canonical, dict)
         assert isinstance(active, dict)
+
+    def test_render_skipped_falls_back_to_canonical(self, tmp_path: Path) -> None:
+        """When rendering is skipped, active falls back to sanitised canonical."""
+        write_schema_contract(
+            tmp_path,
+            node_id="n1",
+            input_schema={"$ref": "#/$defs/Foo"},
+            output_schema=None,
+            profile="provider-strict",
+            provider_id="openai",
+        )
+        canonical = json.loads((tmp_path / "schemas" / "n1" / "input.canonical.json").read_text())
+        active = json.loads((tmp_path / "schemas" / "n1" / "input.active.json").read_text())
+        canonical.pop("_schema_contract_version", None)
+        active.pop("_schema_contract_version", None)
+        assert canonical == active
+
+    def test_render_error_falls_back_to_canonical(self, tmp_path: Path) -> None:
+        """A renderer exception falls back to sanitised canonical and warns."""
+        with patch(
+            "modulo.core.schema_registry.contract.render_for_profile",
+            side_effect=RuntimeError("simulated render failure"),
+        ):
+            result = write_schema_contract(
+                tmp_path,
+                node_id="n1",
+                input_schema=_SAMPLE_INPUT_SCHEMA,
+                output_schema=None,
+                profile="provider-strict",
+                provider_id="openai",
+            )
+        assert result.schema_files_written is True
+        assert any("render_error_fallback" in w for w in result.warnings)
+        canonical = json.loads((tmp_path / "schemas" / "n1" / "input.canonical.json").read_text())
+        active = json.loads((tmp_path / "schemas" / "n1" / "input.active.json").read_text())
+        canonical.pop("_schema_contract_version", None)
+        active.pop("_schema_contract_version", None)
+        assert canonical == active
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +705,11 @@ class TestCleanup:
     def test_tolerates_absent_schemas_root(self, tmp_path: Path) -> None:
         result = cleanup_schema_contract(tmp_path)
         assert result is True
+
+    def test_returns_false_on_error(self, tmp_path: Path) -> None:
+        (tmp_path / "schemas" / "n1").mkdir(parents=True)
+        with patch("shutil.rmtree", side_effect=OSError("simulated rmtree failure")):
+            assert cleanup_schema_contract(tmp_path, "n1") is False
 
 
 # ---------------------------------------------------------------------------
