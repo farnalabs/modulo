@@ -5049,6 +5049,10 @@ features:
             - "[x] The per-provider login redirect embeds an HMAC-signed RelayState token bound to the provider slug; a replay of the same signed response with a RelayState minted for another org is rejected (401, 'does not match')"
             - "[x] IdP-initiated SSO (no RelayState) is accepted on the per-provider ACS — absence is tolerated, only a PRESENT-and-mismatched RelayState is fatal"
             - "[x] Legacy single-tenant parity: /saml/login and /saml/acs (unsegmented) keep working against the first enabled provider; the legacy RelayState is python3-saml's self-derived SP self URL rather than a signed per-provider token"
+        deferrals:
+            - OIDC SSO flows (per-org OIDC, per-provider discovery) are covered by unit tests only; equivalent multi-org real-DB (RLS) integration regression not yet written
+            - IdP-initiated SSO and ACS paths are exercised with the XML-signature step mocked (xmlsec cannot sign/verify round-trip on this Windows host); a Linux CI job with a real signed response would close the gap
+            - SAML single logout (SLO) and SCIM deprovisioning are not implemented yet
     feat-system-config:
         description: System-level configuration administration
     feat-system-orgs:
