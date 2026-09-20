@@ -25,6 +25,8 @@ from modulo.auth.sso import (
     parse_oidc_providers,
     saml_get_auth_url,
     saml_process_response,
+    sign_saml_relay_state,
+    verify_saml_relay_state,
 )
 from modulo.core.sanitize_log import sanitise_log_value
 from modulo.db.crud.sso_provider import (
@@ -340,6 +342,7 @@ async def _saml_login_redirect(
     session: AsyncSession,
     *,
     provider_id: str | None = None,
+    relay_state: str | None = None,
     unexpected_error_tag: str,
 ) -> Response:
     """Generate the IdP redirect for a SAML login, mapping DB errors to HTTP errors.
@@ -348,10 +351,21 @@ async def _saml_login_redirect(
     per-provider ``/saml/{provider_id}/login`` route so the error-mapping
     contract (`ValueError` -> 400, missing table -> 501, DB error -> 503,
     unexpected -> 500) stays identical in both call sites.
+
+    When ``relay_state`` is given (a signed HMAC token), it is embedded in
+    the IdP redirect URL as the RelayState parameter — defense-in-depth
+    for per-provider SAML.
     """
     try:
         async with session.begin():
-            auth_url, _ = await saml_get_auth_url(settings, acs_url, system_session, session, provider_id=provider_id)
+            auth_url, _ = await saml_get_auth_url(
+                settings,
+                acs_url,
+                system_session,
+                session,
+                provider_id=provider_id,
+                relay_state=relay_state,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
     except ProgrammingError as exc:
@@ -392,6 +406,17 @@ async def saml_acs_provider(
 
     Resolves the provider by its globally unique ``provider_id`` slug. The
     response is validated against THIS provider's SP entity ID and ACS URL.
+
+    RelayState verification (FAR-1003, defense-in-depth):
+    - valid signed RelayState for THIS provider → proceed
+    - tampered / wrong provider / expired → reject (401)
+    - absent → do NOT fail; proceed on URL path (IdP-initiated SSO)
+
+    Security reasoning: with routing by URL path, a forged RelayState
+    cannot redirect an assertion to a different org's handler — that
+    containment comes from the per-provider Entity ID + audience check
+    (FAR-1010), NOT from RelayState. RelayState is an additional integrity
+    signal, not the control.
     """
     await _resolve_saml_for_route(provider_id, system_session, session)
 
@@ -402,6 +427,32 @@ async def saml_acs_provider(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing 'SAMLResponse' in form data",
         )
+
+    # RelayState verification (FAR-1003): when present, verify HMAC signature
+    # and provider_id match. Absence is tolerated — IdP-initiated SSO may
+    # not carry RelayState, and routing is by the ACS URL path.
+    raw_relay: object = form.get("RelayState", "")
+    if isinstance(raw_relay, str) and raw_relay:
+        relay_payload = verify_saml_relay_state(raw_relay, settings.secret_key)
+        if relay_payload is None:
+            _log.warning(
+                "sso.saml_relay_state_invalid",
+                extra={"provider_id": provider_id},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired RelayState",
+            )
+        relay_pid = relay_payload.get("pid")
+        if relay_pid != provider_id:
+            _log.warning(
+                "sso.saml_relay_state_provider_mismatch",
+                extra={"expected": provider_id, "relay_pid": relay_pid},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="RelayState does not match the ACS provider",
+            )
 
     try:
         async with session.begin():
@@ -507,11 +558,21 @@ async def saml_login_provider(
     session: AsyncSession = Depends(get_db_session),
     system_session: AsyncSession = Depends(get_system_db_session),
 ) -> Any:
-    """Per-provider SAML login — redirects to the IdP for this specific provider."""
+    """Per-provider SAML login — redirects to the IdP for this specific provider.
+
+    Embeds a HMAC-signed RelayState (FAR-1003) containing the provider_id
+    and a timestamp. This is defense-in-depth: routing is by the ACS URL
+    path, and RelayState absence must NOT fail (IdP-initiated SSO).
+    """
     await _resolve_saml_for_route(provider_id, system_session, session)
 
     public_url = settings.modulo_public_url.rstrip("/")
     acs_url = f"{public_url}/api/v1/auth/saml/acs/{provider_id}"
+
+    # Defense-in-depth (FAR-1003): sign the provider_id into RelayState.
+    # Routing is by the ACS path — RelayState is an integrity signal, not
+    # the routing key. Its absence is tolerated (IdP-initiated SSO).
+    relay_state = sign_saml_relay_state(provider_id, settings.secret_key)
 
     return await _saml_login_redirect(
         acs_url,
@@ -519,6 +580,7 @@ async def saml_login_provider(
         system_session,
         session,
         provider_id=provider_id,
+        relay_state=relay_state,
         unexpected_error_tag="sso.saml_login_provider.unexpected_error",
     )
 

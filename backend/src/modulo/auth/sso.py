@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 import logging
+import time
 import urllib.parse
 import uuid
 from datetime import UTC, datetime
@@ -70,6 +71,68 @@ def verify_state(signed: str, secret_key: str) -> str | None:
     if not hmac.compare_digest(expected, sig):
         return None
     return state
+
+
+# ---------------------------------------------------------------------------
+# SAML RelayState signing (defense-in-depth for per-provider SAML)
+# ---------------------------------------------------------------------------
+# RelayState is NEVER the routing key — routing is by the ACS URL path
+# ({provider_id}). Its absence must NOT fail routing (IdP-initiated SSO
+# may not send it). This is an additional integrity signal, not the
+# primary control. The per-provider Entity ID + audience check (FAR-1010)
+# contain assertions to the correct org; RelayState is defense-in-depth
+# against tampering within that containment.
+
+_RELAY_STATE_MAX_AGE_SECONDS = 600  # 10 minutes
+
+
+def sign_saml_relay_state(provider_id: str, secret_key: str) -> str:
+    """HMAC-sign a SAML RelayState payload containing the provider_id and a timestamp.
+
+    Reuses the existing ``sign_state`` primitive (the same HMAC-SHA256
+    helper OIDC already uses). The signed payload is a base64url-encoded
+    JSON object ``{"pid": provider_id, "ts": <unix_epoch>}`` to avoid
+    encoding issues across URL-redirect and form-post boundaries.
+
+    The payload is intentionally compact — it travels through the
+    IdP's opaque relay field and must survive truncation by some IdPs.
+    """
+    payload = json.dumps({"pid": provider_id, "ts": int(time.time())}, separators=(",", ":"))
+    encoded = base64.urlsafe_b64encode(payload.encode()).rstrip(b"=").decode()
+    return sign_state(encoded, secret_key)
+
+
+def verify_saml_relay_state(
+    signed: str,
+    secret_key: str,
+    *,
+    max_age_seconds: int = _RELAY_STATE_MAX_AGE_SECONDS,
+) -> dict[str, object] | None:
+    """Verify a signed SAML RelayState. Returns the decoded payload on success, None on failure.
+
+    Checks the HMAC signature (via ``verify_state``) and the timestamp
+    expiry. Returns a dict with ``"pid"`` (provider_id) and ``"ts"``
+    (Unix timestamp) on success.
+
+    Absence-tolerance is handled by the CALLER — this function is never
+    called when RelayState is absent.
+    """
+    state = verify_state(signed, secret_key)
+    if state is None:
+        return None
+    try:
+        padded = state + "=" * (4 - len(state) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    ts = payload.get("ts")
+    if not isinstance(ts, (int, float)):
+        return None
+    if time.time() - ts > max_age_seconds:
+        return None
+    return payload
 
 
 async def _set_default_rls_org(session: AsyncSession) -> None:
@@ -1030,6 +1093,7 @@ async def saml_get_auth_url(
     app_session: AsyncSession | None = None,
     *,
     provider_id: str | None = None,
+    relay_state: str | None = None,
 ) -> tuple[str, str]:
     """Generate a SAML AuthnRequest using python3-saml and return (IdP redirect URL, _).
 
@@ -1040,6 +1104,11 @@ async def saml_get_auth_url(
     When ``provider_id`` is given, resolves the SPECIFIC provider by its globally
     unique slug (FAR-1001). When ``None``, resolves the first enabled SAML
     provider globally (legacy single-tenant convenience).
+
+    When ``relay_state`` is given (a signed HMAC token from
+    ``sign_saml_relay_state``), it is embedded in the IdP redirect URL as
+    the RelayState parameter — defense-in-depth for per-provider SAML.
+    Absence is tolerated (IdP-initiated SSO may not send it).
 
     Resolves IdP config through the sso_providers DB table first (preferred, since
     the admin UI writes there); falls back to env-var config for backward
@@ -1057,7 +1126,7 @@ async def saml_get_auth_url(
         sp_x509_cert=sp_cert,
     )
     try:
-        auth_url = handler.get_auth_url()
+        auth_url = handler.get_auth_url(return_to=relay_state)
     except Exception as exc:
         raise ValueError(f"Failed to generate SAML AuthnRequest: {exc}") from None
     return auth_url, ""

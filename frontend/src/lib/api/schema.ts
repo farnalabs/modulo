@@ -1504,6 +1504,17 @@ export interface paths {
          *
          *     Resolves the provider by its globally unique ``provider_id`` slug. The
          *     response is validated against THIS provider's SP entity ID and ACS URL.
+         *
+         *     RelayState verification (FAR-1003, defense-in-depth):
+         *     - valid signed RelayState for THIS provider → proceed
+         *     - tampered / wrong provider / expired → reject (401)
+         *     - absent → do NOT fail; proceed on URL path (IdP-initiated SSO)
+         *
+         *     Security reasoning: with routing by URL path, a forged RelayState
+         *     cannot redirect an assertion to a different org's handler — that
+         *     containment comes from the per-provider Entity ID + audience check
+         *     (FAR-1010), NOT from RelayState. RelayState is an additional integrity
+         *     signal, not the control.
          */
         post: operations["saml_acs_provider_api_v1_auth_saml_acs__provider_id__post"];
         delete?: never;
@@ -1542,6 +1553,10 @@ export interface paths {
         /**
          * Saml Login Provider
          * @description Per-provider SAML login — redirects to the IdP for this specific provider.
+         *
+         *     Embeds a HMAC-signed RelayState (FAR-1003) containing the provider_id
+         *     and a timestamp. This is defense-in-depth: routing is by the ACS URL
+         *     path, and RelayState absence must NOT fail (IdP-initiated SSO).
          */
         get: operations["saml_login_provider_api_v1_auth_saml__provider_id__login_get"];
         put?: never;
