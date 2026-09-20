@@ -1109,6 +1109,28 @@ def test_js_inline_block_comment_only_not_counted():
 _GIT = shutil.which("git") or "git"
 _GIT_TIMEOUT_SECS = 60
 
+# Git hook-context variables injected by pre-commit / git when running
+# inside a hook.  When these leak into a scratch-repo subprocess, git
+# ignores cwd and targets the real repo — causing the scratch commit to
+# fail.  Strip them from every scratch-repo env.
+_GIT_HOOK_CONTEXT_VARS = (
+    "GIT_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+)
+
+
+def _scratch_git_env() -> dict[str, str]:
+    """Return an env dict safe for scratch-repo git operations.
+
+    Inherits the current process environment but strips git hook-context
+    variables that would redirect git commands to the enclosing repo.
+    """
+    return {k: v for k, v in os.environ.items() if k not in _GIT_HOOK_CONTEXT_VARS}
+
 
 def _git(repo: Path, env: dict[str, str], *args: str) -> None:
     subprocess.run(  # noqa: S603 — trusted fixed git args, test helper
@@ -1125,7 +1147,7 @@ def _git(repo: Path, env: dict[str, str], *args: str) -> None:
 def _init_repo(repo: Path, base_content: str = "def f():\n    return 1\n") -> dict[str, str]:
     """Create a git repo with a ``main`` commit; return an env for commits."""
     env = {
-        **os.environ,
+        **_scratch_git_env(),
         "GIT_AUTHOR_NAME": "Test",
         "GIT_AUTHOR_EMAIL": "test@example.com",
         "GIT_COMMITTER_NAME": "Test",

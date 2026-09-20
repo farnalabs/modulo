@@ -8,12 +8,27 @@ backend/ (so backend/.env resolves for Settings()), and fails if any fail.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 BACKEND_DIR = str(Path(REPO_ROOT) / "backend")
+
+# Git hook-context variables injected by pre-commit / git when running
+# inside a hook.  These must be stripped from the subprocess environment so
+# that any scratch-repo test (e.g. tests that call ``git init`` in a
+# tmp_path) does not inherit the enclosing repo's git context and silently
+# target the wrong repository.
+_GIT_HOOK_CONTEXT_VARS = (
+    "GIT_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+)
 
 
 def _changed_unit_tests() -> list[str]:
@@ -54,7 +69,9 @@ def main() -> int:
     print(f"Running tests for changed files: {' '.join(test_paths)}", file=sys.stderr)
 
     cmd = ["uv", "run", "--no-sync", "python", "-m", "pytest", "--tb=short", "-q", "--timeout=120", *test_paths]
-    result = subprocess.run(cmd, cwd=BACKEND_DIR, check=False)
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_HOOK_CONTEXT_VARS}
+    env.setdefault("HOME", env.get("USERPROFILE", ""))
+    result = subprocess.run(cmd, cwd=BACKEND_DIR, check=False, env=env)
     if result.returncode != 0:
         print("FAILED: Changed tests did not pass", file=sys.stderr)
         return 1
