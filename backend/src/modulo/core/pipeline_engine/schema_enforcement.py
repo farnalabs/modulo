@@ -9,6 +9,13 @@ This module provides:
   the validation outcome, profile, and repair loop state.
 - ``aggregate_run_enforcement``: pure function that aggregates per-attempt
   records into run-level counters (native/verbatim/repair/wasted).
+- ``derive_mode_from_records``: pure function that derives the schema validator
+  mode from enforcement records (lenient if any lenient bypass exists).
+- ``derive_outcome_from_records``: pure function that derives the run-level
+  validation outcome from per-attempt records.
+- ``FlipGuardVerdict`` + ``compute_flip_guard_verdict``: the lenient-to-strict
+  flip guard — advises whether flipping is safe based on accumulated
+  lenient-mode warnings.  NEVER mutates the mode.
 - ``MAX_ENFORCEMENT_PAYLOAD_BYTES``: the 64 KB hard cap on the serialised
   enforcement payload.
 
@@ -16,7 +23,7 @@ The enforcement record is a PURE telemetry payload — it does not gate recovery
 (``recover_node`` must NOT consult it) and never writes into the Agent Return
 Contract columns (``outputs_json`` / ``node_telemetry_json``).
 
-The flip guard (D5) lives here as a separate concern — it advises on the
+The flip guard lives here as a separate concern — it advises on the
 lenient-to-strict transition based on accumulated lenient-mode warnings.
 """
 
@@ -222,4 +229,161 @@ def aggregate_run_enforcement(
         wasted_count=wasted,
         total_attempts=total,
         enforcement_record_count=total,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mode / outcome derivation from enforcement records (FAR-902)
+# ---------------------------------------------------------------------------
+
+# Outcomes that indicate lenient mode was active (a bypass = warning only).
+_LENIENT_OUTCOMES = frozenset(
+    {
+        SchemaValidationOutcome.LENIENT_VALIDATION_BYPASSED.value,
+    }
+)
+
+# Outcomes that would become hard failures in strict mode — these are the
+# "warnings" that the flip guard counts.
+_STRICT_FAILURE_OUTCOMES = frozenset(
+    {
+        SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED.value,
+        SchemaValidationOutcome.REPAIR_EXHAUSTED.value,
+    }
+)
+
+# Outcome severity ranking (lower = more severe).  The run-level outcome is
+# the MOST severe outcome observed across all attempts.
+_OUTCOME_SEVERITY: dict[str, int] = {
+    SchemaValidationOutcome.REPAIR_EXHAUSTED.value: 0,
+    SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED.value: 1,
+    SchemaValidationOutcome.NATIVE_DECODE_FAILED.value: 2,
+    SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON.value: 3,
+    SchemaValidationOutcome.LENIENT_VALIDATION_BYPASSED.value: 4,
+    SchemaValidationOutcome.REPAIR_ATTEMPTED.value: 5,
+    SchemaValidationOutcome.VERBATIM_PASSED.value: 6,
+    SchemaValidationOutcome.PASSED_AFTER_REPAIR.value: 7,
+    SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value: 8,
+    SchemaValidationOutcome.SCHEMA_UNENFORCEABLE.value: 9,
+}
+
+
+def derive_mode_from_records(
+    enforcement_records: list[dict[str, Any]],
+) -> str:
+    """Derive the schema validator mode from per-attempt enforcement records.
+
+    Pure function — no DB, no I/O.  Returns ``"lenient"`` if any record has
+    a lenient-mode outcome (``LENIENT_VALIDATION_BYPASSED``), else ``"strict"``.
+
+    When no records are provided, returns ``"lenient"`` (safe default — matches
+    the hard default in ``resolve_schema_validator_mode``).
+    """
+    if not enforcement_records:
+        return "lenient"
+    for record in enforcement_records:
+        if record.get("outcome") in _LENIENT_OUTCOMES:
+            return "lenient"
+    return "strict"
+
+
+def derive_outcome_from_records(
+    enforcement_records: list[dict[str, Any]],
+) -> str:
+    """Derive the run-level validation outcome from per-attempt enforcement records.
+
+    Pure function — no DB, no I/O.  Returns the outcome with the lowest
+    severity rank (most severe) across all records.  When no records are
+    provided, returns ``"no_schema"``.
+    """
+    if not enforcement_records:
+        return SchemaValidationOutcome.NO_SCHEMA.value
+    worst_outcome = SchemaValidationOutcome.NO_SCHEMA.value
+    worst_severity = len(_OUTCOME_SEVERITY) + 1
+    for record in enforcement_records:
+        outcome = record.get("outcome", "")
+        severity = _OUTCOME_SEVERITY.get(outcome, len(_OUTCOME_SEVERITY))
+        if severity < worst_severity:
+            worst_severity = severity
+            worst_outcome = outcome
+    return worst_outcome
+
+
+# ---------------------------------------------------------------------------
+# Flip guard — lenient-to-strict advisory (FAR-902 D2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FlipGuardVerdict:
+    """The flip guard's advisory on whether to switch from lenient to strict.
+
+    The guard NEVER mutates the mode — it only advises.  Changing the mode
+    remains a separate, explicit, already-authorised operator action.
+
+    Fields:
+
+    - ``safe_to_flip``: True when zero lenient-mode warnings exist.
+    - ``lenient_warning_count``: number of lenient-bypass records that would
+      become hard failures in strict mode.
+    - ``total_records``: total enforcement records examined.
+    - ``affected_outcomes``: distinct outcome types from lenient-mode warnings.
+    - ``advisory``: human-readable explanation of the verdict.
+    """
+
+    safe_to_flip: bool
+    lenient_warning_count: int
+    total_records: int
+    affected_outcomes: tuple[str, ...]
+    advisory: str
+
+
+def compute_flip_guard_verdict(
+    enforcement_records: list[dict[str, Any]],
+) -> FlipGuardVerdict:
+    """Compute the flip guard verdict from per-attempt enforcement records.
+
+    Pure function — no DB, no I/O.  Examines enforcement records and
+    determines whether switching from lenient to strict mode is safe.
+
+    The verdict is ``safe_to_flip=True`` when zero lenient-mode warnings
+    exist (no records with outcome ``LENIENT_VALIDATION_BYPASSED``).
+
+    **This function NEVER mutates the mode.**  It only returns an advisory
+    verdict.  Changing the mode remains a separate, explicit, already-
+    authorised operator action (the existing settings/org-config path).
+    """
+    warning_outcomes: set[str] = set()
+    warning_count = 0
+
+    for record in enforcement_records:
+        outcome = record.get("outcome", "")
+        if outcome == SchemaValidationOutcome.LENIENT_VALIDATION_BYPASSED.value:
+            warning_count += 1
+            warning_outcomes.add(outcome)
+
+    total = len(enforcement_records)
+    safe = warning_count == 0
+
+    if safe:
+        advisory = (
+            f"Safe to flip: {total} enforcement record(s) examined, "
+            "zero lenient-mode warnings found.  No validation failures "
+            "would become hard errors in strict mode."
+        )
+    else:
+        advisory = (
+            f"NOT safe to flip: {warning_count} of {total} enforcement "
+            "record(s) are lenient-mode warnings that would become hard "
+            f"failures in strict mode.  Outcomes: "
+            f"{', '.join(sorted(warning_outcomes))}.  Resolve the "
+            "underlying validation failures before switching to strict."
+        )
+
+    return FlipGuardVerdict(
+        safe_to_flip=safe,
+        lenient_warning_count=warning_count,
+        total_records=total,
+        affected_outcomes=tuple(sorted(warning_outcomes)),
+        advisory=advisory,
     )

@@ -425,3 +425,153 @@ class TestEnforcementPayloadPopulated:
         )
         assert repair_info["repair_attempts"] == 1  # first attempt triggered the exception
         assert repair_info["wasted_attempts"] == 0  # invoke failure ≠ schema rejection
+
+
+# ---------------------------------------------------------------------------
+# FAR-902 D2: flip guard + mode/outcome derivation
+# ---------------------------------------------------------------------------
+
+
+class TestDeriveModeFromRecords:
+    """D2: derive_mode_from_records — pure function for mode derivation."""
+
+    def test_empty_records_returns_lenient(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import derive_mode_from_records
+
+        assert derive_mode_from_records([]) == "lenient"
+
+    def test_lenient_bypass_returns_lenient(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import derive_mode_from_records
+
+        records = [
+            {"outcome": "lenient_validation_bypassed", "repair_attempts": 0, "wasted_attempts": 0},
+        ]
+        assert derive_mode_from_records(records) == "lenient"
+
+    def test_strict_outcomes_returns_strict(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import derive_mode_from_records
+
+        records = [
+            {"outcome": "native_decoded_and_validated", "repair_attempts": 0, "wasted_attempts": 0},
+            {"outcome": "verbatim_passed", "repair_attempts": 0, "wasted_attempts": 0},
+        ]
+        assert derive_mode_from_records(records) == "strict"
+
+    def test_mixed_outcomes_with_lenient_returns_lenient(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import derive_mode_from_records
+
+        records = [
+            {"outcome": "native_decoded_and_validated", "repair_attempts": 0, "wasted_attempts": 0},
+            {"outcome": "lenient_validation_bypassed", "repair_attempts": 0, "wasted_attempts": 0},
+        ]
+        assert derive_mode_from_records(records) == "lenient"
+
+
+class TestDeriveOutcomeFromRecords:
+    """D2: derive_outcome_from_records — pure function for outcome derivation."""
+
+    def test_empty_records_returns_no_schema(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
+
+        assert derive_outcome_from_records([]) == "no_schema"
+
+    def test_single_record_returns_its_outcome(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
+
+        records = [{"outcome": "verbatim_passed"}]
+        assert derive_outcome_from_records(records) == "verbatim_passed"
+
+    def test_most_severe_outcome_wins(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
+
+        records = [
+            {"outcome": "native_decoded_and_validated"},
+            {"outcome": "repair_exhausted"},
+            {"outcome": "verbatim_passed"},
+        ]
+        assert derive_outcome_from_records(records) == "repair_exhausted"
+
+    def test_posthoc_wins_over_lenient(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
+
+        records = [
+            {"outcome": "lenient_validation_bypassed"},
+            {"outcome": "posthoc_validation_failed"},
+        ]
+        assert derive_outcome_from_records(records) == "posthoc_validation_failed"
+
+
+class TestComputeFlipGuardVerdict:
+    """D2: compute_flip_guard_verdict — pure function for flip safety."""
+
+    def test_safe_when_no_records(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
+
+        verdict = compute_flip_guard_verdict([])
+        assert verdict.safe_to_flip is True
+        assert verdict.lenient_warning_count == 0
+        assert verdict.total_records == 0
+        assert not verdict.affected_outcomes
+        assert "Safe to flip" in verdict.advisory
+
+    def test_safe_when_no_warnings(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
+
+        records = [
+            {"outcome": "native_decoded_and_validated", "repair_attempts": 0, "wasted_attempts": 0},
+            {"outcome": "verbatim_passed", "repair_attempts": 0, "wasted_attempts": 0},
+        ]
+        verdict = compute_flip_guard_verdict(records)
+        assert verdict.safe_to_flip is True
+        assert verdict.lenient_warning_count == 0
+        assert verdict.total_records == 2
+        assert "Safe to flip" in verdict.advisory
+
+    def test_unsafe_when_warnings_exist(self) -> None:
+        from modulo.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
+
+        records = [
+            {"outcome": "lenient_validation_bypassed", "repair_attempts": 0, "wasted_attempts": 0},
+            {"outcome": "native_decoded_and_validated", "repair_attempts": 0, "wasted_attempts": 0},
+        ]
+        verdict = compute_flip_guard_verdict(records)
+        assert verdict.safe_to_flip is False
+        assert verdict.lenient_warning_count == 1
+        assert verdict.total_records == 2
+        assert "lenient_validation_bypassed" in verdict.affected_outcomes
+        assert "NOT safe to flip" in verdict.advisory
+
+    def test_never_mutates_mode(self) -> None:
+        """The flip guard MUST NOT change the mode under any circumstance.
+
+        This test calls the guard with various enforcement records and
+        verifies the resolved mode (via derive_mode_from_records) is
+        unchanged after the call.
+        """
+        from modulo.core.pipeline_engine.schema_enforcement import (
+            compute_flip_guard_verdict,
+            derive_mode_from_records,
+        )
+
+        records_with_warnings = [
+            {"outcome": "lenient_validation_bypassed", "repair_attempts": 0, "wasted_attempts": 0},
+        ]
+        records_without_warnings = [
+            {"outcome": "native_decoded_and_validated", "repair_attempts": 0, "wasted_attempts": 0},
+        ]
+
+        # Mode before calling the guard
+        mode_before_warnings = derive_mode_from_records(records_with_warnings)
+        mode_before_no_warnings = derive_mode_from_records(records_without_warnings)
+
+        # Call the guard — it must NOT mutate anything
+        verdict_warnings = compute_flip_guard_verdict(records_with_warnings)
+        verdict_no_warnings = compute_flip_guard_verdict(records_without_warnings)
+
+        # Mode is unchanged
+        assert derive_mode_from_records(records_with_warnings) == mode_before_warnings
+        assert derive_mode_from_records(records_without_warnings) == mode_before_no_warnings
+
+        # The guard never mutates the mode — it only advises
+        assert verdict_warnings.safe_to_flip is False
+        assert verdict_no_warnings.safe_to_flip is True

@@ -9,8 +9,11 @@ This module provides:
 The repair loop operates in STRICT mode only. In lenient mode, validation
 failures are recorded as warnings but the node does not fail.
 
-# TODO(FAR-902): flip guard hooks in here (needs the runs.schema_validator_mode
-# / schema_validation_outcome columns)
+FAR-902 flip guard: the ``compute_flip_guard_verdict`` in
+``schema_enforcement`` advises operators on lenient-to-strict safety.
+The guard NEVER mutates the mode — it only returns an advisory verdict
+based on accumulated enforcement records.  Changing the mode remains a
+separate, explicit, already-authorised operator action.
 """
 
 from __future__ import annotations
