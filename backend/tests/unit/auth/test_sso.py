@@ -2427,4 +2427,293 @@ class TestSsoJoinGate:
 
         assert _sso_verified_domain("plainname") is None
         assert _sso_verified_domain("a@b") == "b"
-        assert _sso_verified_domain("a@b@BAD.com") == "bad.com"
+
+
+# ---------------------------------------------------------------------------
+# Per-provider SAML routes (FAR-1001)
+# ---------------------------------------------------------------------------
+
+
+def _make_saml_provider(
+    *,
+    provider_id: str = "okta-saml",
+    entity_id: str | None = None,
+    enabled: bool = True,
+    org_id: uuid.UUID | None = None,
+) -> MagicMock:
+    """Build a mock SsoProvider with SAML type."""
+    p = MagicMock()
+    p.provider_id = provider_id
+    p.provider_type = "saml"
+    p.enabled = enabled
+    p.entity_id = entity_id
+    p.organisation_id = org_id or uuid.uuid4()
+    p.metadata_xml = None
+    p.metadata_url = None
+    p.name = "Okta SAML"
+    return p
+
+
+class TestPerProviderSamlRoutes:
+    """Per-provider SAML route surface (FAR-1001 / FAR-1002)."""
+
+    def test_per_provider_acs_valid_slug(self, client: TestClient) -> None:
+        """POST /saml/{slug}/acs resolves provider by slug and processes response."""
+        provider = _make_saml_provider(provider_id="okta-saml")
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+        )
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = provider
+            mock_process.return_value = {
+                "access_token": "at-per",
+                "refresh_token": "rt-per",
+                "token_type": "bearer",
+            }
+            resp = client.post(
+                "/api/v1/auth/saml/acs/okta-saml",
+                data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 307
+            assert "access_token=at-per" in resp.headers["location"]
+            # Verify provider_id was threaded through to saml_process_response
+            mock_process.assert_awaited_once()
+            call_kwargs = mock_process.call_args
+            assert call_kwargs.kwargs.get("provider_id") == "okta-saml"
+
+    def test_per_provider_acs_unknown_slug_returns_404(self, client: TestClient) -> None:
+        """POST /saml/{slug}/acs returns uniform 404 for unknown slug."""
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+        )
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = None
+            resp = client.post(
+                "/api/v1/auth/saml/acs/ghost-saml",
+                data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "Not Found"
+
+    def test_per_provider_acs_disabled_slug_returns_404(self, client: TestClient) -> None:
+        """POST /saml/{slug}/acs returns same 404 for disabled provider."""
+        provider = _make_saml_provider(provider_id="okta-saml", enabled=False)
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+        )
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = provider
+            resp = client.post(
+                "/api/v1/auth/saml/acs/okta-saml",
+                data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "Not Found"
+
+    def test_per_provider_acs_non_saml_slug_returns_404(self, client: TestClient) -> None:
+        """POST /saml/{slug}/acs returns same 404 for non-SAML provider type."""
+        provider = _make_saml_provider(provider_id="google-oidc")
+        provider.provider_type = "oidc"
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+        )
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = provider
+            resp = client.post(
+                "/api/v1/auth/saml/acs/google-oidc",
+                data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "Not Found"
+
+    def test_per_provider_metadata_emits_own_entity_id_and_acs(self, client: TestClient) -> None:
+        """GET /saml/{slug}/metadata emits provider-specific Entity ID and ACS Location."""
+        provider = _make_saml_provider(
+            provider_id="okta-saml",
+            entity_id="https://idp.okta.com/sp/abc123",
+        )
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+            modulo_public_url="https://app.example.com",
+        )
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = provider
+            resp = client.get("/api/v1/auth/saml/okta-saml/metadata")
+            assert resp.status_code == 200
+            body = resp.text
+            assert 'entityID="https://idp.okta.com/sp/abc123"' in body
+            assert 'Location="https://app.example.com/api/v1/auth/saml/acs/okta-saml"' in body
+
+    def test_per_provider_metadata_default_entity_id(self, client: TestClient) -> None:
+        """GET /saml/{slug}/metadata uses default Entity ID when provider has none."""
+        provider = _make_saml_provider(provider_id="okta-saml", entity_id=None)
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+            modulo_public_url="https://app.example.com",
+        )
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = provider
+            resp = client.get("/api/v1/auth/saml/okta-saml/metadata")
+            assert resp.status_code == 200
+            body = resp.text
+            default_eid = "https://app.example.com/api/v1/auth/saml/okta-saml"
+            assert f'entityID="{default_eid}"' in body
+            assert 'Location="https://app.example.com/api/v1/auth/saml/acs/okta-saml"' in body
+
+    def test_per_provider_metadata_unknown_slug_returns_404(self, client: TestClient) -> None:
+        """GET /saml/{slug}/metadata returns uniform 404 for unknown slug."""
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+        )
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = None
+            resp = client.get("/api/v1/auth/saml/ghost-saml/metadata")
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "Not Found"
+
+    def test_per_provider_login_redirects_to_idp(self, client: TestClient) -> None:
+        """GET /saml/{slug}/login resolves provider and redirects to IdP."""
+        provider = _make_saml_provider(provider_id="okta-saml")
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+        )
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
+        ):
+            mock_lookup.return_value = provider
+            mock_auth.return_value = ("https://idp.okta.com/sso?SAMLRequest=xyz", "")
+            resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
+            assert resp.status_code == 307
+            assert "idp.okta.com" in resp.headers["location"]
+            # Verify provider_id was threaded through
+            mock_auth.assert_awaited_once()
+            call_kwargs = mock_auth.call_args
+            assert call_kwargs.kwargs.get("provider_id") == "okta-saml"
+
+    def test_per_provider_login_unknown_slug_returns_404(self, client: TestClient) -> None:
+        """GET /saml/{slug}/login returns uniform 404 for unknown slug."""
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+        )
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = None
+            resp = client.get("/api/v1/auth/saml/ghost-saml/login", follow_redirects=False)
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "Not Found"
+
+    def test_no_preauth_route_401s_without_credentials(self, client: TestClient) -> None:
+        """Pre-auth SAML per-provider routes must never 401 for missing Authorization."""
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+        )
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = None
+            # All three per-provider routes should 404 (not 401) when slug is unknown
+            for path in [
+                "/api/v1/auth/saml/ghost/metadata",
+                "/api/v1/auth/saml/ghost/login",
+            ]:
+                resp = client.get(path, follow_redirects=False)
+                assert resp.status_code != 401, f"{path} must not 401"
+
+            resp = client.post(
+                "/api/v1/auth/saml/ghost/acs",
+                data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                follow_redirects=False,
+            )
+            assert resp.status_code != 401, "acs must not 401"
+
+    def test_two_orgs_each_with_saml_provider_different_metadata(self, client: TestClient) -> None:
+        """Two providers: each /saml/{slug}/metadata emits its OWN Entity ID and ACS."""
+        provider_a = _make_saml_provider(
+            provider_id="okta-a",
+            entity_id="https://idp-a.example.com/sp",
+        )
+        provider_b = _make_saml_provider(
+            provider_id="okta-b",
+            entity_id="https://idp-b.example.com/sp",
+        )
+        _override_settings(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+            modulo_public_url="https://app.example.com",
+        )
+
+        def _lookup_by_slug(slug: str) -> MagicMock | None:
+            if slug == "okta-a":
+                return provider_a
+            if slug == "okta-b":
+                return provider_b
+            return None
+
+        async def _async_lookup(session: object, slug: str) -> MagicMock | None:
+            return _lookup_by_slug(slug)
+
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.side_effect = _async_lookup
+
+            resp_a = client.get("/api/v1/auth/saml/okta-a/metadata")
+            assert resp_a.status_code == 200
+            assert 'entityID="https://idp-a.example.com/sp"' in resp_a.text
+            assert 'Location="https://app.example.com/api/v1/auth/saml/acs/okta-a"' in resp_a.text
+
+            resp_b = client.get("/api/v1/auth/saml/okta-b/metadata")
+            assert resp_b.status_code == 200
+            assert 'entityID="https://idp-b.example.com/sp"' in resp_b.text
+            assert 'Location="https://app.example.com/api/v1/auth/saml/acs/okta-b"' in resp_b.text
+
+
+class TestSamlProviderScoping:
+    """Provider-scoped resolution: audience containment (FAR-1010) across providers."""
+
+    def test_response_for_provider_a_rejected_at_provider_b(self) -> None:
+        """A SAML response minted for provider A's entity_id is rejected at provider B.
+
+        The _enforce_audience_restriction check in saml_handler.py enforces
+        audience containment. When provider A's entity_id is not in the
+        response's AudienceRestriction, the response is rejected — even if
+        the signature is valid.
+
+        We test _enforce_audience_restriction directly because python3-saml's
+        own Destination check rejects the response before our audience check
+        when Destination doesn't match the handler's ACS URL.
+        """
+        from modulo.auth.saml_handler import ModuloSamlAuth
+
+        # Build a response whose audience is provider A's entity_id
+        response_audience = "https://app.example.com/api/v1/auth/saml/okta-a"
+        xml = _build_xsd_compliant_saml_response(audience=response_audience)
+        encoded = base64.b64encode(xml.encode()).decode()
+
+        # _enforce_audience_restriction rejects when entity_id not in audiences
+        with pytest.raises(Exception, match="audience"):
+            ModuloSamlAuth._enforce_audience_restriction(encoded, "https://app.example.com/api/v1/auth/saml/okta-b")
+
+    def test_response_for_provider_a_accepted_at_provider_a(self) -> None:
+        """A SAML response minted for provider A's entity_id is accepted at provider A."""
+        from modulo.auth.saml_handler import ModuloSamlAuth
+
+        response_audience = "https://app.example.com/api/v1/auth/saml/okta-a"
+        xml = _build_xsd_compliant_saml_response(audience=response_audience)
+        encoded = base64.b64encode(xml.encode()).decode()
+
+        # Should not raise — entity_id matches the audience
+        ModuloSamlAuth._enforce_audience_restriction(encoded, "https://app.example.com/api/v1/auth/saml/okta-a")

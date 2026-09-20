@@ -92,7 +92,7 @@ async def _unique_provider_id(session: AsyncSession, base: str, _org_id: uuid.UU
     Scans every ``provider_id`` visible to ``session`` and returns ``base``,
     ``base-2``, ... — the first value not present. When ``session`` runs as the
     ``modulo_system`` role (BYPASSRLS) the scan is instance-global (all orgs),
-    matching the GLOBAL partial unique index (migration 0151, FAR-464 option a);
+    matching the GLOBAL partial unique index (migration 0158, FAR-464 option a);
     when it is the app session (RLS-scoped) the scan is limited to the org(s)
     the session can see. ``_org_id`` is retained in the signature for call-site
     clarity; the scan itself is RLS-aware so it is correct either way.
@@ -130,9 +130,9 @@ async def get_provider_by_provider_id(session: AsyncSession, provider_id: str) -
 
     Pre-auth SSO routes have no user/org context, so providers are resolved
     globally through the ``modulo_system`` role (BYPASSRLS). ``provider_id`` is
-    GLOBALLY unique (migration 0151, FAR-464 option a), so the system-session
+    GLOBALLY unique (migration 0158, FAR-464 option a), so the system-session
     slug resolution is deterministic. ``.limit(1)`` is a defensive guard: if
-    data somehow contains duplicate slugs (e.g. a pre-0151 fixture or a manual
+    data somehow contains duplicate slugs (e.g. a pre-0158 fixture or a manual
     insert), ``scalar_one_or_none`` would otherwise raise ``MultipleResultsFound``
     and 500 the OIDC login/callback — this coerces it to the first row instead.
     """
@@ -201,7 +201,7 @@ async def create_provider(
 
     pid = _slugify_provider_id(provider_id) if provider_id else _slugify_provider_id(name)
 
-    # provider_id is GLOBALLY unique (migration 0151, FAR-464 option a) so a
+    # provider_id is GLOBALLY unique (migration 0158, FAR-464 option a) so a
     # cross-org create must not collide. The caller hands us a modulo_system
     # (BYPASSRLS) session so ALL orgs' existing slugs are visible; we only use
     # it when the system role is actually provisioned (MODULO_SYSTEM_DATABASE_URL

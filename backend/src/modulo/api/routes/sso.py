@@ -27,12 +27,24 @@ from modulo.auth.sso import (
     saml_process_response,
 )
 from modulo.core.sanitize_log import sanitise_log_value
-from modulo.db.crud.sso_provider import get_enabled_saml_provider, list_enabled_oidc_providers
+from modulo.db.crud.sso_provider import (
+    get_enabled_saml_provider,
+    get_provider_by_provider_id,
+    list_enabled_oidc_providers,
+)
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["sso"])
+
+# Uniform generic error for unknown / disabled / org-inactive SAML provider
+# slugs.  Same status, body and timing shape — a prober must not be able to
+# distinguish an existing slug from a non-existing one (ADR 036 anti-enumeration).
+_SAML_NOT_FOUND = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Not Found",
+)
 
 
 def _frontend_url(settings: Settings) -> str:
@@ -295,7 +307,193 @@ async def oidc_callback(
 
 
 # ---------------------------------------------------------------------------
-# SAML 2.0
+# SAML 2.0 — per-provider routes (FAR-1001)
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_saml_for_route(
+    provider_id: str,
+    system_session: AsyncSession,
+    app_session: AsyncSession,
+) -> None:
+    """Resolve a SAML provider by slug for per-provider routes.
+
+    Uses the system session (BYPASSRLS) first, then the app session with
+    ``_set_default_rls_org`` fallback (mirrors OIDC). Raises a uniform 404
+    for unknown / disabled / non-SAML slugs (ADR 036 anti-enumeration).
+    """
+    provider = None
+    if system_session is not None:
+        async with system_session.begin():
+            provider = await get_provider_by_provider_id(system_session, provider_id)
+    if provider is None:
+        await _set_default_rls_org(app_session)
+        provider = await get_provider_by_provider_id(app_session, provider_id)
+    if provider is None or provider.provider_type != "saml" or not provider.enabled:
+        raise _SAML_NOT_FOUND
+
+
+@router.post("/saml/acs/{provider_id}")
+@handle_db_errors("sso.saml_acs_provider")
+async def saml_acs_provider(
+    provider_id: str,
+    request: Request,
+    _: object = require_feature_anonymous("sso"),
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+    system_session: AsyncSession = Depends(get_system_db_session),
+) -> RedirectResponse:
+    """Per-provider SAML ACS — the IdP posts back to this endpoint.
+
+    Resolves the provider by its globally unique ``provider_id`` slug. The
+    response is validated against THIS provider's SP entity ID and ACS URL.
+    """
+    await _resolve_saml_for_route(provider_id, system_session, session)
+
+    form = await request.form()
+    raw_saml: object = form.get("SAMLResponse", "")
+    if not isinstance(raw_saml, str) or not raw_saml:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing 'SAMLResponse' in form data",
+        )
+
+    try:
+        async with session.begin():
+            tokens = await saml_process_response(raw_saml, settings, system_session, session, provider_id=provider_id)
+    except ValueError as exc:
+        _log.warning("SAML ACS failed for provider %s: %s", provider_id, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from None
+    except ProgrammingError as exc:
+        _log.warning("SAML ACS failed — DB table missing: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("sso.saml_acs_provider.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+    return _redirect_to_frontend(tokens, settings)
+
+
+@router.get("/saml/{provider_id}/metadata", response_class=PlainTextResponse)
+@handle_db_errors("sso.saml_metadata_provider")
+async def saml_metadata_provider(
+    provider_id: str,
+    _request: Request,
+    _: object = require_feature_anonymous("sso"),
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+    system_session: AsyncSession = Depends(get_system_db_session),
+) -> str:
+    """Per-provider SP metadata — Entity ID and ACS Location are scoped to this provider."""
+    try:
+        async with session.begin():
+            # Resolve provider globally (system session first, then app fallback).
+            provider = None
+            if system_session is not None:
+                async with system_session.begin():
+                    provider = await get_provider_by_provider_id(system_session, provider_id)
+            if provider is None:
+                await _set_default_rls_org(session)
+                provider = await get_provider_by_provider_id(session, provider_id)
+            if provider is None or provider.provider_type != "saml" or not provider.enabled:
+                raise _SAML_NOT_FOUND
+
+            entity_id = provider.entity_id or f"{settings.modulo_public_url.rstrip('/')}/api/v1/auth/saml/{provider_id}"
+            public_url = settings.modulo_public_url.rstrip("/")
+            acs_url = f"{public_url}/api/v1/auth/saml/acs/{provider_id}"
+
+            xml_entities = {'"': "&quot;", "'": "&apos;"}
+            safe_entity_id = xml.sax.saxutils.escape(entity_id, xml_entities)
+            safe_acs_url = xml.sax.saxutils.escape(acs_url, xml_entities)
+
+            return (
+                '<?xml version="1.0"?>'
+                "<md:EntityDescriptor"
+                ' xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"'
+                f' entityID="{safe_entity_id}">'
+                "  <md:SPSSODescriptor"
+                '   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">'
+                f"    <md:AssertionConsumerService"
+                f'     Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"'
+                f'     Location="{safe_acs_url}"'
+                f'     index="1"/>'
+                "  </md:SPSSODescriptor>"
+                "</md:EntityDescriptor>"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("sso.saml_metadata_provider.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+
+@router.get("/saml/{provider_id}/login")
+@handle_db_errors("sso.saml_login_provider")
+async def saml_login_provider(
+    provider_id: str,
+    _request: Request,
+    _: object = require_feature_anonymous("sso"),
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+    system_session: AsyncSession = Depends(get_system_db_session),
+) -> Any:
+    """Per-provider SAML login — redirects to the IdP for this specific provider."""
+    await _resolve_saml_for_route(provider_id, system_session, session)
+
+    public_url = settings.modulo_public_url.rstrip("/")
+    acs_url = f"{public_url}/api/v1/auth/saml/acs/{provider_id}"
+
+    try:
+        async with session.begin():
+            auth_url, _ = await saml_get_auth_url(settings, acs_url, system_session, session, provider_id=provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+    except ProgrammingError as exc:
+        _log.warning("SAML login failed — DB table missing: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.warning("SAML login DB error: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("sso.saml_login_provider.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+    return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
+
+
+# ---------------------------------------------------------------------------
+# SAML 2.0 — legacy single-tenant convenience (unchanged)
 # ---------------------------------------------------------------------------
 
 
