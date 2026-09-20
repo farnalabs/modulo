@@ -1827,6 +1827,47 @@ class TestProjectWideFloor:
         assert "FAIL: Python line" in out
         assert "WARNING" not in out
 
+    def test_project_js_floor_enforced_with_relative_lcov_paths(self, tmp_path, capsys):
+        """The JS floor must be read from the raw report, not the deleted temp copy.
+
+        ``main`` normalises the LCOV report (vitest emits relative ``SF:``
+        paths) into an absolute-path temp file and unlinks it in the ``finally``
+        before the project-wide floor check runs.  Reading the normalised path
+        therefore finds a deleted file and silently skips the JavaScript floor
+        on every CI run; the floor must read the original report instead.
+        """
+        lcov = tmp_path / "lcov.info"
+        # Relative SF path => _normalize_js_report writes a temp copy that
+        # main deletes before the floor check.  50% line coverage sits below
+        # the 88% floor, so the run must fail.
+        lcov.write_text("TN:\nSF:src/App.vue\nDA:1,1\nDA:2,0\nend_of_record\n")
+
+        def fake_changed(compare_branch, language):
+            # A Python tiny diff keeps the gate from short-circuiting on
+            # all-skipped; JavaScript has no changed production files.
+            return {"backend/src/modulo/x.py": 1} if language == "Python" else {}
+
+        with (
+            patch.object(mod, "_get_changed_production_files", side_effect=fake_changed),
+            patch(
+                "sys.argv",
+                [
+                    "run_coverage_gate.py",
+                    "--compare-branch",
+                    "origin/main",
+                    "--python-report",
+                    str(tmp_path / "no-python.xml"),
+                    "--js-report",
+                    str(lcov),
+                ],
+            ),
+        ):
+            rc = mod.main()
+
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "FAIL: JavaScript line" in out
+
     def test_project_branch_zero_with_data_fails(self, tmp_path):
         """Branch records present but all uncovered (0%) -> floor failure.
 

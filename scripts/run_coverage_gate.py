@@ -1560,6 +1560,15 @@ def main() -> int:
 
     # Normalise the LCOV report so diff-cover can match its paths (see
     # _normalize_js_report).  The temp file, if any, is cleaned up below.
+    #
+    # Keep the ORIGINAL report path: the project-wide floor is computed after
+    # the finally block has unlinked the normalised temp copy, so it must read
+    # the raw report (which still exists) rather than ``js_report``.  In CI the
+    # vitest LCOV always uses relative ``SF:`` paths, so ``_normalize_js_report``
+    # always returns a temp file and ``js_report`` always points at the deleted
+    # copy — reading it would silently skip the JavaScript project-wide floor on
+    # every run.
+    raw_js_report = js_report
     normalised_js_report: Path | None = None
     if js_report is not None and js_report.exists():
         js_src_root = _sanitize_path(args.js_src_root, "js-src-root")
@@ -1608,8 +1617,8 @@ def main() -> int:
                 project_metrics.append(
                     f"  FAIL: Python branch {pb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — coverage regressed below floor"
                 )
-    if js_report is not None and js_report.exists():
-        js_metrics = _compute_project_wide_metrics_lcov(js_report)
+    if raw_js_report is not None and raw_js_report.exists():
+        js_metrics = _compute_project_wide_metrics_lcov(raw_js_report)
         if js_metrics is not None:
             jl, jb = js_metrics
             branch_display = f"{jb:.1f}%" if jb is not None else "n/a (no branch data)"
