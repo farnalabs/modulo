@@ -45,6 +45,7 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 from modulo.db.seed_demo import seed_demo, seed_demo_runtime
+from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
@@ -647,7 +648,11 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
     summary = await _run_seed(session, monkeypatch, _demo_settings())
 
     assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
-    demo_orgs = list((await session.execute(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG))).scalars())
+    demo_orgs = list(
+        (
+            await session.execute(include_soft_deleted(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG)))
+        ).scalars()
+    )
     assert len(demo_orgs) == 2
     live = [org for org in demo_orgs if org.deleted_at is None]
     assert len(live) == 1

@@ -29,6 +29,7 @@ from modulo.db.models import (
     purge_soft_deleted_eval_cases,
     validate_dataset_has_cases,
 )
+from modulo.db.soft_delete import include_soft_deleted
 
 _MIGRATION_PATH = (
     Path(__file__).parents[4]
@@ -247,7 +248,7 @@ def test_purge_removes_only_old_soft_deleted_cases() -> None:
     removed = purge_soft_deleted_eval_cases(session, cutoff - timedelta(days=7))
     session.commit()
     assert removed == 1
-    remaining = session.scalars(select(EvalCase)).all()
+    remaining = session.scalars(include_soft_deleted(select(EvalCase))).all()
     assert [c.id for c in remaining] == [recent.id]
     session.close()
 

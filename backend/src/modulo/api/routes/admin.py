@@ -115,6 +115,7 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.token_family import TokenFamily
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import Settings, get_settings
 
 _CODE_ROUTES_ADMIN = "routes.admin"
@@ -3518,7 +3519,11 @@ async def _load_org_retention_setting(
     try:
         async with session.begin():
             await set_rls_org(session, org_id)
-            result = await session.execute(select(Organisation.settings_json).where(Organisation.id == org_id).limit(1))
+            # FAR-1025: opt out of the global soft-delete filter — a
+            # pending-deletion org is still operationally live.
+            result = await session.execute(
+                include_soft_deleted(select(Organisation.settings_json).where(Organisation.id == org_id).limit(1))
+            )
             return result.scalar_one_or_none()
     except asyncio.CancelledError:
         raise
@@ -3576,8 +3581,12 @@ async def admin_update_retention(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            # FAR-1025: opt out of the global soft-delete filter — a
+            # pending-deletion org is still operationally live.
             result = await session.execute(
-                select(Organisation).where(Organisation.id == current_user.organisation_id).limit(1)
+                include_soft_deleted(
+                    select(Organisation).where(Organisation.id == current_user.organisation_id).limit(1)
+                )
             )
             org = result.scalar_one_or_none()
             if org is None:
@@ -3764,11 +3773,16 @@ async def admin_update_sandbox_concurrency(
                 # FAR-589 D3b: row-level lock (SELECT ... FOR UPDATE) so the
                 # read-modify-write of settings_json cannot drop a concurrent
                 # writer's change between the read and the flush.
+                # FAR-1025: opt out of the global soft-delete filter — a
+                # pending-deletion org is still operationally live during the
+                # confirmation window.
                 result = await session.execute(
-                    select(Organisation)
-                    .where(Organisation.id == current_user.organisation_id)
-                    .limit(1)
-                    .with_for_update()
+                    include_soft_deleted(
+                        select(Organisation)
+                        .where(Organisation.id == current_user.organisation_id)
+                        .limit(1)
+                        .with_for_update()
+                    )
                 )
                 org = result.scalar_one_or_none()
                 if org is None:

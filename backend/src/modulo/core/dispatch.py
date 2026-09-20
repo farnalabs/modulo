@@ -13,7 +13,7 @@ from typing import Any
 
 from redis.asyncio import Redis as AsyncRedis
 from saq.queue.redis import RedisQueue
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.settings import get_settings
@@ -80,12 +80,19 @@ async def _capacity_deferred(session: AsyncSession, run_id: uuid.UUID) -> bool:
     """True when the run's pipeline is at ``max_concurrent_runs`` (plan F3b)."""
     from modulo.db.crud.run import count_active_runs_for_pipeline, get_run
     from modulo.db.models.pipeline import Pipeline
+    from modulo.db.soft_delete import include_soft_deleted
 
     run = await get_run(session, run_id)
     if run is None:
         _log.warning("dispatch_run: run %s not found for capacity check", run_id)
         return True
-    pipeline = await session.get(Pipeline, run.pipeline_id)
+    # FAR-1025: opt out of the global soft-delete filter -- an in-flight
+    # run's pipeline may have been soft-deleted after dispatch.  Returning
+    # True (deferred) here causes an infinite re-dispatch loop because the
+    # run is never enqueued.
+    pipeline = (
+        await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
+    ).scalar_one_or_none()
     if pipeline is None:
         return True
     max_concurrent = pipeline.max_concurrent_runs
@@ -118,12 +125,19 @@ async def _slot_saturated(session: AsyncSession, run_id: uuid.UUID) -> bool:
     """
     from modulo.db.crud.run import count_active_runs_for_pipeline, get_run
     from modulo.db.models.pipeline import Pipeline
+    from modulo.db.soft_delete import include_soft_deleted
 
     try:
         run = await get_run(session, run_id)
         if run is None:
             return False
-        pipeline = await session.get(Pipeline, run.pipeline_id)
+        # FAR-1025: opt out of the global soft-delete filter -- an in-flight
+        # run's pipeline may have been soft-deleted.  Fail-open: missing
+        # pipeline admits the run (backpressure is an overload guard, never
+        # an admission authority).
+        pipeline = (
+            await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
+        ).scalar_one_or_none()
         if pipeline is None:
             return False
         max_concurrent = pipeline.max_concurrent_runs

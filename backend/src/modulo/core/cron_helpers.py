@@ -6539,8 +6539,16 @@ async def _capacity_defer_pending_run(
     """Mark a capacity-blocked pending run (FAR-225); True when deferred."""
     from modulo.db.crud.run import ERROR_CODE_PIPELINE_CAPACITY, count_active_runs_for_pipeline
     from modulo.db.models.pipeline import Pipeline
+    from modulo.db.soft_delete import include_soft_deleted
 
-    pipeline = await session.get(Pipeline, row.pipeline_id)
+    # FAR-1025: opt out of the global soft-delete filter -- an in-flight
+    # run's pipeline may have been soft-deleted.  Without this, the pipeline
+    # lookup returns None and max_concurrent defaults to 0, which skips the
+    # capacity check entirely (allows the run through unchecked).
+    pipeline_result = await session.execute(
+        include_soft_deleted(select(Pipeline).where(Pipeline.id == row.pipeline_id))
+    )
+    pipeline = pipeline_result.scalar_one_or_none()
     max_concurrent = pipeline.max_concurrent_runs if pipeline is not None else 0
     if max_concurrent <= 0:
         return False
