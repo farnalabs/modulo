@@ -411,6 +411,28 @@ describe('DevMetricsView', () => {
     expect(wrapper.text()).toContain('Time to First Byte over time')
   })
 
+  it('renders time-range selector and refresh button via the right slot', async () => {
+    const wrapper = mount(DevMetricsView)
+    await flushPromises()
+    // The header's right-hand container must render (PageHeader injects it via #right)
+    const headerRight = wrapper.find('[data-testid="page-header-right"]')
+    expect(headerRight.exists()).toBe(true)
+    // The time-range <select> must be rendered inside the header's right slot
+    const select = headerRight.find('[data-testid="dev-metrics-time-range"]')
+    expect(select.exists()).toBe(true)
+    // All three day options must be present
+    const options = select.findAll('option')
+    expect(options).toHaveLength(3)
+    expect(options[0].text()).toBe('Last 7 days')
+    expect(options[1].text()).toBe('Last 30 days')
+    expect(options[2].text()).toBe('Last 90 days')
+    // The Refresh button must be rendered inside the header's right slot,
+    // scoped by data-testid so it does not depend on DOM order
+    const refreshBtn = headerRight.find('[data-testid="dev-metrics-refresh"]')
+    expect(refreshBtn.exists()).toBe(true)
+    expect(refreshBtn.text()).toContain('Refresh')
+  })
+
   it('renders bar tooltip with date and formatted value', async () => {
     mockGet.mockImplementation((url: string) => {
       if (url.includes('/summary')) {
