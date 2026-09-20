@@ -544,8 +544,9 @@ def test_threshold_not_met_regex_matches():
 # ---------------------------------------------------------------------------
 # COVERAGE_THRESHOLD constant
 # ---------------------------------------------------------------------------
-def test_default_threshold_is_90():
-    assert mod.COVERAGE_THRESHOLD == 90
+def test_default_threshold_is_98():
+    assert mod.COVERAGE_THRESHOLD == 98
+    assert mod.BRANCH_COVERAGE_THRESHOLD == 98
 
 
 # ---------------------------------------------------------------------------
@@ -1284,3 +1285,434 @@ def test_evaluate_deletion_only_diff_skips_via_real_git_diff(tmp_path):
     assert changed == {}
     assert result.skipped is True
     assert result.passed is True
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: parser unit tests
+# ---------------------------------------------------------------------------
+class TestParseCoberturaBranches:
+    def test_parses_branch_conditions(self, tmp_path):
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="src/main.py"><lines>'
+            '<line number="5" hits="3" branch="true" condition-coverage="50% (1/2)">'
+            "<conditions>"
+            '<condition number="0" type="jump" coverage="100%"/>'
+            '<condition number="1" type="jump" coverage="0%"/>'
+            "</conditions></line>"
+            '<line number="10" hits="1" branch="false"/>'
+            "</lines></class></classes></package></packages></coverage>"
+        )
+        result = mod._parse_cobertura_branches(xml)
+        assert "src/main.py" in result
+        assert result["src/main.py"][5] == (1, 2)
+        assert 10 not in result["src/main.py"]
+
+    def test_empty_report(self, tmp_path):
+        xml = tmp_path / "coverage.xml"
+        xml.write_text("<coverage/>")
+        assert mod._parse_cobertura_branches(xml) == {}
+
+    def test_invalid_xml(self, tmp_path):
+        xml = tmp_path / "coverage.xml"
+        xml.write_text("not xml")
+        assert mod._parse_cobertura_branches(xml) == {}
+
+
+class TestParseLcovBranches:
+    def test_parses_brda_records(self, tmp_path):
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nSF:src/app.ts\nBRDA:5,0,0,1\nBRDA:5,0,1,-\nBRDA:10,0,0,-\nend_of_record\n")
+        result = mod._parse_lcov_branches(lcov)
+        assert result["src/app.ts"][5] == (1, 2)
+        assert result["src/app.ts"][10] == (0, 1)
+
+    def test_taken_zero_is_not_covered(self, tmp_path):
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nSF:src/x.ts\nBRDA:1,0,0,0\nend_of_record\n")
+        result = mod._parse_lcov_branches(lcov)
+        assert result["src/x.ts"][1] == (0, 1)
+
+    def test_empty_report(self, tmp_path):
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nend_of_record\n")
+        assert mod._parse_lcov_branches(lcov) == {}
+
+
+class TestParseAddedLineNumbers:
+    def test_extracts_added_line_numbers(self):
+        diff = "@@ -1,3 +1,5 @@\n context\n+added_one\n+added_two\n context\n"
+        assert mod._parse_added_line_numbers(diff) == {2, 3}
+
+    def test_multiple_hunks(self):
+        diff = "@@ -1,2 +1,3 @@\n+a1\n ctx\n@@ -10,2 +11,3 @@\n+b1\n ctx\n"
+        assert mod._parse_added_line_numbers(diff) == {1, 11}
+
+
+class TestComputeBranchCoverage:
+    def test_no_branch_data_all_unmeasured(self):
+        covered, total, unmeasured = mod._compute_branch_coverage({"src/main.py": 5}, {})
+        assert covered == 0 and total == 0 and unmeasured == 5
+
+    def test_partial_branch_data(self):
+        covered, total, unmeasured = mod._compute_branch_coverage(
+            {"src/main.py": 10}, {"src/main.py": {3: (1, 2), 7: (2, 2)}}
+        )
+        assert covered == 3 and total == 4 and unmeasured == 0
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: evaluation tests -- the cases that catch the rejected impl
+# ---------------------------------------------------------------------------
+class TestBranchCoverageEvaluation:
+    def test_two_branches_one_taken_fails(self, tmp_path):
+        """CATCHES THE REJECTED IMPLEMENTATION: 2 branches, 1 taken -> 50% -> FAIL."""
+        fake_report = tmp_path / "coverage.xml"
+        fake_report.write_text("<coverage/>")
+        json_pass = {
+            "src_stats": {
+                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}
+            },
+            "total_num_lines": 50,
+            "total_num_violations": 0,
+            "total_percent_covered": 100.0,
+            "num_changed_lines": 50,
+        }
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 50}),
+            patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+            patch.object(mod, "_get_diff_cover_json", return_value=json_pass),
+            patch.object(mod, "_compute_branch_coverage_from_raw", return_value=(1, 2, 0)),
+        ):
+            result = mod.evaluate("Python", fake_report, "origin/main", 98, branch_fail_under=98)
+        assert result.passed is True
+        assert result.branch_passed is False
+        assert result.branch_actual_pct == 50.0
+
+    def test_all_branches_not_taken_fails(self, tmp_path):
+        """Branch records present but ALL taken='-' -> 0% -> FAIL."""
+        fake_report = tmp_path / "coverage.xml"
+        fake_report.write_text("<coverage/>")
+        json_pass = {
+            "src_stats": {
+                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}
+            },
+            "total_num_lines": 50,
+            "total_num_violations": 0,
+            "total_percent_covered": 100.0,
+            "num_changed_lines": 50,
+        }
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 50}),
+            patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+            patch.object(mod, "_get_diff_cover_json", return_value=json_pass),
+            patch.object(mod, "_compute_branch_coverage_from_raw", return_value=(0, 4, 0)),
+        ):
+            result = mod.evaluate("Python", fake_report, "origin/main", 98, branch_fail_under=98)
+        assert result.passed is True
+        assert result.branch_passed is False
+        assert result.branch_actual_pct == 0.0
+
+    def test_line_97_percent_fails_new_threshold(self, tmp_path):
+        """Line 97% -> FAIL (new 98 threshold)."""
+        fake_report = tmp_path / "coverage.xml"
+        fake_report.write_text("<coverage/>")
+        json_97 = {
+            "src_stats": {
+                "src/calc.py": {
+                    "percent_covered": 100.0,
+                    "covered_lines": list(range(97)),
+                    "violation_lines": [98, 99, 100],
+                }
+            },
+            "total_num_lines": 100,
+            "total_num_violations": 3,
+            "total_percent_covered": 97.0,
+            "num_changed_lines": 100,
+        }
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 100}),
+            patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_90_STDOUT)),
+            patch.object(mod, "_get_diff_cover_json", return_value=json_97),
+            patch.object(mod, "_compute_branch_coverage_from_raw", return_value=(100, 100, 0)),
+        ):
+            result = mod.evaluate("Python", fake_report, "origin/main", 98, branch_fail_under=98)
+        assert result.passed is False
+        assert result.actual_pct is not None and result.actual_pct < 98
+
+    def test_line_99_branch_90_fails(self, tmp_path):
+        """Line 99% + branch 90% -> FAIL."""
+        fake_report = tmp_path / "coverage.xml"
+        fake_report.write_text("<coverage/>")
+        json_99 = {
+            "src_stats": {
+                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(99)), "violation_lines": [100]}
+            },
+            "total_num_lines": 100,
+            "total_num_violations": 1,
+            "total_percent_covered": 99.0,
+            "num_changed_lines": 100,
+        }
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 100}),
+            patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+            patch.object(mod, "_get_diff_cover_json", return_value=json_99),
+            patch.object(mod, "_compute_branch_coverage_from_raw", return_value=(9, 10, 0)),
+        ):
+            result = mod.evaluate("Python", fake_report, "origin/main", 98, branch_fail_under=98)
+        assert result.passed is True
+        assert result.branch_passed is False
+
+    def test_line_99_branch_99_passes(self, tmp_path):
+        """Line 99% + branch 99% -> PASS."""
+        fake_report = tmp_path / "coverage.xml"
+        fake_report.write_text("<coverage/>")
+        json_99 = {
+            "src_stats": {
+                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(99)), "violation_lines": [100]}
+            },
+            "total_num_lines": 100,
+            "total_num_violations": 1,
+            "total_percent_covered": 99.0,
+            "num_changed_lines": 100,
+        }
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 100}),
+            patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+            patch.object(mod, "_get_diff_cover_json", return_value=json_99),
+            patch.object(mod, "_compute_branch_coverage_from_raw", return_value=(99, 100, 0)),
+        ):
+            result = mod.evaluate("Python", fake_report, "origin/main", 98, branch_fail_under=98)
+        assert result.passed is True and result.branch_passed is True
+
+    def test_vacuous_branch_pass(self, tmp_path):
+        """No branch records -> vacuous pass."""
+        fake_report = tmp_path / "coverage.xml"
+        fake_report.write_text("<coverage/>")
+        json_pass = {
+            "src_stats": {
+                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}
+            },
+            "total_num_lines": 50,
+            "total_num_violations": 0,
+            "total_percent_covered": 100.0,
+            "num_changed_lines": 50,
+        }
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 50}),
+            patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+            patch.object(mod, "_get_diff_cover_json", return_value=json_pass),
+            patch.object(mod, "_compute_branch_coverage_from_raw", return_value=(0, 0, 0)),
+        ):
+            result = mod.evaluate("Python", fake_report, "origin/main", 98, branch_fail_under=98)
+        assert result.passed is True
+        assert result.branch_passed is None
+        assert result.branch_actual_pct is None
+
+
+# ---------------------------------------------------------------------------
+# Branch parser integration tests
+# ---------------------------------------------------------------------------
+class TestBranchParserIntegration:
+    def test_cobertura_all_conditions_covered(self, tmp_path):
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="src/main.py"><lines>'
+            '<line number="5" hits="2" branch="true" condition-coverage="100% (2/2)">'
+            '<conditions><condition number="0" type="jump" coverage="100%"/>'
+            '<condition number="1" type="jump" coverage="100%"/></conditions></line>'
+            "</lines></class></classes></package></packages></coverage>"
+        )
+        assert mod._parse_cobertura_branches(xml)["src/main.py"][5] == (2, 2)
+
+    def test_cobertura_no_conditions_covered(self, tmp_path):
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="src/main.py"><lines>'
+            '<line number="5" hits="0" branch="true" condition-coverage="0% (0/2)">'
+            '<conditions><condition number="0" type="jump" coverage="0%"/>'
+            '<condition number="1" type="jump" coverage="0%"/></conditions></line>'
+            "</lines></class></classes></package></packages></coverage>"
+        )
+        assert mod._parse_cobertura_branches(xml)["src/main.py"][5] == (0, 2)
+
+    def test_lcov_mixed_taken_not_taken(self, tmp_path):
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nSF:src/app.ts\nBRDA:3,0,0,1\nBRDA:3,0,1,2\nBRDA:7,0,0,-\nend_of_record\n")
+        result = mod._parse_lcov_branches(lcov)
+        assert result["src/app.ts"][3] == (2, 2)
+        assert result["src/app.ts"][7] == (0, 1)
+
+    def test_compute_branch_coverage_from_raw_cobertura(self, tmp_path):
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="src/main.py"><lines>'
+            '<line number="1" hits="1" branch="true" condition-coverage="50% (1/2)">'
+            '<conditions><condition number="0" type="jump" coverage="100%"/>'
+            '<condition number="1" type="jump" coverage="0%"/></conditions></line>'
+            '<line number="2" hits="1" branch="true" condition-coverage="100% (1/1)">'
+            '<conditions><condition number="0" type="jump" coverage="100%"/></conditions></line>'
+            "</lines></class></classes></package></packages></coverage>"
+        )
+        git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
+        with patch.object(mod.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
+                {"src/main.py": 2}, xml, "origin/main", "Python"
+            )
+        assert covered == 2 and total == 3 and unmeasured == 0
+
+    def test_compute_branch_coverage_from_raw_lcov(self, tmp_path):
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nSF:src/app.ts\nBRDA:1,0,0,1\nBRDA:1,0,1,-\nBRDA:2,0,0,3\nend_of_record\n")
+        git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
+        with patch.object(mod.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
+                {"src/app.ts": 2}, lcov, "origin/main", "JavaScript"
+            )
+        assert covered == 2 and total == 3 and unmeasured == 0
+
+    def test_compute_branch_coverage_unmeasured_file(self, tmp_path):
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nSF:src/other.ts\nBRDA:1,0,0,1\nend_of_record\n")
+        git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
+        with patch.object(mod.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
+                {"src/new.ts": 2}, lcov, "origin/main", "JavaScript"
+            )
+        assert covered == 0 and total == 0 and unmeasured == 2
+
+
+# ---------------------------------------------------------------------------
+# Project-wide floor tests
+# ---------------------------------------------------------------------------
+class TestProjectWideMetrics:
+    def test_cobertura_metrics(self, tmp_path):
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>'
+            '<line number="1" hits="3"/><line number="2" hits="0"/>'
+            '<line number="3" hits="1" branch="true" condition-coverage="100% (1/1)">'
+            '<conditions><condition number="0" type="jump" coverage="100%"/></conditions></line>'
+            '<line number="4" hits="0" branch="true" condition-coverage="0% (0/1)">'
+            '<conditions><condition number="0" type="jump" coverage="0%"/></conditions></line>'
+            "</lines></class>"
+            '<class filename="b.py"><lines><line number="1" hits="5"/></lines></class>'
+            "</classes></package></packages></coverage>"
+        )
+        line_pct, branch_pct = mod._compute_project_wide_metrics_cobertura(xml)
+        assert line_pct == 60.0 and branch_pct == 50.0
+
+    def test_lcov_metrics(self, tmp_path):
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text(
+            "TN:\nSF:a.ts\nDA:1,1\nDA:2,0\nDA:3,5\nBRDA:1,0,0,1\nBRDA:2,0,0,-\nend_of_record\n"
+            "TN:\nSF:b.ts\nDA:1,1\nend_of_record\n"
+        )
+        line_pct, branch_pct = mod._compute_project_wide_metrics_lcov(lcov)
+        assert line_pct == 75.0 and branch_pct == 50.0
+
+    def test_cobertura_empty(self, tmp_path):
+        xml = tmp_path / "coverage.xml"
+        xml.write_text("<coverage/>")
+        assert mod._compute_project_wide_metrics_cobertura(xml) == (0.0, 0.0)
+
+    def test_lcov_empty(self, tmp_path):
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nend_of_record\n")
+        assert mod._compute_project_wide_metrics_lcov(lcov) == (0.0, 0.0)
+
+
+class TestProjectWideFloor:
+    def test_project_line_below_floor(self, tmp_path):
+        xml = tmp_path / "coverage.xml"
+        lines = "\n".join('<line number="{}" hits="{}"/>'.format(i, "1" if i <= 80 else "0") for i in range(1, 101))
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 0
+
+    def test_project_both_above_floor(self, tmp_path):
+        xml = tmp_path / "coverage.xml"
+        lines = "\n".join(
+            f'<line number="{i}" hits="1" branch="true" '
+            'condition-coverage="100% (1/1)">'
+            '<conditions><condition number="0" type="jump" '
+            'coverage="100%"/></conditions></line>'
+            for i in range(1, 101)
+        )
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage in summary output
+# ---------------------------------------------------------------------------
+class TestBranchCoverageSummary:
+    def test_summary_includes_branch_info(self):
+        result = mod.GateResult(
+            language="Python",
+            skipped=False,
+            skip_reason="",
+            passed=True,
+            actual_pct=100.0,
+            threshold=98,
+            branch_actual_pct=95.0,
+            branch_passed=False,
+            branch_threshold=98,
+        )
+        summary = result.summary()
+        assert "[Python] PASS" in summary
+        assert "branch 95.0%" in summary
+
+    def test_summary_vacuous_branch(self):
+        result = mod.GateResult(
+            language="JavaScript",
+            skipped=False,
+            skip_reason="",
+            passed=True,
+            actual_pct=100.0,
+            threshold=98,
+            branch_passed=None,
+        )
+        assert "vacuous" in result.summary().lower()
+
+    def test_summary_skipped_no_branch_info(self):
+        result = mod.GateResult(
+            language="Python",
+            skipped=True,
+            skip_reason="no changed production lines",
+            passed=True,
+            actual_pct=None,
+            threshold=98,
+        )
+        summary = result.summary()
+        assert "SKIPPED" in summary
+        assert "branch" not in summary.lower()
