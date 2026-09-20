@@ -111,8 +111,9 @@ _MIGRATION_PATH = (
 # chained onto 0245_drop_organisations_created_by_fk, and 0247_sso_presets (FAR-853)
 # chained onto 0246_sso_join_gate, and 0248_agent_schema_profile (FAR-900)
 # chained onto 0247_sso_presets, and 0249_validation_level (FAR-935)
-# chained onto 0248_agent_schema_profile as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0249_validation_level"
+# chained onto 0248_agent_schema_profile, and 0250_eval_policy_gate (FAR-1060)
+# chained onto 0249_validation_level as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0250_eval_policy_gate"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
