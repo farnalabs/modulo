@@ -4,6 +4,7 @@
     hooks:
       - id: bandit
         args: [-r, backend/src/, -ll, -x, backend/src/modulo/model_backends/stub/]
+        files: ^backend/src/
         pass_filenames: false
         stages: [pre-commit]
 
