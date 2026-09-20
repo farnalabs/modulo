@@ -7873,8 +7873,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 extra={"node_id": node_id},
                 exc_info=True,
             )
-        # NOTE: the local temp dir is retained until node completion (FAR-901)
-        # and then removed in the validation ``finally`` below.
+        finally:
+            # FAR-901: the contract files are uploaded to the sandbox above, so
+            # the local temp dir is removed here on EVERY path.  Cleaning up
+            # only in the output-schema validation ``finally`` (further below)
+            # leaked the dir whenever a node declared an input schema but no
+            # output schema, because that validation block never ran.
+            if _contract_local_tmp is not None:
+                import shutil
+
+                shutil.rmtree(_contract_local_tmp, ignore_errors=True)
 
         # FAR-296 mode split: llm mode writes the rendered prompt to
         # prompt.md; script mode writes the FULL run input (no 10KB
@@ -8835,13 +8843,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     ),
                     node_id=node_id,
                 ) from None
-            finally:
-                # FAR-901: clean up the local temp schema dir now that
-                # validation is complete.
-                if _contract_local_tmp is not None:
-                    import shutil
-
-                    shutil.rmtree(_contract_local_tmp, ignore_errors=True)
 
         status: str = "completed" if exit_code == 0 else "failed"
         result_summary: str = ""

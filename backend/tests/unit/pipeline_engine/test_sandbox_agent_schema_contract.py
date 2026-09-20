@@ -14,6 +14,7 @@ mock style (see ``test_sandbox_agent_workspace_inputs.py``).
 
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -185,6 +186,34 @@ async def test_contract_write_failure_is_best_effort() -> None:
 
     assert result["output"]["status"] == "completed"
     assert not [path for path in _written_paths(sandbox) if "/home/user/schemas/" in path]
+
+
+async def test_contract_temp_dir_cleaned_up_without_output_schema(tmp_path: Path) -> None:
+    """A node with only an input schema still cleans up the local contract tmp dir.
+
+    Regression (FAR-901 review): cleanup lived inside the output-schema
+    validation ``finally``, so a node whose ``output_schema_json`` was empty
+    never ran it and leaked a ``schema_contract_*`` dir on every dispatch.
+    """
+    node_def = _script_node_def(output_schema_json=None)
+    node_id = node_def["id"]
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _sandbox_mock()
+    contract_tmp = tmp_path / "schema_contract_test"
+    contract_tmp.mkdir()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("tempfile.mkdtemp", return_value=str(contract_tmp)),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    # The input contract is still written and uploaded on the no-output path.
+    assert any(f"/home/user/schemas/{node_id}/input.active.json" in path for path in _written_paths(sandbox))
+    # ...and the local temp dir is removed even though validation never ran.
+    assert not contract_tmp.exists()
 
 
 async def test_contract_write_warnings_are_logged_but_do_not_fail() -> None:

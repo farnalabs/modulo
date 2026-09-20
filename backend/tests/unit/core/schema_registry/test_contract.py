@@ -183,7 +183,7 @@ class TestAtomicityAndRollback:
         )
         schema_dir = tmp_path / "schemas" / "n1"
         tmp_files = list(schema_dir.glob("*.tmp"))
-        assert tmp_files == []
+        assert not tmp_files
 
     def test_orphan_tmp_cleanup(self, tmp_path: Path) -> None:
         schema_dir = tmp_path / "schemas" / "n1"
@@ -308,10 +308,21 @@ class TestAtomicityAndRollback:
         assert (schema_dir / "orphan.tmp").exists()
 
     def test_orphan_cleanup_missing_dir(self, tmp_path: Path) -> None:
-        """Cleanup of a directory that does not exist is a no-op."""
-        missing_dir = tmp_path / "does-not-exist"
-        _cleanup_orphan_tmps(missing_dir)
-        assert not missing_dir.exists()
+        """Cleanup of a directory that does not exist is a no-op.
+
+        It must not raise, must not create the directory, and must not reach
+        into sibling directories.
+        """
+        sibling = tmp_path / "present"
+        sibling.mkdir()
+        uncleaned = sibling / "keep.tmp"
+        uncleaned.write_text("stale")
+        missing = tmp_path / "does-not-exist"
+
+        _cleanup_orphan_tmps(missing)
+
+        assert not missing.exists()
+        assert uncleaned.exists()
 
     def test_atomic_write_cleans_up_when_fdopen_fails(self, tmp_path: Path) -> None:
         """A failure after mkstemp but before fdopen closes the fd and removes the tmp."""
