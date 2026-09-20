@@ -39,6 +39,7 @@ from modulo.db.crud.sso_provider import (
     list_enabled_oidc_providers,
     list_enabled_saml_providers,
 )
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -207,6 +208,18 @@ async def org_login(
             org = await get_login_active_org_by_slug(session, slug)
             if org is None:
                 raise _GENERIC_404
+
+            # FAR-1058: bind the app session's RLS org to the RESOLVED org
+            # before the provider reads. The sso_providers RLS policy is
+            # ``organisation_id = current_setting('app.organisation_id')``;
+            # pre-auth nothing is bound, so every provider read returned ZERO
+            # rows (fail-closed but feature-dead: the org-login page showed
+            # no SSO options on a real RLS deployment). Binding AFTER the
+            # org resolves preserves fail-closed — unknown/non-login-active
+            # slugs raised 404 above before any binding — and the explicit
+            # ``organisation_id == org.id`` filters below remain
+            # defense-in-depth, so sibling orgs stay invisible either way.
+            await set_rls_org(session, org.id)
 
             # Scoped to this org only — never use the system-scoped global read.
             oidc_providers = await list_enabled_oidc_providers(session)
