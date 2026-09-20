@@ -173,7 +173,7 @@ def rest_test_server(monkeypatch: pytest.MonkeyPatch):
     Sets ``SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128`` for the test scope
     so the connector's pinned transport permits loopback — the documented
     operator mechanism for self-hosted deployments reaching localhost backends
-    (Trivy, SonarQube, Ollama, etc.).  This does NOT weaken the SSRF guard;
+    (SonarQube, Ollama, etc.).  This does NOT weaken the SSRF guard;
     link-local / metadata / multicast ranges remain blocked.
     """
     monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "127.0.0.0/8,::1/128")

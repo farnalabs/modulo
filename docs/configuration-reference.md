@@ -447,7 +447,6 @@ above (or an explicit non-loopback `base_url`) before they will connect:
 
 | Connector | Default `base_url` |
 |-----------|--------------------|
-| Trivy | `http://localhost:8080` |
 | SonarQube | `http://localhost:9000` |
 | 1Password Connect | `http://localhost:8080` |
 | TeamCity | `http://localhost:8111` |
