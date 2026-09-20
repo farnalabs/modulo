@@ -402,6 +402,7 @@ describe('AdminRemyView branches — save error catch blocks', () => {
 
     // Open skills-as-knowledge section and trigger save
     const skillsAsKnowledge = wrapper.findAll('.card').find((c) => c.find('h2')?.text().includes('Skills as Knowledge'))
+    expect(skillsAsKnowledge).toBeDefined()
     if (skillsAsKnowledge) {
       const select = skillsAsKnowledge.findAllComponents({ name: 'Select' })[0]
       await (select.vm as unknown as { $emit: (e: string, v: unknown) => void }).$emit('update:modelValue', 'off')
@@ -514,9 +515,14 @@ describe('AdminRemyView branches — loadProviders error', () => {
     })
     const wrapper = mount((await import('../views/AdminRemyView.vue')).default)
     await flushPromises()
-    // When model-backends errors, the providers list should be empty
+    // When model-backends errors, providerStatus is cleared, so the
+    // configured-providers section renders no provider entries...
     const providers = wrapper.find('[data-testid="remy-providers"]')
     expect(providers.exists()).toBe(true)
+    expect(providers.text()).not.toContain('Anthropic')
+    // ...and the custom-backends section falls back to its empty state.
+    const customSection = wrapper.find('[data-testid="remy-custom-backends"]')
+    expect(customSection.text()).toContain('No custom backends configured')
     wrapper.unmount()
   })
 
@@ -545,9 +551,14 @@ describe('AdminRemyView branches — loadProviders error', () => {
     })
     const wrapper = mount((await import('../views/AdminRemyView.vue')).default)
     await flushPromises()
-    // No crash, providers section should render empty
+    // No crash, providerStatus is cleared on the catch path, so the
+    // configured-providers section renders no entries and the
+    // custom-backends section shows its empty state.
     const providers = wrapper.find('[data-testid="remy-providers"]')
     expect(providers.exists()).toBe(true)
+    expect(providers.text()).not.toContain('Anthropic')
+    const customSection = wrapper.find('[data-testid="remy-custom-backends"]')
+    expect(customSection.text()).toContain('No custom backends configured')
     wrapper.unmount()
   })
 })
@@ -612,6 +623,7 @@ describe('AdminRemyView branches — saveSkillSourceMode API error', () => {
     })
 
     const skillsAsKnowledge = wrapper.findAll('.card').find((c) => c.find('h2')?.text().includes('Skills as Knowledge'))
+    expect(skillsAsKnowledge).toBeDefined()
     if (skillsAsKnowledge) {
       const select = skillsAsKnowledge.findAllComponents({ name: 'Select' })[0]
       await (select.vm as unknown as { $emit: (e: string, v: unknown) => void }).$emit('update:modelValue', 'off')
