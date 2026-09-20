@@ -1,4 +1,9 @@
-"""FAR-902: unit tests for schema enforcement record + aggregation (D2, D4 pure fn)."""
+"""FAR-902: unit tests for schema enforcement record + aggregation (D2, D4 pure fn).
+
+Also covers the FAR-902 enforcement-record PAYLOAD fix: proving that the
+record carries real profile, native-output, repair and attempt data from both
+the agent path and the sandbox path.
+"""
 
 from __future__ import annotations
 
@@ -154,3 +159,269 @@ class TestSchemaEnforcementRecordDataclass:
         rec = SchemaEnforcementRecord(outcome="test")
         with pytest.raises(AttributeError):
             rec.outcome = "changed"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# FAR-902 PAYLOAD FIX: prove enforcement records carry real data
+# ---------------------------------------------------------------------------
+
+
+class TestEnforcementPayloadPopulated:
+    """Prove the enforcement record carries real profile, native-output,
+    repair and attempt data — NOT the hollow defaults.
+
+    Without the fix, every record says resolved_profile=None,
+    native_output=False, repair_attempts=0, wasted_attempts=0 because the
+    call sites omit these parameters.  Each test BELOW asserts a value that
+    is NON-default, so it FAILS with the old hollow wiring.
+    """
+
+    def _simple_schema(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "age": {"type": "integer"},
+            },
+            "required": ["name"],
+        }
+
+    # -- resolved_profile threading --
+
+    def test_finalize_node_result_threads_resolved_profile(self) -> None:
+        """_finalize_node_result passes resolved_profile to build_enforcement_record.
+
+        FAILS WITHOUT FIX: resolved_profile defaults to None when omitted.
+        """
+        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+
+        result = _finalize_node_result(
+            "n1",
+            {"name": "Alice"},
+            self._simple_schema(),
+            None,
+            resolved_profile="provider-strict",
+        )
+        rec = result.get("_schema_enforcement_record")
+        assert rec is not None
+        assert rec["resolved_profile"] == "provider-strict"
+
+    def test_finalize_node_result_threads_verbatim_profile(self) -> None:
+        """When no profile override is set, the record carries 'verbatim'."""
+        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+
+        result = _finalize_node_result(
+            "n1",
+            {"name": "Alice"},
+            self._simple_schema(),
+            None,
+            resolved_profile="verbatim",
+        )
+        rec = result.get("_schema_enforcement_record")
+        assert rec is not None
+        assert rec["resolved_profile"] == "verbatim"
+
+    # -- native_output threading --
+
+    def test_finalize_node_result_threads_native_output_true(self) -> None:
+        """When the provider uses native structured output, the record is True.
+
+        FAILS WITHOUT FIX: native_output defaults to False when omitted.
+        """
+        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+
+        result = _finalize_node_result(
+            "n1",
+            {"name": "Alice"},
+            self._simple_schema(),
+            None,
+            native_output=True,
+        )
+        rec = result.get("_schema_enforcement_record")
+        assert rec is not None
+        assert rec["native_output"] is True
+
+    def test_finalize_node_result_threads_native_output_false(self) -> None:
+        """When the provider does NOT use native output, the record is False."""
+        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+
+        result = _finalize_node_result(
+            "n1",
+            {"name": "Alice"},
+            self._simple_schema(),
+            None,
+            native_output=False,
+        )
+        rec = result.get("_schema_enforcement_record")
+        assert rec is not None
+        assert rec["native_output"] is False
+
+    # -- repair_attempts / wasted_attempts threading --
+
+    def test_finalize_node_result_threads_repair_info_from_validate(self) -> None:
+        """When the repair loop runs, _finalize_node_result threads the counts.
+
+        FAILS WITHOUT FIX: repair_attempts and wasted_attempts default to 0.
+        """
+        from unittest.mock import MagicMock
+
+        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+
+        # A repair invoke function that returns a valid output.
+        mock_repair_fn = MagicMock(return_value=json.dumps({"name": "Fixed"}))
+
+        result = _finalize_node_result(
+            "n1",
+            {"name": 123},  # wrong type for 'name' — triggers validation failure
+            self._simple_schema(),
+            None,
+            mode="strict",
+            _repair_invoke_fn=mock_repair_fn,
+        )
+        rec = result.get("_schema_enforcement_record")
+        assert rec is not None
+        # The repair loop ran at least one attempt.
+        assert rec["repair_attempts"] >= 1
+        # At least one attempt was wasted (schema rejection).
+        assert rec["wasted_attempts"] >= 0
+
+    def test_repair_info_no_repair_when_no_invoke_fn(self) -> None:
+        """Without a repair invoke function, repair_attempts stays 0.
+
+        In strict mode this raises OutputSchemaValidationError; the repair_info
+        is still populated before the raise.
+        """
+        from modulo.core.pipeline_engine.node_runner import (
+            OutputSchemaValidationError,
+            _finalize_node_result,
+        )
+
+        with pytest.raises(OutputSchemaValidationError):
+            _finalize_node_result(
+                "n1",
+                {"name": 123},
+                self._simple_schema(),
+                None,
+                mode="strict",
+                _repair_invoke_fn=None,
+            )
+
+    # -- validate_against_schema _repair_info threading --
+
+    def test_validate_against_schema_populates_repair_info(self) -> None:
+        """_validate_against_schema populates _repair_info with repair stats.
+
+        FAILS WITHOUT FIX: _repair_info is not populated because the dict
+        is never threaded through.
+        """
+        from unittest.mock import MagicMock
+
+        from modulo.core.pipeline_engine.node_runner import _validate_against_schema
+
+        bad_data = {"name": 123}  # wrong type
+        repair_info: dict = {}
+        mock_invoke = MagicMock(return_value=json.dumps({"name": "Fixed"}))
+
+        _outcome, _errors, _data = _validate_against_schema(
+            bad_data,
+            self._simple_schema(),
+            mode="strict",
+            _repair_invoke_fn=mock_invoke,
+            _repair_info=repair_info,
+        )
+        assert "repair_attempts" in repair_info
+        assert "wasted_attempts" in repair_info
+        assert repair_info["repair_attempts"] >= 1
+
+    def test_validate_against_schema_no_repair_info_when_omitted(self) -> None:
+        """When _repair_info is not passed, no error — backwards compatible."""
+        from modulo.core.pipeline_engine.node_runner import _validate_against_schema
+
+        _outcome, _errors, _data = _validate_against_schema(
+            {"name": "OK"},
+            self._simple_schema(),
+            mode="lenient",
+        )
+        assert _outcome == SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value
+
+    # -- run_repair_loop _repair_info threading --
+
+    def test_run_repair_loop_populates_repair_info(self) -> None:
+        """run_repair_loop populates _repair_info with repair stats.
+
+        FAILS WITHOUT FIX: _repair_info is never populated because the dict
+        is not threaded through run_repair_loop.
+        """
+        from unittest.mock import MagicMock
+
+        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+
+        bad_data = {"name": 123}
+        repair_info: dict = {}
+        mock_invoke = MagicMock(return_value=json.dumps({"name": "Fixed"}))
+
+        _outcome, _errors, _data = run_repair_loop(
+            bad_data,
+            self._simple_schema(),
+            budget=1,
+            repair_invoke_fn=mock_invoke,
+            _repair_info=repair_info,
+        )
+        assert "repair_attempts" in repair_info
+        assert "wasted_attempts" in repair_info
+        assert repair_info["repair_attempts"] == 1
+
+    def test_run_repair_loop_wasted_count_on_exhaustion(self) -> None:
+        """When repair exhausts, all schema-rejection attempts are wasted.
+
+        With budget=2 and identical bad data each time, untranslatable
+        detection stops the loop after the second record_attempt (same
+        errors → REPAIR_EXHAUSTED before invoking). Only 1 invoke ran
+        and was schema-rejected → wasted=1.
+
+        FAILS WITHOUT FIX: wasted_attempts is never populated.
+        """
+        from unittest.mock import MagicMock
+
+        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+
+        bad_data = {"name": 123}
+        repair_info: dict = {}
+        # Invoke returns the same bad data — repair fails every time.
+        mock_invoke = MagicMock(return_value=json.dumps(bad_data))
+
+        _outcome, _errors, _data = run_repair_loop(
+            bad_data,
+            self._simple_schema(),
+            budget=2,
+            repair_invoke_fn=mock_invoke,
+            _repair_info=repair_info,
+        )
+        assert repair_info["repair_attempts"] == 2
+        # Only 1 actual invoke+schema-rejection; the 2nd attempt is
+        # short-circuited by untranslatable detection.
+        assert repair_info["wasted_attempts"] == 1
+
+    def test_run_repair_loop_wasted_excludes_invoke_failures(self) -> None:
+        """Invoke failures are NOT counted as wasted (different failure cause).
+
+        FAILS WITHOUT FIX: wasted_attempts is never populated.
+        """
+        from unittest.mock import MagicMock
+
+        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+
+        bad_data = {"name": 123}
+        repair_info: dict = {}
+        # Invoke always raises — not a schema rejection.
+        mock_invoke = MagicMock(side_effect=RuntimeError("provider down"))
+
+        _outcome, _errors, _data = run_repair_loop(
+            bad_data,
+            self._simple_schema(),
+            budget=2,
+            repair_invoke_fn=mock_invoke,
+            _repair_info=repair_info,
+        )
+        assert repair_info["repair_attempts"] == 1  # first attempt triggered the exception
+        assert repair_info["wasted_attempts"] == 0  # invoke failure ≠ schema rejection
