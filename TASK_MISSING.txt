@@ -1,9 +1,0 @@
-The natural-language prompt provided was empty (Task: ).
-
-No specific implementation request was made.
-
-This file was added as a minimal placeholder to enable a pull request.
-
-Assumption: The user intended to provide a task but it was missing. This PR documents the missing task.
-
-- Modulo Prompt-to-PR Bot

@@ -26,7 +26,7 @@ Feature: Schema Deletion Protection
     When I DELETE /api/schemas/in-use-schema with force=true
     Then the response status is 204
 
-  Scenario: Schema used only by unpinned pipeline can be deleted
+  Scenario: Schema referenced by an unpublished pipeline cannot be deleted
     Given org "acme" has schema "legacy-schema"
     And an unpublished pipeline uses "legacy-schema"
     When I DELETE /api/schemas/legacy-schema

@@ -629,3 +629,556 @@ def response_contains_single_org_item(request: Any) -> None:
     body = request.node.response.json()
     items = body.get("items", [])
     assert len(items) == 1, f"Expected exactly 1 item, got {len(items)}"
+
+
+# ===========================================================================
+# Hard spend ceilings (FAR-391) — /ceiling surface + run-finalize enforcement
+# ===========================================================================
+
+
+def _usd_cents(amount: str) -> int:
+    """Parse a `$12.34`-style step value to integer cents."""
+    return int((Decimal(str(amount).replace(",", "")) * 100).to_integral_value())
+
+
+def _make_ceiling_org(ctx: dict[str, Any]) -> MagicMock:
+    """Build the org row the /ceiling routes read (integer-cents columns)."""
+    org = MagicMock()
+    org.id = _ORG_ID
+    org.max_run_cost_cents = ctx.get("max_run_cost_cents")
+    org.spend_ceiling_cents = ctx.get("spend_ceiling_cents")
+    org.org_cumulative_spend_cents = ctx.get("org_cumulative_spend_cents", 0)
+    return org
+
+
+def _get_ceiling_route(request: Any, ctx: dict[str, Any], client: Any, *, body: dict | None) -> None:
+    org = _make_ceiling_org(ctx)
+    with (
+        patch("modulo.api.routes.costs.get_organisation", new=AsyncMock(return_value=org)),
+        patch("modulo.api.routes.costs.set_rls_org"),
+    ):
+        if body is None:
+            resp = client.get("/api/v1/admin/costs/ceiling")
+        else:
+            resp = client.put("/api/v1/admin/costs/ceiling", json=body)
+    ctx["ceiling_org"] = org
+    _store_response(request, ctx, resp)
+
+
+@given(
+    parsers.parse('org "{org_name}" has cost ceilings with max_run_cost ${mrc} and spend_ceiling ${ceiling}'),
+)
+def org_has_cost_ceilings(org_name: str, mrc: str, ceiling: str, ctx: dict[str, Any]) -> None:
+    ctx["max_run_cost_cents"] = _usd_cents(mrc)
+    ctx["spend_ceiling_cents"] = _usd_cents(ceiling)
+
+
+@given(parsers.parse('org "{org_name}" has consumed ${amount} of its ceiling'))
+def org_has_consumed_ceiling(org_name: str, amount: str, ctx: dict[str, Any]) -> None:
+    ctx["org_cumulative_spend_cents"] = _usd_cents(amount)
+
+
+@given(parsers.parse('org "{org_name}" has a spend ceiling of ${ceiling} and has consumed it all'))
+def org_ceiling_fully_consumed(org_name: str, ceiling: str, ctx: dict[str, Any]) -> None:
+    cents = _usd_cents(ceiling)
+    ctx["spend_ceiling_cents"] = cents
+    ctx["org_cumulative_spend_cents"] = cents
+
+
+@given(parsers.parse('org "{org_name}" has a per-run ceiling of ${limit}'))
+def org_has_per_run_ceiling(org_name: str, limit: str, ctx: dict[str, Any]) -> None:
+    ctx["max_run_cost_cents"] = _usd_cents(limit)
+    ctx["org_cumulative_spend_cents"] = 0
+
+
+@when("I GET /api/v1/admin/costs/ceiling")
+def admin_get_ceiling(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    _get_ceiling_route(request, ctx, client, body=None)
+
+
+@when(parsers.parse("I PUT /api/v1/admin/costs/ceiling with spend_ceiling ${ceiling}"))
+def admin_put_ceiling(ceiling: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
+    _get_ceiling_route(request, ctx, client, body={"spend_ceiling": float(ceiling.replace(",", ""))})
+
+
+@when("I PUT /api/v1/admin/costs/ceiling with spend_ceiling null")
+def admin_put_ceiling_null(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    _get_ceiling_route(request, ctx, client, body={"spend_ceiling": None})
+
+
+@when("I PUT /api/v1/admin/costs/ceiling with an invalid negative ceiling")
+def admin_put_ceiling_negative(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    # The request model rejects a negative value (ge=0) before the handler runs.
+    _get_ceiling_route(request, ctx, client, body={"spend_ceiling": -5.0})
+
+
+@then(parsers.parse("the response contains spend_ceiling of {expected}"))
+def response_contains_spend_ceiling(expected: str, request: Any) -> None:
+    body = request.node.response.json()
+    actual = body.get("spend_ceiling")
+    assert actual == float(expected), f"Expected spend_ceiling {expected}, got {actual}"
+
+
+@then(parsers.parse("the response contains max_run_cost of {expected}"))
+def response_contains_max_run_cost(expected: str, request: Any) -> None:
+    body = request.node.response.json()
+    actual = body.get("max_run_cost")
+    assert actual == float(expected), f"Expected max_run_cost {expected}, got {actual}"
+
+
+@then(parsers.parse("the response contains remaining_budget_usd of {expected}"))
+def response_contains_remaining_budget(expected: str, request: Any) -> None:
+    body = request.node.response.json()
+    actual = body.get("remaining_budget_usd")
+    assert actual == float(expected), f"Expected remaining_budget_usd {expected}, got {actual}"
+
+
+@then("the response spend_ceiling is null")
+def response_spend_ceiling_is_null(request: Any) -> None:
+    body = request.node.response.json()
+    assert body.get("spend_ceiling") is None, f"Expected spend_ceiling None, got {body.get('spend_ceiling')}"
+
+
+@then(parsers.parse("the response ceiling was stored as {cents:d} cents"))
+def response_ceiling_stored_cents(cents: int, ctx: dict[str, Any]) -> None:
+    org = ctx.get("ceiling_org")
+    assert org is not None, "no ceiling write was driven"
+    assert org.spend_ceiling_cents == cents, (
+        f"Expected spend_ceiling stored as {cents} cents, got {org.spend_ceiling_cents}"
+    )
+
+
+def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
+    """Drive ``finalize._ledger_block`` with a mocked session (the established
+    cost-controller BDD pattern: real FAR-391 ceiling gate, mocked DB). The run
+    and org rows are stored in ``ctx`` for the ``Then`` assertions.
+    """
+    import asyncio
+    from datetime import date
+
+    from modulo.core.cost_controller.finalize import _ledger_block
+    from modulo.db.models.organisation import Organisation
+    from modulo.db.models.run import Run
+
+    run = MagicMock(spec=Run)
+    run.id = uuid.uuid4()
+    run.ledger_written = False
+    run.ledger_refused_at = None
+    run.status = "complete"
+    run.error_code = None
+    run.error_detail = None
+    run.pipeline_id = uuid.uuid4()
+    run.owner_team_id = None
+
+    org = MagicMock(spec=Organisation)
+    org.id = _ORG_ID
+    org.max_run_cost_cents = ctx.get("max_run_cost_cents")
+    org.spend_ceiling_cents = ctx.get("spend_ceiling_cents")
+    org.org_cumulative_spend_cents = ctx.get("org_cumulative_spend_cents", 0)
+
+    def _execute(stmt):
+        text = str(stmt)
+        result = MagicMock()
+        if "organisations" in text:
+            result.scalar_one_or_none = MagicMock(return_value=org)
+            result.scalar_one = MagicMock(return_value=org)
+        else:
+            result.scalar_one = MagicMock(return_value=run)
+            result.scalar_one_or_none = MagicMock(return_value=run)
+        return result
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=_execute)
+    session.flush = AsyncMock()
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(
+            _ledger_block(
+                session,
+                run_id=run.id,
+                org_id=org.id,
+                status="complete",
+                total=Decimal(str(cost).replace(",", "")),
+                owner_team_id=None,
+                run_date=date(2026, 6, 24),
+                finalize_fields={},
+                session_factory=None,
+                claim_token=None,
+            )
+        )
+    finally:
+        loop.close()
+
+    ctx["ceiling_run"] = run
+    ctx["ceiling_org"] = org
+
+
+@when(parsers.parse("a run with cost ${cost} is finalized"))
+def run_finalized_with_cost(cost: str, ctx: dict[str, Any]) -> None:
+    _run_ledger_block(cost, ctx)
+
+
+@then(parsers.parse('the run terminalizes as "{status}"'))
+def run_terminalizes(status: str, ctx: dict[str, Any]) -> None:
+    run = ctx.get("ceiling_run")
+    assert run is not None, "no ceiling enforcement run was driven"
+    assert run.status == status, f"Expected terminal state {status!r}, got {run.status!r}"
+
+
+@then(parsers.parse('the refusal reason is "{reason}"'))
+def refusal_reason_is(reason: str, ctx: dict[str, Any]) -> None:
+    run = ctx.get("ceiling_run")
+    assert run is not None, "no ceiling enforcement run was driven"
+    assert run.error_code == reason, f"Expected refusal reason {reason!r}, got {run.error_code!r}"
+
+
+@then("the run ledger is accepted")
+def run_ledger_accepted(ctx: dict[str, Any]) -> None:
+    run = ctx.get("ceiling_run")
+    assert run is not None, "no ceiling enforcement run was driven"
+    assert run.ledger_refused_at is None, "ledger was refused but should have been accepted"
+
+
+@then("the org cumulative spend is not incremented")
+def org_cumulative_not_incremented(ctx: dict[str, Any]) -> None:
+    run = ctx.get("ceiling_run")
+    assert run is not None, "no ceiling enforcement run was driven"
+    assert run.ledger_refused_at is not None, "run ledger must be refused"
+    org = ctx.get("ceiling_org")
+    before = ctx.get("org_cumulative_spend_cents", 0)
+    actual = org.org_cumulative_spend_cents
+    assert actual == before, f"Expected org cumulative unchanged at {before} cents, got {actual}"
+
+
+@then(parsers.parse("the org cumulative spend is incremented by ${amount}"))
+def org_cumulative_incremented(amount: str, ctx: dict[str, Any]) -> None:
+    org = ctx.get("ceiling_org")
+    run = ctx.get("ceiling_run")
+    assert run is not None, "no ceiling enforcement run was driven"
+    assert run.ledger_refused_at is None, "run ledger must be accepted to increment spend"
+    expected = ctx.get("org_cumulative_spend_cents", 0) + _usd_cents(amount)
+    actual = org.org_cumulative_spend_cents
+    assert actual == expected, f"Expected org cumulative {expected} cents, got {actual}"
+
+
+# ===========================================================================
+# Scheduled cost reports (/reports)
+# ===========================================================================
+
+_REPORT_ID = uuid.UUID("30000000-0000-0000-0000-000000000001")
+
+
+def _make_report() -> MagicMock:
+    from datetime import UTC, datetime
+
+    report = MagicMock()
+    report.id = _REPORT_ID
+    report.period = "weekly"
+    report.group_by = "team"
+    report.format = "csv"
+    report.recipients = ["ops@example.com"]
+    report.schedule_type = "recurring"
+    report.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    return report
+
+
+@given(parsers.parse('org "{org_name}" has a scheduled weekly report'))
+def org_has_scheduled_report(org_name: str) -> None:
+    pass
+
+
+@given(parsers.parse('org "{org_name}" has a scheduled weekly report with id "{report_id}"'))
+def org_has_scheduled_report_with_id(org_name: str, report_id: str, ctx: dict[str, Any]) -> None:
+    ctx["report_id"] = report_id
+
+
+@when("I POST /api/v1/admin/costs/reports with a weekly team CSV report")
+def admin_create_report(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    with (
+        patch("modulo.api.routes.costs.create_scheduled_report", new=AsyncMock(return_value=_make_report())),
+        patch("modulo.api.routes.costs.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/admin/costs/reports",
+            json={
+                "period": "weekly",
+                "group_by": "team",
+                "format": "csv",
+                "recipients": ["ops@example.com"],
+                "schedule_type": "recurring",
+            },
+        )
+        _store_response(request, ctx, resp)
+
+
+@when("I POST /api/v1/admin/costs/reports without recipients")
+def admin_create_report_missing_recipients(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    # recipients (min_length=1) and group_by are enforced by the request model
+    # before the handler runs — no route patching needed for the 422.
+    resp = client.post(
+        "/api/v1/admin/costs/reports",
+        json={"period": "weekly", "group_by": "team"},
+    )
+    _store_response(request, ctx, resp)
+
+
+@when("I GET /api/v1/admin/costs/reports")
+def admin_list_reports(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    with (
+        patch("modulo.api.routes.costs.list_scheduled_reports", new=AsyncMock(return_value=[_make_report()])),
+        patch("modulo.api.routes.costs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/admin/costs/reports")
+        _store_response(request, ctx, resp)
+
+
+@when(parsers.parse("I DELETE /api/v1/admin/costs/reports/{report_id}"))
+def admin_delete_report(report_id: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
+    exists = str(ctx.get("report_id")) == report_id
+    with (
+        patch("modulo.api.routes.costs.delete_scheduled_report", new=AsyncMock(return_value=exists)),
+        patch("modulo.api.routes.costs.set_rls_org"),
+    ):
+        resp = client.delete(f"/api/v1/admin/costs/reports/{report_id}")
+        _store_response(request, ctx, resp)
+
+
+@then(parsers.parse('the response contains report id and period "{period}"'))
+def response_contains_report(period: str, request: Any) -> None:
+    body = request.node.response.json()
+    assert body.get("id") == str(_REPORT_ID), f"Unexpected report id: {body.get('id')}"
+    assert body.get("period") == period, f"Expected period {period!r}, got {body.get('period')!r}"
+
+
+@then("the response contains one scheduled report")
+def response_contains_one_report(request: Any) -> None:
+    body = request.node.response.json()
+    assert isinstance(body, list) and len(body) == 1, f"Expected 1 scheduled report, got {body!r}"
+    assert body[0].get("id") == str(_REPORT_ID)
+
+
+# ===========================================================================
+# Spend anomaly detection (/anomalies)
+# ===========================================================================
+
+_ANOMALY_ID = uuid.UUID("40000000-0000-0000-0000-000000000001")
+
+
+@given(
+    parsers.parse('org "{org_name}" has a detected spend anomaly of ${amount} against a ${baseline} baseline'),
+)
+def org_detected_anomaly(org_name: str, amount: str, baseline: str, ctx: dict[str, Any]) -> None:
+    ctx["anomaly_amount"] = float(amount.replace(",", ""))
+    ctx["anomaly_baseline"] = float(baseline.replace(",", ""))
+
+
+def _make_persisted_anomaly() -> MagicMock:
+    from datetime import UTC, datetime, timedelta
+
+    anomaly = MagicMock()
+    anomaly.id = _ANOMALY_ID
+    anomaly.anomaly_date = datetime.now(UTC).date() - timedelta(days=1)
+    anomaly.pipeline_id = None
+    anomaly.amount = 5.0
+    anomaly.baseline = 1.0
+    anomaly.percent_above = 400.0
+    anomaly.dismissed = False
+    return anomaly
+
+
+@when("I GET /api/v1/admin/costs/anomalies")
+def admin_get_anomalies(request: Any, ctx: dict[str, Any], client: Any, mock_session: Any) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    base = ctx.get("anomaly_baseline", 1.0)
+    spike = ctx.get("anomaly_amount", 5.0)
+    today = datetime.now(UTC).date()
+    rows = [MagicMock(run_date=today - timedelta(days=8 - i), daily_spend=base) for i in range(7)]
+    rows.append(MagicMock(run_date=today - timedelta(days=1), daily_spend=spike))
+    result = MagicMock()
+    result.all.return_value = rows
+    with (
+        patch.object(mock_session, "execute", new=AsyncMock(return_value=result)),
+        patch("modulo.api.routes.costs.list_anomalies", new=AsyncMock(return_value=[])),
+        patch("modulo.api.routes.costs.record_or_get_anomaly", new=AsyncMock(return_value=_make_persisted_anomaly())),
+        patch("modulo.api.routes.costs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/admin/costs/anomalies")
+        _store_response(request, ctx, resp)
+
+
+@when("I dismiss the reported anomaly")
+def dismiss_reported_anomaly(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    with (
+        patch("modulo.api.routes.costs.dismiss_anomaly", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.costs.set_rls_org"),
+    ):
+        resp = client.post(f"/api/v1/admin/costs/anomalies/dismiss/{_ANOMALY_ID}")
+        _store_response(request, ctx, resp)
+
+
+@when(parsers.parse("I POST /api/v1/admin/costs/anomalies/dismiss/{anomaly_id}"))
+def admin_dismiss_anomaly_by_id(anomaly_id: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
+    with (
+        patch("modulo.api.routes.costs.dismiss_anomaly", new=AsyncMock(return_value=False)),
+        patch("modulo.api.routes.costs.set_rls_org"),
+    ):
+        resp = client.post(f"/api/v1/admin/costs/anomalies/dismiss/{anomaly_id}")
+        _store_response(request, ctx, resp)
+
+
+@then("the response contains one fresh anomaly")
+def response_contains_one_anomaly(request: Any) -> None:
+    body = request.node.response.json()
+    assert isinstance(body, list) and len(body) == 1, f"Expected 1 anomaly, got {body!r}"
+
+
+@then("the anomaly carries a persisted id")
+def anomaly_carries_persisted_id(request: Any) -> None:
+    body = request.node.response.json()
+    assert body, "expected at least one anomaly"
+    assert body[0].get("id") == str(_ANOMALY_ID), f"Unexpected anomaly id: {body[0].get('id')}"
+    assert body[0].get("dismissed") is False, "fresh anomaly must not be dismissed"
+
+
+# ===========================================================================
+# Cost components (/api/v1/admin/costs/components)
+# ===========================================================================
+
+_COMPONENT_ID = uuid.UUID("50000000-0000-0000-0000-000000000001")
+
+
+def _make_component(**overrides: Any) -> MagicMock:
+    from modulo.db.models.cost_component import CostComponentKind
+
+    component = MagicMock()
+    component.id = overrides.get("id", _COMPONENT_ID)
+    component.name = overrides.get("name", "reported_cost")
+    component.display_name = overrides.get("display_name", "Reported Cost")
+    component.kind = overrides.get("kind", CostComponentKind.SELF_REPORTED.value)
+    component.rate_usd = overrides.get("rate_usd")
+    component.rate_fallback = overrides.get("rate_fallback")
+    component.formula = overrides.get("formula")
+    component.report_key = overrides.get("report_key", "model_cost_usd")
+    component.enabled = overrides.get("enabled", True)
+    component.sort_order = overrides.get("sort_order", 0)
+    component.deleted_at = overrides.get("deleted_at")
+    return component
+
+
+@given(parsers.parse('a cost component named "{name}" already exists'))
+def cost_component_exists(name: str) -> None:
+    pass
+
+
+@given(parsers.parse('a cost component with id "{component_id}"'))
+def cost_component_with_id(component_id: str) -> None:
+    pass
+
+
+@given(parsers.parse('org "{org_name}" has cost components configured'))
+def org_has_cost_components(org_name: str) -> None:
+    pass
+
+
+def _post_component(request: Any, ctx: dict[str, Any], client: Any, payload: dict) -> None:
+    with (
+        patch(
+            "modulo.api.routes.cost_components.create_cost_component",
+            new=AsyncMock(return_value=_make_component()),
+        ),
+        patch("modulo.api.routes.cost_components.append_audit_event", new=AsyncMock()),
+        patch("modulo.api.routes.cost_components.set_rls_org"),
+    ):
+        resp = client.post("/api/v1/admin/costs/components", json=payload)
+        _store_response(request, ctx, resp)
+
+
+@when("I POST /api/v1/admin/costs/components with a reportable self_reported component")
+def admin_create_component(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    _post_component(
+        request,
+        ctx,
+        client,
+        {
+            "name": "reported_cost",
+            "display_name": "Reported Cost",
+            "kind": "self_reported",
+            "report_key": "model_cost_usd",
+        },
+    )
+
+
+@when(parsers.parse('I POST /api/v1/admin/costs/components named "{name}"'))
+def admin_create_component_duplicate(name: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
+    with (
+        patch(
+            "modulo.api.routes.cost_components.create_cost_component",
+            new=AsyncMock(side_effect=ValueError("duplicate_component")),
+        ),
+        patch("modulo.api.routes.cost_components.append_audit_event", new=AsyncMock()),
+        patch("modulo.api.routes.cost_components.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/admin/costs/components",
+            json={"name": name, "display_name": "LLM Tokens", "kind": "self_reported", "report_key": "model_cost_usd"},
+        )
+        _store_response(request, ctx, resp)
+
+
+@when("I POST /api/v1/admin/costs/components with a self_reported component that has a formula")
+def admin_create_component_with_formula(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    # The request model's cross-field validator rejects self_reported + formula
+    # before the handler runs (CostFormulaError -> 422).
+    resp = client.post(
+        "/api/v1/admin/costs/components",
+        json={
+            "name": "bad_sr",
+            "display_name": "X",
+            "kind": "self_reported",
+            "formula": "rate * 2",
+            "report_key": "model_cost_usd",
+        },
+    )
+    _store_response(request, ctx, resp)
+
+
+@when("I GET /api/v1/admin/costs/components")
+def admin_list_components(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    with (
+        patch(
+            "modulo.api.routes.cost_components.list_cost_components",
+            new=AsyncMock(return_value=[_make_component(name="llm_tokens", report_key=None)]),
+        ),
+        patch("modulo.api.routes.cost_components.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/admin/costs/components")
+        _store_response(request, ctx, resp)
+
+
+@when(parsers.parse("I DELETE /api/v1/admin/costs/components/{component_id}"))
+def admin_delete_component(component_id: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
+    with (
+        patch(
+            "modulo.api.routes.cost_components.soft_delete_cost_component",
+            new=AsyncMock(return_value=_make_component()),
+        ),
+        patch("modulo.api.routes.cost_components.append_audit_event", new=AsyncMock()),
+        patch("modulo.api.routes.cost_components.set_rls_org"),
+    ):
+        resp = client.delete(f"/api/v1/admin/costs/components/{component_id}")
+        _store_response(request, ctx, resp)
+
+
+@then(parsers.parse('the response contains component name "{expected}"'))
+def response_contains_component_name(expected: str, request: Any) -> None:
+    body = request.node.response.json()
+    assert body.get("name") == expected, f"Expected component name {expected!r}, got {body.get('name')!r}"
+
+
+@then("the response contains the configured components")
+def response_contains_configured_components(request: Any) -> None:
+    body = request.node.response.json()
+    assert isinstance(body, list) and len(body) == 1, f"Expected 1 configured component, got {body!r}"
+    assert body[0].get("name") == "llm_tokens"

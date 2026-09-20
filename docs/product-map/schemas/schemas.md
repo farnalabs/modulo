@@ -75,12 +75,14 @@ applied migration between versions (`core/schema_registry/*`).
 
 - **Schema inference requires a configured model backend** — the draft-building pass is
   model-assisted; there is no purely heuristic fallback inference path.
-- **`deletion_protection.feature` naming drift** — the "Schema used only by unpinned
-  pipeline can be deleted" scenario title contradicts its own 409 assertion (an unpublished
-  pipeline still protects the schema); the behaviour (deletion refused while referenced)
-  is what is asserted and shipped.
 
 ## QA History
+- 2026-09-20: **improve-architecture (product-map walk)** — closed the
+  `deletion_protection.feature` naming drift: the scenario title "Schema used only
+  by unpinned pipeline can be deleted" contradicted its own 409 assertion (an
+  unpublished pipeline still protects the schema). Renamed to "Schema referenced by
+  an unpublished pipeline cannot be deleted" so the title matches the asserted and
+  shipped behaviour.
 - 2026-09-13: **improve-architecture (product-map walk)** — closed the
   `create.feature` "invalid JSON Schema rejected at create" gap: the create
   endpoint now accepts an optional initial `definition_json`, applies the same
