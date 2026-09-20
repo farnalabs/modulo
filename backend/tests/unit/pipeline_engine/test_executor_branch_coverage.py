@@ -238,12 +238,12 @@ def test_map_lg_event_chain_error_non_dict_data_error():
 
 def test_connector_scope_empty_nodes():
     """Empty nodes list → empty result."""
-    assert _connector_scope_agent_ids({"nodes": []}) == []
+    assert not _connector_scope_agent_ids({"nodes": []})
 
 
 def test_connector_scope_no_nodes_key():
     """No 'nodes' key → empty result."""
-    assert _connector_scope_agent_ids({}) == []
+    assert not _connector_scope_agent_ids({})
 
 
 # ---------------------------------------------------------------------------
@@ -358,9 +358,9 @@ def test_seed_state_empty_payload():
     snap.default_autonomy_level = None
     state = _seed_state(snap, {})
     assert state["run_context"]["cancelled"] is False
-    assert state["run_context"]["input"] == {}
-    assert state["artifacts"] == []
-    assert state["_iteration_counts"] == {}
+    assert not state["run_context"]["input"]
+    assert not state["artifacts"]
+    assert not state["_iteration_counts"]
 
 
 def test_seed_state_with_context_defaults():

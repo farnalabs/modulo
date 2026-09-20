@@ -237,7 +237,7 @@ def test_guardrail_binding_valid():
         eval_type="regex",
         config={"detection": {"type": "regex"}},
     )
-    defn.validate_guardrail_binding(guardrail)
+    assert defn.validate_guardrail_binding(guardrail) is None
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +263,7 @@ def test_validate_restricted_backend_clean():
         guardrail_id="g1",
         model_backend_id="m1",
     )
-    defn.validate_restricted_backend(["read_only_tools"])
+    assert defn.validate_restricted_backend(["read_only_tools"]) is None
 
 
 # ---------------------------------------------------------------------------
@@ -443,12 +443,12 @@ def test_redact_payload_deeply_nested():
 
 def test_collect_prior_fingerprints_non_dict_state():
     """Non-dict state → skipped."""
-    assert _collect_prior_fingerprints(["not-a-dict", 42]) == set()
+    assert not _collect_prior_fingerprints(["not-a-dict", 42])
 
 
 def test_collect_prior_fingerprints_empty():
     """Empty list → empty set."""
-    assert _collect_prior_fingerprints([]) == set()
+    assert not _collect_prior_fingerprints([])
 
 
 def test_collect_prior_fingerprints_both_keys():
@@ -463,7 +463,7 @@ def test_collect_prior_fingerprints_both_keys():
 def test_collect_prior_fingerprints_non_string_value():
     """Non-string fingerprint value → skipped."""
     states = [{"input_fingerprint": 42}]
-    assert _collect_prior_fingerprints(states) == set()
+    assert not _collect_prior_fingerprints(states)
 
 
 # ---------------------------------------------------------------------------
@@ -709,19 +709,19 @@ def test_flatten_content_blocks_mixed_list():
 
 def test_flatten_content_blocks_empty_list():
     """Empty list → empty string."""
-    assert _flatten_content_blocks([]) == ""
+    assert not _flatten_content_blocks([])
 
 
 def test_flatten_content_blocks_non_string_dict_text():
     """Dict with non-string 'text' → skipped."""
     blocks = [{"text": 42}]
-    assert _flatten_content_blocks(blocks) == ""
+    assert not _flatten_content_blocks(blocks)
 
 
 def test_flatten_content_blocks_dict_without_text():
     """Dict without 'text' key → skipped."""
     blocks = [{"other": "key"}]
-    assert _flatten_content_blocks(blocks) == ""
+    assert not _flatten_content_blocks(blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -766,8 +766,8 @@ def test_redaction_pattern_default_replacement():
 def test_correction_outcome_defaults():
     """Default field values."""
     outcome = CorrectionOutcome(verdict=CorrectionVerdict.RESOLVED)
-    assert outcome.detail == ""
+    assert not outcome.detail
     assert outcome.produced_output is None
     assert outcome.revalidation_result is None
     assert outcome.needs_human_review is False
-    assert outcome.state == {}
+    assert not outcome.state

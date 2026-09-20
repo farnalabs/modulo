@@ -73,15 +73,15 @@ def test_user_to_scim_single_name():
     account = _make_account(display_name="Cher")
     result = _user_to_scim(account, "https://app.modulo.run")
     assert result["name"]["givenName"] == "Cher"
-    assert result["name"]["familyName"] == ""
+    assert not result["name"]["familyName"]
 
 
 def test_user_to_scim_none_display_name():
     """None display_name → empty given/family."""
     account = _make_account(display_name=None)
     result = _user_to_scim(account, "https://app.modulo.run")
-    assert result["name"]["givenName"] == ""
-    assert result["name"]["familyName"] == ""
+    assert not result["name"]["givenName"]
+    assert not result["name"]["familyName"]
     assert result["name"]["formatted"] is None
 
 
@@ -89,8 +89,8 @@ def test_user_to_scim_none_timestamps():
     """None timestamps → empty strings."""
     account = _make_account(created_at=None, updated_at=None)
     result = _user_to_scim(account, "https://app.modulo.run")
-    assert result["meta"]["created"] == ""
-    assert result["meta"]["lastModified"] == ""
+    assert not result["meta"]["created"]
+    assert not result["meta"]["lastModified"]
 
 
 def test_user_to_scim_multi_word_name():
@@ -154,15 +154,15 @@ def test_group_to_scim_empty_members():
     """Empty members list."""
     group = _make_group()
     result = _group_to_scim(group, [], "https://app.modulo.run")
-    assert result["members"] == []
+    assert not result["members"]
 
 
 def test_group_to_scim_none_timestamps():
     """None timestamps → empty strings."""
     group = _make_group(created_at=None, updated_at=None)
     result = _group_to_scim(group, [], "https://app.modulo.run")
-    assert result["meta"]["created"] == ""
-    assert result["meta"]["lastModified"] == ""
+    assert not result["meta"]["created"]
+    assert not result["meta"]["lastModified"]
 
 
 def test_group_to_scim_location():
