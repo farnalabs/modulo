@@ -204,9 +204,14 @@ describe('ParameterSchemasView branches — default value types', () => {
     vm.schemaForm.parameters[0].options = undefined
     await flush()
 
-    // The v-else branch shows a dash span
-    const defaultSection = wrapper.find('#paramschema-param-default-0')
-    expect(defaultSection.exists()).toBe(false)
+    // The v-else branch renders a dash span instead of an input/select. Assert
+    // the rendered span text directly (the span carries no id of its own),
+    // rather than only asserting the absence of the id'd input/select.
+    expect(wrapper.find('#paramschema-param-default-0').exists()).toBe(false)
+    const defaultLabel = wrapper.find('label[for="paramschema-param-default-0"]')
+    expect(defaultLabel.exists()).toBe(true)
+    const dashSpan = defaultLabel.element.parentElement?.querySelector('span')
+    expect(dashSpan?.textContent).toBe('—')
     wrapper.unmount()
   })
 })
