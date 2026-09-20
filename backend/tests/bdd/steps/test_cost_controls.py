@@ -843,7 +843,8 @@ def run_ledger_accepted(ctx: dict[str, Any]) -> None:
 @then("the org cumulative spend is not incremented")
 def org_cumulative_not_incremented(ctx: dict[str, Any]) -> None:
     run = ctx.get("ceiling_run")
-    assert run is not None and run.ledger_refused_at is not None, "run ledger must be refused"
+    assert run is not None, "no ceiling enforcement run was driven"
+    assert run.ledger_refused_at is not None, "run ledger must be refused"
     org = ctx.get("ceiling_org")
     before = ctx.get("org_cumulative_spend_cents", 0)
     actual = org.org_cumulative_spend_cents
@@ -854,7 +855,8 @@ def org_cumulative_not_incremented(ctx: dict[str, Any]) -> None:
 def org_cumulative_incremented(amount: str, ctx: dict[str, Any]) -> None:
     org = ctx.get("ceiling_org")
     run = ctx.get("ceiling_run")
-    assert run is not None and run.ledger_refused_at is None, "run ledger must be accepted to increment spend"
+    assert run is not None, "no ceiling enforcement run was driven"
+    assert run.ledger_refused_at is None, "run ledger must be accepted to increment spend"
     expected = ctx.get("org_cumulative_spend_cents", 0) + _usd_cents(amount)
     actual = org.org_cumulative_spend_cents
     assert actual == expected, f"Expected org cumulative {expected} cents, got {actual}"
@@ -881,7 +883,7 @@ def _make_report() -> MagicMock:
     return report
 
 
-@given('org "{org_name}" has a scheduled weekly report')
+@given(parsers.parse('org "{org_name}" has a scheduled weekly report'))
 def org_has_scheduled_report(org_name: str) -> None:
     pass
 
@@ -992,9 +994,7 @@ def admin_get_anomalies(request: Any, ctx: dict[str, Any], client: Any, mock_ses
     base = ctx.get("anomaly_baseline", 1.0)
     spike = ctx.get("anomaly_amount", 5.0)
     today = datetime.now(UTC).date()
-    rows = [
-        MagicMock(run_date=today - timedelta(days=8 - i), daily_spend=base) for i in range(7)
-    ]
+    rows = [MagicMock(run_date=today - timedelta(days=8 - i), daily_spend=base) for i in range(7)]
     rows.append(MagicMock(run_date=today - timedelta(days=1), daily_spend=spike))
     result = MagicMock()
     result.all.return_value = rows
@@ -1057,13 +1057,13 @@ def _make_component(**overrides: Any) -> MagicMock:
     component.name = overrides.get("name", "reported_cost")
     component.display_name = overrides.get("display_name", "Reported Cost")
     component.kind = overrides.get("kind", CostComponentKind.SELF_REPORTED.value)
-    component.rate_usd = overrides.get("rate_usd", None)
-    component.rate_fallback = overrides.get("rate_fallback", None)
-    component.formula = overrides.get("formula", None)
+    component.rate_usd = overrides.get("rate_usd")
+    component.rate_fallback = overrides.get("rate_fallback")
+    component.formula = overrides.get("formula")
     component.report_key = overrides.get("report_key", "model_cost_usd")
     component.enabled = overrides.get("enabled", True)
     component.sort_order = overrides.get("sort_order", 0)
-    component.deleted_at = overrides.get("deleted_at", None)
+    component.deleted_at = overrides.get("deleted_at")
     return component
 
 
@@ -1077,7 +1077,7 @@ def cost_component_with_id(component_id: str) -> None:
     pass
 
 
-@given('org "{org_name}" has cost components configured')
+@given(parsers.parse('org "{org_name}" has cost components configured'))
 def org_has_cost_components(org_name: str) -> None:
     pass
 
