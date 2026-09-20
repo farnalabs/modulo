@@ -2114,7 +2114,9 @@ async def test_reconcile_one_row_recheck_variants():
 async def test_capacity_defer_pending_run_no_pipeline_false():
     row = _reconcile_row("pending")
     row.dispatched_at = None
-    session = _MockSession()
+    # FAR-1025: the pipeline is resolved via execute(select(Pipeline)...), so a
+    # missing row must come back as a scalar result yielding None.
+    session = _MockSession([_mock_result(scalar_one_or_none=None)])
     deferred = await ch._capacity_defer_pending_run(session, row, {"capacity_deferred": 0})
     assert deferred is False
 

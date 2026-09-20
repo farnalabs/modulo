@@ -89,6 +89,13 @@ class _MockSession:
             r.all.return_value = [(uid,) for uid in ids]
             r.rowcount = len(ids)
             return r
+        if s.startswith("SELECT pipelines."):
+            # FAR-1025: capacity admission resolves the pipeline via
+            # execute(select(Pipeline)...) instead of session.get(...). Mirror
+            # the historical get() double: a live pipeline at 5 max slots.
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = SimpleNamespace(max_concurrent_runs=5, status="running")
+            return r
         if not self._results:
             return MagicMock()
         return self._results.pop(0)

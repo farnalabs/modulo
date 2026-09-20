@@ -324,7 +324,11 @@ class TestSlotSaturationBackpressure:
         session = MagicMock()
         session.begin = MagicMock(return_value=_CtxManager(session))
         session.close = AsyncMock()
-        session.get = AsyncMock(return_value=pipeline)
+        # FAR-1025: the capacity/saturation gates resolve the pipeline via
+        # execute(select(Pipeline)...) rather than session.get(...).
+        _pipeline_result = MagicMock()
+        _pipeline_result.scalar_one_or_none.return_value = pipeline
+        session.execute = AsyncMock(return_value=_pipeline_result)
         return session
 
     async def test_near_saturated_pipeline_defers_run(self) -> None:
