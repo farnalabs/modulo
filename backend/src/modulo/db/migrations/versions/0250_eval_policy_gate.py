@@ -81,6 +81,8 @@ def upgrade() -> None:
             sa.UniqueConstraint("id", "organisation_id", name="uq_evals_id_organisation_id"),
         )
         op.create_index("ix_evals_pipeline_id", "evals", ["pipeline_id"])
+        op.create_index("ix_evals_organisation_id", "evals", ["organisation_id"])
+        op.create_index("ix_evals_account_id", "evals", ["account_id"])
 
     # 2. policy_gates
     if "policy_gates" not in existing_tables:
@@ -115,6 +117,7 @@ def upgrade() -> None:
             ),
             sa.UniqueConstraint("id", "organisation_id", name="uq_policy_gates_id_organisation_id"),
         )
+        op.create_index("ix_policy_gates_organisation_id", "policy_gates", ["organisation_id"])
         # Partial unique index: at most one live gate per Eval.
         op.create_index(
             "uq_policy_gates_eval_id_live",
@@ -154,6 +157,7 @@ def upgrade() -> None:
             ),
             sa.UniqueConstraint("id", "organisation_id", name="uq_policy_gate_decisions_id_organisation_id"),
         )
+        op.create_index("ix_policy_gate_decisions_organisation_id", "policy_gate_decisions", ["organisation_id"])
 
 
 def downgrade() -> None:

@@ -7,7 +7,7 @@ policy_gate_version) ship in a later chunk as an additive migration.
 
 import uuid
 
-from sqlalchemy import ForeignKeyConstraint, Uuid
+from sqlalchemy import ForeignKeyConstraint, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -16,6 +16,7 @@ from modulo.db.models.base import OrgScoped
 class PolicyGateDecision(OrgScoped):
     __tablename__ = "policy_gate_decisions"
     __table_args__ = (
+        UniqueConstraint("id", "organisation_id", name="uq_policy_gate_decisions_id_organisation_id"),
         ForeignKeyConstraint(
             ["policy_gate_id", "organisation_id"],
             ["policy_gates.id", "policy_gates.organisation_id"],

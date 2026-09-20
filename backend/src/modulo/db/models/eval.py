@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, Numeric, Text, Uuid
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, Numeric, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
@@ -38,10 +38,7 @@ class Eval(SoftDeleteMixin, OrgScoped):
             "pass_threshold IS NULL OR pass_threshold BETWEEN 0 AND 1",
             name="ck_evals_pass_threshold",
         ),
-        CheckConstraint(
-            "id = id OR organisation_id = organisation_id",
-            name="uq_evals_id_organisation_id",
-        ),
+        UniqueConstraint("id", "organisation_id", name="uq_evals_id_organisation_id"),
     )
 
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
