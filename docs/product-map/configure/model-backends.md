@@ -68,6 +68,12 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
 - [x] Per-provider adapters (openai, anthropic, and peers) share the `BaseChatModel`
       contract with configuration validation, health checks, error handling and rate
       limiting (`test_model_backends/*`, `model_backends/*.feature`)
+- [x] `POST /api/v1/model-backends/{backend_id}/health-check` re-runs the PRD 8.1 check on
+      demand against the decrypted stored credential and persists the result — returning
+      `healthy` / `unhealthy` (+ auth-failure detail) / `not_applicable` with `checked_at`,
+      clearing a sticky `last_health_check_error`; a cross-org caller is 404'd before any
+      check, and the deterministic stub provider always reports `healthy`
+      (`model_backends/health_check.feature`, steps in `test_alpha_model_backends.py`)
 
 ## Known Gaps
 
@@ -77,6 +83,15 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
   registered backends is not modelled; each worker re-reads backend state via the hub.
 
 ## QA History
+- 2026-09-20: **improve-architecture (product-map walk)** — closed the "no standalone
+  model-backend health endpoint exists" `@awaiting-implementation` gap. The four
+  `model_backends/health_check.feature` scenarios now execute against the REAL
+  `POST /api/v1/model-backends/{id}/health-check` route (PRD 8.1 re-check) with only the
+  DB lookup, secret-decryption and post-commit persist seams patched: healthy → `healthy`,
+  invalid API key → `unhealthy` + auth-failure detail, other-org caller → 404, stub →
+  `healthy`. The stale `@awaiting-implementation` comments in the feature (which claimed
+  the endpoint does not exist) were replaced by the real contract. Removed from
+  `PINNED_AWAITING_IMPLEMENTATION`.
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/model-backends`

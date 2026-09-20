@@ -417,6 +417,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > frozen-snapshot override-diff contract is already locked by the batch-scope
 > comparison scenarios). No `@awaiting-implementation` scenarios remain.
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-20):** closed `feat-model-backends`'s
+> "no standalone model-backend health endpoint exists" `@awaiting-implementation`
+> gap (`configure/model-backends.md`). The four `model_backends/health_check.feature`
+> scenarios now drive the REAL `POST /api/v1/model-backends/{id}/health-check`
+> route (PRD 8.1 re-check: decrypt stored credential, re-ping provider, persist
+> and clear a sticky `last_health_check_error`) with only the DB lookup seam
+> (`get_model_backend`), the secret-decryption seam
+> (`decode_stored_secret_scoped`) and the post-commit persist seam
+> (`_run_health_check_on_save_and_persist`) patched: healthy → `healthy`,
+> invalid API key → `unhealthy` + auth-failure detail, other-org caller →
+> 404 before any check, and the deterministic stub provider → `healthy`.
+> Removed the four scenarios from `PINNED_AWAITING_IMPLEMENTATION`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
