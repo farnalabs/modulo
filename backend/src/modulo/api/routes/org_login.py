@@ -26,7 +26,6 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
@@ -36,8 +35,10 @@ from modulo.db.crud.organisation import (
     get_login_active_org_by_slug,
     list_login_active_orgs,
 )
-from modulo.db.crud.sso_provider import list_enabled_oidc_providers
-from modulo.db.models.sso_provider import SsoProvider
+from modulo.db.crud.sso_provider import (
+    list_enabled_oidc_providers,
+    list_enabled_saml_providers,
+)
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -219,14 +220,8 @@ async def org_login(
 
             # SAML providers scoped to this org (FAR-1004).  Query all enabled
             # SAML providers, then filter by org_id — mirrors the OIDC pattern.
-            saml_result = await session.execute(
-                select(SsoProvider).where(
-                    SsoProvider.provider_type == "saml",
-                    SsoProvider.enabled,
-                )
-            )
-            all_saml = list(saml_result.scalars().all())
-            scoped_saml = [p for p in all_saml if p.organisation_id == org.id]
+            saml_providers = await list_enabled_saml_providers(session)
+            scoped_saml = [p for p in saml_providers if p.organisation_id == org.id]
 
             # Per-org SAML availability: true when THIS org has an enabled SAML
             # provider with usable metadata.  NO env-var fallback — the fallback

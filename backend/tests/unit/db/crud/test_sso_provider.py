@@ -142,6 +142,17 @@ class TestReadPaths:
 
         assert await list_enabled_oidc_providers(mock_session) == providers
 
+    async def test_list_enabled_saml_providers(self, mock_session: AsyncMock) -> None:
+        providers = [_make_provider(provider_type="saml")]
+        result = MagicMock()
+        scalars = MagicMock()
+        scalars.all = MagicMock(return_value=providers)
+        result.scalars = MagicMock(return_value=scalars)
+        mock_session.execute = AsyncMock(return_value=result)
+        from modulo.db.crud.sso_provider import list_enabled_saml_providers
+
+        assert await list_enabled_saml_providers(mock_session) == providers
+
 
 class TestCreateProvider:
     async def test_duplicate_name_raises_value_error(self, mock_session: AsyncMock) -> None:
