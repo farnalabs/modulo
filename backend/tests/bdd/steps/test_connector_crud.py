@@ -240,9 +240,9 @@ def _given_connector_in_org(request: Any, connector_id: str) -> None:
     _ctx(request)["connector"] = _make_connector(
         id=_connector_uuid(connector_id),
         name="Staging Bot",
-        credentials_ciphertext=bytes(Fernet(_FERNET_KEY.encode()).encrypt(
-            json.dumps({"auth_mode": "bearer", "token": "tok-123"}).encode()
-        )),
+        credentials_ciphertext=bytes(
+            Fernet(_FERNET_KEY.encode()).encrypt(json.dumps({"auth_mode": "bearer", "token": "tok-123"}).encode())
+        ),
     )
 
 
@@ -313,9 +313,7 @@ def _when_create_connector(request: Any, name: str, conn_type: str) -> None:
     ]
     store_mock = ctx.get("store_mock")
     if store_mock is not None:
-        ctx["patchers"].append(
-            patch("modulo.api.routes.connectors.create_connector_instance", new=store_mock)
-        )
+        ctx["patchers"].append(patch("modulo.api.routes.connectors.create_connector_instance", new=store_mock))
     _dispatch(request, "POST", "/api/v1/connectors", json=body)
 
 
@@ -430,9 +428,7 @@ def _then_updated_fernet(request: Any) -> None:
     plaintext = Fernet(_FERNET_KEY.encode()).decrypt(ciphertext).decode()
     parsed = json.loads(plaintext)
     assert parsed["auth_mode"] == "bearer"
-    assert parsed["token"] == _ctx(request)["secret"], (
-        f"stored credential token mismatch: {plaintext!r}"
-    )
+    assert parsed["token"] == _ctx(request)["secret"], f"stored credential token mismatch: {plaintext!r}"
 
 
 @then("the list response reports one connector total")
