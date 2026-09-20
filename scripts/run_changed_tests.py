@@ -8,12 +8,19 @@ backend/ (so backend/.env resolves for Settings()), and fails if any fail.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 BACKEND_DIR = str(Path(REPO_ROOT) / "backend")
+
+# The shared hook-context helper lives in ``scripts/``; ensure the repo root is
+# importable when this file is executed directly as a script.
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+from scripts.git_hook_env import strip_git_hook_context_vars
 
 
 def _changed_unit_tests() -> list[str]:
@@ -54,7 +61,12 @@ def main() -> int:
     print(f"Running tests for changed files: {' '.join(test_paths)}", file=sys.stderr)
 
     cmd = ["uv", "run", "--no-sync", "python", "-m", "pytest", "--tb=short", "-q", "--timeout=120", *test_paths]
-    result = subprocess.run(cmd, cwd=BACKEND_DIR, check=False)
+    env = strip_git_hook_context_vars(os.environ)
+    # Only fall back to USERPROFILE when HOME is genuinely absent (Windows);
+    # an empty HOME breaks uv/git resolution in the subprocess.
+    if "HOME" not in env and "USERPROFILE" in env:
+        env["HOME"] = env["USERPROFILE"]
+    result = subprocess.run(cmd, cwd=BACKEND_DIR, check=False, env=env)
     if result.returncode != 0:
         print("FAILED: Changed tests did not pass", file=sys.stderr)
         return 1
