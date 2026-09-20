@@ -165,6 +165,12 @@ async def list_enabled_oidc_providers(session: AsyncSession) -> list[SsoProvider
     return list(result.scalars().all())
 
 
+async def list_enabled_saml_providers(session: AsyncSession) -> list[SsoProvider]:
+    """List enabled SAML providers (global lookup — no org filter)."""
+    result = await session.execute(select(SsoProvider).where(SsoProvider.provider_type == "saml", SsoProvider.enabled))
+    return list(result.scalars().all())
+
+
 async def create_provider(
     session: AsyncSession,
     *,

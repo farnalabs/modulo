@@ -94,6 +94,8 @@ def _make_provider(
     enabled: bool = True,
     organisation_id: uuid.UUID | None = None,
     preset: str = "custom",
+    metadata_url: str | None = None,
+    metadata_xml: str | None = None,
 ) -> MagicMock:
     p = MagicMock()
     p.id = id or uuid.uuid4()
@@ -106,6 +108,8 @@ def _make_provider(
     p.client_secret = None
     p.client_id = None
     p.preset = preset
+    p.metadata_url = metadata_url
+    p.metadata_xml = metadata_xml
     return p
 
 
@@ -263,8 +267,8 @@ class TestOrgLogin:
         org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme Corp")
         provider = _make_provider(provider_id="google", name="Google", organisation_id=org.id)
 
-        # First call: get_login_active_org_by_slug → returns org
-        # Second call: list_enabled_oidc_providers → returns [provider]
+        # Call order: get_login_active_org_by_slug, list_enabled_oidc_providers,
+        # SAML providers query.
         call_count = 0
 
         async def mock_execute(stmt: object, *args: object) -> MagicMock:
@@ -274,27 +278,27 @@ class TestOrgLogin:
             if call_count == 1:
                 # Login-active org lookup
                 result.scalars.return_value.first.return_value = org
-            else:
+            elif call_count == 2:
                 # OIDC provider listing
                 result.scalars.return_value.all.return_value = [provider]
+            else:
+                # SAML provider listing (empty for this org)
+                result.scalars.return_value.all.return_value = []
             return result
 
         session.execute = mock_execute
 
-        with patch(
-            "modulo.api.routes.org_login.is_saml_available",
-            new=AsyncMock(return_value=False),
-        ):
-            resp = http.get("/api/v1/auth/org-login/acme")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["org"]["slug"] == "acme"
-            assert data["org"]["name"] == "Acme Corp"
-            assert len(data["providers"]) == 1
-            assert data["providers"][0]["provider_id"] == "google"
-            assert data["providers"][0]["display_name"] == "Google"
-            assert data["password_enabled"] is True
-            assert data["saml"] is False
+        resp = http.get("/api/v1/auth/org-login/acme")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["org"]["slug"] == "acme"
+        assert data["org"]["name"] == "Acme Corp"
+        assert len(data["providers"]) == 1
+        assert data["providers"][0]["provider_id"] == "google"
+        assert data["providers"][0]["display_name"] == "Google"
+        assert data["providers"][0]["type"] == "oidc"
+        assert data["password_enabled"] is True
+        assert data["saml"] is False
 
     def test_unknown_slug_returns_404(self, client: tuple[TestClient, AsyncMock]) -> None:
         """An unknown slug returns a generic 404."""
@@ -348,23 +352,22 @@ class TestOrgLogin:
             result = MagicMock()
             if call_count == 1:
                 result.scalars.return_value.first.return_value = org_a
-            else:
+            elif call_count == 2:
                 # Return BOTH orgs' providers — the handler must filter to org_a only.
                 result.scalars.return_value.all.return_value = [provider_a, provider_b]
+            else:
+                # SAML provider listing (empty)
+                result.scalars.return_value.all.return_value = []
             return result
 
         session.execute = mock_execute
 
-        with patch(
-            "modulo.api.routes.org_login.is_saml_available",
-            new=AsyncMock(return_value=False),
-        ):
-            resp = http.get("/api/v1/auth/org-login/acme")
-            assert resp.status_code == 200
-            data = resp.json()
-            provider_ids = [p["provider_id"] for p in data["providers"]]
-            assert "google" in provider_ids
-            assert "azure-ad" not in provider_ids
+        resp = http.get("/api/v1/auth/org-login/acme")
+        assert resp.status_code == 200
+        data = resp.json()
+        provider_ids = [p["provider_id"] for p in data["providers"]]
+        assert "google" in provider_ids
+        assert "azure-ad" not in provider_ids
 
     def test_response_contains_no_secret_fields(self, client: tuple[TestClient, AsyncMock]) -> None:
         """The serialised response must never contain client_secret or client_id."""
@@ -380,26 +383,31 @@ class TestOrgLogin:
             result = MagicMock()
             if call_count == 1:
                 result.scalars.return_value.first.return_value = org
-            else:
+            elif call_count == 2:
                 result.scalars.return_value.all.return_value = [provider]
+            else:
+                result.scalars.return_value.all.return_value = []
             return result
 
         session.execute = mock_execute
 
-        with patch(
-            "modulo.api.routes.org_login.is_saml_available",
-            new=AsyncMock(return_value=False),
-        ):
-            resp = http.get("/api/v1/auth/org-login/acme")
-            assert resp.status_code == 200
-            body = resp.text
-            assert "client_secret" not in body.lower()
-            assert "client_id" not in body.lower()
+        resp = http.get("/api/v1/auth/org-login/acme")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "client_secret" not in body.lower()
+        assert "client_id" not in body.lower()
 
     def test_saml_true_when_provider_configured(self, client: tuple[TestClient, AsyncMock]) -> None:
-        """org-login returns saml=true when a SAML provider is available."""
+        """org-login returns saml=true when a SAML provider with metadata is configured."""
         http, session = client
         org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme")
+        saml_provider = _make_provider(
+            provider_id="okta-saml",
+            name="Okta SAML",
+            provider_type="saml",
+            organisation_id=org.id,
+            metadata_url="https://okta.example.com/metadata",
+        )
 
         call_count = 0
 
@@ -409,20 +417,24 @@ class TestOrgLogin:
             result = MagicMock()
             if call_count == 1:
                 result.scalars.return_value.first.return_value = org
-            else:
+            elif call_count == 2:
                 result.scalars.return_value.all.return_value = []
+            else:
+                # SAML provider with metadata
+                result.scalars.return_value.all.return_value = [saml_provider]
             return result
 
         session.execute = mock_execute
 
-        with patch(
-            "modulo.api.routes.org_login.is_saml_available",
-            new=AsyncMock(return_value=True),
-        ):
-            resp = http.get("/api/v1/auth/org-login/acme")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["saml"] is True
+        resp = http.get("/api/v1/auth/org-login/acme")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["saml"] is True
+        # SAML provider should also appear in the providers list
+        saml_providers = [p for p in data["providers"] if p["type"] == "saml"]
+        assert len(saml_providers) == 1
+        assert saml_providers[0]["provider_id"] == "okta-saml"
+        assert saml_providers[0]["display_name"] == "Okta SAML"
 
     def test_saml_false_when_no_provider(self, client: tuple[TestClient, AsyncMock]) -> None:
         """org-login returns saml=false when no SAML provider is configured."""
@@ -437,20 +449,20 @@ class TestOrgLogin:
             result = MagicMock()
             if call_count == 1:
                 result.scalars.return_value.first.return_value = org
+            elif call_count == 2:
+                result.scalars.return_value.all.return_value = []
             else:
+                # No SAML providers
                 result.scalars.return_value.all.return_value = []
             return result
 
         session.execute = mock_execute
 
-        with patch(
-            "modulo.api.routes.org_login.is_saml_available",
-            new=AsyncMock(return_value=False),
-        ):
-            resp = http.get("/api/v1/auth/org-login/acme")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["saml"] is False
+        resp = http.get("/api/v1/auth/org-login/acme")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["saml"] is False
+        assert not any(p["type"] == "saml" for p in data["providers"])
 
     def test_provider_includes_preset_field(self, client: tuple[TestClient, AsyncMock]) -> None:
         """Org-login providers include the preset field (FAR-853)."""
@@ -466,8 +478,10 @@ class TestOrgLogin:
             result = MagicMock()
             if call_count == 1:
                 result.scalars.return_value.first.return_value = org
-            else:
+            elif call_count == 2:
                 result.scalars.return_value.all.return_value = [provider]
+            else:
+                result.scalars.return_value.all.return_value = []
             return result
 
         session.execute = mock_execute
@@ -478,6 +492,170 @@ class TestOrgLogin:
         p = data["providers"][0]
         assert p["preset"] == "google"
         assert p["display_name"] == "Google"
+        assert p["type"] == "oidc"
+
+    def test_saml_provider_in_providers_list_with_type_saml(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """SAML providers appear in the providers list with type='saml'."""
+        http, session = client
+        org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme")
+        oidc_provider = _make_provider(provider_id="google", name="Google", organisation_id=org.id)
+        saml_provider = _make_provider(
+            provider_id="okta-saml",
+            name="Okta SAML",
+            provider_type="saml",
+            organisation_id=org.id,
+            metadata_url="https://okta.example.com/metadata",
+        )
+
+        call_count = 0
+
+        async def mock_execute(stmt: object, *args: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalars.return_value.first.return_value = org
+            elif call_count == 2:
+                result.scalars.return_value.all.return_value = [oidc_provider]
+            else:
+                result.scalars.return_value.all.return_value = [saml_provider]
+            return result
+
+        session.execute = mock_execute
+
+        resp = http.get("/api/v1/auth/org-login/acme")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["providers"]) == 2
+        oidc = [p for p in data["providers"] if p["type"] == "oidc"]
+        saml = [p for p in data["providers"] if p["type"] == "saml"]
+        assert len(oidc) == 1
+        assert oidc[0]["provider_id"] == "google"
+        assert len(saml) == 1
+        assert saml[0]["provider_id"] == "okta-saml"
+        assert saml[0]["preset"] is None  # SAML has no preset
+
+    def test_saml_providers_from_other_org_excluded(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """SAML providers belonging to a different org are excluded."""
+        http, session = client
+        org_a = _make_org(id=uuid.uuid4(), slug="acme", name="Acme")
+        org_b = _make_org(id=uuid.uuid4(), slug="globex", name="Globex")
+        saml_a = _make_provider(
+            provider_id="saml-a",
+            name="SAML A",
+            provider_type="saml",
+            organisation_id=org_a.id,
+            metadata_url="https://a.example.com",
+        )
+        saml_b = _make_provider(
+            provider_id="saml-b",
+            name="SAML B",
+            provider_type="saml",
+            organisation_id=org_b.id,
+            metadata_url="https://b.example.com",
+        )
+
+        call_count = 0
+
+        async def mock_execute(stmt: object, *args: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalars.return_value.first.return_value = org_a
+            elif call_count == 2:
+                result.scalars.return_value.all.return_value = []
+            else:
+                # Both orgs' SAML providers — handler must filter to org_a
+                result.scalars.return_value.all.return_value = [saml_a, saml_b]
+            return result
+
+        session.execute = mock_execute
+
+        resp = http.get("/api/v1/auth/org-login/acme")
+        assert resp.status_code == 200
+        data = resp.json()
+        saml_ids = [p["provider_id"] for p in data["providers"] if p["type"] == "saml"]
+        assert "saml-a" in saml_ids
+        assert "saml-b" not in saml_ids
+
+    def test_saml_false_when_provider_lacks_metadata(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """saml=false when SAML provider exists but has no metadata."""
+        http, session = client
+        org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme")
+        saml_no_meta = _make_provider(
+            provider_id="saml-no-meta",
+            name="SAML No Meta",
+            provider_type="saml",
+            organisation_id=org.id,
+            # No metadata_url or metadata_xml
+        )
+
+        call_count = 0
+
+        async def mock_execute(stmt: object, *args: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalars.return_value.first.return_value = org
+            elif call_count == 2:
+                result.scalars.return_value.all.return_value = []
+            else:
+                result.scalars.return_value.all.return_value = [saml_no_meta]
+            return result
+
+        session.execute = mock_execute
+
+        resp = http.get("/api/v1/auth/org-login/acme")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["saml"] is False
+        # Provider still appears in the list (for button rendering) but saml flag is false
+        saml_providers = [p for p in data["providers"] if p["type"] == "saml"]
+        assert len(saml_providers) == 1
+
+    def test_env_var_fallback_not_applied_for_per_org(self, client: tuple[TestClient, AsyncMock]) -> None:
+        """Per-org endpoint does NOT use env-var SAML fallback (FAR-1004).
+
+        Even when settings.modulo_saml_enabled is True, the per-org endpoint
+        only checks the DB for this org's SAML providers.
+        """
+        http, session = client
+        org = _make_org(id=uuid.uuid4(), slug="acme", name="Acme")
+
+        call_count = 0
+
+        async def mock_execute(stmt: object, *args: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalars.return_value.first.return_value = org
+            elif call_count == 2:
+                result.scalars.return_value.all.return_value = []
+            else:
+                # No SAML providers in DB for this org
+                result.scalars.return_value.all.return_value = []
+            return result
+
+        session.execute = mock_execute
+
+        # Override settings with SAML env-var enabled — should NOT affect per-org response
+        settings = _make_settings(
+            modulo_saml_enabled=True,
+            modulo_license_key="test-key",
+            modulo_saml_idp_metadata_url="https://idp.example.com/metadata",
+        )
+        app.dependency_overrides[get_settings] = lambda: settings
+        try:
+            resp = http.get("/api/v1/auth/org-login/acme")
+            assert resp.status_code == 200
+            data = resp.json()
+            # saml must be false — env-var fallback is NOT applied here
+            assert data["saml"] is False
+        finally:
+            app.dependency_overrides[get_settings] = lambda: _make_settings()
 
 
 # ---------------------------------------------------------------------------

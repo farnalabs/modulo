@@ -1670,7 +1670,7 @@ export interface paths {
         };
         /**
          * Org Login
-         * @description Resolve ONE org by slug and return its enabled OIDC providers.
+         * @description Resolve ONE org by slug and return its enabled OIDC and SAML providers.
          *
          *     Pre-auth, anonymous — must never require an Authorization header and must
          *     never 401/402. Rate-limited via the existing ``RateLimitMiddleware`` (the
@@ -1682,15 +1682,22 @@ export interface paths {
          *     rate-limit awareness via a comment for future middleware expansion).
          *
          *     For a login-active org returns:
-         *       ``{"org": {slug, name}, "providers": [{provider_id, display_name, preset?}],
-         *         "password_enabled": true}``
+         *       ``{"org": {slug, name},
+         *         "providers": [{provider_id, display_name, type, preset?}],
+         *         "password_enabled": true, "saml": true|false}``
          *
-         *     ``providers`` are that org's ENABLED OIDC providers only — scoped to the
-         *     resolved org (not the system-scoped global read). ``preset`` is included
-         *     only if the column exists (FAR-853); omitted otherwise.
+         *     ``providers`` are that org's ENABLED OIDC and SAML providers — scoped to
+         *     the resolved org (not the system-scoped global read).  Each provider has
+         *     a ``type`` discriminator: ``"oidc"`` or ``"saml"``.  ``preset`` is
+         *     included only for OIDC providers (SAML has no preset).
+         *
+         *     ``saml`` is per-org (FAR-1004): true when THIS org has an enabled SAML
+         *     provider with usable metadata (metadata_url or metadata_xml).  The
+         *     env-var fallback is NOT applied here — it stays only in the legacy
+         *     ``/sso/providers`` endpoint used by LoginView.vue for single-org.
          *
          *     For an unknown OR non-login-active slug, returns a uniform generic 404
-         *     with the same body/timing shape for both cases. Never reveals whether
+         *     with the same body/timing shape for both cases.  Never reveals whether
          *     the slug exists.
          *
          *     Security reasoning:
@@ -14606,6 +14613,11 @@ export interface components {
             provider_id: string;
             /** Display Name */
             display_name: string;
+            /**
+             * Type
+             * @default oidc
+             */
+            type: string;
             /** Preset */
             preset?: string | null;
         };
