@@ -1575,6 +1575,10 @@ def main() -> int:
     else:
         js_report = None
 
+    # Save the original report path for the project-wide floor check, which
+    # runs AFTER the normalised temp file is cleaned up by the finally block.
+    original_js_report = js_report
+
     # Normalise the LCOV report so diff-cover can match its paths (see
     # _normalize_js_report).  The temp file, if any, is cleaned up below.
     #
@@ -1617,6 +1621,8 @@ def main() -> int:
     any_branch_failed = any(r.branch_passed is False for r in results)
 
     # --- Project-wide floor check (the ratchet) ---
+    # Floors are a ratchet: raise as coverage improves, never lower.
+    # Lowering requires an explicit, justified commit message.
     project_floor_failed = False
     project_metrics: list[str] = []
     if python_report is not None and python_report.exists():
@@ -1628,12 +1634,23 @@ def main() -> int:
             if pl < MIN_PROJECT_LINE_COVERAGE:
                 project_floor_failed = True
                 project_metrics.append(
-                    f"  FAIL: Python line {pl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — coverage regressed below floor"
+                    f"  BREACH: Python line {pl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — "
+                    "fix coverage (floors are a ratchet and must not be lowered)"
                 )
-            if pb is not None and pb < MIN_PROJECT_BRANCH_COVERAGE:
+            # Branch data must be present.  A report with no branch data at all
+            # is indistinguishable from one whose branch data was dropped — fail
+            # closed with its own distinct reason, not a floor breach.
+            if pb is None:
                 project_floor_failed = True
                 project_metrics.append(
-                    f"  FAIL: Python branch {pb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — coverage regressed below floor"
+                    "  BREACH: Python branch data missing from Cobertura report "
+                    "(no <condition> elements) — branch coverage cannot be enforced"
+                )
+            elif pb < MIN_PROJECT_BRANCH_COVERAGE:
+                project_floor_failed = True
+                project_metrics.append(
+                    f"  BREACH: Python branch {pb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — "
+                    "fix coverage (floors are a ratchet and must not be lowered)"
                 )
     if raw_js_report is not None and raw_js_report.exists():
         js_metrics = _compute_project_wide_metrics_lcov(raw_js_report)
@@ -1644,12 +1661,20 @@ def main() -> int:
             if jl < MIN_PROJECT_LINE_COVERAGE:
                 project_floor_failed = True
                 project_metrics.append(
-                    f"  FAIL: JavaScript line {jl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — coverage regressed below floor"
+                    f"  BREACH: JavaScript line {jl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — "
+                    "fix coverage (floors are a ratchet and must not be lowered)"
                 )
-            if jb is not None and jb < MIN_PROJECT_BRANCH_COVERAGE:
+            if jb is None:
                 project_floor_failed = True
                 project_metrics.append(
-                    f"  FAIL: JavaScript branch {jb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — coverage regressed below floor"
+                    "  BREACH: JavaScript branch data missing from LCOV report "
+                    "(no BRDA records) — branch coverage cannot be enforced"
+                )
+            elif jb < MIN_PROJECT_BRANCH_COVERAGE:
+                project_floor_failed = True
+                project_metrics.append(
+                    f"  BREACH: JavaScript branch {jb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — "
+                    "fix coverage (floors are a ratchet and must not be lowered)"
                 )
 
     # --- Summary ---
@@ -1672,7 +1697,7 @@ def main() -> int:
     all_skipped = all(r.skipped for r in results)
     any_line_failed = any(not r.skipped and not r.passed for r in results)
 
-    if all_skipped:
+    if all_skipped and not project_floor_failed:
         print("No coverage data to check — gate passed (all languages skipped).")
         _write_summary(results)
         return 0

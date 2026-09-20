@@ -1851,6 +1851,7 @@ class TestProjectWideMetrics:
     def test_lcov_empty(self, tmp_path):
         lcov = tmp_path / "lcov.info"
         lcov.write_text("TN:\nend_of_record\n")
+        # No branch records at all -> branch is None (absent), not 0.0.
         assert mod._compute_project_wide_metrics_lcov(lcov) == (0.0, None)
 
     def test_lcov_non_numeric_counts_do_not_crash(self, tmp_path):
@@ -1886,6 +1887,9 @@ class TestProjectWideFloor:
         entirely and the floor (which reflects main's coverage) must not fail
         the PR.  This is the deliberate all-skipped short-circuit.
         """
+
+    def test_project_line_below_floor(self, tmp_path):
+        """Line coverage 80% < floor 88% → FAIL (exit 1)."""
         xml = tmp_path / "coverage.xml"
         lines = "\n".join('<line number="{}" hits="{}"/>'.format(i, "1" if i <= 80 else "0") for i in range(1, 101))
         xml.write_text(
@@ -1900,7 +1904,7 @@ class TestProjectWideFloor:
             ),
         ):
             rc = mod.main()
-        assert rc == 0
+        assert rc == 1
 
     def test_project_line_below_floor_fails(self, tmp_path, capsys):
         """Production changes + project line coverage below floor -> exit 1.
@@ -1932,7 +1936,7 @@ class TestProjectWideFloor:
 
         assert rc == 1
         out = capsys.readouterr().out
-        assert "FAIL: Python line" in out
+        assert "BREACH: Python line" in out
         assert "WARNING" not in out
 
     def test_project_js_floor_enforced_with_relative_lcov_paths(self, tmp_path, capsys):
@@ -1974,7 +1978,7 @@ class TestProjectWideFloor:
 
         assert rc == 1
         out = capsys.readouterr().out
-        assert "FAIL: JavaScript line" in out
+        assert "BREACH: JavaScript line" in out
 
     def test_project_branch_zero_with_data_fails(self, tmp_path):
         """Branch records present but all uncovered (0%) -> floor failure.
@@ -2010,8 +2014,8 @@ class TestProjectWideFloor:
             rc = mod.main()
         assert rc == 1
 
-    def test_project_no_branch_data_does_not_fail(self, tmp_path):
-        """No branch records at all -> branch floor is not enforced."""
+    def test_project_no_branch_data_fails_closed(self, tmp_path):
+        """No branch records at all -> branch floor fails closed (distinct from floor breach)."""
         xml = tmp_path / "coverage.xml"
         lines = "\n".join(f'<line number="{i}" hits="1"/>' for i in range(1, 101))
         xml.write_text(
@@ -2030,7 +2034,7 @@ class TestProjectWideFloor:
             ),
         ):
             rc = mod.main()
-        assert rc == 0
+        assert rc == 1, "Missing branch data must fail closed, not pass"
 
     def test_project_both_above_floor(self, tmp_path):
         xml = tmp_path / "coverage.xml"
@@ -2131,3 +2135,113 @@ class TestBranchCoverageSummary:
         assert result.tiny_diff is True
         assert result.branch_passed is None
         assert result.branch_actual_pct is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1063: fail-closed branch floor + no "WARNING" in output
+# ---------------------------------------------------------------------------
+class TestFar1063BranchFloorFailClosed:
+    """FAR-1063: branch data missing must fail closed (distinct from floor breach),
+    and floor breaches must not print 'WARNING'."""
+
+    def test_python_branch_below_floor_fails(self, tmp_path):
+        """Branch data present but below floor → FAIL."""
+        xml = tmp_path / "coverage.xml"
+        # 100 lines, all hit (100% line), but only 1 of 4 branches covered (25% branch)
+        lines = "\n".join(
+            f'<line number="{i}" hits="1" branch="true" '
+            'condition-coverage="25% (1/4)">'
+            "<conditions>"
+            '<condition number="0" type="jump" coverage="100%"/>'
+            '<condition number="1" type="jump" coverage="0%"/>'
+            '<condition number="2" type="jump" coverage="0%"/>'
+            '<condition number="3" type="jump" coverage="0%"/>'
+            "</conditions></line>"
+            for i in range(1, 101)
+        )
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1
+
+    def test_python_no_branch_data_fails_closed(self, tmp_path, capsys):
+        """Cobertura report with NO branch data → FAIL (exit 1) with distinct
+        reason — NOT a floor breach, NOT a pass.  This is the FAR-1063 defect:
+        the old code silently passed when pb == 0.0."""
+        xml = tmp_path / "coverage.xml"
+        # 100 lines, all hit, no branch="true" attributes at all
+        lines = "\n".join(f'<line number="{i}" hits="1"/>' for i in range(1, 101))
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1, "Missing branch data must fail closed, not pass"
+        captured = capsys.readouterr()
+        assert "branch data missing" in captured.out.lower(), "Missing branch data must produce its own distinct reason"
+        # Must NOT be reported as a coverage breach of the branch metric
+        assert "branch 0.0% < floor" not in captured.out.lower()
+
+    def test_js_no_branch_data_fails_closed(self, tmp_path, capsys):
+        """LCOV report with NO BRDA records → FAIL (exit 1) with distinct reason."""
+        lcov = tmp_path / "lcov.info"
+        # DA records (line data) but no BRDA records (no branch data)
+        lcov.write_text("TN:\nSF:a.ts\n" + "\n".join(f"DA:{i},1" for i in range(1, 101)) + "\nend_of_record\n")
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--js-report", str(lcov)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1, "Missing branch data must fail closed, not pass"
+        captured = capsys.readouterr()
+        assert "branch data missing" in captured.out.lower(), "Missing branch data must produce its own distinct reason"
+
+    def test_floor_breach_output_no_warning(self, tmp_path, capsys):
+        """A floor breach's output must NOT contain the word 'WARNING'."""
+        xml = tmp_path / "coverage.xml"
+        lines = "\n".join(
+            f'<line number="{i}" hits="1" branch="true" '
+            'condition-coverage="25% (1/4)">'
+            "<conditions>"
+            '<condition number="0" type="jump" coverage="100%"/>'
+            '<condition number="1" type="jump" coverage="0%"/>'
+            '<condition number="2" type="jump" coverage="0%"/>'
+            '<condition number="3" type="jump" coverage="0%"/>'
+            "</conditions></line>"
+            for i in range(1, 101)
+        )
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "WARNING" not in captured.out, "Floor breaches must not print 'WARNING' — they are hard failures"
+        assert "BREACH" in captured.out, "Floor breaches should print 'BREACH'"
