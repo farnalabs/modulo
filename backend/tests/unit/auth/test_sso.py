@@ -2727,6 +2727,125 @@ class TestSamlProviderScoping:
         assert result is None
 
 
+class TestPerProviderAudienceEndToEnd:
+    """Cross-provider audience containment through the real python3-saml stack.
+
+    ``TestSamlProviderScoping`` above unit-tests ``_enforce_audience_restriction``
+    in isolation; these tests drive the real ``saml_process_response`` handler
+    (FAR-1010) with a DB-resolved per-provider config, mocking ONLY the XML
+    signature-verification step (xmlsec signing cannot round-trip on Windows)
+    so the real strict validation — Destination, conditions, audience and the
+    hard-fail audience containment check — actually runs.
+    """
+
+    PUBLIC_URL = "https://app.example.com"
+    IDP_METADATA = """<?xml version="1.0"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                     entityID="https://idp.example.com">
+  <md:IDPSSODescriptor
+   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:SingleSignOnService
+     Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+     Location="https://idp.example.com/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"""
+
+    def _db_provider(self, slug: str, entity_id: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            provider_id=slug,
+            provider_type="saml",
+            enabled=True,
+            entity_id=entity_id,
+            metadata_xml=self.IDP_METADATA,
+            metadata_url=None,
+            organisation_id=uuid.uuid4(),
+            group_mappings=[],
+        )
+
+    def _settings(self) -> Settings:
+        return _override(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+            modulo_public_url=self.PUBLIC_URL,
+        )
+
+    def _acs(self, slug: str) -> str:
+        return f"{self.PUBLIC_URL}/api/v1/auth/saml/acs/{slug}"
+
+    async def test_response_audience_for_provider_a_rejected_at_provider_b(self) -> None:
+        """A response whose Audience is provider A's SP entity is rejected at B's ACS.
+
+        Realistic confusion attacker: one shared IdP can issue assertions for
+        SP A (audience = A's SP entity). Submitting that response to provider
+        B's ACS must fail strict validation even though the signature is valid
+        and the Destination points at B's ACS URL.
+        """
+        from onelogin.saml2.response import OneLogin_Saml2_Response
+        from onelogin.saml2.utils import OneLogin_Saml2_Utils
+
+        from modulo.auth.sso import saml_process_response
+
+        provider_b = self._db_provider("idp-b", f"{self.PUBLIC_URL}/api/v1/auth/saml/idp-b")
+        xml = _build_xsd_compliant_saml_response(
+            audience=f"{self.PUBLIC_URL}/api/v1/auth/saml/idp-a",
+            destination=self._acs("idp-b"),
+            recipient=self._acs("idp-b"),
+        )
+        encoded = base64.b64encode(xml.encode()).decode()
+        session = _mock_session()
+
+        with (
+            patch("modulo.auth.sso._read_system_saml_provider_by_slug", new_callable=AsyncMock) as mock_slug,
+            patch.object(OneLogin_Saml2_Utils, "validate_sign", return_value=True),
+            patch.object(
+                OneLogin_Saml2_Response,
+                "process_signed_elements",
+                return_value=["{urn:oasis:names:tc:SAML:2.0:protocol}Response"],
+            ),
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+        ):
+            mock_slug.return_value = provider_b
+            with pytest.raises(ValueError, match="SAML response validation failed"):
+                await saml_process_response(encoded, self._settings(), session, session, provider_id="idp-b")
+        mock_jit.assert_not_awaited()
+
+    async def test_control_response_audience_for_provider_b_accepted_at_provider_b(self) -> None:
+        """Affirmative control: the same stack accepts a correctly-audience response.
+
+        Proves the rejection above is audience-driven, not state/fixture-driven.
+        """
+        from onelogin.saml2.response import OneLogin_Saml2_Response
+        from onelogin.saml2.utils import OneLogin_Saml2_Utils
+
+        from modulo.auth.sso import saml_process_response
+
+        provider_b = self._db_provider("idp-b", f"{self.PUBLIC_URL}/api/v1/auth/saml/idp-b")
+        xml = _build_xsd_compliant_saml_response(
+            audience=f"{self.PUBLIC_URL}/api/v1/auth/saml/idp-b",
+            destination=self._acs("idp-b"),
+            recipient=self._acs("idp-b"),
+        )
+        encoded = base64.b64encode(xml.encode()).decode()
+        session = _mock_session()
+
+        with (
+            patch("modulo.auth.sso._read_system_saml_provider_by_slug", new_callable=AsyncMock) as mock_slug,
+            patch.object(OneLogin_Saml2_Utils, "validate_sign", return_value=True),
+            patch.object(
+                OneLogin_Saml2_Response,
+                "process_signed_elements",
+                return_value=["{urn:oasis:names:tc:SAML:2.0:protocol}Response"],
+            ),
+            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        ):
+            mock_slug.return_value = provider_b
+            mock_jit.return_value = (MagicMock(), uuid.uuid4(), "runner")
+            mock_tok.return_value = {"access_token": "at-saml"}
+            result = await saml_process_response(encoded, self._settings(), session, session, provider_id="idp-b")
+            assert result["access_token"] == "at-saml"
+
+
 def _make_saml_db_provider(
     *,
     provider_id: str = "okta-saml",
