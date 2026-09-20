@@ -90,7 +90,7 @@ async def _create_sso_provider(
                 "client_secret, discovery_url, enabled, auto_provision, "
                 "allowed_domains, default_role, group_mappings, preset) "
                 "VALUES (:id, :oid, 'oidc', :name, :pid, :cid, :secret, "
-                ":disc, :enabled, :auto, :domains::json, :role, '[]'::json, 'custom')"
+                ":disc, :enabled, :auto, CAST(:domains AS json), :role, '[]'::json, 'custom')"
             ),
             {
                 "id": str(prov_id),
