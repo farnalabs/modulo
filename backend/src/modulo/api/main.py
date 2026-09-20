@@ -425,7 +425,10 @@ async def _assert_single_alembic_head(settings: Settings) -> None:
 
             script = ScriptDirectory.from_config(config)
             heads = script.get_heads()
-            return heads.split(",") if heads else []
+            # get_heads() already returns list[str] — no string splitting needed.
+            if isinstance(heads, str):
+                return heads.split(",") if heads else []
+            return list(heads) if heads else []
 
         heads = await asyncio.to_thread(_get_heads)
         if len(heads) > 1:
@@ -438,7 +441,9 @@ async def _assert_single_alembic_head(settings: Settings) -> None:
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.warning("startup.alembic_head_check_failed", exc_info=True)
+        logger.exception(
+            "startup.alembic_head_check_failed — guard could not run; multiple-head detection is NOT enforced"
+        )
 
 
 async def _assert_no_owner_rows(settings: Settings) -> None:
