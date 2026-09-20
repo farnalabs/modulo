@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.view import SavedView
+from modulo.db.soft_delete import include_soft_deleted
 
 
 async def create_view(
@@ -46,8 +47,7 @@ async def create_view(
 
 async def get_view(session: AsyncSession, view_id: uuid.UUID, *, include_deleted: bool = False) -> SavedView | None:
     stmt = select(SavedView).where(SavedView.id == view_id)
-    if not include_deleted:
-        stmt = stmt.where(SavedView.deleted_at.is_(None))
+    stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SavedView.deleted_at.is_(None))
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -67,23 +67,20 @@ async def list_views(
         conditions.append(SavedView.deleted_at.is_(None))
 
     count_q = select(func.count()).select_from(SavedView).where(*conditions)
+    if include_deleted:
+        count_q = include_soft_deleted(count_q)
     try:
         total = (await session.execute(count_q)).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
 
     offset = (page - 1) * page_size
-    items = list(
-        (
-            await session.execute(
-                select(SavedView)
-                .where(*conditions)
-                .order_by(SavedView.created_at.desc())
-                .offset(offset)
-                .limit(page_size)
-            )
-        ).scalars()
+    list_stmt = (
+        select(SavedView).where(*conditions).order_by(SavedView.created_at.desc()).offset(offset).limit(page_size)
     )
+    if include_deleted:
+        list_stmt = include_soft_deleted(list_stmt)
+    items = list((await session.execute(list_stmt)).scalars())
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
 

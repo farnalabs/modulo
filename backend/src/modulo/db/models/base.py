@@ -43,6 +43,11 @@ class SoftDeleteMixin:
     Or equivalently::
 
         stmt = select(Model).execution_options(include_deleted=True)
+
+    **Every model with a ``deleted_at`` column MUST inherit this mixin.**
+    The architecture test ``tests/architecture/test_soft_delete_mixin_coverage.py``
+    enforces this invariant — a model declaring ``deleted_at`` without the mixin
+    is a CI failure.
     """
 
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)

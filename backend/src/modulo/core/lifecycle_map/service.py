@@ -21,6 +21,7 @@ from modulo.core.lifecycle_map.validation import (
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.soft_delete import include_soft_deleted
 
 _log = logging.getLogger(__name__)
 
@@ -171,9 +172,11 @@ async def restore_lifecycle_map(
     updated_by: uuid.UUID | None = None,
 ) -> LifecycleMap | None:
     result = await session.execute(
-        select(LifecycleMap).where(
-            LifecycleMap.id == lifecycle_map_id,
-            LifecycleMap.deleted_at.isnot(None),
+        include_soft_deleted(
+            select(LifecycleMap).where(
+                LifecycleMap.id == lifecycle_map_id,
+                LifecycleMap.deleted_at.isnot(None),
+            )
         )
     )
     lifecycle_map = result.scalar_one_or_none()

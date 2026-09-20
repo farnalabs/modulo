@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.db.soft_delete import include_soft_deleted
 from modulo.util import validate_workspace_network
 
 
@@ -86,8 +87,7 @@ async def get_environment_profile(
     session: AsyncSession, profile_id: uuid.UUID, *, include_deleted: bool = False
 ) -> EnvironmentProfile | None:
     stmt = select(EnvironmentProfile).where(EnvironmentProfile.id == profile_id)
-    if not include_deleted:
-        stmt = stmt.where(EnvironmentProfile.deleted_at.is_(None))
+    stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(EnvironmentProfile.deleted_at.is_(None))
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -105,9 +105,12 @@ async def list_environment_profiles(
         count_where.append(EnvironmentProfile.deleted_at.is_(None))
     if cursor is not None:
         paginator = CursorPaginator()
+        base_stmt = select(EnvironmentProfile).where(*count_where)
+        if include_deleted:
+            base_stmt = include_soft_deleted(base_stmt)
         cp = await paginator.paginate(
             session,
-            select(EnvironmentProfile).where(*count_where),
+            base_stmt,
             cursor=cursor,
             limit=page_size,
             model=EnvironmentProfile,
@@ -124,6 +127,8 @@ async def list_environment_profiles(
     offset = (page - 1) * page_size
     try:
         count_q = select(func.count()).select_from(EnvironmentProfile).where(*count_where)
+        if include_deleted:
+            count_q = include_soft_deleted(count_q)
         total = (await session.execute(count_q)).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
@@ -135,6 +140,8 @@ async def list_environment_profiles(
         .offset(offset)
         .limit(page_size)
     )
+    if include_deleted:
+        q = include_soft_deleted(q)
     rows = (await session.execute(q)).scalars().all()
     return PageResult(items=list(rows), total=total, page=page, page_size=page_size)
 

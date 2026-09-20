@@ -1,10 +1,8 @@
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -16,10 +14,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base, OrgScoped, TimestampMixin
+from modulo.db.models.base import Base, OrgScoped, SoftDeleteMixin, TimestampMixin
 
 
-class ErrorNotificationRule(OrgScoped):
+class ErrorNotificationRule(SoftDeleteMixin, OrgScoped):
     __tablename__ = "error_notification_rules"
 
     __table_args__ = (
@@ -51,7 +49,6 @@ class ErrorNotificationRule(OrgScoped):
     # force-updates ONLY rows still ``is_default=true`` (never edited); editing a
     # seeded rule flips this (route surface — out of scope for the service seed).
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
 
 class DeletedDefault(Base, TimestampMixin):

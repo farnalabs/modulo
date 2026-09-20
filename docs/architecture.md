@@ -575,6 +575,8 @@ All tenant isolation is at the database layer via `SET LOCAL app.organisation_id
 
 Soft-deleted rows (models inheriting `SoftDeleteMixin`) are **automatically excluded** from every ORM SELECT via a global `do_orm_execute` listener registered at startup (`modulo.db.soft_delete`). The listener injects `WHERE deleted_at IS NULL` through `with_loader_criteria`, so new read paths automatically exclude soft-deleted rows without requiring an explicit hand-written predicate.
 
+**Every model with a `deleted_at` column MUST inherit `SoftDeleteMixin`.** This is enforced by the architecture test `tests/architecture/test_soft_delete_mixin_coverage.py`, which enumerates all registered mappers and fails CI if any model declares `deleted_at` without the mixin. The mixin provides the column definition (`DateTime(timezone=True), nullable=True, default=None`), so normalised models remove their locally-declared `deleted_at` to avoid duplication.
+
 **Opt-out convention:** Legitimate read paths that must see soft-deleted rows (restore flows, historical lookups, purge operations, version resolution) opt out per-statement:
 
 ```python
@@ -590,6 +592,17 @@ stmt = select(Model).where(Model.id == uid).execution_options(include_deleted=Tr
 ```
 
 The opt-out is scoped to the individual statement and does not leak across concurrent operations on the same session. Existing hand-written `deleted_at.is_(None)` predicates are now redundant but harmless — they are left in place to avoid risky churn.
+
+**CRUD `include_deleted` parameter pattern:** CRUD functions that accept `include_deleted: bool = False` must bridge to the opt-out when `include_deleted=True`:
+
+```python
+if include_deleted:
+    stmt = include_soft_deleted(stmt)
+else:
+    stmt = stmt.where(Model.deleted_at.is_(None))
+```
+
+Without this bridge, `include_deleted=True` becomes a no-op because the global filter still injects `deleted_at IS NULL`.
 
 ### Run-Execution Service Identity (ADR 038)
 

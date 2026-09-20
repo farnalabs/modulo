@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.composite_template import CompositeTemplate
+from modulo.db.soft_delete import include_soft_deleted
 
 
 async def create_composite_template(
@@ -53,8 +54,7 @@ async def get_composite_template(
     include_deleted: bool = False,
 ) -> CompositeTemplate | None:
     stmt = select(CompositeTemplate).where(CompositeTemplate.id == template_id)
-    if not include_deleted:
-        stmt = stmt.where(CompositeTemplate.deleted_at.is_(None))
+    stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(CompositeTemplate.deleted_at.is_(None))
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 

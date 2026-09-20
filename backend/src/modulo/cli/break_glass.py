@@ -188,12 +188,15 @@ def _sqlstate_from_exc(exc: BaseException) -> str | None:
 
 
 async def _resolve_org(session: AsyncSession, ref: str) -> Organisation | None:
+    """Resolve an org by slug or ID, including soft-deleted orgs (break-glass emergency access)."""
+    from modulo.db.soft_delete import include_soft_deleted
+
     try:
         org_id = uuid.UUID(str(ref))
     except (ValueError, AttributeError, TypeError):
-        result = await session.execute(select(Organisation).where(Organisation.slug == ref))
+        result = await session.execute(include_soft_deleted(select(Organisation).where(Organisation.slug == ref)))
     else:
-        result = await session.execute(select(Organisation).where(Organisation.id == org_id))
+        result = await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))
     return result.scalar_one_or_none()
 
 

@@ -220,10 +220,17 @@ def _engine_and_factory(url: str) -> tuple[AsyncEngine, async_sessionmaker[Async
 
 
 async def _first_org(session: AsyncSession) -> Any:
-    """The oldest organisation — the same convention the boot seeder uses."""
-    from modulo.db.models.organisation import Organisation
+    """The oldest organisation — the same convention the boot seeder uses.
 
-    result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
+    Includes soft-deleted orgs: the CLI is an admin tool and must find
+    organisations regardless of their soft-delete status.
+    """
+    from modulo.db.models.organisation import Organisation
+    from modulo.db.soft_delete import include_soft_deleted
+
+    result = await session.execute(
+        include_soft_deleted(select(Organisation).order_by(Organisation.created_at).limit(1))
+    )
     org = result.scalar_one_or_none()
     if org is None:
         raise UserCliError("no organisation exists in this database — run 'modulo start' once to bootstrap")

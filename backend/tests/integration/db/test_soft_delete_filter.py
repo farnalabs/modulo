@@ -182,3 +182,41 @@ class TestSoftDeleteFilter:
 
             assert live_id in ids, "live row must be in subquery"
             assert deleted_id not in ids, "soft-deleted row must be excluded from subquery"
+
+    @pytest.mark.asyncio
+    async def test_session_get_excludes_soft_deleted(
+        self,
+        db_engine: AsyncEngine,
+        _seed_soft_deleted: tuple[uuid.UUID, uuid.UUID],  # noqa: PT019
+    ) -> None:
+        """session.get() must NOT return a soft-deleted row by default."""
+        live_id, deleted_id = _seed_soft_deleted
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            found_live = await session.get(_TestSoftEntity, live_id)
+            found_deleted = await session.get(_TestSoftEntity, deleted_id)
+
+        assert found_live is not None, "session.get must find the live row"
+        assert found_deleted is None, "session.get must exclude the soft-deleted row"
+
+    @pytest.mark.asyncio
+    async def test_session_get_includes_soft_deleted_with_opt_out(
+        self,
+        db_engine: AsyncEngine,
+        _seed_soft_deleted: tuple[uuid.UUID, uuid.UUID],  # noqa: PT019
+    ) -> None:
+        """session.get() must return a soft-deleted row when opt-out is used.
+
+        The opt-out is applied via a SELECT statement with include_soft_deleted,
+        since session.get() does not accept execution_options directly.
+        """
+        _live_id, deleted_id = _seed_soft_deleted
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            # Use include_soft_deleted with a select to re-include the deleted row
+            result = await session.execute(
+                include_soft_deleted(select(_TestSoftEntity).where(_TestSoftEntity.id == deleted_id))
+            )
+            found_deleted = result.scalar_one_or_none()
+
+        assert found_deleted is not None, "include_soft_deleted must re-include the soft-deleted row"

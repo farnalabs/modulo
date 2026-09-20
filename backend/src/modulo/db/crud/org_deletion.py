@@ -33,6 +33,7 @@ from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.soft_delete import include_soft_deleted
 
 _log = logging.getLogger(__name__)
 
@@ -256,7 +257,9 @@ async def confirm_org_deletion(
     (never blocks on E2B), then terminal runs older than 30 days are
     batch-deleted. The remaining cascade is handled by Postgres FK constraints.
     """
-    result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
+    result = await session.execute(
+        include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
+    )
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError(_ERR_ORG_NOT_FOUND)
@@ -301,7 +304,9 @@ async def cancel_org_deletion(
     The org must be in 'deleted' status with a valid deletion_token set.
     Clears the soft-delete fields and restores the organisation to active state.
     """
-    result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
+    result = await session.execute(
+        include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
+    )
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError(_ERR_ORG_NOT_FOUND)
@@ -323,7 +328,9 @@ async def export_org_data(
     org_id: uuid.UUID,
 ) -> dict[str, Any]:
     """Return the export bundle for an org (captures live data if none exists)."""
-    result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
+    result = await session.execute(
+        include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
+    )
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError(_ERR_ORG_NOT_FOUND)

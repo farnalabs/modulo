@@ -23,6 +23,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.variant_batch_state import VariantBatchState
 from modulo.db.models.variant_group import VariantGroup
+from modulo.db.soft_delete import include_soft_deleted
 
 _log = logging.getLogger(__name__)
 
@@ -66,8 +67,7 @@ async def get_variant_group(
     session: AsyncSession, group_id: uuid.UUID, *, include_deleted: bool = False
 ) -> VariantGroup | None:
     stmt = select(VariantGroup).where(VariantGroup.id == group_id)
-    if not include_deleted:
-        stmt = stmt.where(VariantGroup.deleted_at.is_(None))
+    stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(VariantGroup.deleted_at.is_(None))
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
