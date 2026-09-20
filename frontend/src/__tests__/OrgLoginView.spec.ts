@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import type { components } from '../lib/api/schema'
 
 // Mock vue-router with actual route params
 const mockRoute = {
@@ -241,7 +242,9 @@ describe('OrgLoginView', () => {
       ok: true,
       json: () => Promise.resolve({
         org: { slug: 'test-org', name: 'Test Org' },
-        providers: [],
+        providers: [
+          { provider_id: 'okta-saml', display_name: 'Okta SAML', type: 'saml', preset: null },
+        ],
         password_enabled: true,
         saml: true,
       }),
@@ -249,13 +252,14 @@ describe('OrgLoginView', () => {
 
     const wrapper = mountView()
     await vi.waitFor(() => {
-      expect(wrapper.find('[data-testid="org-login-sso-saml"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="org-login-sso-okta-saml"]').exists()).toBe(true)
     })
-    const samlLink = wrapper.find('[data-testid="org-login-sso-saml"]')
-    expect(samlLink.attributes('href')).toBe('/api/v1/auth/saml/login')
+    const samlLink = wrapper.find('[data-testid="org-login-sso-okta-saml"]')
+    // Per-provider SAML login URL (FAR-1004)
+    expect(samlLink.attributes('href')).toBe('/api/v1/auth/saml/okta-saml/login')
   })
 
-  it('hides SAML button when saml is false', async () => {
+  it('hides SAML button when saml is false and no SAML providers in list', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({
@@ -270,7 +274,7 @@ describe('OrgLoginView', () => {
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="org-login-email"]').exists()).toBe(true)
     })
-    expect(wrapper.find('[data-testid="org-login-sso-saml"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="org-login-sso-section"]').exists()).toBe(false)
   })
 
   it('shows SSO section when only SAML is available (no OIDC providers)', async () => {
@@ -278,7 +282,9 @@ describe('OrgLoginView', () => {
       ok: true,
       json: () => Promise.resolve({
         org: { slug: 'test-org', name: 'Test Org' },
-        providers: [],
+        providers: [
+          { provider_id: 'okta-saml', display_name: 'Okta SAML', type: 'saml', preset: null },
+        ],
         password_enabled: true,
         saml: true,
       }),
@@ -288,6 +294,69 @@ describe('OrgLoginView', () => {
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="org-login-sso-section"]').exists()).toBe(true)
     })
-    expect(wrapper.find('[data-testid="org-login-sso-saml"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="org-login-sso-okta-saml"]').exists()).toBe(true)
+  })
+
+  it('renders OIDC and SAML providers with correct URLs (type discriminator)', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        org: { slug: 'test-org', name: 'Test Org' },
+        providers: [
+          { provider_id: 'google', display_name: 'Google', type: 'oidc', preset: 'google' },
+          { provider_id: 'okta-saml', display_name: 'Okta SAML', type: 'saml', preset: null },
+        ],
+        password_enabled: true,
+        saml: true,
+      }),
+    } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-sso-google"]').exists()).toBe(true)
+    })
+    // OIDC provider uses OIDC login URL with org param
+    const oidcLink = wrapper.find('[data-testid="org-login-sso-google"]')
+    expect(oidcLink.attributes('href')).toBe('/api/v1/auth/oidc/google/login?org=test-org')
+    // SAML provider uses per-provider SAML login URL
+    const samlLink = wrapper.find('[data-testid="org-login-sso-okta-saml"]')
+    expect(samlLink.attributes('href')).toBe('/api/v1/auth/saml/okta-saml/login')
+  })
+
+  it('response shape matches generated OrgLoginProviderInfo type (real types)', async () => {
+    // This test imports the REAL generated types from schema.ts to verify
+    // the mock response shape matches the actual API contract.
+    type OrgLoginProviderInfo = components['schemas']['OrgLoginProviderInfo']
+    type OrgLoginResponse = components['schemas']['OrgLoginResponse']
+
+    const mockProviders: OrgLoginProviderInfo[] = [
+      { provider_id: 'google', display_name: 'Google', type: 'oidc', preset: 'google' },
+      { provider_id: 'okta-saml', display_name: 'Okta SAML', type: 'saml', preset: undefined },
+    ]
+    const mockResponse: OrgLoginResponse = {
+      org: { slug: 'test-org', name: 'Test Org' },
+      providers: mockProviders,
+      password_enabled: true,
+      saml: true,
+    }
+
+    // Verify the shape compiles against the real generated type
+    expect(mockResponse.org.slug).toBe('test-org')
+    expect(mockResponse.providers).toHaveLength(2)
+    expect(mockResponse.providers[0].type).toBe('oidc')
+    expect(mockResponse.providers[1].type).toBe('saml')
+    expect(mockResponse.saml).toBe(true)
+
+    // Now mount with this data and verify rendering
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockResponse),
+    } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-sso-google"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-testid="org-login-sso-okta-saml"]').exists()).toBe(true)
   })
 })

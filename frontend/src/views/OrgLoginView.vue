@@ -76,20 +76,14 @@
             <a
               v-for="provider in providers"
               :key="provider.provider_id"
-              :href="`/api/v1/auth/oidc/${provider.provider_id}/login?org=${slug}`"
+              :href="provider.type === 'saml'
+                ? `/api/v1/auth/saml/${provider.provider_id}/login`
+                : `/api/v1/auth/oidc/${provider.provider_id}/login?org=${slug}`"
               class="flex w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
               :data-testid="`org-login-sso-${provider.provider_id}`"
             >
-              <SsoBrandMark :preset="provider.preset ?? 'custom'" />
+              <SsoBrandMark :preset="provider.type === 'saml' ? 'custom' : (provider.preset ?? 'custom')" />
               {{ $t('views.LoginView.sign_in_with', { provider: provider.display_name || provider.provider_id }) }}
-            </a>
-            <a
-              v-if="samlEnabled"
-              href="/api/v1/auth/saml/login"
-              class="flex w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-              data-testid="org-login-sso-saml"
-            >
-              {{ $t('views.OrgLoginView.saml_button') }}
             </a>
           </div>
         </div>

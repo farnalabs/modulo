@@ -1,4 +1,4 @@
-"""Pre-auth org-login resolution routes (FAR-856).
+"""Pre-auth org-login resolution routes (FAR-856, FAR-1004).
 
 Two anonymous endpoints that power the org-first login flow:
 
@@ -6,7 +6,7 @@ Two anonymous endpoints that power the org-first login flow:
    single login-active org (for auto-skip) or multiple (for org selection).
 
 2. ``GET /api/v1/auth/org-login/{slug}`` — resolves ONE org by exact slug
-   and returns its enabled OIDC providers (scoped to that org only).
+   and returns its enabled OIDC and SAML providers (scoped to that org only).
 
 Both endpoints are pre-auth (no JWT required), must never 401/402 for a
 missing Authorization header, and must never enumerate orgs. A uniform
@@ -26,17 +26,18 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.api.routes.sso import is_saml_available
 from modulo.db.crud.organisation import (
     get_login_active_org_by_slug,
     list_login_active_orgs,
 )
 from modulo.db.crud.sso_provider import list_enabled_oidc_providers
+from modulo.db.models.sso_provider import SsoProvider
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ class LoginContextResponse(BaseModel):
 class OrgLoginProviderInfo(BaseModel):
     provider_id: str
     display_name: str
+    type: str = "oidc"  # "oidc" | "saml" — discriminator for the frontend router.
     # preset may be omitted if FAR-853 has not landed — never invent a column.
     preset: str | None = None
 
@@ -78,7 +80,10 @@ class OrgLoginResponse(BaseModel):
     org: OrgInfo
     providers: list[OrgLoginProviderInfo]
     password_enabled: bool = True
-    # Instance-wide SAML availability (not per-org — SAML is single-IdP-per-instance).
+    # Per-org SAML availability (FAR-1004): true when THIS org has an enabled
+    # SAML provider with usable metadata.  The env-var fallback is NOT applied
+    # here — it stays only in the legacy /sso/providers endpoint (sso.py)
+    # used by LoginView.vue for single-org auto-skip.
     saml: bool = False
 
 
@@ -154,7 +159,7 @@ async def org_login(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLoginResponse:
-    """Resolve ONE org by slug and return its enabled OIDC providers.
+    """Resolve ONE org by slug and return its enabled OIDC and SAML providers.
 
     Pre-auth, anonymous — must never require an Authorization header and must
     never 401/402. Rate-limited via the existing ``RateLimitMiddleware`` (the
@@ -166,15 +171,22 @@ async def org_login(
     rate-limit awareness via a comment for future middleware expansion).
 
     For a login-active org returns:
-      ``{"org": {slug, name}, "providers": [{provider_id, display_name, preset?}],
-        "password_enabled": true}``
+      ``{"org": {slug, name},
+        "providers": [{provider_id, display_name, type, preset?}],
+        "password_enabled": true, "saml": true|false}``
 
-    ``providers`` are that org's ENABLED OIDC providers only — scoped to the
-    resolved org (not the system-scoped global read). ``preset`` is included
-    only if the column exists (FAR-853); omitted otherwise.
+    ``providers`` are that org's ENABLED OIDC and SAML providers — scoped to
+    the resolved org (not the system-scoped global read).  Each provider has
+    a ``type`` discriminator: ``"oidc"`` or ``"saml"``.  ``preset`` is
+    included only for OIDC providers (SAML has no preset).
+
+    ``saml`` is per-org (FAR-1004): true when THIS org has an enabled SAML
+    provider with usable metadata (metadata_url or metadata_xml).  The
+    env-var fallback is NOT applied here — it stays only in the legacy
+    ``/sso/providers`` endpoint used by LoginView.vue for single-org.
 
     For an unknown OR non-login-active slug, returns a uniform generic 404
-    with the same body/timing shape for both cases. Never reveals whether
+    with the same body/timing shape for both cases.  Never reveals whether
     the slug exists.
 
     Security reasoning:
@@ -203,10 +215,23 @@ async def org_login(
             # organisation_id = <org's RLS context>.  When the session is the
             # system session (BYPASSRLS), we must filter manually.  We always
             # filter by organisation_id defensively.
-            scoped_providers = [p for p in oidc_providers if p.organisation_id == org.id]
+            scoped_oidc = [p for p in oidc_providers if p.organisation_id == org.id]
 
-            # SAML is instance-wide (single-IdP-per-instance), not per-org.
-            saml_enabled = await is_saml_available(settings, None, session)
+            # SAML providers scoped to this org (FAR-1004).  Query all enabled
+            # SAML providers, then filter by org_id — mirrors the OIDC pattern.
+            saml_result = await session.execute(
+                select(SsoProvider).where(
+                    SsoProvider.provider_type == "saml",
+                    SsoProvider.enabled,
+                )
+            )
+            all_saml = list(saml_result.scalars().all())
+            scoped_saml = [p for p in all_saml if p.organisation_id == org.id]
+
+            # Per-org SAML availability: true when THIS org has an enabled SAML
+            # provider with usable metadata.  NO env-var fallback — the fallback
+            # stays only in the legacy /sso/providers endpoint (sso.py).
+            saml_enabled = any(bool(p.metadata_xml or p.metadata_url) for p in scoped_saml)
     except HTTPException:
         raise
     except Exception:
@@ -222,10 +247,21 @@ async def org_login(
             OrgLoginProviderInfo(
                 provider_id=p.provider_id or "",
                 display_name=p.name,
+                type="oidc",
                 preset=getattr(p, "preset", None),
             )
-            for p in scoped_providers
+            for p in scoped_oidc
             if p.provider_id  # skip providers with no slug
+        ]
+        + [
+            OrgLoginProviderInfo(
+                provider_id=p.provider_id or "",
+                display_name=p.name,
+                type="saml",
+                preset=None,  # SAML has no preset — generic icon on frontend.
+            )
+            for p in scoped_saml
+            if p.provider_id
         ],
         password_enabled=True,
         saml=saml_enabled,
