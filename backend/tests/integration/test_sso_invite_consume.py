@@ -73,14 +73,21 @@ async def _create_sso_provider(
     engine: AsyncEngine,
     *,
     org_id: uuid.UUID,
-    provider_id: str = "test-sso",
+    provider_id: str | None = None,
     auto_provision: bool = True,
     allowed_domains: list[str] | None = None,
     default_role: str = "viewer",
     enabled: bool = False,
 ) -> uuid.UUID:
-    """Create an SSO provider row (disabled by default for staging safety)."""
+    """Create an SSO provider row (disabled by default for staging safety).
+
+    ``provider_id`` defaults to a unique value: the DB enforces a GLOBAL unique
+    index (``uq_sso_providers_provider_id``), so two tests sharing a constant id
+    collide when the first test's committed row persists (the shared
+    session-scoped DB is not rolled back between tests).
+    """
     prov_id = uuid.uuid4()
+    provider_id = provider_id or f"test-sso-{prov_id.hex[:8]}"
     domains_json = json.dumps(allowed_domains or [])
     async with engine.begin() as conn:
         await conn.execute(
@@ -227,8 +234,9 @@ async def test_sso_invite_consume_invitation_role_wins(
 
     # Read the SsoProvider row as an ORM object (jit_provision_user expects it)
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    async with factory() as session:
-        # Set RLS org so the session can read/write within this org
+    async with factory() as session, session.begin():
+        # set_rls_* requires an active transaction; session.begin() opens one
+        # (and commits on exit) so the RLS config applies to this unit of work.
         from modulo.db.rls import set_rls_org
 
         await set_rls_org(session, org_id)
@@ -267,8 +275,6 @@ async def test_sso_invite_consume_invitation_role_wins(
             sso_provider=provider,
             email_verified=True,
         )
-
-        await session.commit()
 
     # -- Assertions against the real DB --
 
@@ -319,7 +325,7 @@ async def test_sso_invite_consume_exactly_once(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     # First SSO sign-in -- consumes the invitation
-    async with factory() as session:
+    async with factory() as session, session.begin():
         from modulo.db.rls import set_rls_org
 
         await set_rls_org(session, org_id)
@@ -349,12 +355,11 @@ async def test_sso_invite_consume_exactly_once(
             sso_provider=provider,
             email_verified=True,
         )
-        await session.commit()
 
     assert role1 == "operator"
 
     # Second SSO sign-in -- should find existing membership, not burn invitation
-    async with factory() as session:
+    async with factory() as session, session.begin():
         from modulo.db.rls import set_rls_org
 
         await set_rls_org(session, org_id)
@@ -372,7 +377,6 @@ async def test_sso_invite_consume_exactly_once(
             sso_provider=provider,
             email_verified=True,
         )
-        await session.commit()
 
     # Same account, same role, invitation not double-consumed
     assert account2.id == account.id
