@@ -3,7 +3,7 @@
 import contextlib
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
@@ -240,39 +240,121 @@ def health_check_determines(request):
     pass
 
 
-@when("I check the model backend health")
-def check_mb_health(client, request):
-    # No standalone health endpoint exists — health is enforced via pipeline
-    # validation (see backend_health_check.feature). The carrying scenarios are
-    # marked @awaiting-implementation and deselected.
-    request.node._resp = None
+@given(parsers.parse("an OpenAI model backend configured with valid credentials"))
+@given(parsers.parse("an OpenAI model backend configured with a valid API key"))
+def openai_backend_valid_credentials(request):
+    request.node._mb = _make_mock_backend(name="openai-health", provider="openai", model_id="gpt-4o")
+    request.node._mb_api_key = "sk-valid"
+    request.node._mb_health = ("ok", None)
 
 
-@then("the health check returns ok")
-def health_ok(request):
-    pass
+@given(parsers.parse("an OpenAI model backend configured with invalid API key"))
+def openai_backend_invalid_credentials(request):
+    request.node._mb = _make_mock_backend(name="openai-health", provider="openai", model_id="gpt-4o")
+    request.node._mb_api_key = "sk-invalid"
+    request.node._mb_health = ("unhealthy", "401 Incorrect API key provided")
 
 
-@then("the health check returns error")
-def health_error(request):
-    pass
-
-
-@then("the error describes the authentication failure")
-def health_auth_error(request):
-    pass
-
-
+@given(parsers.parse('org "{org}" has a model backend "{name}"'))
 @given(parsers.parse('org "{org}" has model backend "{name}"'))
 def org_has_model_backend_simple(org: str, name: str, request):
     request.node._mb_name = name
-
-
-@when(parsers.parse('I check the health of "{name}"'))
-def check_health_of(name: str, client, request):
-    request.node._resp = None
+    request.node._mb = _make_mock_backend(name=name)
 
 
 @given("a Stub model backend is configured")
 def stub_configured(request):
-    pass
+    request.node._mb = _make_mock_backend(name="stub-backend", provider="stub", model_id="stub")
+    request.node._mb_api_key = "stub-key"
+    # The stub provider is deterministic by construction — it is always healthy.
+    request.node._mb_health = ("ok", None)
+
+
+def _post_health_check(request, mb, health_status, health_detail):
+    """POST the real /api/v1/model-backends/{id}/health-check route.
+
+    Only the DB lookup seam (``get_model_backend``), the secret-decryption seam
+    (``decode_stored_secret_scoped``) and the post-commit persist seam
+    (``_run_health_check_on_save_and_persist``) are patched — the route's auth,
+    RLS context setup, DB-error mapping and response shape stay real.
+    """
+    with (
+        patch(
+            "modulo.api.routes.model_backends.get_model_backend",
+            new=AsyncMock(return_value=mb),
+        ),
+        patch(
+            "modulo.api.routes.model_backends.decode_stored_secret_scoped",
+            new=AsyncMock(return_value=getattr(request.node, "_mb_api_key", None)),
+        ),
+        patch(
+            "modulo.api.routes.model_backends._run_health_check_on_save_and_persist",
+            new=AsyncMock(return_value=(health_status, health_detail)),
+        ) as mock_health,
+        patch("modulo.api.routes.model_backends.set_rls_org", new=AsyncMock()),
+        patch("modulo.api.routes.model_backends.set_rls_user_context", new=AsyncMock()),
+    ):
+        resp = request.node._client.post(f"/api/v1/model-backends/{mb.id}/health-check")
+    request.node._resp = resp
+    request.node._mb_health_calls = mock_health.await_count
+
+
+@when("I check the model backend health")
+def check_mb_health(client, request):
+    mb = getattr(request.node, "_mb", None) or _make_mock_backend(name="health-backend")
+    health_status, health_detail = getattr(request.node, "_mb_health", ("ok", None))
+    _post_health_check(request, mb, health_status, health_detail)
+
+
+@when(parsers.parse('I check the health of "{name}"'))
+def check_health_of(name: str, client, request):
+    # The caller is the other-org client; RLS hides the backend, so the DB
+    # lookup seam resolves nothing and the route answers 404 before any check.
+    mb = _make_mock_backend(name=name)
+    with (
+        patch(
+            "modulo.api.routes.model_backends.get_model_backend",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("modulo.api.routes.model_backends.set_rls_org", new=AsyncMock()),
+        patch("modulo.api.routes.model_backends.set_rls_user_context", new=AsyncMock()),
+    ):
+        resp = request.node._client.post(f"/api/v1/model-backends/{mb.id}/health-check")
+    request.node._resp = resp
+
+
+@then("the health check returns ok")
+def health_ok(request):
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["status"] in ("healthy", "not_applicable"), f"Expected healthy, got {body}"
+    assert body["checked_at"] is not None
+
+
+@then("the persisted health check result is healthy")
+def health_ok_persisted(request):
+    assert getattr(request.node, "_mb_health_calls", 0) >= 1, "health check seam was never invoked"
+    resp = request.node._resp
+    assert resp.json()["detail"] is None
+
+
+@then("the health check returns error")
+def health_error(request):
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["status"] == "unhealthy", f"Expected unhealthy, got {body}"
+    assert body["checked_at"] is not None
+
+
+@then("the error describes the authentication failure")
+def health_auth_error(request):
+    detail = request.node._resp.json().get("detail") or ""
+    assert "401" in detail, f"Expected auth failure detail to mention 401, got {detail!r}"
+
+
+@then("the health check is not accessible for the other org")
+def health_not_accessible_other_org(request):
+    resp = request.node._resp
+    assert resp.status_code == 404, f"Expected 404 for a cross-org health check, got {resp.status_code}: {resp.text}"
