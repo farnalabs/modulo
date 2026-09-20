@@ -2,6 +2,14 @@
 migration between schema versions, and profile-based rendering/translation.
 """
 
+from modulo.core.schema_registry.contract import (
+    SCHEMA_CONTRACT_VERSION,
+    SCHEMA_DIR_ENV_VAR,
+    ContractWriteResult,
+    cleanup_schema_contract,
+    read_schema_contract_version,
+    write_schema_contract,
+)
 from modulo.core.schema_registry.generation import (
     SchemaGenerationError,
     SchemaGenerationService,
@@ -43,7 +51,10 @@ from modulo.core.schema_registry.validation import (
 )
 
 __all__ = [
+    "SCHEMA_CONTRACT_VERSION",
+    "SCHEMA_DIR_ENV_VAR",
     "SCHEMA_PROFILE_VALUES",
+    "ContractWriteResult",
     "FieldChange",
     "MigrationPlan",
     "MigrationRegistry",
@@ -60,10 +71,12 @@ __all__ = [
     "SchemaValidationResult",
     "add_field",
     "apply_migration",
+    "cleanup_schema_contract",
     "convert_field",
     "create_migration",
     "flag_rare_fields",
     "preview_strip_warnings",
+    "read_schema_contract_version",
     "remove_field",
     "rename_field",
     "render_for_profile",
@@ -72,4 +85,5 @@ __all__ = [
     "validate_array_schema",
     "validate_union_and_array",
     "validate_union_schema",
+    "write_schema_contract",
 ]
