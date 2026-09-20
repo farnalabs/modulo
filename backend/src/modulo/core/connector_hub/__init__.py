@@ -77,7 +77,6 @@ from modulo.connectors.snyk import SnykConnector
 from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
 from modulo.connectors.trello import TrelloConnector
-from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
@@ -856,7 +855,6 @@ _HUB_NATIVE_TOKEN_TYPES: frozenset[str] = frozenset(
         "grafana",
         "onepassword",
         "codeclimate",
-        "trivy",
     }
 )
 
@@ -1092,11 +1090,6 @@ def _build_connector(
             return CodeClimateConnector(token=_get_cred(creds, "token", type_id))
         case "snyk":
             return SnykConnector(token=_get_cred(creds, "token", type_id))
-        case "trivy":
-            return TrivyConnector(
-                token=_get_cred(creds, "token", type_id),
-                base_url=config.get("base_url", _LOCALHOST_8080),
-            )
         case "n8n":
             return N8NConnector(
                 token=_get_cred(creds, "token", type_id),

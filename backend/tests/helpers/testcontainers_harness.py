@@ -1,7 +1,7 @@
 """Tier 1b (FAR-934) shared testcontainers harness.
 
-Builds real container-hosted fixtures for the 10 self-hostable connectors
-(gitea, jenkins, n8n, youtrack, sonarqube, grafana, teamcity, trivy, codeclimate,
+Builds real container-hosted fixtures for the 9 self-hostable connectors
+(gitea, jenkins, n8n, youtrack, sonarqube, grafana, teamcity, codeclimate,
 gitlab) and the 5 OpenAI-compatible local model servers (ollama, llamacpp,
 localai, vllm, tgi) that the ``modulo.connectors`` and
 ``modulo.model_backends`` clients talk to.

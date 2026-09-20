@@ -51,7 +51,6 @@ from modulo.connectors.onepassword import OnePasswordConnector
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
-from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core import ssrf
 
@@ -75,7 +74,6 @@ def _build(name: str, base_url: str) -> Any:
         "youtrack": lambda: YouTrackConnector(token=TOKEN, base_url=base_url),
         "sonarqube": lambda: SonarQubeConnector(token=TOKEN, base_url=base_url),
         "teamcity": lambda: TeamCityConnector(token=TOKEN, base_url=base_url),
-        "trivy": lambda: TrivyConnector(token=TOKEN, base_url=base_url),
         "onepassword": lambda: OnePasswordConnector(token=TOKEN, base_url=base_url),
         "sentry": lambda: SentryConnector(token=TOKEN, organization="org", base_url=base_url),
         "azure_key_vault": lambda: AzureKeyVaultConnector(token=TOKEN, vault_url=base_url),
@@ -102,7 +100,6 @@ CONNECTOR_NAMES = [
     "youtrack",
     "sonarqube",
     "teamcity",
-    "trivy",
     "onepassword",
     "sentry",
     "azure_key_vault",
@@ -136,7 +133,6 @@ async def test_health_check_reports_blocked_base_url(name: str) -> None:
 
 
 LOCALHOST_DEFAULT_BUILDERS = {
-    "trivy": lambda: TrivyConnector(token=TOKEN),
     "sonarqube": lambda: SonarQubeConnector(token=TOKEN),
     "teamcity": lambda: TeamCityConnector(token=TOKEN),
     "onepassword": lambda: OnePasswordConnector(token=TOKEN),
@@ -152,7 +148,7 @@ LOCALHOST_DEFAULT_NAMES = list(LOCALHOST_DEFAULT_BUILDERS)
 async def test_localhost_default_base_url_is_blocked_by_default(name: str, monkeypatch) -> None:
     """The localhost-default connectors fail closed with actionable guidance.
 
-    Trivy/SonarQube/TeamCity/1Password/Jenkins/n8n/Grafana ship a loopback default
+    SonarQube/TeamCity/1Password/Jenkins/n8n/Grafana ship a loopback default
     ``base_url``. With loopback blocked by default they must not connect, and the
     error must name the variable AND the both-families requirement, because
     ``localhost`` resolves to ``127.0.0.1`` and ``::1`` on a dual-stack host.
@@ -201,7 +197,7 @@ def test_localhost_default_works_once_both_loopback_families_allowed(name: str, 
 async def test_hostname_resolving_to_private_address_is_blocked(monkeypatch) -> None:
     """The DNS path is gated too, not just literal IPs."""
     monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["192.168.7.7"])
-    connector = TrivyConnector(token=TOKEN, base_url="http://scanner.internal.example:8080")
+    connector = SonarQubeConnector(token=TOKEN, base_url="http://scanner.internal.example:8080")
 
     with pytest.raises(ValueError, match="resolves to a private/internal address"):
         connector._client()
@@ -218,7 +214,7 @@ async def test_query_and_write_refuse_blocked_base_url() -> None:
     silently proceeding — the same failure mode as any other invalid connector
     configuration.
     """
-    connector = TrivyConnector(token=TOKEN, base_url=METADATA)
+    connector = SonarQubeConnector(token=TOKEN, base_url=METADATA)
 
     with pytest.raises(ValueError, match="private/internal"):
         await connector.query(ConnectorQuery(resource="reports"))
@@ -230,7 +226,7 @@ async def test_query_and_write_refuse_blocked_base_url() -> None:
 def test_public_base_url_still_builds_a_client(monkeypatch) -> None:
     """Control case: the gate must not block a legitimate public target."""
     monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["93.184.216.34"])
-    connector = TrivyConnector(token=TOKEN, base_url="https://scanner.example.com")
+    connector = SonarQubeConnector(token=TOKEN, base_url="https://scanner.example.com")
     assert connector._client() is not None
 
 

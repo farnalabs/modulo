@@ -66,7 +66,6 @@ def test_all_connector_types_have_polling_parity():
         "sonarqube": "not yet implemented in _build_polling_connector",
         "codeclimate": "not yet implemented in _build_polling_connector",
         "snyk": "not yet implemented in _build_polling_connector",
-        "trivy": "not yet implemented in _build_polling_connector",
         "discord": "not yet implemented in _build_polling_connector",
         "microsoft_teams": "not yet implemented in _build_polling_connector",
         "n8n": "not yet implemented in _build_polling_connector",

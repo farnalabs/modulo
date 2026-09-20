@@ -173,7 +173,7 @@ def rest_test_server(monkeypatch: pytest.MonkeyPatch):
     Sets ``SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128`` for the test scope
     so the connector's pinned transport permits loopback — the documented
     operator mechanism for self-hosted deployments reaching localhost backends
-    (Trivy, SonarQube, Ollama, etc.).  This does NOT weaken the SSRF guard;
+    (SonarQube, Ollama, etc.).  This does NOT weaken the SSRF guard;
     link-local / metadata / multicast ranges remain blocked.
     """
     monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "127.0.0.0/8,::1/128")
@@ -269,10 +269,9 @@ register_conformance_connector("rest", "rest_connector")
 # test_pypi_contract.py) and are NOT registered for the shared conformance
 # suite.
 #
-# NOTE — trivy and codeclimate are REST API clients that require a running
-# remote service (Trivy server, Code Climate API).  trivy accepts an optional
-# token; codeclimate requires an API token.  Neither is a local scanner.
-# Both are excluded from conformance because they need live network access.
+# NOTE — codeclimate is a REST API client that requires a running
+# remote service (Code Climate API).  codeclimate requires an API token.
+# It is excluded from conformance because it needs live network access.
 
 
 @pytest.fixture

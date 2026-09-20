@@ -13,10 +13,10 @@ Excluded types and why:
   conformance resources (directory/file read/write).  Tested in
   dedicated VCR-backed contract tests (test_npm_contract.py,
   test_pypi_contract.py).
-- **trivy, codeclimate** — REST API clients that require a running
-  remote service (Trivy server, Code Climate API).  Neither is a local
-  scanner.  trivy accepts an optional token; codeclimate requires an
-  API token.  Both are excluded because they need live network access,
+- **codeclimate** — REST API client that requires a running
+  remote service (Code Climate API).  Neither is a local
+  scanner.  codeclimate requires an
+  API token.  Excluded because it needs live network access,
   not solely because of credentials.
 - **github, linear, jira, slack** — require a live vendor credential.
 - **ci-runner, ticket-tracker** — abstract bases, not instantiable.

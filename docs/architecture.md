@@ -171,9 +171,8 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 | `OnePasswordConnector` | `secrets` | read secrets |
 | `AzureKeyVaultConnector` | `secrets` | read secrets |
 | `SharePointConnector` | `documentation` | read/write files and pages |
-| `TrivyConnector` | `security` | scan container images |
 | `CodeClimateConnector` | `quality` | query code quality metrics |
-| *(42 built-in connectors total; see `modulo/connectors/`)* | | |
+| *(41 built-in connectors total; see `modulo/connectors/`)* | | |
 
 #### Integration Validation Levels (FAR-935)
 

@@ -95,7 +95,6 @@ _CONNECTOR_BASELINE: dict[ConnectorType, ValidationLevel] = {
     ConnectorType.SONARQUBE: ValidationLevel.UNIT_ONLY,
     ConnectorType.CODECLIMATE: ValidationLevel.UNIT_ONLY,
     ConnectorType.SNYK: ValidationLevel.UNIT_ONLY,
-    ConnectorType.TRIVY: ValidationLevel.UNIT_ONLY,
     # --- Communication ---
     ConnectorType.SLACK: ValidationLevel.UNIT_ONLY,
     ConnectorType.DISCORD: ValidationLevel.UNIT_ONLY,

@@ -1,6 +1,6 @@
 """FAR-520: remaining ``base_url`` connectors migrated to the pinned-IP transport.
 
-This file covers the FAR-520 leftovers: trivy, jenkins, grafana, teamcity,
+This file covers the FAR-520 leftovers: jenkins, grafana, teamcity,
 youtrack, gitea, azure_repos, confluence, sentry, onepassword, azure_key_vault,
 azure_pipelines and the ``ci_runner`` GitLab CI runner.
 
@@ -42,8 +42,8 @@ from modulo.connectors.grafana import GrafanaConnector
 from modulo.connectors.jenkins import JenkinsConnector
 from modulo.connectors.onepassword import OnePasswordConnector
 from modulo.connectors.sentry import SentryConnector
+from modulo.connectors.sonarqube import SonarQubeConnector
 from modulo.connectors.teamcity import TeamCityConnector
-from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core import ssrf
 
@@ -90,7 +90,6 @@ def _aclose(client: object) -> None:
 # host is the original hostname used for validation/SNI; for derived-base_url
 # connectors (azure_repos/azure_pipelines) it is a constant.
 _MIGRATED = {
-    "trivy": ("scanner.example.com", TrivyConnector(token=TOKEN, base_url="https://scanner.example.com")),
     "jenkins": (
         "jenkins.example.com",
         JenkinsConnector(username="user", token=TOKEN, base_url="https://jenkins.example.com"),
@@ -143,7 +142,7 @@ def test_connector_refuses_unpinned_rebound_host(monkeypatch: pytest.MonkeyPatch
     connection only ever targets the validated address.
     """
     _flip_resolver(monkeypatch)
-    connector = TrivyConnector(token=TOKEN, base_url="https://scanner.example.com")
+    connector = SonarQubeConnector(token=TOKEN, base_url="https://scanner.example.com")
     client = connector._client()
     try:
         backend = client._transport._pool._network_backend

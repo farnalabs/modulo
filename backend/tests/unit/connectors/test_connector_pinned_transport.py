@@ -64,7 +64,6 @@ from modulo.connectors.teamcity import TeamCityConnector
 from modulo.connectors.ticket_tracker.github import GitHubTicketTracker
 from modulo.connectors.ticket_tracker.trello import TrelloTicketTracker
 from modulo.connectors.trello import TrelloConnector
-from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core import ssrf
 
@@ -265,7 +264,7 @@ def test_ci_runner_github_actions_pins_api_github(monkeypatch: pytest.MonkeyPatc
 #
 # The roster spans all three construction paths:
 #   * tenant ``base_url`` built in ``_client()`` (gitea, gitlab, jira, youtrack,
-#     sonarqube, teamcity, trivy, onepassword, sentry, azure_key_vault, jenkins,
+#     sonarqube, teamcity, onepassword, sentry, azure_key_vault, jenkins,
 #     n8n, grafana, confluence, gitlab_ci);
 #   * a fixed vendor host pinned (azure_repos -> dev.azure.com,
 #     azure_pipelines -> dev.azure.com, ci_runner.github_actions -> api.github.com,
@@ -303,10 +302,6 @@ _PIN_ROSTER: dict[str, tuple[Callable[[], ConnectorBase], str]] = {
     "teamcity": (
         lambda: TeamCityConnector(token=TOKEN, base_url="https://teamcity-egress.example.com"),
         "teamcity-egress.example.com",
-    ),
-    "trivy": (
-        lambda: TrivyConnector(token=TOKEN, base_url="https://trivy-egress.example.com"),
-        "trivy-egress.example.com",
     ),
     "onepassword": (
         lambda: OnePasswordConnector(token=TOKEN, base_url="https://onepassword-egress.example.com"),
