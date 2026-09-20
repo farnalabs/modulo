@@ -3,7 +3,12 @@
 Net-new tables for the eval/policy-gate taxonomy.  Nothing reads or writes
 these tables in production yet; the migration creates the schema surface only.
 
-Downgrade drops the three tables (and their indexes) in reverse dependency order.
+After creation the tables are enabled with Row Level Security (FORCE) and
+owned by ``modulo_migrate`` so the runtime ``modulo_app`` role (non-owner)
+is filtered by the org-isolation policy.
+
+Downgrade drops the RLS policies and the three tables (and their indexes)
+in reverse dependency order.
 
 Revision ID: 0250_eval_policy_gate
 Revises: 0249_validation_level
@@ -12,7 +17,7 @@ Create Date: 2026-09-20
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 revision = "0250_eval_policy_gate"
 down_revision = "0249_validation_level"
@@ -29,6 +34,37 @@ _VALID_EVAL_TYPES = (
     "human_set",
 )
 _eval_type_sql = ", ".join(f"'{v}'" for v in _VALID_EVAL_TYPES)
+
+# Row Level Security — org isolation policy (mirrors 0130_eval_suite_entity).
+_ORG_ISOLATION_POLICY = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
+
+# Ownership transfer to migration role so modulo_app (non-owner) is RLS-filtered.
+_NEW_TABLES = ("evals", "policy_gates", "policy_gate_decisions")
+
+_OWNER_TRANSFER_SQL = (
+    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') "
+    "THEN ALTER TABLE public.{table} OWNER TO modulo_migrate; END IF; END $$;"
+)
+
+
+def _transfer_ownership() -> None:
+    for table in _NEW_TABLES:
+        op.execute(text(_OWNER_TRANSFER_SQL.format(table=table)))
+
+
+def _enable_rls() -> None:
+    """Enable + FORCE RLS with the org-isolation policy on all new tables."""
+    for table in _NEW_TABLES:
+        op.execute(text('ALTER TABLE "' + table + '" ENABLE ROW LEVEL SECURITY'))
+        op.execute(text('ALTER TABLE "' + table + '" FORCE ROW LEVEL SECURITY'))
+        op.execute(text('DROP POLICY IF EXISTS rls_org_isolation ON "' + table + '"'))
+        op.execute(text('CREATE POLICY rls_org_isolation ON "' + table + '" USING (' + _ORG_ISOLATION_POLICY + ")"))
+
+
+def _drop_rls() -> None:
+    """Drop the org-isolation policy from all new tables."""
+    for table in _NEW_TABLES:
+        op.execute(text('DROP POLICY IF EXISTS rls_org_isolation ON "' + table + '"'))
 
 
 def _is_postgres() -> bool:
@@ -159,6 +195,12 @@ def upgrade() -> None:
         )
         op.create_index("ix_policy_gate_decisions_organisation_id", "policy_gate_decisions", ["organisation_id"])
 
+    # 4. Row Level Security (org isolation) on all three new tables.
+    _enable_rls()
+
+    # Ensure the runtime modulo_app role is a non-owner (filtered by RLS).
+    _transfer_ownership()
+
 
 def downgrade() -> None:
     if not _is_postgres():
@@ -167,6 +209,9 @@ def downgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
     existing_tables = set(inspector.get_table_names())
+
+    # Drop RLS policies before dropping tables.
+    _drop_rls()
 
     # Reverse dependency order.
     if "policy_gate_decisions" in existing_tables:

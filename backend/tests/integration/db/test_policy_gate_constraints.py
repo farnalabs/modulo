@@ -151,12 +151,16 @@ class TestC12CrossOrgFKRejection:
                 )
 
     @pytest.mark.asyncio
-    async def test_decision_cross_org_gate_fk(self, db_engine: AsyncEngine) -> None:
+    async def test_decision_cross_org_gate_fk_only(self, db_engine: AsyncEngine) -> None:
+        """Violates ONLY the (policy_gate_id, org) FK -- eval FK is valid."""
         org_a, acc_a, pipe_a = await _setup_org(db_engine)
-        org_b, _, _ = await _setup_org(db_engine)
+        org_b, acc_b, pipe_b = await _setup_org(db_engine)
         node_a = uuid.uuid4()
+        node_b = uuid.uuid4()
         eval_a = await _insert_eval(db_engine, org_a, pipe_a, acc_a, node_a)
         gate_a = await _insert_gate(db_engine, org_a, eval_a, node_a)
+        # org_b has its own valid eval -- so the eval FK is satisfied.
+        eval_b = await _insert_eval(db_engine, org_b, pipe_b, acc_b, node_b)
         with pytest.raises(IntegrityError):
             async with db_engine.begin() as conn:
                 await conn.execute(
@@ -164,17 +168,21 @@ class TestC12CrossOrgFKRejection:
                         "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) "
                         "VALUES (:id, :oid, :pgid, :eid)"
                     ),
-                    {"id": str(uuid.uuid4()), "oid": str(org_b), "pgid": str(gate_a), "eid": str(eval_a)},
+                    # gate_a belongs to org_a -- invalid for org_b's organisation_id.
+                    {"id": str(uuid.uuid4()), "oid": str(org_b), "pgid": str(gate_a), "eid": str(eval_b)},
                 )
 
     @pytest.mark.asyncio
-    async def test_decision_cross_org_eval_fk(self, db_engine: AsyncEngine) -> None:
+    async def test_decision_cross_org_eval_fk_only(self, db_engine: AsyncEngine) -> None:
+        """Violates ONLY the (eval_id, org) FK -- gate FK is valid."""
         org_a, acc_a, pipe_a = await _setup_org(db_engine)
-        org_b, _, _ = await _setup_org(db_engine)
+        org_b, acc_b, pipe_b = await _setup_org(db_engine)
         node_a = uuid.uuid4()
+        node_b = uuid.uuid4()
         eval_a = await _insert_eval(db_engine, org_a, pipe_a, acc_a, node_a)
-        gate_a = await _insert_gate(db_engine, org_a, eval_a, node_a)
-        fake_eval = uuid.uuid4()
+        # org_b has its own valid gate -- so the gate FK is satisfied.
+        eval_b = await _insert_eval(db_engine, org_b, pipe_b, acc_b, node_b)
+        gate_b = await _insert_gate(db_engine, org_b, eval_b, node_b)
         with pytest.raises(IntegrityError):
             async with db_engine.begin() as conn:
                 await conn.execute(
@@ -182,7 +190,8 @@ class TestC12CrossOrgFKRejection:
                         "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) "
                         "VALUES (:id, :oid, :pgid, :eid)"
                     ),
-                    {"id": str(uuid.uuid4()), "oid": str(org_b), "pgid": str(gate_a), "eid": str(fake_eval)},
+                    # eval_a belongs to org_a -- invalid for org_b's organisation_id.
+                    {"id": str(uuid.uuid4()), "oid": str(org_b), "pgid": str(gate_b), "eid": str(eval_a)},
                 )
 
 
@@ -191,50 +200,66 @@ class TestC12CrossOrgFKRejection:
 # ---------------------------------------------------------------------------
 
 
+async def _get_fk_confdeltype(
+    conn,
+    child_table: str,
+    child_columns: tuple[str, str],
+    parent_table: str,
+):
+    """Look up confdeltype for a composite FK by column set + parent table.
+
+    Returns the confdeltype character ('r' for RESTRICT, 'd' for CASCADE, etc.)
+    or raises AssertionError with a clear diagnostic message.
+
+    Table and column names are hardcoded constants, so f-string interpolation
+    is safe here (not user input).
+    """
+    col_a, col_b = child_columns
+    # Use f-string for table/column names (constants) to avoid ::regclass
+    # conflicting with SQLAlchemy bind-parameter syntax.
+    sql = (
+        f"SELECT confdeltype FROM pg_constraint "  # noqa: S608 — hardcoded constants
+        f"WHERE conrelid = '{child_table}'::regclass "
+        f"AND conkey @> ARRAY["
+        f"  (SELECT attnum::smallint FROM pg_attribute"
+        f"   WHERE attrelid = '{child_table}'::regclass"
+        f"   AND attname = '{col_a}'),"
+        f"  (SELECT attnum::smallint FROM pg_attribute"
+        f"   WHERE attrelid = '{child_table}'::regclass"
+        f"   AND attname = '{col_b}')"
+        f"] "
+        f"AND confrelid = '{parent_table}'::regclass"
+    )
+    result = await conn.execute(text(sql))
+    row = result.fetchone()
+    assert row is not None, f"FK ({col_a}, {col_b}) -> {parent_table} not found in pg_constraint"
+    val = row[0]
+    # asyncpg returns single-char columns as bytes; decode for comparison.
+    return val.decode() if isinstance(val, bytes) else val
+
+
 class TestC13FkDeleteActions:
     @pytest.mark.asyncio
     async def test_gate_fk_is_restrict(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as conn:
-            result = await conn.execute(
-                text(
-                    "SELECT confdeltype FROM pg_constraint "
-                    "WHERE conrelid = 'policy_gate_decisions'::regclass "
-                    "AND confdeltype = 'r' "
-                    "AND conkey @> ARRAY["
-                    "  (SELECT attnum::smallint FROM pg_attribute"
-                    "   WHERE attrelid='policy_gate_decisions'::regclass"
-                    "   AND attname='policy_gate_id'),"
-                    "  (SELECT attnum::smallint FROM pg_attribute"
-                    "   WHERE attrelid='policy_gate_decisions'::regclass"
-                    "   AND attname='organisation_id')"
-                    "] "
-                    "AND confrelid = 'policy_gates'::regclass"
-                )
+            confdeltype = await _get_fk_confdeltype(
+                conn,
+                child_table="policy_gate_decisions",
+                child_columns=("policy_gate_id", "organisation_id"),
+                parent_table="policy_gates",
             )
-            row = result.fetchone()
-        assert row is not None, "FK (policy_gate_id, org) -> policy_gates not found"
+        assert confdeltype == "r", f"Expected RESTRICT (confdeltype='r') for FK -> policy_gates, got '{confdeltype}'"
 
     @pytest.mark.asyncio
     async def test_eval_fk_is_restrict(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as conn:
-            result = await conn.execute(
-                text(
-                    "SELECT confdeltype FROM pg_constraint "
-                    "WHERE conrelid = 'policy_gate_decisions'::regclass "
-                    "AND confdeltype = 'r' "
-                    "AND conkey @> ARRAY["
-                    "  (SELECT attnum::smallint FROM pg_attribute"
-                    "   WHERE attrelid='policy_gate_decisions'::regclass"
-                    "   AND attname='eval_id'),"
-                    "  (SELECT attnum::smallint FROM pg_attribute"
-                    "   WHERE attrelid='policy_gate_decisions'::regclass"
-                    "   AND attname='organisation_id')"
-                    "] "
-                    "AND confrelid = 'evals'::regclass"
-                )
+            confdeltype = await _get_fk_confdeltype(
+                conn,
+                child_table="policy_gate_decisions",
+                child_columns=("eval_id", "organisation_id"),
+                parent_table="evals",
             )
-            row = result.fetchone()
-        assert row is not None, "FK (eval_id, org) -> evals not found"
+        assert confdeltype == "r", f"Expected RESTRICT (confdeltype='r') for FK -> evals, got '{confdeltype}'"
 
     @pytest.mark.asyncio
     async def test_delete_gate_rejected_when_decision_exists(self, db_engine: AsyncEngine) -> None:
