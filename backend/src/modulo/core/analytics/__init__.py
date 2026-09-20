@@ -239,16 +239,19 @@ async def _fact_workspace_inputs_count(session: AsyncSession, run: Run) -> int |
 async def _fact_enforcement_aggregates(
     session: AsyncSession,
     run: Run,
-) -> Any:
+) -> tuple[Any, list[dict[str, Any]]]:
     """Aggregate per-attempt enforcement records for a terminal run (FAR-902).
 
     Reads all non-``__final__`` rows with ``schema_enforcement_json IS NOT
     NULL`` from ``run_node_outputs`` for this run and aggregates them via the
-    pure :func:`aggregate_run_enforcement` function.  Returns ``None`` when
-    no enforcement records exist (run had no schema enforcement).
+    pure :func:`aggregate_run_enforcement` function.  Returns ``(None, [])``
+    when no enforcement records exist (run had no schema enforcement).
 
-    Best-effort: a read failure degrades to ``None`` -- never raises.  This is
-    a telemetry path inside the fail-open ``record_run_facts`` guard.
+    The second element is the raw list of enforcement record dicts, used by
+    the caller to derive mode and outcome via the pure helpers.
+
+    Best-effort: a read failure degrades to ``(None, [])`` -- never raises.
+    This is a telemetry path inside the fail-open ``record_run_facts`` guard.
     """
     from modulo.core.pipeline_engine.schema_enforcement import aggregate_run_enforcement
     from modulo.db.models.run_node_outputs import RunNodeOutput
@@ -267,15 +270,16 @@ async def _fact_enforcement_aggregates(
             .all()
         )
         if not rows:
-            return None
-        return aggregate_run_enforcement([r for r in rows if isinstance(r, dict)])
+            return None, []
+        raw_records = [r for r in rows if isinstance(r, dict)]
+        return aggregate_run_enforcement(raw_records), raw_records
     except Exception:
         _log.warning(
             "analytics.enforcement_aggregation_failed",
             extra={"run_id": str(run.id)},
             exc_info=True,
         )
-        return None
+        return None, []
 
 
 def _derive_graph_dimensions(
@@ -381,7 +385,20 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
         node_count, sandbox_agent_node_count, max_node_timeout_seconds = await _snapshot_graph_dimensions(session, run)
         blobs = await _fact_run_blobs(session, run)
         workspace_inputs_count = await _fact_workspace_inputs_count(session, run)
-        enforcement = await _fact_enforcement_aggregates(session, run)
+        enforcement, enforcement_records = await _fact_enforcement_aggregates(session, run)
+
+        # FAR-902: derive mode and outcome from the raw enforcement records
+        # and write them onto the Run row so the API route can read them
+        # directly instead of re-deriving every time.
+        if enforcement_records:
+            from modulo.core.pipeline_engine.schema_enforcement import (
+                derive_mode_from_records,
+                derive_outcome_from_records,
+            )
+
+            run.schema_validator_mode = derive_mode_from_records(enforcement_records)
+            run.schema_validation_outcome = derive_outcome_from_records(enforcement_records)
+
         values: dict[str, Any] = {
             "run_id": run.id,
             "organisation_id": run.organisation_id,

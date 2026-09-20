@@ -18,12 +18,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+import uuid
+from typing import Any
 
-from sqlalchemy import text
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text, update
 
 _log = logging.getLogger(__name__)
 
@@ -39,9 +37,13 @@ ENFORCEMENT_SWEEP_PREDICATE = "rno.schema_enforcement_json IS NOT NULL AND rno.a
 
 
 async def sweep_schema_enforcement_facts(
-    session: AsyncSession,
+    factory: Any,
 ) -> dict[str, Any]:
     """Correct terminal runs with missing enforcement aggregate counters.
+
+    Accepts a session **factory** (``async_sessionmaker``), not a bare
+    session — matching the contract expected by ``_open_system_factory()`` in
+    ``cron_helpers.py``.  Opens and manages its own session internally.
 
     Scans ``run_node_outputs`` rows that have ``schema_enforcement_json`` data
     (matching the partial index predicate), joins to ``run_daily_facts`` where
@@ -51,87 +53,89 @@ async def sweep_schema_enforcement_facts(
     Returns a summary dict: ``{"scanned": int, "corrected": int}``.
     """
     from modulo.core.pipeline_engine.schema_enforcement import aggregate_run_enforcement
+    from modulo.db.models.run_daily_facts import RunDailyFact
+    from modulo.db.models.run_node_outputs import RunNodeOutput
 
     scanned = 0
     corrected = 0
 
     try:
-        # Find runs that have enforcement data but NULL fact columns.
-        # The predicate matches the partial index exactly.
-        rows = (
-            await session.execute(
-                text(
-                    """
-                    SELECT DISTINCT rno.run_id
-                    FROM run_node_outputs rno
-                    JOIN run_daily_facts rdf ON rdf.run_id = rno.run_id
-                    WHERE rno.schema_enforcement_json IS NOT NULL
-                      AND rno.attempt_key <> '__final__'
-                      AND rdf.enforcement_native_count IS NULL
-                    LIMIT :limit
-                    """
-                ),
-                {"limit": _SWEEP_MAX_PER_TICK},
-            )
-        ).fetchall()
-
-        scanned = len(rows)
-
-        for row in rows:
-            run_id = row[0]
-            # Fetch all enforcement records for this run.
-            records = (
+        async with factory() as session, session.begin():
+            # Find runs that have enforcement data but NULL fact columns.
+            # The predicate matches the partial index exactly.
+            # Uses raw text() for the scan (matches the partial index
+            # predicate exactly) — the run_id returned is a proper UUID
+            # object that ORM queries can use.
+            rows = (
                 await session.execute(
                     text(
                         """
-                        SELECT rno.schema_enforcement_json
+                        SELECT DISTINCT rno.run_id
                         FROM run_node_outputs rno
-                        WHERE rno.run_id = :run_id
-                          AND rno.schema_enforcement_json IS NOT NULL
+                        JOIN run_daily_facts rdf ON rdf.run_id = rno.run_id
+                        WHERE rno.schema_enforcement_json IS NOT NULL
                           AND rno.attempt_key <> '__final__'
+                          AND rdf.enforcement_native_count IS NULL
+                        LIMIT :limit
                         """
                     ),
-                    {"run_id": str(run_id)},
+                    {"limit": _SWEEP_MAX_PER_TICK},
                 )
             ).fetchall()
 
-            payloads = [r[0] for r in records if isinstance(r[0], dict)]
-            if not payloads:
-                continue
+            scanned = len(rows)
 
-            agg = aggregate_run_enforcement(payloads)
+            for row in rows:
+                raw_id = row[0]
+                # Ensure run_id is a UUID object (the raw text() scan may
+                # return a string on SQLite or a UUID on Postgres).
+                run_id = raw_id if isinstance(raw_id, uuid.UUID) else uuid.UUID(str(raw_id))
+                # Fetch all enforcement records for this run via ORM
+                # (handles UUID type portably across Postgres and SQLite).
+                records = (
+                    (
+                        await session.execute(
+                            select(RunNodeOutput.schema_enforcement_json).where(
+                                RunNodeOutput.run_id == run_id,
+                                RunNodeOutput.schema_enforcement_json.isnot(None),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
 
-            # Update the fact row.
-            result = await session.execute(
-                text(
-                    """
-                    UPDATE run_daily_facts
-                    SET enforcement_native_count = :native,
-                        enforcement_verbatim_count = :verbatim,
-                        enforcement_repair_count = :repair,
-                        enforcement_wasted_count = :wasted
-                    WHERE run_id = :run_id
-                      AND enforcement_native_count IS NULL
-                    """
-                ),
-                {
-                    "run_id": str(run_id),
-                    "native": agg.native_count,
-                    "verbatim": agg.verbatim_count,
-                    "repair": agg.repair_count,
-                    "wasted": agg.wasted_count,
-                },
-            )
-            if result.rowcount and result.rowcount > 0:  # type: ignore[attr-defined]
-                corrected += 1
+                payloads = [r for r in records if isinstance(r, dict)]
+                if not payloads:
+                    continue
 
-        await session.commit()
+                agg = aggregate_run_enforcement(payloads)
+
+                # Update the fact row via ORM (handles UUID type portably).
+                result = await session.execute(
+                    update(RunDailyFact)
+                    .where(
+                        RunDailyFact.run_id == run_id,
+                        RunDailyFact.enforcement_native_count.is_(None),
+                    )
+                    .values(
+                        enforcement_native_count=agg.native_count,
+                        enforcement_verbatim_count=agg.verbatim_count,
+                        enforcement_repair_count=agg.repair_count,
+                        enforcement_wasted_count=agg.wasted_count,
+                    )
+                )
+                if result.rowcount and result.rowcount > 0:
+                    corrected += 1
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning(
+        # _log.exception logs at ERROR level with full traceback — a
+        # structural failure (e.g. wrong interface) must never be silently
+        # swallowed at WARNING.
+        _log.exception(
             "analytics.enforcement_sweep_failed",
-            exc_info=True,
+            extra={"scanned": scanned, "corrected": corrected},
         )
 
     return {"scanned": scanned, "corrected": corrected}
