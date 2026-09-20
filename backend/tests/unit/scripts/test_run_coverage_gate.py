@@ -1312,12 +1312,12 @@ class TestParseCoberturaBranches:
     def test_empty_report(self, tmp_path):
         xml = tmp_path / "coverage.xml"
         xml.write_text("<coverage/>")
-        assert mod._parse_cobertura_branches(xml) == {}
+        assert not mod._parse_cobertura_branches(xml)
 
     def test_invalid_xml(self, tmp_path):
         xml = tmp_path / "coverage.xml"
         xml.write_text("not xml")
-        assert mod._parse_cobertura_branches(xml) == {}
+        assert not mod._parse_cobertura_branches(xml)
 
 
 class TestParseLcovBranches:
@@ -1337,7 +1337,7 @@ class TestParseLcovBranches:
     def test_empty_report(self, tmp_path):
         lcov = tmp_path / "lcov.info"
         lcov.write_text("TN:\nend_of_record\n")
-        assert mod._parse_lcov_branches(lcov) == {}
+        assert not mod._parse_lcov_branches(lcov)
 
 
 class TestParseAddedLineNumbers:
@@ -1353,13 +1353,17 @@ class TestParseAddedLineNumbers:
 class TestComputeBranchCoverage:
     def test_no_branch_data_all_unmeasured(self):
         covered, total, unmeasured = mod._compute_branch_coverage({"src/main.py": 5}, {})
-        assert covered == 0 and total == 0 and unmeasured == 5
+        assert covered == 0
+        assert total == 0
+        assert unmeasured == 5
 
     def test_partial_branch_data(self):
         covered, total, unmeasured = mod._compute_branch_coverage(
             {"src/main.py": 10}, {"src/main.py": {3: (1, 2), 7: (2, 2)}}
         )
-        assert covered == 3 and total == 4 and unmeasured == 0
+        assert covered == 3
+        assert total == 4
+        assert unmeasured == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1439,7 +1443,8 @@ class TestBranchCoverageEvaluation:
         ):
             result = mod.evaluate("Python", fake_report, "origin/main", 98, branch_fail_under=98)
         assert result.passed is False
-        assert result.actual_pct is not None and result.actual_pct < 98
+        assert result.actual_pct is not None
+        assert result.actual_pct < 98
 
     def test_line_99_branch_90_fails(self, tmp_path):
         """Line 99% + branch 90% -> FAIL."""
@@ -1484,7 +1489,8 @@ class TestBranchCoverageEvaluation:
             patch.object(mod, "_compute_branch_coverage_from_raw", return_value=(99, 100, 0)),
         ):
             result = mod.evaluate("Python", fake_report, "origin/main", 98, branch_fail_under=98)
-        assert result.passed is True and result.branch_passed is True
+        assert result.passed is True
+        assert result.branch_passed is True
 
     def test_vacuous_branch_pass(self, tmp_path):
         """No branch records -> vacuous pass."""
@@ -1564,7 +1570,9 @@ class TestBranchParserIntegration:
             covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
                 {"src/main.py": 2}, xml, "origin/main", "Python"
             )
-        assert covered == 2 and total == 3 and unmeasured == 0
+        assert covered == 2
+        assert total == 3
+        assert unmeasured == 0
 
     def test_compute_branch_coverage_from_raw_lcov(self, tmp_path):
         lcov = tmp_path / "lcov.info"
@@ -1575,7 +1583,9 @@ class TestBranchParserIntegration:
             covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
                 {"src/app.ts": 2}, lcov, "origin/main", "JavaScript"
             )
-        assert covered == 2 and total == 3 and unmeasured == 0
+        assert covered == 2
+        assert total == 3
+        assert unmeasured == 0
 
     def test_compute_branch_coverage_unmeasured_file(self, tmp_path):
         lcov = tmp_path / "lcov.info"
@@ -1586,7 +1596,9 @@ class TestBranchParserIntegration:
             covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
                 {"src/new.ts": 2}, lcov, "origin/main", "JavaScript"
             )
-        assert covered == 0 and total == 0 and unmeasured == 2
+        assert covered == 0
+        assert total == 0
+        assert unmeasured == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1608,7 +1620,8 @@ class TestProjectWideMetrics:
             "</classes></package></packages></coverage>"
         )
         line_pct, branch_pct = mod._compute_project_wide_metrics_cobertura(xml)
-        assert line_pct == 60.0 and branch_pct == 50.0
+        assert line_pct == 60.0
+        assert branch_pct == 50.0
 
     def test_lcov_metrics(self, tmp_path):
         lcov = tmp_path / "lcov.info"
@@ -1617,7 +1630,8 @@ class TestProjectWideMetrics:
             "TN:\nSF:b.ts\nDA:1,1\nend_of_record\n"
         )
         line_pct, branch_pct = mod._compute_project_wide_metrics_lcov(lcov)
-        assert line_pct == 75.0 and branch_pct == 50.0
+        assert line_pct == 75.0
+        assert branch_pct == 50.0
 
     def test_cobertura_empty(self, tmp_path):
         xml = tmp_path / "coverage.xml"
