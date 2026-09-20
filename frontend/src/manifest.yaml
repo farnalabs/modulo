@@ -5039,6 +5039,16 @@ features:
         description: Typed JSON schemas, schema editor, inference, and parameter schemas
     feat-sso:
         description: Single sign-on (SSO)
+        status: partial
+        behaviours:
+            # SAML per-org (multi-org) — regression coverage in
+            # backend/tests/integration/auth/test_saml_per_org_regression.py
+            - "[x] SAML provider resolution is per-org under RLS: GET /saml/login/{provider_slug} and /saml/acs/{provider_slug} resolve the provider ONLY from the caller's org's enabled provider rows (system-session lookup scoped by the RLS org context) — org A's IdP configuration is invisible to org B and a slug owned by another org resolves 404"
+            - "[x] Per-provider SP metadata (GET /saml/metadata/{provider_slug}) emits each org's own SP Entity ID (urn:modulo:sp:{org_short}) and a provider-specific ACS URL (/saml/acs/{provider_slug}); the instance-wide legacy route emits the first enabled provider's entity ID with the unsegmented legacy ACS"
+            - "[x] Cross-org assertion reuse fails closed: a response minted for org A's entity ID, replayed to org B's ACS, is rejected (401 SAML response validation failed) — python3-saml audience/destination/recipient checks plus the explicit audience-containment enforcement (FAR-1010)"
+            - "[x] The per-provider login redirect embeds an HMAC-signed RelayState token bound to the provider slug; a replay of the same signed response with a RelayState minted for another org is rejected (401, 'does not match')"
+            - "[x] IdP-initiated SSO (no RelayState) is accepted on the per-provider ACS — absence is tolerated, only a PRESENT-and-mismatched RelayState is fatal"
+            - "[x] Legacy single-tenant parity: /saml/login and /saml/acs (unsegmented) keep working against the first enabled provider; the legacy RelayState is python3-saml's self-derived SP self URL rather than a signed per-provider token"
     feat-system-config:
         description: System-level configuration administration
     feat-system-orgs:
