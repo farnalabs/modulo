@@ -97,6 +97,13 @@ def _rls_probe_result() -> SimpleNamespace:
     return SimpleNamespace(scalar=lambda: "")
 
 
+def _enforcement_empty_result() -> SimpleNamespace:
+    """The FAR-902 enforcement-aggregate read result (``.scalars().all()``) —
+    no schema-enforcement records on the run, so the aggregation degrades to
+    ``(None, [])`` without a warning."""
+    return SimpleNamespace(scalars=lambda: SimpleNamespace(all=list))
+
+
 def _blob_read_results() -> list[SimpleNamespace]:
     """The executes the single blobs read issues (qa M14 — ONE read_run_blobs
     call feeds BOTH byte facts): rows fetch + the read_rls_org GUC probe = 2.
@@ -246,6 +253,10 @@ class TestRecordRunFacts:
                 "completed_at",
                 "total_queue_wait_ms",
                 "workspace_inputs_count",
+                "enforcement_native_count",
+                "enforcement_verbatim_count",
+                "enforcement_repair_count",
+                "enforcement_wasted_count",
             )
 
             def __init__(self, model) -> None:
@@ -276,6 +287,7 @@ class TestRecordRunFacts:
                 SimpleNamespace(first=lambda: ("CI", None)),
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
+                _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
                 SimpleNamespace(),
             ]
         )
@@ -284,9 +296,9 @@ class TestRecordRunFacts:
         await analytics_mod.record_run_facts(session, run)
 
         session.begin_nested.assert_called_once()
-        # snapshot dims + graph dims + the single blobs read + the
-        # workspace_inputs_count read (FAR-802) + the upsert.
-        assert session.execute.await_count == 3 + len(_blob_read_results()) + 1
+        # snapshot dims + workspace_inputs_count (FAR-802) + the single blobs
+        # read + the enforcement-aggregate read (FAR-902) + the upsert.
+        assert session.execute.await_count == 3 + len(_blob_read_results()) + 1 + 1
         assert captured["model"] is analytics_mod.RunDailyFact
         assert len(captured["index_elements"]) == 1
         assert captured["index_elements"][0].key == "run_id"
@@ -369,6 +381,7 @@ class TestRecordRunFacts:
                 SimpleNamespace(first=lambda: (None, None)),
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read (succeeds)
+                _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read (succeeds)
                 RuntimeError("simulated facts insert failure"),
             ]
         )
