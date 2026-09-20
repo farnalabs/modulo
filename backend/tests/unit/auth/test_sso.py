@@ -2721,3 +2721,246 @@ class TestSamlProviderScoping:
             encoded, "https://app.example.com/api/v1/auth/saml/okta-a"
         )
         assert result is None
+
+
+def _make_saml_db_provider(
+    *,
+    provider_id: str = "okta-saml",
+    provider_type: str = "saml",
+    enabled: bool = True,
+    entity_id: str | None = "https://idp.example.com/sp",
+) -> SimpleNamespace:
+    """A minimal DB provider row for the auth-layer resolution helpers."""
+    return SimpleNamespace(
+        provider_id=provider_id,
+        provider_type=provider_type,
+        enabled=enabled,
+        entity_id=entity_id,
+        metadata_xml="<md:EntityDescriptor xmlns:md='urn:oasis:names:tc:SAML:2.0:metadata'/>",
+        metadata_url=None,
+    )
+
+
+class TestResolveSamlConfigPerProvider:
+    """``_resolve_saml_config(provider_id=...)`` resolution paths (FAR-1001)."""
+
+    async def test_provider_id_resolves_via_system_session(self) -> None:
+        """A matching slug is resolved through the system (BYPASSRLS) session."""
+        from modulo.auth.sso import _resolve_saml_config
+
+        provider = _make_saml_db_provider()
+        settings = _override(modulo_public_url="https://app.example.com")
+        system_session = _mock_session(scalar=provider)
+        app_session = _mock_session()
+
+        with patch("modulo.auth.sso._set_default_rls_org", new_callable=AsyncMock) as mock_default_org:
+            idp_metadata, entity_id, _key, _cert, db_saml = await _resolve_saml_config(
+                system_session, app_session, settings, provider_id="okta-saml"
+            )
+
+        assert db_saml is provider
+        assert entity_id == "https://idp.example.com/sp"
+        assert idp_metadata.startswith("<md:EntityDescriptor")
+        mock_default_org.assert_not_awaited()
+
+    async def test_provider_id_falls_back_to_app_session(self) -> None:
+        """Without a system session, per-provider resolution uses the app session."""
+        from modulo.auth.sso import _resolve_saml_config
+
+        provider = _make_saml_db_provider()
+        settings = _override(modulo_public_url="https://app.example.com")
+        app_session = _mock_session(scalar=provider)
+
+        with (
+            patch("modulo.auth.sso._set_default_rls_org", new_callable=AsyncMock),
+            patch("modulo.auth.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_get,
+        ):
+            mock_get.return_value = provider
+            _idp, entity_id, _key, _cert, db_saml = await _resolve_saml_config(
+                None, app_session, settings, provider_id="okta-saml"
+            )
+
+        assert db_saml is provider
+        assert entity_id == "https://idp.example.com/sp"
+
+    async def test_provider_id_defaults_entity_id_when_provider_has_none(self) -> None:
+        """A per-provider DB row without entity_id defaults to its own SP URL."""
+        from modulo.auth.sso import _resolve_saml_config
+
+        provider = _make_saml_db_provider(entity_id=None)
+        settings = _override(modulo_public_url="https://app.example.com")
+        system_session = _mock_session(scalar=provider)
+
+        with patch("modulo.auth.sso._set_default_rls_org", new_callable=AsyncMock):
+            _idp, entity_id, _key, _cert, _db = await _resolve_saml_config(
+                system_session, _mock_session(), settings, provider_id="okta-saml"
+            )
+
+        assert entity_id == "https://app.example.com/api/v1/auth/saml/okta-saml"
+
+    async def test_read_by_slug_ignores_non_saml_provider(self) -> None:
+        """A resolved non-SAML provider is rejected by the by-slug reader."""
+        from modulo.auth.sso import _read_system_saml_provider_by_slug
+
+        oidc = _make_saml_db_provider(provider_id="google", provider_type="oidc")
+        session = _mock_session(scalar=oidc)
+
+        result = await _read_system_saml_provider_by_slug(session, "google")
+
+        assert result is None
+
+    async def test_read_by_slug_none_without_system_session(self) -> None:
+        """An unprovisioned system role yields no per-provider match."""
+        from modulo.auth.sso import _read_system_saml_provider_by_slug
+
+        assert await _read_system_saml_provider_by_slug(None, "okta-saml") is None
+
+
+class TestPerProviderSamlRouteErrorPaths:
+    """Error/fallback branches on the per-provider SAML routes (FAR-1001)."""
+
+    def _provider(self) -> MagicMock:
+        return _make_saml_provider(provider_id="okta-saml")
+
+    def _post_acs(self, client: TestClient) -> Any:
+        return client.post(
+            "/api/v1/auth/saml/acs/okta-saml",
+            data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+            follow_redirects=False,
+        )
+
+    def test_acs_missing_response_returns_400(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = self._provider()
+            resp = client.post("/api/v1/auth/saml/acs/okta-saml", data={"SAMLResponse": ""}, follow_redirects=False)
+        assert resp.status_code == 400
+
+    def test_acs_value_error_returns_401(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_process.side_effect = ValueError("invalid response")
+            resp = self._post_acs(client)
+        assert resp.status_code == 401
+
+    def test_acs_programming_error_returns_501(self, client: TestClient) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_process.side_effect = ProgrammingError("select 1", {}, Exception("missing table"))
+            resp = self._post_acs(client)
+        assert resp.status_code == 501
+
+    def test_acs_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_process.side_effect = SQLAlchemyError("db down")
+            resp = self._post_acs(client)
+        assert resp.status_code == 503
+
+    def test_acs_http_exception_passthrough(self, client: TestClient) -> None:
+        from fastapi import HTTPException
+
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_process.side_effect = HTTPException(status_code=418, detail="teapot")
+            resp = self._post_acs(client)
+        assert resp.status_code == 418
+
+    def test_acs_unexpected_error_returns_500(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_process.side_effect = RuntimeError("boom")
+            resp = self._post_acs(client)
+        assert resp.status_code == 500
+
+    def test_login_value_error_returns_400(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_auth.side_effect = ValueError("bad config")
+            resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
+        assert resp.status_code == 400
+
+    def test_login_programming_error_returns_501(self, client: TestClient) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_auth.side_effect = ProgrammingError("select 1", {}, Exception("missing table"))
+            resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
+        assert resp.status_code == 501
+
+    def test_login_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_auth.side_effect = SQLAlchemyError("db down")
+            resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
+        assert resp.status_code == 503
+
+    def test_login_http_exception_passthrough(self, client: TestClient) -> None:
+        from fastapi import HTTPException
+
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_auth.side_effect = HTTPException(status_code=418, detail="teapot")
+            resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
+        assert resp.status_code == 418
+
+    def test_login_unexpected_error_returns_500(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with (
+            patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup,
+            patch("modulo.api.routes.sso.saml_get_auth_url", new_callable=AsyncMock) as mock_auth,
+        ):
+            mock_lookup.return_value = self._provider()
+            mock_auth.side_effect = RuntimeError("boom")
+            resp = client.get("/api/v1/auth/saml/okta-saml/login", follow_redirects=False)
+        assert resp.status_code == 500
+
+    def test_metadata_unexpected_error_returns_500(self, client: TestClient) -> None:
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        with patch("modulo.api.routes.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.side_effect = RuntimeError("boom")
+            resp = client.get("/api/v1/auth/saml/okta-saml/metadata", follow_redirects=False)
+        assert resp.status_code == 500
