@@ -1,5 +1,86 @@
 # Agent Configuration
 
+## Schema profile configuration
+
+An operator can set a `schema_profile` on an agent or on an individual pipeline
+node to control how the node's output schema is translated before dispatch to
+the model backend.
+
+### Valid values
+
+| Value | Effect |
+|-------|--------|
+| `verbatim` | Identity (no translation). This is the default when no profile is set. |
+| `provider-strict` | Strips JSON Schema keywords the target provider does not support. See [Schema Reference](./schema-reference.md#schema-profiles) for per-provider keyword sets. |
+| `runtime-sdk` | Renders for the target runtime. Currently identity; reserved for future transforms. |
+
+### Setting on an agent
+
+Set `schema_profile` when creating or updating an agent via the REST API or
+MCP:
+
+```json
+POST /api/v1/agents
+{
+  "name": "my-agent",
+  "prompt_template": "...",
+  "schema_profile": "provider-strict"
+}
+```
+
+The agent-level value becomes the default for all nodes that use this agent.
+A `NULL` value (or omitting the field) defaults to `verbatim`.
+
+### Setting on a node
+
+Set `schema_profile` on an individual node in the pipeline graph:
+
+```json
+PATCH /api/v1/pipelines/{pipeline_id}/graph
+{
+  "nodes": [
+    {
+      "id": "node-1",
+      "node_type": "sandbox_agent",
+      "agent_id": "...",
+      "schema_profile": "provider-strict",
+      "output_schema_json": { "type": "object", ... }
+    }
+  ],
+  "edges": [...]
+}
+```
+
+### Resolution order
+
+The effective profile for a node is resolved in this order:
+
+1. **Node-level** `schema_profile` -- set directly on the node in the
+   pipeline graph. This always wins.
+2. **Agent-level** default -- `Agent.schema_profile`, embedded into the
+   pipeline snapshot at trigger time. The node-level value (if set) is
+   already present in the snapshot via `setdefault` and is never overwritten.
+3. **Absent on both** -- the caller treats it as `verbatim` (identity,
+   no translation).
+
+This means an operator can set a broad default on an agent (e.g. all
+OpenAI-backed agents use `provider-strict`) and override specific nodes
+that need a different profile.
+
+### Design-time preview
+
+When a graph is saved with `include_schema_warnings=true`, the graph response
+includes a `schema_translation_report` listing which keywords would be stripped
+for each node's target provider, so operators can preview the impact before
+running a pipeline.
+
+### Migration safety
+
+The `schema_profile` field is optional and defaults to `verbatim`. Existing
+pipelines and agents are unaffected; no graph migration is required. The
+CHECK constraint on `agents.schema_profile` allows `NULL` or one of
+`verbatim`, `provider-strict`, `runtime-sdk`.
+
 ## Pipeline Graph Validation Rules
 
 Pipeline graphs are validated at three enforcement layers. Each layer catches different classes of issues.
