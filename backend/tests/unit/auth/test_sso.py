@@ -3025,6 +3025,30 @@ class TestSamlRelayStateSigning:
         assert payload_a["pid"] == "okta-a"
         assert payload_b["pid"] == "okta-b"
 
+    def test_verify_non_json_payload_returns_none(self) -> None:
+        from modulo.auth.sso import sign_state, verify_saml_relay_state
+
+        # Valid HMAC signature (via sign_state) but the payload is not JSON.
+        encoded = base64.urlsafe_b64encode(b"not json").rstrip(b"=").decode()
+        signed = sign_state(encoded, _VALID_32)
+        assert verify_saml_relay_state(signed, _VALID_32) is None
+
+    def test_verify_json_non_dict_returns_none(self) -> None:
+        from modulo.auth.sso import sign_state, verify_saml_relay_state
+
+        # Valid signature + valid JSON, but the payload is a list, not a dict.
+        encoded = base64.urlsafe_b64encode(json.dumps([1, 2, 3]).encode()).rstrip(b"=").decode()
+        signed = sign_state(encoded, _VALID_32)
+        assert verify_saml_relay_state(signed, _VALID_32) is None
+
+    def test_verify_missing_ts_returns_none(self) -> None:
+        from modulo.auth.sso import sign_state, verify_saml_relay_state
+
+        # Valid signature + dict payload, but the ts field is absent.
+        encoded = base64.urlsafe_b64encode(json.dumps({"pid": "okta-saml"}).encode()).rstrip(b"=").decode()
+        signed = sign_state(encoded, _VALID_32)
+        assert verify_saml_relay_state(signed, _VALID_32) is None
+
 
 # ---------------------------------------------------------------------------
 # SAML RelayState route integration (FAR-1003)
