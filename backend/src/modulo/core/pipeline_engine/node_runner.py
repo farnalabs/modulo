@@ -125,11 +125,7 @@ from modulo.core.run_context.autonomy import (
     should_skip_hitl_gate,
 )
 from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
-from modulo.core.schema_registry.contract import (
-    SCHEMA_CONTRACT_VERSION,
-    read_schema_contract_version,
-    write_schema_contract,
-)
+from modulo.core.schema_registry.contract import write_schema_contract
 from modulo.core.schema_registry.rendering import SchemaProfile, render_for_profile
 from modulo.db.crud.hitl_gate_config import human_only_effective
 from modulo.db.lifecycle_refs import (
@@ -3326,14 +3322,17 @@ def _extract_provider_id(backend: Any) -> str | None:
 
 async def _resolve_provider_id_from_agent(
     session_factory: Any,
-    agent_id: uuid.UUID,
+    agent_id: uuid.UUID | None,
 ) -> str | None:
     """Resolve the provider identifier from an agent's model backend.
 
     Reads the Agent row, then the ModelBackend row, and extracts the
     provider prefix from the backend's ``provider`` field.  Returns
-    ``None`` on any failure (DB error, missing rows) — never raises.
+    ``None`` when the session factory or agent id is absent, or on any
+    failure (DB error, missing rows) — never raises.
     """
+    if session_factory is None or agent_id is None:
+        return None
     try:
         from sqlalchemy import select
 
@@ -7818,16 +7817,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _sandbox_schema_dir = "/home/user/schemas"
         _node_schema_profile: SchemaProfile = _resolve_schema_profile(node_def) or "verbatim"
         # Resolve the provider_id from the node's agent → model backend.
-        _schema_provider_id: str | None = None
-        _schema_agent_id = _parse_uuid_opt(node_def.get("agent_id"))
-        if _schema_agent_id is not None and session_factory is not None:
-            try:
-                _schema_provider_id = await _resolve_provider_id_from_agent(session_factory, _schema_agent_id)
-            except Exception:
-                _log.debug(
-                    "contract.provider_resolve_failed",
-                    extra={"node_id": node_id, "agent_id": str(_schema_agent_id)},
-                )
+        # Best-effort: the resolver returns None on absence/failure and never raises.
+        _schema_provider_id = await _resolve_provider_id_from_agent(
+            session_factory,
+            _parse_uuid_opt(node_def.get("agent_id")),
+        )
         # Write to a LOCAL temp dir, then upload to the sandbox.  The contract
         # writer is E2B-decoupled — it writes to a real filesystem Path.
         _contract_local_tmp: Path | None = None
@@ -7873,17 +7867,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             f"---"
                         )
                         rendered_prompt = rendered_prompt + _schema_injection
-                    _schema_files_written_flag = True
         except Exception:
             _log.warning(
                 "contract.sandbox_write_failed",
                 extra={"node_id": node_id},
                 exc_info=True,
             )
-            _schema_files_written_flag = False
-        # NOTE: _contract_local_tmp cleanup is deferred to after schema
-        # validation (FAR-901) — the validator reads on-disk contract
-        # version files from this directory.
+        # NOTE: the local temp dir is retained until node completion (FAR-901)
+        # and then removed in the validation ``finally`` below.
 
         # FAR-296 mode split: llm mode writes the rendered prompt to
         # prompt.md; script mode writes the FULL run input (no 10KB
@@ -8756,45 +8747,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _sandbox_repair_invoke_fn = None
 
             try:
-                # FAR-901: pre-flight re-render on strict contract-version
-                # mismatch.  Before calling _validate_against_schema, check
-                # the on-disk contract version.  If it is stale (strict
-                # mode), re-render the schema files via write_schema_contract
-                # so the validator sees the current version.  Best-effort:
-                # a re-render failure is logged and never fails the node.
-                if schema_validator_mode == "strict" and _contract_local_tmp is not None:
-                    _precheck_version = read_schema_contract_version(
-                        _contract_local_tmp,
-                        node_id,
-                    )
-                    if isinstance(_precheck_version, int) and _precheck_version != SCHEMA_CONTRACT_VERSION:
-                        try:
-                            write_schema_contract(
-                                _contract_local_tmp,
-                                node_id=node_id,
-                                input_schema=config.input_schema_json,
-                                output_schema=config.output_schema_json,
-                                profile=_node_schema_profile,
-                                provider_id=_schema_provider_id,
-                            )
-                            _log.info(
-                                "schema_contract.reRendered",
-                                extra={
-                                    "node_id": node_id,
-                                    "old_version": _precheck_version,
-                                    "new_version": SCHEMA_CONTRACT_VERSION,
-                                },
-                            )
-                        except Exception:
-                            _log.warning(
-                                "schema_contract.rerender_failed",
-                                extra={"node_id": node_id},
-                                exc_info=True,
-                            )
-
                 # FAR-899: use real JSON Schema validation with mode support
-                # FAR-901: pass schema_dir + node_id so the validator reads
-                # the on-disk contract version.
                 _val_outcome, _val_errors, _ = _validate_against_schema(
                     output_json,
                     output_schema_json,
@@ -8802,8 +8755,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     schema_id=schema_id,
                     schema_version=schema_version,
                     _repair_invoke_fn=_sandbox_repair_invoke_fn,
-                    schema_dir=_contract_local_tmp,
-                    node_id=node_id,
                 )
                 # FIX H: log the validation outcome for observability
                 # TODO(FAR-902): persist the outcome
@@ -8886,7 +8837,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 ) from None
             finally:
                 # FAR-901: clean up the local temp schema dir now that
-                # validation (and any re-render) is complete.
+                # validation is complete.
                 if _contract_local_tmp is not None:
                     import shutil
 
@@ -9802,19 +9753,12 @@ def _validate_against_schema(
     schema_version: int = 0,
     repair_budget_config: Any = None,
     _repair_invoke_fn: Any | None = None,
-    schema_dir: "Path | None" = None,
-    node_id: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], Any]:
     """Validate *data* against *schema* using Draft202012Validator.
 
     FAR-899: thin mode-switching dispatcher. Repair orchestration lives in
     ``schema_repair.run_repair_loop``; error-summary formatting in
     ``schema_repair.format_error_summary``.
-
-    FAR-901: when *schema_dir* and *node_id* are provided, reads the on-disk
-    schema contract version via :func:`read_schema_contract_version` and
-    compares it against ``SCHEMA_CONTRACT_VERSION``.  A mismatch triggers a
-    warning (lenient) or an invalidation (strict).
 
     Returns:
         ``(outcome, errors, effective_data)`` where outcome is a
@@ -9839,36 +9783,6 @@ def _validate_against_schema(
     # No schema → nothing to validate
     if not isinstance(schema, dict) or not schema:
         return SchemaValidationOutcome.NO_SCHEMA.value, [], data
-
-    # FAR-901: schema contract version check.
-    # When schema_dir + node_id are provided, read the on-disk contract version
-    # via read_schema_contract_version — the real consumer of that function.
-    # Fall back to the in-memory _schema_contract_version key if the on-disk
-    # file is absent or unreadable.
-    _disk_version: int | None = None
-    if schema_dir is not None and node_id is not None:
-        _disk_version = read_schema_contract_version(schema_dir, node_id)
-    _contract_version: int | None = (
-        _disk_version if _disk_version is not None else schema.get("_schema_contract_version")
-    )
-    if isinstance(_contract_version, int) and _contract_version != SCHEMA_CONTRACT_VERSION:
-        if mode == "lenient":
-            _log.warning(
-                "schema_contract.version_mismatch_lenient",
-                extra={
-                    "schema_id": schema_id,
-                    "found": _contract_version,
-                    "expected": SCHEMA_CONTRACT_VERSION,
-                },
-            )
-        else:
-            # Strict mode: invalidate — the schema is stale and must be
-            # re-rendered for the current contract version.
-            raise OutputSchemaValidationError(
-                f"Schema contract version mismatch (schema={schema_id}): "
-                f"found {_contract_version}, expected {SCHEMA_CONTRACT_VERSION} — "
-                "schema must be re-rendered for the current contract version"
-            )
 
     # Run validation
     is_valid, errors = validate_against_schema(data, schema)

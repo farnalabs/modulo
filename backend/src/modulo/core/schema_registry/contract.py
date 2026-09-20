@@ -31,8 +31,9 @@ file so consumers can detect absence structurally.
 Version contract
 ----------------
 Every written file carries ``_schema_contract_version`` — a top-level integer
-key that the host-side validator (FAR-899 path in ``node_runner``) reads and
-compares.  A version mismatch triggers a warn (lenient) or re-render (strict).
+key identifying the contract layout for downstream consumers.  It is advisory
+metadata only: the schema contract is written and consumed within a single
+node dispatch, so the host-side validator does not gate on it.
 """
 
 from __future__ import annotations
@@ -57,8 +58,7 @@ _log = logging.getLogger(__name__)
 # Contract version — single source of truth
 # ---------------------------------------------------------------------------
 
-# Bump this when the file layout or content semantics change.  The host-side
-# validator in ``node_runner._validate_against_schema`` reads and compares it.
+# Bump this when the file layout or content semantics change.
 SCHEMA_CONTRACT_VERSION = 1
 
 # Sentinel written when schema files cannot be written.

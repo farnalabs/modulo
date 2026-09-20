@@ -35,7 +35,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from decimal import Decimal
-from pathlib import Path
 from typing import Any, NoReturn
 
 from langchain_core.messages import BaseMessage
@@ -122,7 +121,6 @@ from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, CompensationFailedError
-from modulo.core.schema_registry.contract import cleanup_schema_contract
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
@@ -3730,17 +3728,6 @@ class PipelineExecutor:
             raise
         except Exception:
             _log.exception("run_api_key.revoke_failed", extra={"run_id": str(run_id)})
-        # FAR-901: schema contract lifecycle cleanup.
-        # Schemas live inside the ephemeral sandbox (destroyed on run completion),
-        # so this is a best-effort hook for any residual host-side files.
-        # Tolerant of absence; never fails the run.
-        try:
-            import tempfile
-
-            _schema_cleanup_dir = Path(tempfile.gettempdir()) / "schema_contracts" / str(run_id)
-            cleanup_schema_contract(_schema_cleanup_dir)  # no-op if absent
-        except Exception:
-            _log.debug("schema_cleanup.skip", extra={"run_id": str(run_id)})
         return final_run
 
     async def _revoke_run_api_key(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:

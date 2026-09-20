@@ -404,6 +404,7 @@ __all__ = [
     # --- FAR-899 schema validation + repair loop (test-referenced;
     #     production callers wired in node_runner.py) ---
     "_clear_validator_cache",  # test isolation helper: resets the compiled-validator LRU
-    # --- FAR-901 schema contract (test-referenced; production callers wired in executor.py) ---
+    # --- FAR-901 schema contract (test-referenced module API;
+    #     the sandbox dispatcher consumes write_schema_contract only) ---
     "list_schema_nodes",  # advisory schema file enumeration (test-referenced)
 ]
