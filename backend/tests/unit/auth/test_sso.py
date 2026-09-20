@@ -3,6 +3,7 @@
 import base64
 import contextlib
 import json
+import time
 import uuid
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
@@ -27,7 +28,9 @@ from modulo.api.dependencies import (
 from modulo.api.routes.sso import router as sso_router
 from modulo.auth.sso import (
     parse_oidc_providers,
+    sign_saml_relay_state,
     sign_state,
+    verify_saml_relay_state,
     verify_state,
 )
 from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
@@ -2976,8 +2979,6 @@ class TestSamlRelayStateSigning:
     """sign_saml_relay_state / verify_saml_relay_state unit tests."""
 
     def test_sign_and_verify_returns_payload(self) -> None:
-        from modulo.auth.sso import sign_saml_relay_state, verify_saml_relay_state
-
         signed = sign_saml_relay_state("okta-saml", _VALID_32)
         payload = verify_saml_relay_state(signed, _VALID_32)
         assert payload is not None
@@ -2985,37 +2986,33 @@ class TestSamlRelayStateSigning:
         assert isinstance(payload["ts"], (int, float))
 
     def test_verify_tampered_returns_none(self) -> None:
-        from modulo.auth.sso import sign_saml_relay_state, verify_saml_relay_state
-
         signed = sign_saml_relay_state("okta-saml", _VALID_32)
         assert verify_saml_relay_state(signed + "x", _VALID_32) is None
 
     def test_verify_wrong_key_returns_none(self) -> None:
-        from modulo.auth.sso import sign_saml_relay_state, verify_saml_relay_state
-
         signed = sign_saml_relay_state("okta-saml", _VALID_32)
         assert verify_saml_relay_state(signed, "b" * 32) is None
 
     def test_verify_expired_returns_none(self) -> None:
-        from modulo.auth.sso import sign_saml_relay_state, verify_saml_relay_state
-
         signed = sign_saml_relay_state("okta-saml", _VALID_32)
         # With max_age_seconds=0, anything is expired
         assert verify_saml_relay_state(signed, _VALID_32, max_age_seconds=0) is None
 
-    def test_verify_malformed_returns_none(self) -> None:
-        from modulo.auth.sso import verify_saml_relay_state
+    def test_verify_future_timestamp_returns_none(self) -> None:
+        # A token minted more than the allowed skew in the future is rejected
+        # (clock-skew / replay-window abuse).
+        payload = json.dumps({"pid": "okta-saml", "ts": int(time.time()) + 3600})
+        encoded = base64.urlsafe_b64encode(payload.encode()).rstrip(b"=").decode()
+        signed = sign_state(encoded, _VALID_32)
+        assert verify_saml_relay_state(signed, _VALID_32) is None
 
+    def test_verify_malformed_returns_none(self) -> None:
         assert verify_saml_relay_state("no-colon", _VALID_32) is None
 
     def test_verify_empty_returns_none(self) -> None:
-        from modulo.auth.sso import verify_saml_relay_state
-
         assert verify_saml_relay_state("", _VALID_32) is None
 
     def test_different_providers_different_payloads(self) -> None:
-        from modulo.auth.sso import sign_saml_relay_state, verify_saml_relay_state
-
         signed_a = sign_saml_relay_state("okta-a", _VALID_32)
         signed_b = sign_saml_relay_state("okta-b", _VALID_32)
         payload_a = verify_saml_relay_state(signed_a, _VALID_32)
@@ -3026,24 +3023,18 @@ class TestSamlRelayStateSigning:
         assert payload_b["pid"] == "okta-b"
 
     def test_verify_non_json_payload_returns_none(self) -> None:
-        from modulo.auth.sso import sign_state, verify_saml_relay_state
-
         # Valid HMAC signature (via sign_state) but the payload is not JSON.
         encoded = base64.urlsafe_b64encode(b"not json").rstrip(b"=").decode()
         signed = sign_state(encoded, _VALID_32)
         assert verify_saml_relay_state(signed, _VALID_32) is None
 
     def test_verify_json_non_dict_returns_none(self) -> None:
-        from modulo.auth.sso import sign_state, verify_saml_relay_state
-
         # Valid signature + valid JSON, but the payload is a list, not a dict.
         encoded = base64.urlsafe_b64encode(json.dumps([1, 2, 3]).encode()).rstrip(b"=").decode()
         signed = sign_state(encoded, _VALID_32)
         assert verify_saml_relay_state(signed, _VALID_32) is None
 
     def test_verify_missing_ts_returns_none(self) -> None:
-        from modulo.auth.sso import sign_state, verify_saml_relay_state
-
         # Valid signature + dict payload, but the ts field is absent.
         encoded = base64.urlsafe_b64encode(json.dumps({"pid": "okta-saml"}).encode()).rstrip(b"=").decode()
         signed = sign_state(encoded, _VALID_32)
@@ -3060,8 +3051,6 @@ class TestSamlRelayStateRouteIntegration:
 
     def test_login_emits_relay_state_signed_for_provider(self, client: TestClient) -> None:
         """GET /saml/{slug}/login passes a signed relay_state to saml_get_auth_url."""
-        from modulo.auth.sso import verify_saml_relay_state
-
         provider = _make_saml_provider(provider_id="okta-saml")
         _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
         settings = _override(modulo_license_key="lic-123", modulo_saml_enabled=True)
@@ -3086,8 +3075,6 @@ class TestSamlRelayStateRouteIntegration:
 
     def test_acs_accepts_valid_signed_relay_state(self, client: TestClient) -> None:
         """POST /saml/{slug}/acs accepts a valid signed RelayState for the right provider."""
-        from modulo.auth.sso import sign_saml_relay_state
-
         provider = _make_saml_provider(provider_id="okta-saml")
         settings = _override(modulo_license_key="lic-123", modulo_saml_enabled=True)
         _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
@@ -3139,8 +3126,6 @@ class TestSamlRelayStateRouteIntegration:
 
     def test_acs_rejects_relay_state_signed_for_different_provider(self, client: TestClient) -> None:
         """POST /saml/{slug}/acs rejects a RelayState signed for a DIFFERENT provider."""
-        from modulo.auth.sso import sign_saml_relay_state
-
         provider = _make_saml_provider(provider_id="okta-saml")
         settings = _override(modulo_license_key="lic-123", modulo_saml_enabled=True)
         _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)

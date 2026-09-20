@@ -84,6 +84,7 @@ def verify_state(signed: str, secret_key: str) -> str | None:
 # against tampering within that containment.
 
 _RELAY_STATE_MAX_AGE_SECONDS = 600  # 10 minutes
+_RELAY_STATE_FUTURE_SKEW_SECONDS = 60  # tolerance for IdP/SP clock skew
 
 
 def sign_saml_relay_state(provider_id: str, secret_key: str) -> str:
@@ -111,8 +112,10 @@ def verify_saml_relay_state(
     """Verify a signed SAML RelayState. Returns the decoded payload on success, None on failure.
 
     Checks the HMAC signature (via ``verify_state``) and the timestamp
-    expiry. Returns a dict with ``"pid"`` (provider_id) and ``"ts"``
-    (Unix timestamp) on success.
+    expiry. A timestamp more than ``_RELAY_STATE_FUTURE_SKEW_SECONDS`` in
+    the future is also rejected, so a clock-skew or replay window cannot be
+    abused by a token minted ahead of time. Returns a dict with ``"pid"``
+    (provider_id) and ``"ts"`` (Unix timestamp) on success.
 
     Absence-tolerance is handled by the CALLER — this function is never
     called when RelayState is absent.
@@ -121,7 +124,7 @@ def verify_saml_relay_state(
     if state is None:
         return None
     try:
-        padded = state + "=" * (4 - len(state) % 4)
+        padded = state + "=" * (-len(state) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded))
     except (ValueError, TypeError, json.JSONDecodeError):
         return None
@@ -129,6 +132,8 @@ def verify_saml_relay_state(
         return None
     ts = payload.get("ts")
     if not isinstance(ts, (int, float)):
+        return None
+    if ts - time.time() > _RELAY_STATE_FUTURE_SKEW_SECONDS:
         return None
     if time.time() - ts > max_age_seconds:
         return None
