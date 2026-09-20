@@ -1330,6 +1330,25 @@ class TestParseLcovBranches:
         result = mod._parse_lcov_branches(lcov)
         assert result["src/x.ts"][1] == (0, 1)
 
+    def test_non_numeric_taken_is_not_covered(self, tmp_path):
+        """A malformed ``taken`` value must be counted as uncovered, not crash.
+
+        ``int()`` on a non-numeric field raised an uncaught ``ValueError`` that
+        took down the whole gate instead of the structured fail-closed path.
+        """
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nSF:src/x.ts\nBRDA:1,0,0,oops\nBRDA:2,0,0,5\nend_of_record\n")
+        result = mod._parse_lcov_branches(lcov)
+        assert result["src/x.ts"][1] == (0, 1)
+        assert result["src/x.ts"][2] == (1, 1)
+
+    def test_non_numeric_line_number_is_skipped(self, tmp_path):
+        """A malformed line number cannot be attributed; the record is dropped."""
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nSF:src/x.ts\nBRDA:x,0,0,1\nBRDA:3,0,0,1\nend_of_record\n")
+        result = mod._parse_lcov_branches(lcov)
+        assert result["src/x.ts"] == {3: (1, 1)}
+
     def test_empty_report(self, tmp_path):
         lcov = tmp_path / "lcov.info"
         lcov.write_text("TN:\nend_of_record\n")
@@ -1690,6 +1709,27 @@ class TestBranchParserIntegration:
         assert total == 0
         assert unmeasured == 2
 
+    def test_compute_branch_coverage_honours_custom_js_src_root(self, tmp_path):
+        """An explicit JS source root must drive key alignment, not the default.
+
+        ``--js-src-root`` exists so a report whose relative ``SF:`` paths
+        resolve against a directory other than ``frontend/`` still aligns to
+        the repo-relative changed-file keys.  The old implementation threaded
+        only the default root into the alignment, silently ignoring the flag,
+        so a custom root scored the file as unmeasured.
+        """
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nSF:src/app.ts\nBRDA:1,0,0,1\nBRDA:1,0,1,-\nend_of_record\n")
+        git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
+        with patch.object(mod.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
+                {"webapp/src/app.ts": 2}, lcov, "origin/main", "JavaScript", js_src_root="webapp"
+            )
+        assert covered == 1
+        assert total == 2
+        assert unmeasured == 1
+
     def test_match_report_key_rejects_ambiguous_suffix(self):
         """A bare basename matching multiple changed files must not cross-attribute."""
         changed = ["backend/src/modulo/a/foo.py", "backend/src/modulo/b/foo.py"]
@@ -1739,6 +1779,17 @@ class TestProjectWideMetrics:
         lcov = tmp_path / "lcov.info"
         lcov.write_text("TN:\nend_of_record\n")
         assert mod._compute_project_wide_metrics_lcov(lcov) == (0.0, None)
+
+    def test_lcov_non_numeric_counts_do_not_crash(self, tmp_path):
+        """Malformed DA/BRDA numeric fields must not raise — they count as unhit.
+
+        The project-wide floor read ``float(taken_str)`` / ``int(parts[1])``
+        unguarded, so a single non-numeric field crashed the gate rather than
+        letting it fail closed with structured output.
+        """
+        lcov = tmp_path / "lcov.info"
+        lcov.write_text("TN:\nSF:a.ts\nDA:1,oops\nDA:2,3\nBRDA:1,0,0,bad\nBRDA:2,0,0,2\nend_of_record\n")
+        assert mod._compute_project_wide_metrics_lcov(lcov) == (50.0, 50.0)
 
     def test_cobertura_zero_branch_with_data_is_zero_not_absent(self, tmp_path):
         """Branch records that exist but are all uncovered report 0.0, not None."""
@@ -1976,3 +2027,34 @@ class TestBranchCoverageSummary:
         summary = result.summary()
         assert "SKIPPED" in summary
         assert "branch" not in summary.lower()
+
+    def test_summary_tiny_diff_is_line_only(self):
+        """Tiny diffs never measure branches, so the summary must not claim one.
+
+        ``evaluate`` returns before ``_compute_branch_coverage_from_raw`` runs,
+        so ``branch_passed`` is always None on a tiny diff.  Reporting a
+        branch-aware line while branches are unmeasured was contradictory —
+        and the table's "FAIL (branch)" tiny-diff status was unreachable.
+        """
+        result = mod.GateResult(
+            language="Python",
+            skipped=False,
+            skip_reason="",
+            passed=True,
+            actual_pct=None,
+            threshold=98,
+            changed_lines=2,
+            tiny_diff=True,
+            branch_passed=None,
+        )
+        summary = result.summary()
+        assert "tiny diff" in summary
+        assert "branch" not in summary.lower()
+
+    def test_tiny_diff_result_has_no_branch_measurement(self, tmp_path):
+        """A tiny diff is line-only: branch_passed stays None by construction."""
+        with patch.object(mod, "_get_changed_production_files", return_value={"src/main.py": 1}):
+            result = mod.evaluate("Python", tmp_path / "missing.xml", "origin/main", 98, branch_fail_under=98)
+        assert result.tiny_diff is True
+        assert result.branch_passed is None
+        assert result.branch_actual_pct is None

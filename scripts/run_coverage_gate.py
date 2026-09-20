@@ -762,6 +762,19 @@ def _parse_cobertura_branches(report_path: Path) -> dict[str, dict[int, tuple[in
     return result
 
 
+def _parse_lcov_count(value: str) -> int:
+    """Parse a numeric LCOV field, treating a malformed value as 0.
+
+    LCOV uses ``-`` for "never executed" and a decimal count otherwise.  A
+    malformed (non-numeric) value must not crash the gate — it cannot be shown
+    to be covered, so it fail-closes to 0, exactly like ``-``.
+    """
+    try:
+        return int(value)
+    except ValueError:
+        return 0
+
+
 def _parse_lcov_branches(report_path: Path) -> dict[str, dict[int, tuple[int, int]]]:
     """Parse LCOV ``BRDA`` records for per-line branch coverage.
 
@@ -783,13 +796,15 @@ def _parse_lcov_branches(report_path: Path) -> dict[str, dict[int, tuple[int, in
             parts = raw[5:].split(",")
             if len(parts) < 4:
                 continue
-            line_no = int(parts[0])
+            line_no = _parse_lcov_count(parts[0])
+            if line_no <= 0:
+                continue
             taken_str = parts[3].strip()
             if current_file not in result:
                 result[current_file] = {}
             prev = result[current_file].get(line_no, (0, 0))
             total = prev[1] + 1
-            covered = prev[0] + (1 if taken_str not in ("-", "") and float(taken_str) > 0 else 0)
+            covered = prev[0] + (1 if _parse_lcov_count(taken_str) > 0 else 0)
             result[current_file][line_no] = (covered, total)
     return result
 
@@ -893,6 +908,7 @@ def _compute_branch_coverage_from_raw(
     report_path: Path | None,
     compare_branch: str,
     language: str,
+    js_src_root: str = DEFAULT_JS_SRC_ROOT,
 ) -> tuple[int, int, int]:
     """Parse raw coverage report and compute branch coverage on changed lines.
 
@@ -933,7 +949,7 @@ def _compute_branch_coverage_from_raw(
     raw_branch_data = (
         _parse_cobertura_branches(report_path) if language == "Python" else _parse_lcov_branches(report_path)
     )
-    branch_data = _normalize_branch_data_keys(raw_branch_data, changed_files, language)
+    branch_data = _normalize_branch_data_keys(raw_branch_data, changed_files, language, js_src_root)
 
     branch_covered = 0
     branch_total = 0
@@ -1010,14 +1026,13 @@ def _compute_project_wide_metrics_lcov(report_path: Path) -> tuple[float, float 
             parts = raw[3:].split(",")
             if len(parts) >= 2:
                 total_lines += 1
-                if int(parts[1]) > 0:
+                if _parse_lcov_count(parts[1]) > 0:
                     hit_lines += 1
         elif raw.startswith("BRDA:"):
             parts = raw[5:].split(",")
             if len(parts) >= 4:
-                taken_str = parts[3].strip()
                 total_branches += 1
-                if taken_str not in ("-", "") and float(taken_str) > 0:
+                if _parse_lcov_count(parts[3].strip()) > 0:
                     hit_branches += 1
     line_pct = (hit_lines / total_lines * 100.0) if total_lines else 0.0
     branch_pct = (hit_branches / total_branches * 100.0) if total_branches else None
@@ -1050,12 +1065,11 @@ class GateResult:
         if self.skipped:
             return f"[{self.language}] SKIPPED — {self.skip_reason}"
         if self.tiny_diff:
-            # Do not return early: a branch-gate failure must still be visible in
-            # the summary line even when the line gate was tiny-diff exempt.
-            line_part = (
-                f"[{self.language}] PASS — tiny diff ({self.changed_lines} lines, ≤{TINY_DIFF_THRESHOLD} threshold)"
-            )
-        elif self.unmeasured_lines > 0 and not self.passed:
+            # Tiny diffs are line-only by design: ``evaluate`` returns before
+            # measuring branches, so ``branch_passed`` is always None and there
+            # is no branch status to surface here.
+            return f"[{self.language}] PASS — tiny diff ({self.changed_lines} lines, ≤{TINY_DIFF_THRESHOLD} threshold)"
+        if self.unmeasured_lines > 0 and not self.passed:
             line_part = (
                 f"[{self.language}] FAIL — {self.actual_pct:.1f}% effective coverage, "
                 f"{self.unmeasured_lines} unmeasured line(s) at 0% < {self.threshold}%"
@@ -1246,6 +1260,7 @@ def evaluate(
     *,
     allow_missing: bool = False,
     branch_fail_under: int = BRANCH_COVERAGE_THRESHOLD,
+    js_src_root: str = DEFAULT_JS_SRC_ROOT,
 ) -> GateResult:
     """Evaluate one language's changed-lines coverage (line + branch).
 
@@ -1393,6 +1408,7 @@ def evaluate(
         report_path,
         compare_branch,
         language,
+        js_src_root,
     )
     branch_actual_pct: float | None = None
     branch_passed_val: bool | None = None
@@ -1437,9 +1453,11 @@ def _write_summary(results: list[GateResult]) -> None:
             pct = "—"
             bpct = "—"
         elif r.tiny_diff:
-            status = "FAIL (branch)" if r.branch_passed is False else "PASS (tiny)"
+            # Tiny diffs are line-only (branch is never measured); there is no
+            # branch status to display.  See ``GateResult.summary``.
+            status = "PASS (tiny)"
             pct = "—"
-            bpct = f"{r.branch_actual_pct:.1f}%" if r.branch_actual_pct is not None else "—"
+            bpct = "—"
         elif r.passed:
             status = "PASS" if (r.branch_passed is not False) else "FAIL (branch)"
             pct = f"{r.actual_pct:.1f}%" if r.actual_pct is not None else "?"
@@ -1552,8 +1570,8 @@ def main() -> int:
     # every run.
     raw_js_report = js_report
     normalised_js_report: Path | None = None
+    js_src_root = _sanitize_path(args.js_src_root, "js-src-root")
     if js_report is not None and js_report.exists():
-        js_src_root = _sanitize_path(args.js_src_root, "js-src-root")
         normalised = _normalize_js_report(js_report, js_src_root)
         if normalised is not None:
             normalised_js_report = normalised
@@ -1570,6 +1588,7 @@ def main() -> int:
                     args.fail_under,
                     allow_missing=args.allow_missing_reports,
                     branch_fail_under=args.branch_fail_under,
+                    js_src_root=js_src_root,
                 )
             )
     finally:
