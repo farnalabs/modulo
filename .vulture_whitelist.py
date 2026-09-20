@@ -407,4 +407,8 @@ __all__ = [
     # --- FAR-901 schema contract (test-referenced module API;
     #     the sandbox dispatcher consumes write_schema_contract only) ---
     "list_schema_nodes",  # advisory schema file enumeration (test-referenced)
+    # --- FAR-1060 eval/policy-gate module (unwired chunk 1;
+    #     production callers wired in chunk 3) ---
+    "resolve_policy_gate",  # policy gate resolution (unwired until chunk 3)
+    "validate_binding",  # policy gate binding validation (unwired until chunk 3)
 ]
