@@ -70,7 +70,6 @@ def env():
         patch.object(pa_module, "set_rls_org", new=AsyncMock()),
         patch.object(pa_module, "append_audit_event", new=AsyncMock()),
         patch.object(pa_module, "is_instance_analytics_enabled", new=AsyncMock(return_value=False)),
-        patch.object(pa_module, "get_organisation", new=AsyncMock(return_value=org)),
     ):
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:

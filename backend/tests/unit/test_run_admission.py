@@ -346,11 +346,13 @@ class TestAdmissionAfterRelease:
         async def _get_run(session: Any, rid: Any) -> Any:
             return run
 
-        async def _get_pipeline(session: Any, pid: Any) -> Any:
-            return pipeline
-
+        # FAR-1025: _capacity_deferred resolves the pipeline via
+        # execute(include_soft_deleted(select(Pipeline)...)) rather than
+        # session.get(...).
         session = MagicMock()
-        session.get = AsyncMock(side_effect=_get_pipeline)
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one_or_none.return_value = pipeline
+        session.execute = AsyncMock(return_value=pipeline_result)
 
         with (
             patch("modulo.db.crud.run.get_run", side_effect=_get_run),

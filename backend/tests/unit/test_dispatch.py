@@ -699,6 +699,20 @@ class TestOrgCapacityDeferred:
 # ---------------------------------------------------------------------------
 
 
+def _session_with_pipeline(pipeline: object) -> AsyncMock:
+    """Session double whose ``execute`` yields *pipeline* for the lookup.
+
+    FAR-1025: ``_capacity_deferred`` resolves the pipeline via
+    ``execute(include_soft_deleted(select(Pipeline)...))`` instead of
+    ``session.get``, so the result's ``scalar_one_or_none`` must carry it.
+    """
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = pipeline
+    session.execute = AsyncMock(return_value=result)
+    return session
+
+
 class TestCapacityDeferred:
     @pytest.mark.asyncio
     async def test_missing_run_defers(self) -> None:
@@ -708,20 +722,19 @@ class TestCapacityDeferred:
             deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID))
 
         assert deferred is True
-        session.get.assert_not_awaited()
+        session.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_missing_pipeline_defers(self) -> None:
         """A run whose pipeline was deleted is deferred, never enqueued."""
         run = MagicMock()
         run.pipeline_id = uuid.uuid4()
-        session = AsyncMock()
-        session.get = AsyncMock(return_value=None)
+        session = _session_with_pipeline(None)
         with patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run):
             deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID))
 
         assert deferred is True
-        session.get.assert_awaited_once()
+        session.execute.assert_awaited_once()
 
     @pytest.mark.parametrize("max_concurrent", [0, -1])
     @pytest.mark.asyncio
@@ -731,8 +744,7 @@ class TestCapacityDeferred:
         run.pipeline_id = uuid.uuid4()
         pipeline = MagicMock()
         pipeline.max_concurrent_runs = max_concurrent
-        session = AsyncMock()
-        session.get = AsyncMock(return_value=pipeline)
+        session = _session_with_pipeline(pipeline)
         with (
             patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
             patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock) as count,
@@ -748,8 +760,7 @@ class TestCapacityDeferred:
         run.pipeline_id = uuid.uuid4()
         pipeline = MagicMock()
         pipeline.max_concurrent_runs = 2
-        session = AsyncMock()
-        session.get = AsyncMock(return_value=pipeline)
+        session = _session_with_pipeline(pipeline)
         with (
             patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
             patch(
@@ -775,8 +786,7 @@ class TestCapacityDeferred:
         run.pipeline_id = uuid.uuid4()
         pipeline = MagicMock()
         pipeline.max_concurrent_runs = 3
-        session = AsyncMock()
-        session.get = AsyncMock(return_value=pipeline)
+        session = _session_with_pipeline(pipeline)
         with (
             patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
             patch(
