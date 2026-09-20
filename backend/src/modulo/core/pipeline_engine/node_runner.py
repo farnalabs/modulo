@@ -3488,6 +3488,8 @@ def _finalize_node_result(
     _repair_invoke_fn: Any | None = None,
 ) -> dict[str, Any]:
     """Validate schema, build the node artifact result, and surface a routed hop."""
+    # FAR-902: accumulated enforcement payload for the caller to persist.
+    _result_enforcement: dict[str, Any] | None = None
     if isinstance(output_schema_json, dict) and output_schema_json:
         outcome, errors, effective_output = _validate_against_schema(
             output_data,
@@ -3501,8 +3503,19 @@ def _finalize_node_result(
         # otherwise effective_output IS output_data. Never emit a payload that
         # failed the declared contract after repair reported success.
         output_data = effective_output
+        # FAR-902: build the enforcement record for the caller to persist.
+        # The record is attached to the result dict under a reserved key so
+        # the caller (``_node``) can extract and persist it to
+        # ``run_node_outputs`` BEFORE terminalization (D3 ordering).
+        from modulo.core.pipeline_engine.schema_enforcement import build_enforcement_record
+
+        _enforcement_payload = build_enforcement_record(
+            outcome=outcome,
+            validation_errors=errors,
+        )
+        if _enforcement_payload is not None:
+            _result_enforcement = _enforcement_payload
         # Log outcome for observability
-        # TODO(FAR-902): persist the outcome
         if errors:
             _log.info(
                 "schema_validation.outcome",
@@ -3513,6 +3526,10 @@ def _finalize_node_result(
         "artifacts": [{"node_id": node_id, "status": "completed", "output": output_data}],
         "output": output_data,
     }
+
+    # FAR-902: carry the enforcement record for the caller to persist.
+    if _result_enforcement is not None:
+        result["_schema_enforcement_record"] = _result_enforcement
 
     # Extract _next_node from LLM routing output for the router.
     if routing_mode == "llm" and isinstance(output_data, dict):
@@ -3719,7 +3736,7 @@ def make_node_fn(
             # validation failures are terminal (the documented hard-fail path).
             _repair_fn = None
 
-        return _finalize_node_result(
+        _node_result = _finalize_node_result(
             node_id,
             output_data,
             output_schema_json,
@@ -3729,6 +3746,41 @@ def make_node_fn(
             schema_version=node_def.get("output_schema_version", 0),
             _repair_invoke_fn=_repair_fn,
         )
+
+        # FAR-902: persist the enforcement record BEFORE terminalization.
+        # The record was built by _finalize_node_result and carried on the
+        # result dict under ``_schema_enforcement_record``.  Persist it via
+        # the conformance-context session_factory and remove it from the
+        # result so it never leaks into node telemetry (D3 ordering).
+        _enforcement_rec = _node_result.pop("_schema_enforcement_record", None)
+        if _enforcement_rec is not None:
+            try:
+                _ef_ctx = get_conformance_ctx()
+                _ef_sf = _ef_ctx[0] if _ef_ctx is not None else None
+                _ef_org = _ef_ctx[1] if _ef_ctx is not None else None
+                _ef_run_id = state.get("_run_id")
+                if _ef_sf is not None and _ef_org is not None and _ef_run_id is not None:
+                    from modulo.db.crud.run_node_outputs import persist_schema_enforcement_record
+
+                    async with _ef_sf() as _ef_session, _ef_session.begin():
+                        await set_rls_org(_ef_session, uuid.UUID(str(_ef_org)))
+                        await persist_schema_enforcement_record(
+                            _ef_session,
+                            run_id=uuid.UUID(str(_ef_run_id)),
+                            organisation_id=uuid.UUID(str(_ef_org)),
+                            node_id=node_id,
+                            attempt_key="attempt-1",
+                            enforcement_record=_enforcement_rec,
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "schema_enforcement.persist_failed",
+                    extra={"node_id": node_id},
+                )
+
+        return _node_result
 
     _node.__name__ = f"node_{node_id}"
     return _node
@@ -8765,11 +8817,36 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     _repair_invoke_fn=_sandbox_repair_invoke_fn,
                 )
                 # FIX H: log the validation outcome for observability
-                # TODO(FAR-902): persist the outcome
-                if _val_errors:
-                    _log.info(
-                        "schema_validation.outcome",
-                        extra={"node_id": node_id, "outcome": _val_outcome, "error_count": len(_val_errors)},
+                # FAR-902: persist the enforcement record BEFORE terminalization.
+                # Best-effort: a persistence failure must NEVER fail the node.
+                try:
+                    from modulo.core.pipeline_engine.schema_enforcement import build_enforcement_record
+
+                    _sandbox_enforcement = build_enforcement_record(
+                        outcome=_val_outcome,
+                        resolved_profile=_node_schema_profile if isinstance(_node_schema_profile, str) else None,
+                        native_output=False,
+                        validation_errors=_val_errors,
+                    )
+                    if _sandbox_enforcement is not None and attempt_key and session_factory:
+                        from modulo.db.crud.run_node_outputs import persist_schema_enforcement_record
+
+                        async with session_factory() as _ef_session, _ef_session.begin():
+                            await set_rls_org(_ef_session, uuid.UUID(org_id))
+                            await persist_schema_enforcement_record(
+                                _ef_session,
+                                run_id=uuid.UUID(run_id),
+                                organisation_id=uuid.UUID(org_id),
+                                node_id=node_id,
+                                attempt_key=attempt_key,
+                                enforcement_record=_sandbox_enforcement,
+                            )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception(
+                        "schema_enforcement.persist_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
                     )
             except ValueError as _schema_exc:
                 _log.exception(
