@@ -125,7 +125,11 @@ from modulo.core.run_context.autonomy import (
     should_skip_hitl_gate,
 )
 from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
-from modulo.core.schema_registry.contract import SCHEMA_CONTRACT_VERSION, read_schema_contract_version
+from modulo.core.schema_registry.contract import (
+    SCHEMA_CONTRACT_VERSION,
+    read_schema_contract_version,
+    write_schema_contract,
+)
 from modulo.core.schema_registry.rendering import SchemaProfile, render_for_profile
 from modulo.db.crud.hitl_gate_config import human_only_effective
 from modulo.db.lifecycle_refs import (
@@ -7830,8 +7834,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         try:
             import tempfile
 
-            from modulo.core.schema_registry.contract import write_schema_contract
-
             _contract_local_tmp = Path(tempfile.mkdtemp(prefix="schema_contract_"))
             _contract_result = write_schema_contract(
                 _contract_local_tmp,
@@ -7879,12 +7881,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 exc_info=True,
             )
             _schema_files_written_flag = False
-        finally:
-            # Clean up the local temp dir (best-effort).
-            if _contract_local_tmp is not None:
-                import shutil
-
-                shutil.rmtree(_contract_local_tmp, ignore_errors=True)
+        # NOTE: _contract_local_tmp cleanup is deferred to after schema
+        # validation (FAR-901) — the validator reads on-disk contract
+        # version files from this directory.
 
         # FAR-296 mode split: llm mode writes the rendered prompt to
         # prompt.md; script mode writes the FULL run input (no 10KB
@@ -8757,10 +8756,45 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _sandbox_repair_invoke_fn = None
 
             try:
+                # FAR-901: pre-flight re-render on strict contract-version
+                # mismatch.  Before calling _validate_against_schema, check
+                # the on-disk contract version.  If it is stale (strict
+                # mode), re-render the schema files via write_schema_contract
+                # so the validator sees the current version.  Best-effort:
+                # a re-render failure is logged and never fails the node.
+                if schema_validator_mode == "strict" and _contract_local_tmp is not None:
+                    _precheck_version = read_schema_contract_version(
+                        _contract_local_tmp,
+                        node_id,
+                    )
+                    if isinstance(_precheck_version, int) and _precheck_version != SCHEMA_CONTRACT_VERSION:
+                        try:
+                            write_schema_contract(
+                                _contract_local_tmp,
+                                node_id=node_id,
+                                input_schema=config.input_schema_json,
+                                output_schema=config.output_schema_json,
+                                profile=_node_schema_profile,
+                                provider_id=_schema_provider_id,
+                            )
+                            _log.info(
+                                "schema_contract.reRendered",
+                                extra={
+                                    "node_id": node_id,
+                                    "old_version": _precheck_version,
+                                    "new_version": SCHEMA_CONTRACT_VERSION,
+                                },
+                            )
+                        except Exception:
+                            _log.warning(
+                                "schema_contract.rerender_failed",
+                                extra={"node_id": node_id},
+                                exc_info=True,
+                            )
+
                 # FAR-899: use real JSON Schema validation with mode support
-                # FIX H: capture the returned (outcome, errors, data) tuple —
-                # the sandbox path passes no repair fn, so the third element is
-                # always the original output_json (no repair to apply).
+                # FAR-901: pass schema_dir + node_id so the validator reads
+                # the on-disk contract version.
                 _val_outcome, _val_errors, _ = _validate_against_schema(
                     output_json,
                     output_schema_json,
@@ -8768,6 +8802,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     schema_id=schema_id,
                     schema_version=schema_version,
                     _repair_invoke_fn=_sandbox_repair_invoke_fn,
+                    schema_dir=_contract_local_tmp,
+                    node_id=node_id,
                 )
                 # FIX H: log the validation outcome for observability
                 # TODO(FAR-902): persist the outcome
@@ -8848,6 +8884,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     ),
                     node_id=node_id,
                 ) from None
+            finally:
+                # FAR-901: clean up the local temp schema dir now that
+                # validation (and any re-render) is complete.
+                if _contract_local_tmp is not None:
+                    import shutil
+
+                    shutil.rmtree(_contract_local_tmp, ignore_errors=True)
 
         status: str = "completed" if exit_code == 0 else "failed"
         result_summary: str = ""

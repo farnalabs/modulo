@@ -597,7 +597,13 @@ class TestCleanup:
 
 
 class TestDiskVersionMismatch:
-    """Verify the validator reads version from disk via read_schema_contract_version."""
+    """Verify the validator reads version from disk via read_schema_contract_version.
+
+    These tests exercise the direct function-call path (the fallback/contract
+    check inside ``_validate_against_schema``).  The *production wiring* test
+    (``TestSandboxContractWiring``) separately proves that the sandbox dispatch
+    path actually passes ``schema_dir`` and ``node_id`` to the validator.
+    """
 
     def test_lenient_warns_on_disk_mismatch(self, tmp_path: Path) -> None:
         from modulo.core.pipeline_engine.node_runner import _validate_against_schema
@@ -695,3 +701,81 @@ class TestReadVersionEdgeCases:
         schema_dir.mkdir(parents=True)
         (schema_dir / "output.canonical.json").write_text(json.dumps({"_schema_contract_version": "not-an-int"}))
         assert read_schema_contract_version(tmp_path, "n1") is None
+
+
+# ---------------------------------------------------------------------------
+# Production wiring guard (FAR-901)
+# ---------------------------------------------------------------------------
+
+
+class TestSandboxContractWiring:
+    """Prove the sandbox dispatch path passes schema_dir + node_id.
+
+    These tests fail if someone removes the ``schema_dir=`` / ``node_id=``
+    kwargs from the production call site in ``_sandbox_agent_impl``.
+    """
+
+    def test_validate_against_schema_accepts_schema_dir_and_node_id(self) -> None:
+        """_validate_against_schema signature includes schema_dir and node_id.
+
+        If someone removes these parameters from the function, this test
+        will fail at call time (TypeError).
+        """
+        from modulo.core.pipeline_engine.node_runner import (
+            OutputSchemaValidationError,
+            _validate_against_schema,
+        )
+
+        # Calling with schema_dir and node_id must NOT raise TypeError.
+        # It may raise OutputSchemaValidationError (strict validation
+        # failure on empty schema) — that is fine and expected.
+        try:
+            _validate_against_schema(
+                {},
+                {"type": "object"},
+                mode="strict",
+                schema_id="test",
+                schema_dir=Path("/nonexistent"),
+                node_id="test-node",
+            )
+        except OutputSchemaValidationError:
+            pass  # Expected — strict validation failure on empty dict
+        except TypeError as exc:
+            pytest.fail(f"_validate_against_schema rejected schema_dir/node_id kwargs: {exc}")
+        else:
+            # If no exception was raised, that's also fine — the function
+            # accepted the kwargs and produced a result.
+            pass
+
+    def test_ast_guard_sandbox_passes_schema_dir(self) -> None:
+        """AST check: the sandbox call site passes schema_dir= to _validate_against_schema.
+
+        This is a wiring guard — if someone removes ``schema_dir=`` from the
+        production call site, this test catches it without needing a full
+        integration setup.
+        """
+        import ast
+        import textwrap
+
+        from modulo.core.pipeline_engine import node_runner
+
+        source = textwrap.dedent(inspect.getsource(node_runner._sandbox_agent_impl))
+        tree = ast.parse(source)
+
+        call_found = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Name) and func.id == "_validate_against_schema"):
+                continue
+            kw_names = {kw.arg for kw in node.keywords if kw.arg}
+            if "schema_dir" in kw_names and "node_id" in kw_names:
+                call_found = True
+                break
+
+        assert call_found, (
+            "Production call site in _sandbox_agent_impl does NOT pass "
+            "schema_dir= and node_id= to _validate_against_schema — "
+            "the FAR-901 wiring has been removed"
+        )
