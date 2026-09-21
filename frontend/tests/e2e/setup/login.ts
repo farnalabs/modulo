@@ -8,8 +8,9 @@ import { getBaseUrl } from './env'
  *
  * Uses resolveLoginPath() to query /api/v1/auth/login-context at runtime and
  * determine the correct login URL based on the instance's multi-org state.
- * Falls back to completeLoginForm-style slug detection if the resolved path
- * does not render the email form (e.g. network failure left the cache empty).
+ * Falls back to /login (safe on both single-org and multi-org) when the
+ * login-context fetch fails, then completeLoginForm handles whichever UI
+ * the instance renders (email form or slug selector).
  */
 export async function loginThroughUi(page: Page, env: TestEnv): Promise<void> {
   const baseURL = getBaseUrl(env.name)

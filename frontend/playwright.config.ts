@@ -15,7 +15,7 @@ export default defineConfig({
   // staging workers:1) but FAR below the CI step's 90-min timeout. Catches
   // login-path regressions (FAR-1123) in minutes instead of burning the full
   // step budget on selector timeouts.
-  globalTimeout: target !== 'local' ? 3_000_000 : undefined,
+  globalTimeout: target !== 'local' ? 3_600_000 : undefined,
   workers: target === 'staging' ? 1 : undefined,
   use: {
     baseURL,

@@ -56,10 +56,13 @@ export async function resolveLoginPath(baseURL: string): Promise<string> {
     return `/login/${encodeURIComponent(overrideSlug)}`
   }
 
-  // Fetch failed with no cached result: fall back to the override slug
-  // (optimistic — assume multi-org since the override was set)
+  // Fetch failed with no cached result: fall back to /login.
+  // /login is safe on both single-org (renders email form directly) and
+  // multi-org (renders slug selector, which completeLoginForm handles).
+  // Using /login/<slug> here would be a dead page on single-org instances
+  // (the common case on staging), recreating the 90-min crawl FAR-1123 fixes.
   if (fetchFailed && cachedContext === null) {
-    return `/login/${encodeURIComponent(overrideSlug)}`
+    return '/login'
   }
 
   // Single-org: ignore the override (fixes FAR-1123)

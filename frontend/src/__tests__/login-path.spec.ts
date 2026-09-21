@@ -89,15 +89,15 @@ describe('resolveLoginPath', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 
-  it('falls back to /login/<slug> when fetch fails (network error)', async () => {
+  it('falls back to /login when fetch fails (network error)', async () => {
     process.env.E2E_ORG_SLUG = 'acme'
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')))
 
     const path = await resolveLoginPath(BASE_URL)
-    expect(path).toBe('/login/acme')
+    expect(path).toBe('/login')
   })
 
-  it('falls back to /login/<slug> when fetch returns non-OK', async () => {
+  it('falls back to /login when fetch returns non-OK', async () => {
     process.env.E2E_ORG_SLUG = 'acme'
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
@@ -105,15 +105,15 @@ describe('resolveLoginPath', () => {
     }))
 
     const path = await resolveLoginPath(BASE_URL)
-    expect(path).toBe('/login/acme')
+    expect(path).toBe('/login')
   })
 
-  it('falls back to /login/<slug> on fetch timeout', async () => {
+  it('falls back to /login on fetch timeout', async () => {
     process.env.E2E_ORG_SLUG = 'acme'
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new DOMException('The operation timed out', 'AbortError')))
 
     const path = await resolveLoginPath(BASE_URL)
-    expect(path).toBe('/login/acme')
+    expect(path).toBe('/login')
   })
 
   it('resetCache clears the cache so next call re-fetches', async () => {

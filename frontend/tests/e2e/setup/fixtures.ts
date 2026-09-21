@@ -91,12 +91,43 @@ export async function completeLoginForm(page: Page, env: TestEnv): Promise<void>
   const slugInput = page.getByTestId('login-org-slug')
   const emailInput = page.locator(env.credentials.loginFormEmailSelector)
 
-  await Promise.race([
-    slugInput.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {}),
-    emailInput.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {}),
-  ])
+  const slugVisible = slugInput.waitFor({ state: 'visible', timeout: 30000 }).then(() => true).catch(() => false)
+  const emailVisible = emailInput.waitFor({ state: 'visible', timeout: 30000 }).then(() => true).catch(() => false)
 
-  if (await slugInput.isVisible()) {
+  const [gotSlug, gotEmail] = await Promise.all([slugVisible, emailVisible])
+
+  if (!gotSlug && !gotEmail) {
+    // Fail-fast: neither the slug selector nor the email form appeared.
+    // Throw a rich diagnostic instead of silently returning and failing
+    // opaquely at the next step.
+    const currentURL = page.url()
+    const pageTitle = await page.title()
+    const bodyText = await page.locator('body').innerText().catch(() => '<unreadable>')
+    const screenshot = await page.screenshot().catch(() => null)
+
+    const diagnostic = [
+      `[login] Neither slug selector nor email form appeared within 30s`,
+      `[login] Current URL: ${currentURL}`,
+      `[login] Page title: ${pageTitle}`,
+      `[login] Page body (first 500 chars): ${bodyText.slice(0, 500)}`,
+      `[login] E2E_ORG_SLUG=${process.env.E2E_ORG_SLUG || '(unset)'}`,
+      screenshot ? '[login] Screenshot saved to test-results/login-diagnostic.png' : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+
+    if (screenshot) {
+      const fs = await import('node:fs/promises')
+      const path = await import('node:path')
+      const dir = path.resolve('test-results')
+      await fs.mkdir(dir, { recursive: true }).catch(() => {})
+      await fs.writeFile(path.join(dir, 'login-diagnostic.png'), screenshot).catch(() => {})
+    }
+
+    throw new Error(diagnostic)
+  }
+
+  if (gotSlug) {
     await slugInput.fill(env.orgSlug)
     await page.getByTestId('login-org-entry-submit').click()
     await emailInput.waitFor({ state: 'visible', timeout: 30000 })
