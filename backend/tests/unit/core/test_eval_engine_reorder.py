@@ -784,7 +784,7 @@ class TestC16HitlGateEvalPersistsBeforeRaise:
             patch.stopall()
 
         assert exc_info.value.eval_name == "gate-block-fn"
-        assert len(session.added) >= 1
+        assert session.added
         assert session.added[0].passed is False
 
 
