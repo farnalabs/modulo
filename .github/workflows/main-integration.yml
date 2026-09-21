@@ -7,9 +7,9 @@ name: "Main: Integration tests"
 # main post-merge surfaces the same red immediately after the merge
 # (minutes) instead of at the next deploy attempt (hours).
 #
-# This job does NOT gate merges — it runs AFTER the merge. On failure it
-# is LOUD: fail the run, post a Linear comment if LINEAR_API_KEY is
-# available (fail-open on the comment only).
+# This job does NOT gate merges — it runs AFTER the merge. On failure or
+# timeout it is LOUD: fail the run, post a Linear comment if LINEAR_API_KEY
+# is available (fail-open on the comment only).
 #
 # NO high-frequency schedule: this repo has documented evidence that
 # GitHub drops high-frequency crons under load (AGENTS.md: "GitHub's
@@ -112,7 +112,13 @@ jobs:
   notify-failure:
     name: Signal integration failure
     needs: [integration]
-    if: always() && needs.integration.result == 'failure'
+    # 'cancelled' included: GitHub Actions reports a job that hits its
+    # job-level timeout-minutes as 'cancelled', not 'failure'. The integration
+    # job has a 90-min budget, so a hung suite would otherwise vanish silently
+    # — no Linear comment, no loud failure — which is the exact silent-hang
+    # pattern this workflow exists to surface (same rationale as deploy.yml's
+    # notify-* conditions).
+    if: always() && (needs.integration.result == 'failure' || needs.integration.result == 'cancelled')
     runs-on: ubicloud-standard-2
     steps:
       - name: Post Linear comment (fail-open)
@@ -156,7 +162,9 @@ jobs:
             echo "::warning::Linear ticket ${FAR_ID} not found — skipping comment (fail-open)."
             exit 0
           fi
-          BODY="Integration tests failed on main post-merge (${COMMIT_SHA:0:7}). Run: ${RUN_URL}"
+          # 'cancelled' is the job-level timeout signal, so name the timeout
+          # explicitly rather than reporting a misleading plain "failed".
+          BODY="Integration tests failed or timed out on main post-merge (${COMMIT_SHA:0:7}). Run: ${RUN_URL}"
           # Build the payload via jq --arg so values are passed as variables,
           # never string-interpolated into the GraphQL query (best-effort,
           # fail-open).
