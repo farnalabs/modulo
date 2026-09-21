@@ -75,6 +75,8 @@ jobs:
     steps:
       - name: Check out repository (read the pinned installer)
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Compare pinned version to latest release
         id: compare

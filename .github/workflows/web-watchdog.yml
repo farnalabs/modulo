@@ -72,6 +72,8 @@ jobs:
       # the pinned installer script below exists. Same checkout ref the other
       # workflows use (deploy.yml, ci.yml); the job only needs contents: read.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Installed the same way the deploy workflow installs flyctl (the
       # pinned, sha256-verified installer in .github/scripts/) so both
