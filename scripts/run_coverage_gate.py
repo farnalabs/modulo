@@ -1016,7 +1016,7 @@ def _compute_project_wide_metrics_cobertura(report_path: Path) -> tuple[float, f
     as equivalent: the project floor is only meaningful when branch data
     actually exists.
 
-    Branch data is read from two sources, in order of preference:
+    Branch data is read from three sources, in order of preference:
 
     1. **Root ``<coverage>`` attributes** (``branches-covered`` /
        ``branches-valid``): coverage.py ≥7.x always emits these when branch
@@ -1707,7 +1707,8 @@ def main() -> int:
                 project_floor_failed = True
                 project_metrics.append(
                     "  BREACH: Python branch data missing from Cobertura report "
-                    "(no branch-rate attributes or <condition> elements) — branch coverage cannot be enforced"
+                    "(no branches-covered/branches-valid attributes, condition-coverage "
+                    "attributes, or <condition> elements) — branch coverage cannot be enforced"
                 )
             elif pb < MIN_PROJECT_BRANCH_COVERAGE:
                 project_floor_failed = True
