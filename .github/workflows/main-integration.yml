@@ -57,9 +57,13 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      # NOSONAR githubactions:S8541: pytest-bdd is a pinned source-archive dep (no
+      # wheel) and ibm-cos-sdk is sdist-only, so `--no-build` hard-fails the sync
+      # on a cold uv cache. `--frozen` locks the exact revisions, so the builds are
+      # deterministic and trusted (no untrusted setup scripts execute).
       - name: Sync deps
         working-directory: backend
-        run: uv sync --frozen
+        run: uv sync --frozen  # NOSONAR
 
       # --- Service containers (copied verbatim from deploy.yml integration-tests) ---
       - name: Start Postgres
