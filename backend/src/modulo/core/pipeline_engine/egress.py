@@ -109,7 +109,7 @@ class EgressResolution:
         The resolved allowlist of host/port entries when ``policy ==
         "selected"``.  ``None`` otherwise.
 
-    ``refusion``
+    ``refusal``
         Non-``None`` when the resolved policy **cannot be enforced** on the
         given tier.  Carries a clear, actionable reason string naming the
         profile/node values and the alternatives.  A refusal is NEVER a

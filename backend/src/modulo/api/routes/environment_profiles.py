@@ -461,6 +461,42 @@ def _sse_event(event: str, detail: str) -> str:
     return f"data: {data}\n\n"
 
 
+# Provider registry -> canonical egress tier.  The tier vocabulary is owned
+# by ``modulo.core.pipeline_engine.egress`` (``_TIER_ENFORCEMENT``); the
+# provider identity (``provider_id`` + ``provider_aliases``) is owned by the
+# runtime-provider classes.  Sourcing both means a new provider alias cannot
+# drift from the egress tier it maps to (FAR-1065 lesson).
+_PROVIDER_TIER_SOURCES: tuple[tuple[str, str, str], ...] = (
+    ("modulo.core.runtime_provider.e2b", "E2BRuntimeProvider", "e2b"),
+    ("modulo.core.runtime_provider.docker", "DockerRuntimeProvider", "docker"),
+    ("modulo.core.runtime_provider.local", "LocalRuntimeProvider", "local"),
+)
+
+
+def _egress_tier_for_provider_type(provider_type: str) -> str | None:
+    """Return the canonical egress tier for a profile ``provider_type``.
+
+    Provider aliases are read from the runtime-provider classes themselves
+    (the single source of truth) rather than duplicated here — ``local_docker``
+    is a Docker alias (``DockerRuntimeProvider.provider_aliases``), NOT the
+    host-process local tier.  Returns ``None`` for an unrecognised provider
+    type; the caller then fails closed.
+    """
+    normalized = (provider_type or "").strip().lower()
+    from importlib import import_module
+
+    for module_name, class_name, tier in _PROVIDER_TIER_SOURCES:
+        try:
+            provider_cls = getattr(import_module(module_name), class_name)
+        except ImportError:
+            # Optional provider dependency not installed — skip; the provider
+            # cannot have been resolved for this profile anyway.
+            continue
+        if normalized in {provider_cls.provider_id, *provider_cls.provider_aliases}:
+            return tier
+    return None
+
+
 def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
     from modulo.core.pipeline_engine.egress import resolve_egress
     from modulo.core.runtime_provider import WorkspaceSpec
@@ -468,19 +504,12 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
     cfg = profile.config_json or {}
     # FAR-1085: use canonical egress resolution instead of the raw profile
     # network_policy.  The sandbox test dispatches to whichever tier the
-    # profile's provider_type resolves to — map provider_type to the tier
-    # name used by resolve_egress.
+    # profile's provider_type resolves to — resolve that tier from the
+    # provider registry.  An unknown provider_type fails CLOSED: the raw
+    # value is passed through as the tier so resolve_egress refuses
+    # ("unknown tier") rather than silently defaulting to an enforceable one.
     _provider_type = (profile.provider_type or "").strip().lower()
-    # Map profile provider_type to the tier name used by resolve_egress.
-    # local_docker is a Docker alias (DockerRuntimeProvider.provider_aliases),
-    # NOT the host-process local tier.
-    _tier_map = {
-        "e2b": "e2b",
-        "runner_docker": "docker",
-        "local": "local",
-        "local_docker": "docker",
-    }
-    _tier = _tier_map.get(_provider_type, "e2b")
+    _tier = _egress_tier_for_provider_type(_provider_type) or _provider_type
     _egress = resolve_egress(
         node_egress_policy=None,  # No node in the test path — profile only
         node_egress_allowlist=None,
