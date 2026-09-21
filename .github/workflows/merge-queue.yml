@@ -342,9 +342,34 @@ jobs:
             # Check for approval reviews
             APPROVERS=$(gh pr view "$NUM" --json reviews --jq '.reviews[]? | select(.state == "APPROVED") | .author.login' 2>/dev/null | sort -u)
 
+            MERGEABLE=false
             if echo "$APPROVERS" | grep -qE '^(farnalabs|modulo-reviewbot)$'; then
               echo "approved by $APPROVERS"
+              MERGEABLE=true
+            fi
 
+            # FAR-1099 fast-lane: PR is also mergeable if it has the
+            # fast-lane:test-infra label AND the fast-lane check is green on
+            # the PR's current head SHA AND CI is green. The label is applied
+            # by live pipeline config on app.modulo.run (Branch Fixer), which
+            # is delivered separately — until then this path is inert.
+            if [ "$MERGEABLE" = "false" ]; then
+              LABELS=$(gh pr view "$NUM" --json labels --jq '.labels[].name' 2>/dev/null || echo "")
+              if echo "$LABELS" | grep -q '^fast-lane:test-infra$'; then
+                # Check fast-lane CI check status on current head SHA
+                HEAD_SHA=$(gh pr view "$NUM" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
+                FL_CHECK=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" \
+                  --jq '[.check_runs[] | select(.name == "fast-lane-eligible") | .conclusion] | first // "none"' 2>/dev/null || echo "none")
+                if [ "$FL_CHECK" = "success" ]; then
+                  MERGEABLE=true
+                  echo "fast-lane eligible (label + check green)"
+                else
+                  echo "fast-lane check not green ($FL_CHECK) -- skipping"
+                fi
+              fi
+            fi
+
+            if [ "$MERGEABLE" = "true" ]; then
               # Check CI status - only include PRs with passing CI
               CI_BRANCH=$(echo "$pr" | jq -r ".headRefName")
               CI_CONCLUSION=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --limit 1 --json conclusion --jq ".[0].conclusion" 2>/dev/null || echo "unknown")
@@ -1368,15 +1393,97 @@ jobs:
       # idle runner) and the depth cap (12, then re-anchor to the 15-min cron).
       # Idle passes chain NOTHING - the next approval or CI-success event
       # re-fires the queue - so the loop self-terminates when nothing waits.
+      #
+      # FAR-1099 CI-stall detection: when approved PRs are stuck with no CI
+      # conclusion for >2 hours, fail loudly and post a Linear comment. This
+      # catches the same silent-death shape as the 2026-09-17 deadlock where a
+      # flaky test blocked every deploy for 3 days.
       - name: Self-chain next pass while approved PRs wait on CI (FAR-492)
         if: success() && steps.collect.outputs.ci_pending_count != '0'
         env:
           GH_TOKEN: ${{ github.token }}
           CHAIN_DEPTH: ${{ github.event.client_payload.depth || 0 }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
           case "$CHAIN_DEPTH" in ''|*[!0-9]*) CHAIN_DEPTH=0 ;; esac
+
+          # --- CI-stall detection (FAR-1099) ---
+          # For each pending PR, check whether its CI workflow run has concluded.
+          # The collect step already identified this PR as CI-pending via
+          # `gh run list --branch <branch> --workflow "CI: Fast Validation"`,
+          # so we use the same source (workflow run created_at + conclusion)
+          # rather than the unreliable check-runs API. Required behaviour
+          # (Hopper spec):
+          #   - No CI conclusion on the head SHA within 30 minutes →
+          #     re-dispatch the self-chain (keep pacing).
+          #   - Unresolved after 2 hours → fail a step loudly with
+          #     ::error:: and post a Linear comment.
+          STALL_FOUND=false
+          STALL_REPORT=""
+          NOW=$(date -u +%s)
+          if [ -f /tmp/ci_pending_prs.txt ]; then
+            while IFS= read -r PR_NUM; do
+              [ -z "$PR_NUM" ] && continue
+              CI_BRANCH=$(gh pr view "$PR_NUM" --json headRefName --jq '.headRefName' 2>/dev/null || echo "")
+              [ -z "$CI_BRANCH" ] && continue
+              # Use the same source as the collect step: workflow run conclusion + createdAt
+              CI_RUN=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --limit 1 \
+                --json conclusion,createdAt,status 2>/dev/null || echo "[]")
+              CI_CONCLUSION=$(echo "$CI_RUN" | jq -r '.[0].conclusion // empty' 2>/dev/null || echo "")
+              CI_CREATED=$(echo "$CI_RUN" | jq -r '.[0].createdAt // empty' 2>/dev/null || echo "")
+              if [ -n "$CI_CONCLUSION" ]; then
+                echo "  PR #$PR_NUM: CI concluded ($CI_CONCLUSION) — not stalled"
+                continue
+              fi
+              if [ -z "$CI_CREATED" ]; then
+                echo "  PR #$PR_NUM: no CI run found — skipping stall check"
+                continue
+              fi
+              CI_EPOCH=$(date -u -d "$CI_CREATED" +%s 2>/dev/null || echo "$NOW")
+              AGE_S=$((NOW - CI_EPOCH))
+              AGE_MIN=$((AGE_S / 60))
+              echo "  PR #$PR_NUM: CI pending for ${AGE_MIN}min (since $CI_CREATED)"
+
+              if [ "$AGE_S" -gt 7200 ]; then
+                # >2 hours — hard fail + Linear comment
+                STALL_FOUND=true
+                STALL_REPORT="$STALL_REPORT PR #$PR_NUM (${AGE_MIN}min)"
+                echo "::error::FAR-1099: PR #$PR_NUM CI stalled for ${AGE_MIN}min (>2h threshold). Flaky test or CI infrastructure failure."
+              elif [ "$AGE_S" -gt 1800 ]; then
+                # >30 minutes — re-dispatch self-chain to keep pacing
+                echo "  PR #$PR_NUM: CI pending ${AGE_MIN}min (>30min) — re-dispatching self-chain"
+              fi
+            done < /tmp/ci_pending_prs.txt
+          fi
+
+          if [ "$STALL_FOUND" = "true" ]; then
+            # Post Linear comment about the stall
+            if [ -n "$LINEAR_API_KEY" ]; then
+              for PR_NUM in $(cat /tmp/ci_pending_prs.txt 2>/dev/null); do
+                PR_TITLE=$(gh pr view "$PR_NUM" --json title --jq '.title' 2>/dev/null || echo "")
+                FAR_TICKET=$(echo "$PR_TITLE" | grep -oP 'FAR-\d+' | head -1 || true)
+                if [ -n "$FAR_TICKET" ]; then
+                  COMMENT_BODY="FAR-1099 merge-queue CI stall detected: PR #$PR_NUM has been pending CI for >2 hours on head SHA $(gh pr view "$PR_NUM" --json headRefOid --jq '.headRefOid' 2>/dev/null | cut -c1-12). This blocks all subsequent approved PRs from merging. Flaky test or CI infrastructure failure suspected. Merge queue tick: ${{ github.run_id }}."
+                  ISSUE_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+                    -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+                    -d "{\"query\":\"query(\$id: String!) { issue(id: \$id) { id } }\",\"variables\":{\"id\":\"$FAR_TICKET\"}}" \
+                    | jq -r '.data.issue.id // empty' 2>/dev/null || echo "")
+                  if [ -n "$ISSUE_ID" ]; then
+                    curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+                      -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+                      -d "{\"query\":\"mutation(\$input: CommentCreateInput!) { commentCreate(input: \$input) { success } }\",\"variables\":{\"input\":{\"issueId\":\"$ISSUE_ID\",\"body\":\"$COMMENT_BODY\"}}}" \
+                      > /dev/null 2>&1 || echo "::warning::Failed to post Linear comment for $FAR_TICKET"
+                  fi
+                fi
+              done
+            fi
+            echo "::error::FAR-1099: CI stall detected — PRs with stalled CI:$STALL_REPORT. Merge queue halted until CI resolves."
+            exit 1
+          fi
+
+          # --- Normal self-chain (FAR-492) ---
           NEXT_DEPTH=$((CHAIN_DEPTH + 1))
           READY_AT=$(( $(date -u +%s) + 600 ))
           PAYLOAD=$(jq -n --argjson depth "$NEXT_DEPTH" --argjson ready_at "$READY_AT" \
