@@ -220,6 +220,19 @@ _SUSPENSION_VAR = "FAST_LANE_SUSPENDED_UNTIL"
 _SUSPENSION_REASON_VAR = "FAST_LANE_SUSPENSION_REASON"
 
 
+def _is_missing_variable(stderr: str) -> bool:
+    """Return True when a ``gh api`` failure means the variable is absent.
+
+    A missing repository variable surfaces as an HTTP 404.  ``gh api`` (2.23+)
+    exits 1 and prints ``gh: Not Found (HTTP 404)`` to stderr.  Match on the
+    stderr signal rather than the exact non-zero exit code, so the check stays
+    robust across gh versions (the previous code assumed exit 4, a shape the
+    real CLI never produces).
+    """
+    lowered = stderr.lower()
+    return "not found" in lowered or "http 404" in lowered
+
+
 def check_suspension(
     repo: str,
     gh_token: str | None = None,
@@ -263,14 +276,13 @@ def check_suspension(
         return False, f"suspension check denied (fail-closed): {exc}"
 
     # gh api exits 0 on success; non-zero means the variable does not exist
-    # or the token lacks vars:read — both are "cannot determine" → fail closed.
+    # or the token lacks vars:read — the latter is "cannot determine" → fail
+    # closed.  A missing variable surfaces as an HTTP 404 (gh exit code 1 with
+    # stderr "gh: Not Found (HTTP 404)"), which is treated as "not suspended".
     if result.returncode != 0:
-        # Exit 4 is "Not Found" for a missing variable — not an error, just
-        # no active suspension.  Treat it as "not suspended" (eligible).
-        stderr = result.stderr.strip()
-        if result.returncode == 4 and ("Not Found" in stderr or "not found" in stderr.lower()):
+        if _is_missing_variable(result.stderr):
             return True, "no active suspension (variable not set)"
-        return False, f"suspension check denied (fail-closed): API error: {stderr}"
+        return False, f"suspension check denied (fail-closed): API error: {result.stderr.strip()}"
 
     raw_value = result.stdout.strip()
     if not raw_value:
@@ -280,6 +292,12 @@ def check_suspension(
         suspended_until = datetime.fromisoformat(raw_value)
     except (ValueError, TypeError):
         return False, f"suspension check denied (fail-closed): unparseable timestamp {raw_value!r}"
+
+    # ``datetime.fromisoformat`` accepts tz-naive strings; ``datetime.now(tz=UTC)``
+    # is aware.  Normalise so the comparison never raises TypeError on a naive
+    # stored timestamp (treated as UTC).
+    if suspended_until.tzinfo is None:
+        suspended_until = suspended_until.replace(tzinfo=UTC)
 
     now = datetime.now(tz=UTC)
     if now < suspended_until:

@@ -426,10 +426,11 @@ class TestCheckSuspensionActive:
     @patch("fast_lane_classify.subprocess.run")
     def test_active_suspension_denies(self, mock_run: MagicMock, mock_dt: MagicMock) -> None:
         """A suspension that has not expired must deny eligibility (rc=1)."""
+        from datetime import UTC
         from datetime import datetime as _dt
 
         # Current time: 2026-09-21T12:00:00 UTC
-        mock_dt.now.return_value = _dt(2026, 9, 21, 12, 0, 0)
+        mock_dt.now.return_value = _dt(2026, 9, 21, 12, 0, 0, tzinfo=UTC)
         mock_dt.fromisoformat = _dt.fromisoformat
 
         # First call: FAST_LANE_SUSPENDED_UNTIL (active — future)
@@ -452,10 +453,11 @@ class TestCheckSuspensionExpired:
     @patch("fast_lane_classify.subprocess.run")
     def test_expired_suspension_allows(self, mock_run: MagicMock, mock_dt: MagicMock) -> None:
         """A suspension that has expired must allow eligibility."""
+        from datetime import UTC
         from datetime import datetime as _dt
 
         # Current time: 2026-09-23T00:00:00 UTC (after the suspension window)
-        mock_dt.now.return_value = _dt(2026, 9, 23, 0, 0, 0)
+        mock_dt.now.return_value = _dt(2026, 9, 23, 0, 0, 0, tzinfo=UTC)
         mock_dt.fromisoformat = _dt.fromisoformat
 
         mock_run.return_value = MagicMock(returncode=0, stdout="2026-09-22T00:00:00\n", stderr="")
@@ -469,15 +471,55 @@ class TestCheckSuspensionNotSet:
 
     @patch("fast_lane_classify.subprocess.run")
     def test_missing_variable_allows(self, mock_run: MagicMock) -> None:
-        """Variable not found (gh exit 4) means no suspension is active."""
+        """Variable not found (real gh shape: exit 1, HTTP 404) means no suspension."""
         mock_run.return_value = MagicMock(
-            returncode=4,
+            returncode=1,
             stdout="",
-            stderr="Not Found",
+            stderr="gh: Not Found (HTTP 404)",
         )
         eligible, detail = check_suspension("farnalabs/modulo")
         assert eligible is True
         assert "not set" in detail.lower()
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_missing_variable_lowercase_not_found_allows(self, mock_run: MagicMock) -> None:
+        """The lower-case ``not found`` stderr shape is also treated as missing."""
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is True
+        assert "not set" in detail.lower()
+
+
+class TestCheckSuspensionNaiveTimestamp:
+    """A tz-naive stored timestamp must not crash the comparison.
+
+    ``datetime.fromisoformat`` parses tz-naive strings and ``datetime.now(tz=UTC)``
+    is aware, so an un-normalised compare raises TypeError.  These tests use the
+    real datetime module (no datetime mock) to round-trip that shape.
+    """
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_naive_future_timestamp_denies(self, mock_run: MagicMock) -> None:
+        """A naive future timestamp is treated as UTC and denies (no TypeError)."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="2999-01-01T00:00:00\n", stderr=""),
+            MagicMock(returncode=0, stdout="critical\n", stderr=""),
+        ]
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is False
+        assert "suspended" in detail.lower()
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_naive_past_timestamp_allows(self, mock_run: MagicMock) -> None:
+        """A naive past timestamp is treated as UTC and allows (no TypeError)."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="2000-01-01T00:00:00\n",
+            stderr="",
+        )
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is True
+        assert "expired" in detail.lower()
 
 
 class TestInWindowFollowUpIneligible:
