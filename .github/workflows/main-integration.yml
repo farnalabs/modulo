@@ -1,0 +1,198 @@
+name: "Main: Integration tests"
+
+# Run the full integration suite on main post-merge. The deploy gate's
+# integration job is the same suite, but it only runs when the deploy
+# throttle fires — a PR can be green while an untouched integration test
+# is red (ci.yml's integration job is changed-files-scoped). Running on
+# main post-merge surfaces the same red immediately after the merge
+# (minutes) instead of at the next deploy attempt (hours).
+#
+# This job does NOT gate merges — it runs AFTER the merge. On failure or
+# timeout it is LOUD: fail the run, post a Linear comment if LINEAR_API_KEY
+# is available (fail-open on the comment only).
+#
+# NO high-frequency schedule: this repo has documented evidence that
+# GitHub drops high-frequency crons under load (AGENTS.md: "GitHub's
+# scheduler DROPS high-frequency cron events on high-activity repos").
+# A push-triggered workflow is reliable; a cron here would not be.
+# workflow_dispatch is provided for manual re-runs.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One run per push — overlapping pushes cancel the previous run rather
+# than piling up.
+concurrency:
+  group: main-integration-${{ github.ref_name }}
+  cancel-in-progress: true
+
+# Read-only: the notify job resolves the failing commit message via `gh api`
+# (`repos/.../commits/<sha>`), which needs contents:read — without the scope
+# the API can return 404 (a token-scope 404, not a missing commit).
+permissions:
+  contents: read
+
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
+  GIT_CONFIG_VALUE_0: "https://github.com/"
+
+jobs:
+  integration:
+    name: "Integration tests (main post-merge)"
+    runs-on: ubicloud-standard-2
+    # 90 min budget — matches the deploy gate's integration-tests job.
+    # The same suite, same invocation, same service containers.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # NOSONAR githubactions:S8541: pytest-bdd is a pinned source-archive dep (no
+      # wheel) and ibm-cos-sdk is sdist-only, so `--no-build` hard-fails the sync
+      # on a cold uv cache. `--frozen` locks the exact revisions, so the builds are
+      # deterministic and trusted (no untrusted setup scripts execute).
+      - name: Sync deps
+        working-directory: backend
+        run: uv sync --frozen  # NOSONAR
+
+      # --- Service containers (copied verbatim from deploy.yml integration-tests) ---
+      - name: Start Postgres
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-pg 2>/dev/null || true
+          docker run -d --name modulo-ci-pg \
+            -e POSTGRES_USER=modulo_test \
+            -e POSTGRES_PASSWORD=modulo_test \
+            -e POSTGRES_DB=modulo_test \
+            -p 5433:5432 \
+            postgres:16-alpine
+          for i in $(seq 1 60); do
+            docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null && { echo "Postgres ready"; break; }
+            sleep 2
+          done
+          # Fail fast: a never-ready Postgres must not sleep through the loop and
+          # only surface as a confusing failure in the test step.
+          docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null \
+            || { echo "::error::Postgres did not become ready within 120s"; exit 1; }
+
+      - name: Start Redis
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-redis 2>/dev/null || true
+          docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
+          for i in $(seq 1 30); do
+            docker exec modulo-ci-redis redis-cli ping 2>/dev/null && { echo "Redis ready"; break; }
+            sleep 2
+          done
+          # Fail fast: a never-ready Redis must not sleep through the loop and
+          # only surface as a confusing failure in the test step.
+          docker exec modulo-ci-redis redis-cli ping 2>/dev/null \
+            || { echo "::error::Redis did not become ready within 60s"; exit 1; }
+
+      # Exact invocation from deploy.yml's integration-tests job.
+      # Per-test timeout: without it a single hung test stalls the whole job
+      # silently until the job-level kill. Tier 1b testcontainers suites are
+      # excluded (they own dedicated jobs with sized boot budgets).
+      - name: Integration tests
+        working-directory: backend
+        run: uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 -q
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+
+      - name: Stop containers
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-pg 2>/dev/null || true
+          docker rm -f modulo-ci-redis 2>/dev/null || true
+
+  notify-failure:
+    name: Signal integration failure
+    needs: [integration]
+    # 'cancelled' included: GitHub Actions reports a job that hits its
+    # job-level timeout-minutes as 'cancelled', not 'failure'. The integration
+    # job has a 90-min budget, so a hung suite would otherwise vanish silently
+    # — no Linear comment, no loud failure — which is the exact silent-hang
+    # pattern this workflow exists to surface (same rationale as deploy.yml's
+    # notify-* conditions).
+    if: always() && (needs.integration.result == 'failure' || needs.integration.result == 'cancelled')
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Post Linear comment (fail-open)
+        # Gate inside the script, not with `if: env.LINEAR_API_KEY != ''`. The
+        # step's own `env` block is not reliably populated in the `env` context
+        # when that step's `if` is evaluated, so an empty secret could silently
+        # skip the step. (`secrets` is not a permitted context in a step-level
+        # `if` at all — that invalid reference was the original failure.)
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # gh CLI reads GH_TOKEN from the environment; it is not auto-exported
+          # into steps, so without this the commit lookup below fails and the
+          # notification is skipped before it can fire.
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          # Extract FAR- ticket from the commit message, if present.
+          TITLE="$(gh api "repos/${REPO}/commits/${COMMIT_SHA}" --jq '.commit.message' 2>/dev/null | head -1)"
+          FAR_ID="$(echo "$TITLE" | grep -oE 'FAR-[0-9]+' | head -1 || true)"
+          if [ -z "$FAR_ID" ]; then
+            echo "No FAR- ticket in commit title — skipping Linear comment."
+            exit 0
+          fi
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "::warning::LINEAR_API_KEY not configured — integration failure logged in run only (fail-open)."
+            exit 0
+          fi
+          # commentCreate takes the issue's internal UUID, NOT the human
+          # identifier. Resolve "FAR-123" -> UUID first (same lookup as
+          # merge-queue.yml); passing the identifier directly was a permanent
+          # GraphQL error, so this notification could never fire.
+          ISSUE_ID=$(curl -sS --max-time 15 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: ${LINEAR_API_KEY}" \
+            -d "{\"query\":\"query(\$identifier: String!) { issue(id: \$identifier) { id } }\",\"variables\":{\"identifier\":\"${FAR_ID}\"}}" \
+            | jq -r '.data.issue.id // empty' 2>/dev/null || echo "")
+          if [ -z "$ISSUE_ID" ]; then
+            echo "::warning::Linear ticket ${FAR_ID} not found — skipping comment (fail-open)."
+            exit 0
+          fi
+          # 'cancelled' is the job-level timeout signal, so name the timeout
+          # explicitly rather than reporting a misleading plain "failed".
+          BODY="Integration tests failed or timed out on main post-merge (${COMMIT_SHA:0:7}). Run: ${RUN_URL}"
+          # Build the payload via jq --arg so values are passed as variables,
+          # never string-interpolated into the GraphQL query (best-effort,
+          # fail-open).
+          COMMENT_PAYLOAD=$(jq -n \
+            --arg q 'mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success } }' \
+            --arg id "$ISSUE_ID" --arg body "$BODY" \
+            '{query: $q, variables: { input: { issueId: $id, body: $body } } }')
+          COMMENT_OK=$(curl -sS --max-time 15 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: ${LINEAR_API_KEY}" \
+            -d "$COMMENT_PAYLOAD" \
+            | jq -r '.data.commentCreate.success // empty' 2>/dev/null || echo "")
+          if [ "$COMMENT_OK" = "true" ]; then
+            echo "Linear comment posted on ${FAR_ID}."
+          else
+            echo "::warning::Linear comment post failed — integration failure logged in run only (fail-open)."
+          fi
+
+      - name: Fail loud on integration regression
+        shell: bash
+        run: |
+          echo "::error::Integration tests failed on main post-merge — the suite that gates deploys is red. Investigate immediately: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          exit 1
