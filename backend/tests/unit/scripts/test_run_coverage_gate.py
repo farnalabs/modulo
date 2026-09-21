@@ -1305,6 +1305,28 @@ class TestParseCoberturaBranches:
         assert result["src/main.py"][5] == (1, 2)
         assert 10 not in result["src/main.py"]
 
+    def test_parses_condition_coverage_attribute(self, tmp_path):
+        """coverage.py ≥7.x emits condition-coverage attributes without <condition> children.
+
+        This is the REAL format from CI (coverage.py 7.16.1): lines have
+        ``branch="true" condition-coverage="100% (2/2)"`` as self-closing
+        elements with NO child ``<condition>`` elements.
+        """
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="src/main.py"><lines>'
+            '<line number="5" hits="3" branch="true" condition-coverage="50% (1/2)"/>'
+            '<line number="10" hits="1" branch="true" condition-coverage="100% (2/2)"/>'
+            '<line number="15" hits="1" branch="false"/>'
+            "</lines></class></classes></package></packages></coverage>"
+        )
+        result = mod._parse_cobertura_branches(xml)
+        assert "src/main.py" in result
+        assert result["src/main.py"][5] == (1, 2)
+        assert result["src/main.py"][10] == (2, 2)
+        assert 15 not in result["src/main.py"]
+
     def test_empty_report(self, tmp_path):
         xml = tmp_path / "coverage.xml"
         xml.write_text("<coverage/>")
@@ -1314,6 +1336,29 @@ class TestParseCoberturaBranches:
         xml = tmp_path / "coverage.xml"
         xml.write_text("not xml")
         assert not mod._parse_cobertura_branches(xml)
+
+
+class TestParseConditionCoverageAttr:
+    """Unit tests for _parse_condition_coverage_attr (the attribute parser)."""
+
+    def test_full_coverage(self):
+        assert mod._parse_condition_coverage_attr("100% (2/2)") == (2, 2)
+
+    def test_partial_coverage(self):
+        assert mod._parse_condition_coverage_attr("50% (1/2)") == (1, 2)
+
+    def test_zero_coverage(self):
+        assert mod._parse_condition_coverage_attr("0% (0/3)") == (0, 3)
+
+    def test_single_condition(self):
+        assert mod._parse_condition_coverage_attr("100% (1/1)") == (1, 1)
+
+    def test_unparseable_returns_none(self):
+        assert mod._parse_condition_coverage_attr("") is None
+        assert mod._parse_condition_coverage_attr("n/a") is None
+
+    def test_strips_whitespace(self):
+        assert mod._parse_condition_coverage_attr("  50% (1/2)  ") == (1, 2)
 
 
 class TestParseLcovBranches:
@@ -1830,6 +1875,49 @@ class TestProjectWideMetrics:
         )
         line_pct, branch_pct = mod._compute_project_wide_metrics_cobertura(xml)
         assert line_pct == 60.0
+        assert branch_pct == 50.0
+
+    def test_cobertura_metrics_root_attributes(self, tmp_path):
+        """coverage.py ≥7.x puts branch totals on the root <coverage> element.
+
+        The parser must read ``branches-covered`` / ``branches-valid`` from
+        the root element when ``<condition>`` children are absent.
+        """
+        xml = tmp_path / "coverage.xml"
+        # Simulate real coverage.py output: 4 lines (3 hit), root attrs for branch.
+        xml.write_text(
+            '<coverage branches-valid="26766" branches-covered="23999" branch-rate="0.8966">'
+            "<packages><package><classes>"
+            '<class filename="a.py"><lines>'
+            '<line number="1" hits="3"/><line number="2" hits="0"/>'
+            '<line number="3" hits="1" branch="true" condition-coverage="100% (2/2)"/>'
+            '<line number="4" hits="0" branch="true" condition-coverage="50% (1/2)"/>'
+            "</lines></class>"
+            '<class filename="b.py"><lines><line number="1" hits="5"/></lines></class>'
+            "</classes></package></packages></coverage>"
+        )
+        line_pct, branch_pct = mod._compute_project_wide_metrics_cobertura(xml)
+        assert line_pct == 60.0
+        # Root attrs: 23999/26766 = 89.66%
+        assert branch_pct is not None
+        assert abs(branch_pct - 89.66) < 0.01
+
+    def test_cobertura_metrics_condition_attr_fallback(self, tmp_path):
+        """When root attrs are absent, branch % is computed from condition-coverage attrs."""
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>'
+            '<line number="1" hits="3"/><line number="2" hits="0"/>'
+            '<line number="3" hits="1" branch="true" condition-coverage="100% (2/2)"/>'
+            '<line number="4" hits="0" branch="true" condition-coverage="0% (0/2)"/>'
+            "</lines></class>"
+            '<class filename="b.py"><lines><line number="1" hits="5"/></lines></class>'
+            "</classes></package></packages></coverage>"
+        )
+        line_pct, branch_pct = mod._compute_project_wide_metrics_cobertura(xml)
+        assert line_pct == 60.0
+        # 4 total conditions, 2 covered = 50%
         assert branch_pct == 50.0
 
     def test_lcov_metrics(self, tmp_path):

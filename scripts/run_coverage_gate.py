@@ -735,13 +735,34 @@ def _normalize_js_report(report_path: Path, src_root: str) -> Path | None:
 # ---------------------------------------------------------------------------
 
 
+_CONDITION_COVERAGE_RE = re.compile(r"(\d+)%\s*\((\d+)/(\d+)\)")
+
+
+def _parse_condition_coverage_attr(attr_value: str) -> tuple[int, int] | None:
+    """Parse a ``condition-coverage`` attribute value like ``"100% (2/2)"``.
+
+    Returns ``(covered, total)`` or ``None`` when the value is unparseable.
+    """
+    m = _CONDITION_COVERAGE_RE.fullmatch(attr_value.strip())
+    if m is None:
+        return None
+    return int(m.group(2)), int(m.group(3))
+
+
 def _parse_cobertura_branches(report_path: Path) -> dict[str, dict[int, tuple[int, int]]]:
     """Parse Cobertura XML for per-line branch coverage.
 
     Returns ``{filepath: {line_number: (covered_conditions, total_conditions)}}``.
-    Each ``<condition>`` child of a ``<line branch="true">`` is counted:
-    covered when ``coverage="100%"``, uncovered otherwise.  Only lines with
-    ``branch="true"`` are included.
+    Only lines with ``branch="true"`` are included.
+
+    Supports two coverage.py output formats:
+
+    - **With ``<condition>`` children** (older or explicit ``--cov-branch``):
+      each ``<condition>`` child is counted; covered when
+      ``coverage="100%"``.
+    - **Without ``<condition>`` children** (coverage.py ≥7.x default):
+      the ``condition-coverage`` attribute carries the aggregated
+      ``"XX% (N/M)"`` string — parse N/M directly.
     """
     result: dict[str, dict[int, tuple[int, int]]] = {}
     try:
@@ -756,11 +777,19 @@ def _parse_cobertura_branches(report_path: Path) -> dict[str, dict[int, tuple[in
             if line_el.get("branch") != "true":
                 continue
             line_no = int(line_el.get("number", "0"))
+            # Prefer explicit <condition> children when present.
             conditions = line_el.findall(".//condition")
-            if not conditions:
-                continue
-            total = len(conditions)
-            covered = sum(1 for c in conditions if c.get("coverage") == "100%")
+            if conditions:
+                total = len(conditions)
+                covered = sum(1 for c in conditions if c.get("coverage") == "100%")
+            else:
+                # Fallback: parse the condition-coverage attribute
+                # (e.g. "100% (2/2)" or "50% (1/2)").
+                attr = line_el.get("condition-coverage", "")
+                parsed = _parse_condition_coverage_attr(attr)
+                if parsed is None:
+                    continue
+                covered, total = parsed
             lines_data[line_no] = (covered, total)
         if lines_data:
             result[filename] = lines_data
@@ -986,6 +1015,16 @@ def _compute_project_wide_metrics_cobertura(report_path: Path) -> tuple[float, f
     records exist but none are covered).  The caller must not treat the two
     as equivalent: the project floor is only meaningful when branch data
     actually exists.
+
+    Branch data is read from two sources, in order of preference:
+
+    1. **Root ``<coverage>`` attributes** (``branches-covered`` /
+       ``branches-valid``): coverage.py ≥7.x always emits these when branch
+       measurement is enabled — the authoritative, pre-aggregated values.
+    2. **Per-line ``condition-coverage`` attributes**: parsed from
+       ``<line branch="true" condition-coverage="XX% (N/M)"/>`` when the
+       root attributes are absent (backward compatibility).
+    3. **``<condition>`` child elements**: legacy format; tried last.
     """
     try:
         tree = ET.parse(str(report_path))  # noqa: S314 — internal trusted report
@@ -994,20 +1033,48 @@ def _compute_project_wide_metrics_cobertura(report_path: Path) -> tuple[float, f
     root = tree.getroot()
     total_lines = 0
     covered_lines = 0
-    total_conditions = 0
-    covered_conditions = 0
     for line_el in root.iter("line"):
         hits = int(line_el.get("hits", "0"))
         total_lines += 1
         if hits > 0:
             covered_lines += 1
-        if line_el.get("branch") == "true":
-            for cond in line_el.findall(".//condition"):
-                total_conditions += 1
-                if cond.get("coverage") == "100%":
-                    covered_conditions += 1
     line_pct = (covered_lines / total_lines * 100.0) if total_lines else 0.0
-    branch_pct = (covered_conditions / total_conditions * 100.0) if total_conditions else None
+
+    # --- Branch coverage: prefer root-level attributes (pre-aggregated) ---
+    branch_pct: float | None = None
+    branches_covered_attr = root.get("branches-covered")
+    branches_valid_attr = root.get("branches-valid")
+    if branches_covered_attr is not None and branches_valid_attr is not None:
+        bv = int(branches_valid_attr)
+        bc = int(branches_covered_attr)
+        if bv > 0:
+            branch_pct = (bc / bv) * 100.0
+        elif bc == 0 and bv == 0:
+            branch_pct = None  # no branches at all
+        else:
+            branch_pct = 0.0
+    else:
+        # Fallback: count from per-line data (condition-coverage attr or
+        # <condition> children — _parse_cobertura_branches handles both).
+        total_conditions = 0
+        covered_conditions = 0
+        for line_el in root.iter("line"):
+            if line_el.get("branch") != "true":
+                continue
+            # Try explicit <condition> children first.
+            conditions = line_el.findall(".//condition")
+            if conditions:
+                total_conditions += len(conditions)
+                covered_conditions += sum(1 for c in conditions if c.get("coverage") == "100%")
+            else:
+                # Parse condition-coverage attribute (e.g. "50% (1/2)").
+                attr = line_el.get("condition-coverage", "")
+                parsed = _parse_condition_coverage_attr(attr)
+                if parsed is not None:
+                    covered, total = parsed
+                    total_conditions += total
+                    covered_conditions += covered
+        branch_pct = (covered_conditions / total_conditions * 100.0) if total_conditions else None
     return line_pct, branch_pct
 
 
@@ -1640,7 +1707,7 @@ def main() -> int:
                 project_floor_failed = True
                 project_metrics.append(
                     "  BREACH: Python branch data missing from Cobertura report "
-                    "(no <condition> elements) — branch coverage cannot be enforced"
+                    "(no branch-rate attributes or <condition> elements) — branch coverage cannot be enforced"
                 )
             elif pb < MIN_PROJECT_BRANCH_COVERAGE:
                 project_floor_failed = True
