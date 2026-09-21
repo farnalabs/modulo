@@ -219,6 +219,8 @@ def _workspace_spec_for_dispatch(
     run_id: str,
     node_id: str,
     run_uuid: uuid.UUID | None,
+    node_egress_policy: str | None = None,
+    node_egress_allowlist: list[dict[str, str | int]] | None = None,
 ) -> WorkspaceSpec:
     """Build the hardened WorkspaceSpec for a Bundled Runner dispatch.
 
@@ -229,37 +231,38 @@ def _workspace_spec_for_dispatch(
     bridge network (never the compose/backend network), and the egress
     default permitted (the tier's purpose) with the per-profile ``none``
     opt-in.
+
+    Egress resolution (FAR-1085): uses :func:`resolve_egress` with the
+    Docker tier so both node-level and profile-level policies are
+    considered, and ``selected`` without an allowlist or on a
+    non-enforcing tier returns a refusal.
     """
+    from modulo.core.pipeline_engine.egress import resolve_egress
+
     cfg = getattr(profile, "config_json", None) or {}
     metadata: dict[str, str] = {
         "modulo.run.id": run_id,
         "modulo.org.id": str(org_id) if org_id else "",
         "modulo.node.id": node_id,
     }
-    egress = (getattr(profile, "network_policy", None) or "outbound").strip().lower()
-    # FAR-1064: Docker / Bundled Runner tier cannot enforce per-host egress
-    # allowlists (no NET_ADMIN in the hardened workspace).  Refuse early
-    # rather than silently granting full outbound — the operator must switch
-    # to 'outbound' or 'none', or use a tier that supports host allowlists.
-    if egress == "selected":
-        # Lazy import: node_runner imports this module lazily too, so a
-        # module-level import here would close the cycle.
+
+    # FAR-1085: canonical egress resolution — node -> profile -> provider default,
+    # with tier capability check (Docker cannot enforce "selected").
+    egress_resolved = resolve_egress(
+        node_egress_policy=node_egress_policy,
+        node_egress_allowlist=node_egress_allowlist,
+        profile_network_policy=getattr(profile, "network_policy", None),
+        tier="docker",
+    )
+    if egress_resolved.refusal is not None:
         from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
 
-        profile_label = (
-            getattr(profile, "name", None)
-            or getattr(profile, "id", None)
-            or getattr(profile, "provider_type", None)
-            or "unknown"
-        )
-        raise SandboxTierRefusedError(
-            f"Environment profile '{profile_label}' has "
-            "network_policy='selected' (egress allowlist), but the Docker / "
-            "Bundled Runner tier cannot enforce per-host egress allowlists — "
-            "Docker lacks the host-filtering mechanism required. Use "
-            "network_policy='outbound' (full egress) or network_policy='none' "
-            "(no egress), or switch to a tier that supports host allowlists."
-        )
+        raise SandboxTierRefusedError(f"Node '{node_id}' egress refused on Docker tier: {egress_resolved.refusal}")
+
+    # Map canonical policy to WorkspaceSpec egress_policy vocabulary.
+    # WorkspaceSpec uses: "none" for deny_all, "outbound" for allow/default.
+    spec_egress = "none" if egress_resolved.policy == "deny_all" else "outbound"
+
     # Defense-in-depth (FAR-1020): validate workspace_network at dispatch
     # even if the CRUD boundary already validated it — a value written
     # directly to the DB could bypass the route validation.
@@ -273,7 +276,7 @@ def _workspace_spec_for_dispatch(
         capabilities=getattr(profile, "capabilities_json", None) or [],
         timeout_seconds=int(cfg.get("timeout_seconds", 3600)),
         resource_limits={"memory_mb": int(cfg.get("memory_mb", 1024))},
-        egress_policy="none" if egress == "none" else "outbound",
+        egress_policy=spec_egress,
         persistence_policy=getattr(profile, "persistence_policy", "ephemeral"),
         labels={},
         workspace_metadata={key: value for key, value in metadata.items() if value},
@@ -693,6 +696,8 @@ async def _provision_workspace(
     input_json: str,
     raw_input: Any,
     rendered_prompt: str,
+    node_egress_policy: str | None = None,
+    node_egress_allowlist: list[dict[str, str | int]] | None = None,
 ) -> _ProvisionResult:
     """Acquire the dispatch marker, provision a workspace, and write context/input files.
 
@@ -729,6 +734,8 @@ async def _provision_workspace(
         run_id=run_id,
         node_id=node_id,
         run_uuid=run_uuid,
+        node_egress_policy=node_egress_policy,
+        node_egress_allowlist=node_egress_allowlist,
     )
     provider_ref = await provider.create_workspace(spec)
     _emit_script_span_event(
@@ -1257,6 +1264,8 @@ async def run_bundled_runner_node(
             input_json=input_json,
             raw_input=raw_input,
             rendered_prompt=rendered_prompt,
+            node_egress_policy=node_def.get("egress_policy"),
+            node_egress_allowlist=node_def.get("egress_allowlist"),
         )
         attempt_key = provision.attempt_key
         dispatch_marker_set = True

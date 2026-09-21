@@ -462,9 +462,30 @@ def _sse_event(event: str, detail: str) -> str:
 
 
 def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
+    from modulo.core.pipeline_engine.egress import resolve_egress
     from modulo.core.runtime_provider import WorkspaceSpec
 
     cfg = profile.config_json or {}
+    # FAR-1085: use canonical egress resolution instead of the raw profile
+    # network_policy.  The sandbox test dispatches to whichever tier the
+    # profile's provider_type resolves to — map provider_type to the tier
+    # name used by resolve_egress.
+    _provider_type = (profile.provider_type or "").strip().lower()
+    _tier_map = {
+        "e2b": "e2b",
+        "runner_docker": "docker",
+        "local": "local",
+        "local_docker": "local",
+    }
+    _tier = _tier_map.get(_provider_type, "e2b")
+    _egress = resolve_egress(
+        node_egress_policy=None,  # No node in the test path — profile only
+        node_egress_allowlist=None,
+        profile_network_policy=profile.network_policy,
+        tier=_tier,
+    )
+    # Map canonical policy to WorkspaceSpec egress_policy vocabulary.
+    _spec_egress = "none" if _egress.policy == "deny_all" else "outbound"
     return WorkspaceSpec(
         environment_profile_id=profile.id,
         organisation_id=profile.organisation_id,
@@ -473,7 +494,7 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
         capabilities=profile.capabilities_json or [],
         timeout_seconds=cfg.get("timeout_seconds", 3600),
         resource_limits=cfg,
-        egress_policy=profile.network_policy or "deny_all",
+        egress_policy=_spec_egress,
         persistence_policy=profile.persistence_policy,
         labels={"profile_name": profile.name},
     )

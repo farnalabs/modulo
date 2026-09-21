@@ -94,7 +94,11 @@ SANDBOX_CAPABILITY_MULTI_HOST = "sandbox.git_credentials.multi_host"
 # deny-guarantee nothing enforces.
 
 
-def derive_sandbox_capabilities(node_def: dict[str, Any]) -> dict[str, bool | None]:
+def derive_sandbox_capabilities(
+    node_def: dict[str, Any],
+    *,
+    profile_network_policy: str | None = None,
+) -> dict[str, bool | None]:
     """Mechanically derive a sandbox_agent node's capability profile.
 
     Reads the node's ACTUAL configuration — the FAR-296 Phase 3 egress surface
@@ -106,10 +110,17 @@ def derive_sandbox_capabilities(node_def: dict[str, Any]) -> dict[str, bool | No
     ``{capability: bool | None}`` with the RAW mechanical polarity:
 
       ``sandbox.egress``
-          False when ``egress_policy`` is ``"deny_all"`` or ``"selected"`` —
-          node_runner maps both to ``allow_internet_access=False``; True when
-          the policy is absent (default) or ``"default"``; None when the
-          declared value is unrecognised.
+          False when the resolved egress policy is ``"deny_all"`` or
+          ``"selected"`` — node_runner maps both to
+          ``allow_internet_access=False``; True when the policy is absent
+          (default) or ``"default"``; None when the declared value is
+          unrecognised.
+
+          FAR-1085: the resolution now considers BOTH the node's
+          ``egress_policy`` AND the profile's ``network_policy`` (via
+          :func:`resolve_egress`), so the certified capability matches the
+          runtime outcome for every (node, profile, tier) combination.
+
       ``sandbox.write_files``
           False when ``read_only`` is truthy (the read-only workspace is
           enforced — chmod makes writes impossible); True when ``read_only`` is
@@ -123,6 +134,11 @@ def derive_sandbox_capabilities(node_def: dict[str, Any]) -> dict[str, bool | No
           host); False when ``"unscoped"`` or ``"none"`` (full-access or absent
           credentials are not a scoped guarantee); None when the value is
           unrecognised or absent (unknown — fail-closed).
+
+    ``profile_network_policy`` (FAR-1085): the bound environment profile's
+    ``network_policy`` value.  When provided, the egress capability is derived
+    from the canonical resolution of BOTH node and profile values — so the
+    certified capability matches what the runtime actually enforces.
 
     The derivation is MECHANICAL — it reads the node's actual validated
     configuration, never a declared claim — so a conformance hard-block can
@@ -142,13 +158,41 @@ def derive_sandbox_capabilities(node_def: dict[str, Any]) -> dict[str, bool | No
 
     caps: dict[str, bool | None] = {}
 
-    egress_policy = node_def.get("egress_policy")
-    if egress_policy is None:
-        caps[SANDBOX_CAPABILITY_EGRESS] = True
-    elif isinstance(egress_policy, str) and egress_policy in _SANDBOX_EGRESS_POLICIES:
-        caps[SANDBOX_CAPABILITY_EGRESS] = egress_policy not in ("deny_all", "selected")
-    else:
+    # FAR-1085: derive egress capability from the canonical resolution
+    # (node + profile -> effective policy) instead of reading the node
+    # config in isolation.  The "e2b" tier is used as the reference tier
+    # because it can enforce all three policies (default, deny_all, selected).
+    # When profile_network_policy is None (not plumbed), this falls back to
+    # the node-only derivation -- backward-compatible with existing callers.
+    #
+    # Fail-closed guard: an unrecognised egress_policy string (not in the
+    # valid vocabulary) returns None (unknown) regardless of what resolve_egress
+    # maps it to -- the old code returned None for unrecognised values, and a
+    # block guardrail must fail CLOSED on unknown.
+    raw_egress = node_def.get("egress_policy")
+    if isinstance(raw_egress, str) and raw_egress and raw_egress not in _SANDBOX_EGRESS_POLICIES:
         caps[SANDBOX_CAPABILITY_EGRESS] = None
+    else:
+        from modulo.core.pipeline_engine.egress import resolve_egress
+
+        _egress_res = resolve_egress(
+            node_egress_policy=raw_egress,
+            node_egress_allowlist=node_def.get("egress_allowlist"),
+            profile_network_policy=profile_network_policy,
+            tier="e2b",
+        )
+        if _egress_res.refusal is not None:
+            # Tier cannot enforce -- capability is unknown (fail-closed).
+            caps[SANDBOX_CAPABILITY_EGRESS] = None
+        elif _egress_res.policy is None:
+            # Provider default -- egress is allowed.
+            caps[SANDBOX_CAPABILITY_EGRESS] = True
+        elif _egress_res.policy in ("deny_all", "selected"):
+            # Egress is restricted.
+            caps[SANDBOX_CAPABILITY_EGRESS] = False
+        else:
+            # Unknown resolved policy -- fail-closed.
+            caps[SANDBOX_CAPABILITY_EGRESS] = None
 
     # FAR-212 PR B: read_only is a REAL validated + enforced PipelineGraphNode
     # field. Only a genuine bool is read; any other value (smuggled non-bool,

@@ -7699,8 +7699,22 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _metadata: dict[str, str] = {}
         if resource_limits:
             _metadata["resource_limits"] = json.dumps(resource_limits)
-        if egress_policy == "selected" and egress_allowlist:
-            _metadata["egress_allowlist"] = json.dumps(egress_allowlist)
+        # FAR-1085: use canonical egress resolution instead of ad-hoc mapping.
+        # The E2B route uses node-level egress values (the profile's
+        # network_policy is not loaded in this path; the node config is
+        # the authoritative source here).
+        from modulo.core.pipeline_engine.egress import resolve_egress
+
+        _egress_resolved = resolve_egress(
+            node_egress_policy=egress_policy,
+            node_egress_allowlist=egress_allowlist,
+            profile_network_policy=None,  # E2B path: profile not loaded; node config is authoritative
+            tier="e2b",
+        )
+        if _egress_resolved.refusal is not None:
+            raise SandboxTierRefusedError(f"Node '{node_id}' egress refused on E2B tier: {_egress_resolved.refusal}")
+        if _egress_resolved.policy == "selected" and _egress_resolved.allowlist:
+            _metadata["egress_allowlist"] = json.dumps(_egress_resolved.allowlist)
         # FAR-296 Phase 4a: E2B concurrent-sandbox rate limits (429 / resource
         # exhausted) are TRANSIENT. Retry ``AsyncSandbox.create`` with
         # exponential backoff, bounded by the create timeout window and the
@@ -7742,7 +7756,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             # "1320.0" with 400 (int32 unmarshal), instantly
                             # failing every sandbox create.
                             timeout=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
-                            allow_internet_access=(egress_policy not in ("deny_all", "selected")),
+                            allow_internet_access=(_egress_resolved.policy is None),
                             # deny_all/selected -> no internet; default/None ->
                             # internet allowed (e2b default). IMPORTANT
                             # (FAR-296 Phase 3b-3): ``selected`` DENIES ALL egress
@@ -7975,11 +7989,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # (an unresolvable host stays denied — fail-closed). The policy is
         # best-effort at the command level (each step is itself fail-closed) and
         # never wedges the dispatch.
+        # FAR-1085: use the resolved egress values from resolve_egress, not the
+        # raw config values, so the policy step enforces the same policy the
+        # capability derivation certifies.
+        _resolved_egress_for_policy = _egress_resolved.policy
+        _resolved_allowlist_for_policy = _egress_resolved.allowlist
         if _should_apply_sandbox_policy(
             read_only=read_only,
             git_credentials=git_credentials,
-            egress_policy=egress_policy,
-            egress_allowlist=egress_allowlist,
+            egress_policy=_resolved_egress_for_policy,
+            egress_allowlist=_resolved_allowlist_for_policy,
         ):
             from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
 
@@ -7994,8 +8013,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 sandbox,
                 read_only=read_only,
                 git_credentials=git_credentials,
-                egress_policy=egress_policy,
-                egress_allowlist=await _resolve_egress_allowlist(egress_allowlist),
+                egress_policy=_resolved_egress_for_policy,
+                egress_allowlist=await _resolve_egress_allowlist(_resolved_allowlist_for_policy),
                 allowed_hosts=node_def.get("allowed_hosts") if git_credentials == "scoped" else None,
             )
 
