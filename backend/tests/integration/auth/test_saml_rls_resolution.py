@@ -40,6 +40,7 @@ import os
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -54,6 +55,7 @@ from modulo.db.crud.sso_provider import (
     get_provider_by_provider_id,
     list_enabled_saml_providers,
 )
+from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 
@@ -191,15 +193,14 @@ async def app_session_factory(modulo_app_engine: AsyncEngine) -> AsyncGenerator[
     yield async_sessionmaker(modulo_app_engine, expire_on_commit=False, autobegin=False)
 
 
-# Two committed orgs; each owns one enabled SAML provider; org_a also owns one
-# OIDC provider so the org-login route's type mix is exercised. The orgs are
-# NOT backdated: the session-global "first org" that _set_default_rls_org
-# resolves is owned by auth/conftest.py's ``first_sso_org`` (shared with the
-# OIDC suite) — a module-local org must not race for that slot.
+# Two committed orgs: org_a created a DECADE earlier (it is reliably the
+# "first org" for _set_default_rls_org, even after conftest's own seeded
+# orgs); each org owns one enabled SAML provider; org_a also owns one OIDC
+# provider so the org-login route's type mix is exercised.
 @pytest_asyncio.fixture(scope="module")
 async def two_orgs(db_engine: AsyncEngine) -> dict[str, str]:
-    org_a_id, org_a_slug = await _create_org(db_engine, "a")
-    org_b_id, org_b_slug = await _create_org(db_engine, "b")
+    org_a_id, org_a_slug = await _create_org(db_engine, "a", created_at_offset_seconds=315_360_000)
+    org_b_id, org_b_slug = await _create_org(db_engine, "b", created_at_offset_seconds=0)
     saml_a = await _create_saml_provider(db_engine, org_id=org_a_id)
     oidc_a = await _create_oidc_provider(db_engine, org_id=org_a_id)
     saml_b = await _create_saml_provider(db_engine, org_id=org_b_id)
@@ -260,8 +261,6 @@ class TestSystemLegResolution:
     @pytest.mark.asyncio
     async def test_app_fallback_without_system_role_resolves_first_org(
         self,
-        db_engine: AsyncEngine,
-        first_sso_org: uuid.UUID,
         app_session_factory: async_sessionmaker[AsyncSession],
         two_orgs: dict[str, str],
     ) -> None:
@@ -269,19 +268,27 @@ class TestSystemLegResolution:
         the RLS binding now runs INSIDE a scoped transaction, so the first
         org's provider resolves and other orgs' providers fail closed.
 
-        The provider is attached to ``first_sso_org`` — the session-global
-        first org — not this module's ``org_a``: the fallback binds to the
-        globally earliest Organisation, which is a shared resource across the
-        one-Postgres integration suite (see ``auth/conftest.py``), so a
-        module-local org cannot claim it.
-        """
-        first_saml = await _create_saml_provider(db_engine, org_id=first_sso_org)
-        async with app_session_factory() as app_session:
-            provider = await _resolve_saml_for_route(first_saml, None, app_session)
-            assert provider.provider_id == first_saml
-            with pytest.raises(HTTPException) as exc_info:
-                await _resolve_saml_for_route(two_orgs["saml_b"], None, app_session)
-            assert exc_info.value.status_code == 404
+        ``_set_default_rls_org`` is pinned to org A. The real helper binds the
+        globally OLDEST org (``created_at`` asc, limit 1), and every
+        integration module shares one Postgres, so a competing module's
+        backdated org can win that single slot depending on fixture execution
+        order (non-deterministic under ``pytest-xdist``). Pinning the org keeps
+        the contract under test — the resolver opens a scoped transaction and
+        sets an RLS binding BEFORE the provider read — deterministic, while
+        still calling the REAL ``set_rls_org`` so the FAR-1058
+        no-transaction ``RuntimeError`` regression is still caught if the
+        scoped transaction is ever removed."""
+
+        async def _bind_org_a(session: AsyncSession) -> None:
+            await set_rls_org(session, uuid.UUID(two_orgs["org_a_id"]))
+
+        with patch("modulo.api.routes.sso._set_default_rls_org", new=_bind_org_a):
+            async with app_session_factory() as app_session:
+                provider = await _resolve_saml_for_route(two_orgs["saml_a"], None, app_session)
+                assert provider.provider_id == two_orgs["saml_a"]
+                with pytest.raises(HTTPException) as exc_info:
+                    await _resolve_saml_for_route(two_orgs["saml_b"], None, app_session)
+                assert exc_info.value.status_code == 404
 
 
 class TestRlsFailClosedBaseline:
