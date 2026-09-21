@@ -15,14 +15,13 @@ export async function loginThroughUi(page: Page, env: TestEnv): Promise<void> {
   await page.goto(env.credentials.loginPath)
 
   // Handles the multi-org slug step (if present) and guarantees the credential
-  // form is on screen, failing fast with a diagnostic if it is not.
-  await completeLoginForm(page, env)
+  // form is on screen, failing fast with a diagnostic if it is not. The
+  // returned selectors match whichever layout rendered (LoginView on
+  // single-org, OrgLoginView on multi-org).
+  const form = await completeLoginForm(page, env)
 
-  const emailInput = page.locator(env.credentials.loginFormEmailSelector)
-  const passwordInput = page.locator(env.credentials.loginFormPasswordSelector)
-
-  await emailInput.fill(env.credentials.admin.email)
-  await passwordInput.fill(env.credentials.admin.password)
-  await page.click('button[type="submit"]')
+  await page.fill(form.email, env.credentials.admin.email)
+  await page.fill(form.password, env.credentials.admin.password)
+  await page.click(form.submit)
   await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 60_000 })
 }

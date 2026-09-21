@@ -87,24 +87,67 @@ const LOGIN_STEP_TIMEOUT = 15_000
 const CREDENTIAL_FORM_TIMEOUT = 10_000
 
 /**
- * Fail fast unless the credential (email/password) form renders within the
- * budget.  Shared by every login entry point so a broken login page produces
- * one actionable diagnostic instead of a 30 s timeout per test.
+ * The credential-form selectors actually rendered by the target. Two layouts
+ * provide a credential form:
+ *  - LoginView's direct branch (`login-email`/`login-password`) on single-org
+ *    instances; and
+ *  - OrgLoginView (`org-login-email`/`org-login-password`) on multi-org
+ *    instances, reached after the slug step navigates to /login/<slug>.
+ * Callers must fill/submit whichever one rendered, not assume LoginView's.
  */
-async function requireCredentialForm(page: Page, env: TestEnv, slugStepTaken: boolean): Promise<void> {
-  const emailInput = page.locator(env.credentials.loginFormEmailSelector)
-  const visible = await emailInput
-    .waitFor({ state: 'visible', timeout: CREDENTIAL_FORM_TIMEOUT })
-    .then(() => true)
-    .catch(() => false)
-  if (visible) return
+export interface CredentialFormSelectors {
+  email: string
+  password: string
+  submit: string
+}
+
+function singleOrgCredentialForm(env: TestEnv): CredentialFormSelectors {
+  return {
+    email: env.credentials.loginFormEmailSelector,
+    password: env.credentials.loginFormPasswordSelector,
+    submit: env.credentials.loginFormSubmitSelector,
+  }
+}
+
+function orgCredentialForm(env: TestEnv): CredentialFormSelectors {
+  return {
+    email: env.credentials.orgLoginFormEmailSelector,
+    password: env.credentials.orgLoginFormPasswordSelector,
+    submit: env.credentials.orgLoginFormSubmitSelector,
+  }
+}
+
+/**
+ * Fail fast unless a credential (email/password) form renders within the
+ * budget, and return the selectors for whichever layout appeared. Shared by
+ * every login entry point so a broken login page produces one actionable
+ * diagnostic instead of a 30 s timeout per test.
+ */
+async function requireCredentialForm(
+  page: Page,
+  env: TestEnv,
+  slugStepTaken: boolean,
+): Promise<CredentialFormSelectors> {
+  const candidates = [singleOrgCredentialForm(env), orgCredentialForm(env)]
+  const resolved = await Promise.race(
+    candidates.map((form) =>
+      page
+        .locator(form.email)
+        .waitFor({ state: 'visible', timeout: CREDENTIAL_FORM_TIMEOUT })
+        .then(() => form)
+        .catch(() => null),
+    ),
+  )
+  if (resolved) return resolved
 
   const hint = slugStepTaken
-    ? `the org slug "${env.orgSlug}" may be wrong`
+    ? `the org slug "${env.orgSlug}" may be wrong, or /login/${env.orgSlug} did not render a credential form`
     : 'the login page layout or login-context API may have changed'
   throw new Error(
     `[login] Credential form did not appear within ${CREDENTIAL_FORM_TIMEOUT}ms ` +
-    `(slugStepTaken=${slugStepTaken}). Current URL: ${page.url()}. ${hint}. ` +
+    `(slugStepTaken=${slugStepTaken}). Neither ${env.credentials.loginFormEmailSelector} ` +
+    `nor ${env.credentials.orgLoginFormEmailSelector} became visible. ` +
+    `Current URL: ${page.url()}. ${hint}. ` +
     'Every test that signs in will fail the same way.',
   )
 }
@@ -112,11 +155,12 @@ async function requireCredentialForm(page: Page, env: TestEnv, slugStepTaken: bo
 /**
  * Advance past the multi-org slug-entry step (if present) and guarantee the
  * email/password credential form is on screen. Single-org instances render the
- * credential form directly on /login. Throws a diagnostic if the form never
- * appears, so every caller fails fast instead of timing out per test. Must be
- * called after navigating to /login.
+ * credential form directly on /login; multi-org instances render OrgLoginView's
+ * form after the slug step. Returns the selectors for whichever form appeared,
+ * and throws a diagnostic if neither does, so every caller fails fast instead
+ * of timing out per test. Must be called after navigating to /login.
  */
-export async function completeLoginForm(page: Page, env: TestEnv): Promise<void> {
+export async function completeLoginForm(page: Page, env: TestEnv): Promise<CredentialFormSelectors> {
   const slugInput = page.locator(env.credentials.orgSlugInputSelector)
   const emailInput = page.locator(env.credentials.loginFormEmailSelector)
 
@@ -133,18 +177,18 @@ export async function completeLoginForm(page: Page, env: TestEnv): Promise<void>
     await page.locator(env.credentials.orgSlugSubmitSelector).click()
   }
 
-  await requireCredentialForm(page, env, slugStepTaken)
+  return requireCredentialForm(page, env, slugStepTaken)
 }
 
 /**
  * Navigate to the login page and ensure the credential form is ready to fill.
  * Use this instead of a bare `page.goto('/login')` whenever the test is about
  * to enter credentials, so the suite works on both single-org and multi-org
- * targets.
+ * targets. Returns the selectors for whichever form rendered.
  */
-export async function openLoginForm(page: Page, env: TestEnv): Promise<void> {
+export async function openLoginForm(page: Page, env: TestEnv): Promise<CredentialFormSelectors> {
   await page.goto('/login')
-  await completeLoginForm(page, env)
+  return completeLoginForm(page, env)
 }
 
 export async function loginAsAdmin(page: Page, env: TestEnv) {

@@ -23,11 +23,11 @@ test.describe('Login Flow', () => {
       })
     }
 
-    await openLoginForm(page, env)
+    const form = await openLoginForm(page, env)
 
-    await page.fill(env.credentials.loginFormEmailSelector, 'wrong@example.com')
-    await page.fill(env.credentials.loginFormPasswordSelector, 'thisiswrong')
-    await page.click('button[type="submit"]')
+    await page.fill(form.email, 'wrong@example.com')
+    await page.fill(form.password, 'thisiswrong')
+    await page.click(form.submit)
 
     await expect(page.getByText(/Invalid credentials|Incorrect email or password/)).toBeVisible({ timeout: 15000 })
   })
@@ -84,11 +84,11 @@ test.describe('Login Flow', () => {
       })
     }
 
-    await openLoginForm(page, env)
+    const form = await openLoginForm(page, env)
 
-    await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
-    await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)
-    await page.click('button[type="submit"]')
+    await page.fill(form.email, env.credentials.admin.email)
+    await page.fill(form.password, env.credentials.admin.password)
+    await page.click(form.submit)
 
     await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 15000 })
     await expect(page.getByTestId('dashboard-title')).toContainText('Dashboard')

@@ -7,8 +7,18 @@ export interface TestEnv {
   orgSlug: string
   credentials: {
     admin: { email: string; password: string }
+    // Single-org credential form — LoginView's direct branch on /login.
     loginFormEmailSelector: string
     loginFormPasswordSelector: string
+    loginFormSubmitSelector: string
+    // Per-org credential form — OrgLoginView, reached after the slug step
+    // navigates to /login/<slug>. Multi-org targets render this form, not
+    // LoginView's, so completeLoginForm() resolves whichever appeared.
+    orgLoginFormEmailSelector: string
+    orgLoginFormPasswordSelector: string
+    orgLoginFormSubmitSelector: string
+    // Multi-org slug-entry step — LoginView's branch when more than one org
+    // is login-active.
     orgSlugInputSelector: string
     orgSlugSubmitSelector: string
     // Always /login.  On multi-org instances the slug step is completed by
@@ -22,6 +32,10 @@ export interface TestEnv {
 const TESTID_SELECTORS = {
   email: '[data-testid="login-email"]',
   password: '[data-testid="login-password"]',
+  submit: '[data-testid="login-submit"]',
+  orgEmail: '[data-testid="org-login-email"]',
+  orgPassword: '[data-testid="org-login-password"]',
+  orgSubmit: '[data-testid="org-login-submit"]',
   orgSlugInput: '[data-testid="login-org-slug"]',
   orgSlugSubmit: '[data-testid="login-org-entry-submit"]',
 }
@@ -38,6 +52,10 @@ const ENVS: Record<string, TestEnv> = {
       admin: { email: 'admin@example.com', password: 'password123' },
       loginFormEmailSelector: TESTID_SELECTORS.email,
       loginFormPasswordSelector: TESTID_SELECTORS.password,
+      loginFormSubmitSelector: TESTID_SELECTORS.submit,
+      orgLoginFormEmailSelector: TESTID_SELECTORS.orgEmail,
+      orgLoginFormPasswordSelector: TESTID_SELECTORS.orgPassword,
+      orgLoginFormSubmitSelector: TESTID_SELECTORS.orgSubmit,
       orgSlugInputSelector: TESTID_SELECTORS.orgSlugInput,
       orgSlugSubmitSelector: TESTID_SELECTORS.orgSlugSubmit,
       loginPath: '/login',
@@ -52,6 +70,10 @@ const ENVS: Record<string, TestEnv> = {
       admin: { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD },
       loginFormEmailSelector: TESTID_SELECTORS.email,
       loginFormPasswordSelector: TESTID_SELECTORS.password,
+      loginFormSubmitSelector: TESTID_SELECTORS.submit,
+      orgLoginFormEmailSelector: TESTID_SELECTORS.orgEmail,
+      orgLoginFormPasswordSelector: TESTID_SELECTORS.orgPassword,
+      orgLoginFormSubmitSelector: TESTID_SELECTORS.orgSubmit,
       orgSlugInputSelector: TESTID_SELECTORS.orgSlugInput,
       orgSlugSubmitSelector: TESTID_SELECTORS.orgSlugSubmit,
       loginPath: '/login',
@@ -64,6 +86,10 @@ const ENVS: Record<string, TestEnv> = {
       admin: { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD || 'admin123' },
       loginFormEmailSelector: TESTID_SELECTORS.email,
       loginFormPasswordSelector: TESTID_SELECTORS.password,
+      loginFormSubmitSelector: TESTID_SELECTORS.submit,
+      orgLoginFormEmailSelector: TESTID_SELECTORS.orgEmail,
+      orgLoginFormPasswordSelector: TESTID_SELECTORS.orgPassword,
+      orgLoginFormSubmitSelector: TESTID_SELECTORS.orgSubmit,
       orgSlugInputSelector: TESTID_SELECTORS.orgSlugInput,
       orgSlugSubmitSelector: TESTID_SELECTORS.orgSlugSubmit,
       loginPath: '/login',
