@@ -62,6 +62,7 @@ from modulo.db.crud.sso_provider import (
     get_provider_by_provider_id,
     list_enabled_oidc_providers,
 )
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings
 
 pytestmark = pytest.mark.integration
@@ -244,8 +245,26 @@ class TestSystemLegResolution:
         """``system_session=None`` (system role unprovisioned) → app fallback
         scoped to the FIRST org: org A's provider resolves, org B's fails
         closed (all-None). The scoped-transaction fix (FAR-1058 parity) makes
-        this work on a transaction-less autobegin=False app session."""
-        with patch("modulo.auth.sso.validate_outbound_url_async", AsyncMock()):
+        this work on a transaction-less autobegin=False app session.
+
+        ``_set_default_rls_org`` is pinned to org A. The real helper binds the
+        globally OLDEST org (``created_at`` asc, limit 1), and every
+        integration module shares one Postgres, so a competing module's
+        backdated org can win that single slot depending on fixture execution
+        order (non-deterministic under ``pytest-xdist``). Pinning the org keeps
+        the contract under test — the resolver opens a scoped transaction and
+        sets an RLS binding BEFORE the provider read — deterministic, while
+        still calling the REAL ``set_rls_org`` so the FAR-1058
+        no-transaction ``RuntimeError`` regression is still caught if the
+        scoped transaction is ever removed."""
+
+        async def _bind_org_a(session: AsyncSession) -> None:
+            await set_rls_org(session, uuid.UUID(two_orgs["org_a_id"]))
+
+        with (
+            patch("modulo.auth.sso.validate_outbound_url_async", AsyncMock()),
+            patch("modulo.auth.sso._set_default_rls_org", new=_bind_org_a),
+        ):
             async with app_session_factory() as app_session:
                 resolved_a = await _resolve_oidc_provider(two_orgs["oidc_a"], None, app_session, _settings())
                 assert not app_session.in_transaction()
