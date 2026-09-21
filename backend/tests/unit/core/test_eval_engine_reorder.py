@@ -8,6 +8,7 @@ Target file: backend/tests/unit/core/test_eval_engine_reorder.py
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from contextlib import asynccontextmanager
@@ -1173,3 +1174,147 @@ class TestRLSContextResetPerTransaction:
 
         assert rls_org.call_count == 2
         assert rls_ctx.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# OTel metric helpers — provider/meter-unavailable and error paths
+# ---------------------------------------------------------------------------
+
+
+class TestOtelMetricsHelpers:
+    """Cover the defensive paths of the persistence/suite metric helpers."""
+
+    def test_get_otel_meter_returns_none_when_provider_is_none(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        with patch("opentelemetry.metrics.get_meter_provider", return_value=None):
+            assert ep._get_otel_meter() is None
+
+    def test_get_otel_meter_swallows_exception(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        with patch("opentelemetry.metrics.get_meter_provider", side_effect=RuntimeError("boom")):
+            assert ep._get_otel_meter() is None
+
+    def test_ensure_metrics_returns_when_meter_unavailable(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        with (
+            patch.object(ep, "_get_otel_meter", return_value=None),
+            patch.object(ep, "_eval_result_persist_failures_total", None),
+            patch.object(ep, "_eval_suite_incomplete_total", None),
+        ):
+            ep._ensure_metrics()
+
+    def test_ensure_metrics_creates_both_counters_when_absent(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        meter = MagicMock()
+        with (
+            patch.object(ep, "_get_otel_meter", return_value=meter),
+            patch.object(ep, "_eval_result_persist_failures_total", None),
+            patch.object(ep, "_eval_suite_incomplete_total", None),
+        ):
+            ep._ensure_metrics()
+
+        assert meter.create_counter.call_count == 2
+
+    def test_ensure_metrics_creates_only_missing_suite_counter(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        meter = MagicMock()
+        with (
+            patch.object(ep, "_get_otel_meter", return_value=meter),
+            patch.object(ep, "_eval_result_persist_failures_total", MagicMock()),
+            patch.object(ep, "_eval_suite_incomplete_total", None),
+        ):
+            ep._ensure_metrics()
+
+        meter.create_counter.assert_called_once()
+
+    def test_ensure_metrics_creates_only_missing_failure_counter(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        meter = MagicMock()
+        with (
+            patch.object(ep, "_get_otel_meter", return_value=meter),
+            patch.object(ep, "_eval_result_persist_failures_total", None),
+            patch.object(ep, "_eval_suite_incomplete_total", MagicMock()),
+        ):
+            ep._ensure_metrics()
+
+        meter.create_counter.assert_called_once()
+
+    def test_record_persist_failure_increments_counter(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        counter = MagicMock()
+        with (
+            patch.object(ep, "_ensure_metrics"),
+            patch.object(ep, "_eval_result_persist_failures_total", counter),
+        ):
+            ep._record_persist_failure(failure_behaviour="warn")
+
+        counter.add.assert_called_once_with(1, {"failure_behaviour": "warn"})
+
+    def test_record_persist_failure_skips_when_counter_absent(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        with (
+            patch.object(ep, "_ensure_metrics"),
+            patch.object(ep, "_eval_result_persist_failures_total", None),
+        ):
+            ep._record_persist_failure(failure_behaviour="warn")
+
+    def test_record_persist_failure_swallows_metrics_error(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        with patch.object(ep, "_ensure_metrics", side_effect=RuntimeError("metrics down")):
+            ep._record_persist_failure(failure_behaviour="block")
+
+    def test_record_suite_incomplete_increments_counter(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        counter = MagicMock()
+        with (
+            patch.object(ep, "_ensure_metrics"),
+            patch.object(ep, "_eval_suite_incomplete_total", counter),
+        ):
+            ep._record_suite_incomplete(reason="incomplete_suite_set")
+
+        counter.add.assert_called_once_with(1, {"reason": "incomplete_suite_set"})
+
+    def test_record_suite_incomplete_skips_when_counter_absent(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        with (
+            patch.object(ep, "_ensure_metrics"),
+            patch.object(ep, "_eval_suite_incomplete_total", None),
+        ):
+            ep._record_suite_incomplete(reason="incomplete_suite_set")
+
+    def test_record_suite_incomplete_swallows_metrics_error(self) -> None:
+        from modulo.core.pipeline_engine import eval_persist_order as ep
+
+        with patch.object(ep, "_ensure_metrics", side_effect=RuntimeError("metrics down")):
+            ep._record_suite_incomplete(reason="incomplete_suite_set")
+
+    async def test_cancelled_error_propagates_from_persist(self) -> None:
+        """A CancelledError during persistence is re-raised, not swallowed."""
+
+        @asynccontextmanager
+        async def _cancelled_factory():
+            raise asyncio.CancelledError
+            yield  # type: ignore[misc]  # pragma: no cover
+
+        eval_def = _eval_def(name="cancelled-eval", pattern="pass", failure_behaviour="block")
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_evals_persist_before_decide(
+                eval_defs=[eval_def],
+                resolve_eval_target=lambda ed: _output("pass"),
+                run_id=uuid4(),
+                org_id=uuid4(),
+                session_factory=_cancelled_factory,
+                node_id=_NODE_ID,
+            )
