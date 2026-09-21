@@ -62,8 +62,10 @@ jobs:
         shell: bash
         # Path filter mirroring the runner topology (FAR-773 scope): the
         # runtime provider + bundled runner + dispatch/exec surface, the
-        # runner overlay(s), and this harness suite. force=true (weekly
-        # backstop) skips the filter.
+        # runner overlay(s), this harness suite, and this workflow itself (so a
+        # change to the boot/retry logic is exercised by the harness it guards
+        # instead of landing untested). force=true (weekly backstop) skips the
+        # filter.
         working-directory: .
         # Mapped through the env block (S7630): GitHub expressions inside a
         # run block are interpolated before the shell parses the script, so
@@ -113,7 +115,7 @@ jobs:
             echo "Manual dispatch - running harness unconditionally."
             exit 0
           fi
-          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/executor.py backend/src/modulo/core/pipeline_engine/node_runner.py backend/src/modulo/core/cron_helpers.py backend/src/modulo/core/runner_capacity.py deploy/compose/ backend/tests/docker/test_bundled_runner_harness.py backend/tests/docker/test_runners_strip_e2e.py"
+          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/executor.py backend/src/modulo/core/pipeline_engine/node_runner.py backend/src/modulo/core/cron_helpers.py backend/src/modulo/core/runner_capacity.py deploy/compose/ backend/tests/docker/test_bundled_runner_harness.py backend/tests/docker/test_runners_strip_e2e.py .github/workflows/runner-ci-harness.yml"
           # `rc=0; out=$(...)` survives Actions' `bash -e -o pipefail`: a bare
           # `out=$(...)` aborts the step before the failure can be inspected,
           # and swallowing the error into empty output silently SKIPS the
