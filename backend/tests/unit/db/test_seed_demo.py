@@ -444,7 +444,7 @@ async def test_seed_demo_runtime_uses_provided_session_factory(monkeypatch: pyte
 
 
 # ---------------------------------------------------------------------------
-# Concurrency simulations (qa-iterate iteration 2): soft-deleted duplicate
+# Concurrency simulations (review iteration 2): soft-deleted duplicate
 # slugs and savepoint IntegrityError recovery.
 # ---------------------------------------------------------------------------
 

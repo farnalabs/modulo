@@ -1,7 +1,7 @@
 """Step definitions for the Azure Key Vault connector BDD feature.
 
 Wires ``features/connectors/azure_key_vault.feature`` into the executing
-suite (the improve-architecture product-map walk) by driving the REAL
+BDD suite by driving the REAL
 ``AzureKeyVaultConnector`` against a respx-mocked Azure Key Vault REST API
 (api-version 7.4) — mirroring ``backend/tests/unit/connectors/test_azure_key_vault.py``
 so the executing BDD surface locks the same contract the unit suite does:

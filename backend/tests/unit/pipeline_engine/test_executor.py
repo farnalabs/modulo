@@ -1727,7 +1727,7 @@ async def test_interrupt_capture_failure_still_persists_gate_with_null_context()
 
 
 async def test_interrupt_capture_db_error_runs_inside_savepoint_and_never_blocks_the_interrupt():
-    """qa-iterate iteration-1 MAJOR-2 (FAR-613): the briefing capture performs
+    """Review iteration 1, MAJOR-2 (FAR-613): the briefing capture performs
     DB reads on the SHARED session inside the interrupt handler's outer
     transaction. A DB-level capture error must be savepoint-scoped — the
     handler opens a ``begin_nested()`` savepoint around the capture, the

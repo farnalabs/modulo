@@ -1,4 +1,4 @@
-"""Process-local demo rate-limit floor tests (FAR-535 qa-iterate iteration 2).
+"""Process-local demo rate-limit floor tests (review iteration 2, FAR-535).
 
 When RateLimitMiddleware's registry cannot enforce, every route is normally
 fail-open — existing behaviour. The demo auto-login endpoint is the exception:

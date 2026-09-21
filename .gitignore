@@ -81,7 +81,7 @@ stryker.log
 .opencode/cache/
 .opencode/*.session
 
-# Agent worktrees (created by improve-codebase / qa-iterate)
+# Agent worktrees (created by automated delivery workflows)
 .agents/worktrees/
 
 # Local — machine-local tooling, scripts, resources.
