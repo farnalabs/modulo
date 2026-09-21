@@ -136,11 +136,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Remove schema assignment",
         }
     ),
-    "tests/bdd/features/composites/composite_library.feature": frozenset(
-        {
-            "Composite content_json validation — missing required fields returns error",
-        }
-    ),
     "tests/bdd/features/errors/recovery.feature": frozenset(
         {
             "Already running run cannot be recovered",

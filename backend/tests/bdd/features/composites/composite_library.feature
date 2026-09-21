@@ -25,9 +25,12 @@ Feature: Composite Library
     And the new primitive has source "local"
     And the new primitive has forked_from set to the community primitive id
 
-  @awaiting-implementation
   Scenario: Composite content_json validation — missing required fields returns error
     When the user creates a library primitive with primitive_type "composite" and empty content_json
+    Then the response status is 422
+
+  Scenario: Composite content_json validation on update — missing required fields returns error
+    When the user updates a composite library primitive with empty content_json
     Then the response status is 422
 
   Scenario: Save composite from pipeline via save-as-composite
