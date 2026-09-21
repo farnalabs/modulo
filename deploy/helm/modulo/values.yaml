@@ -1,0 +1,260 @@
+# ============================================================================
+# Modulo Helm Chart — values.yaml
+# ============================================================================
+# Vendor-neutral defaults. Runs unmodified on EKS/AKS/GKE with sensible
+# resource limits and pod security policies.
+#
+# External Postgres and Redis are the defaults — the chart does NOT deploy
+# a database. Set postgres.enabled=true only for development/testing.
+#
+# Secrets: no literal secrets live in this file. Use existingSecret references
+# or set values that get rendered into a Secret resource only when explicitly
+# configured. See the README for details.
+# ============================================================================
+
+# -- Global settings --------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Namespace --------------------------------------------------------------
+namespace:
+  create: true
+  annotations:
+    # Ownership annotation so operators can identify chart-managed namespaces.
+    # The chart sets this automatically; do not remove.
+    app.kubernetes.io/managed-by: helm
+
+# -- ResourceQuota ----------------------------------------------------------
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "20"
+
+# -- LimitRange -------------------------------------------------------------
+limitRange:
+  enabled: true
+  default:
+    cpu: "500m"
+    memory: "512Mi"
+  defaultRequest:
+    cpu: "100m"
+    memory: "128Mi"
+
+# -- Pod Security Admission -------------------------------------------------
+# Apply "restricted" enforcement at namespace level. All Modulo containers run
+# as non-root with drop-all capabilities, so this is safe.
+podSecurity:
+  enforce: restricted
+  audit: restricted
+  warn: restricted
+
+# -- Service Account --------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# -- External Postgres (default) --------------------------------------------
+postgres:
+  enabled: false
+  host: ""
+  port: 5432
+  database: modulo
+  username: modulo
+  # Password reference: use existingSecret or set password (rendered into Secret).
+  existingSecret: ""
+  password: ""
+
+# -- External Redis (default) -----------------------------------------------
+redis:
+  enabled: true
+  # When embedded=true, deploy a Redis container in the chart.
+  # When embedded=false (default), use an external Redis.
+  embedded: false
+  host: redis-master
+  port: 6379
+  db: 0
+  # Password reference: use existingSecret or set password (rendered into Secret).
+  existingSecret: ""
+  password: ""
+
+# -- Embedded Redis (only when redis.embedded=true) -------------------------
+redisChart:
+  enabled: false
+
+# -- Backend ----------------------------------------------------------------
+backend:
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/farnalabs/modulo/backend
+    # Digest takes precedence over tag when both are set.
+    # Example: sha256:abc123...
+    digest: ""
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8000
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  # Health checks derived from deploy/fly/nginx.conf and backend /healthz/ready.
+  livenessProbe:
+    httpGet:
+      path: /healthz/ready
+      port: http-backend
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /healthz/ready
+      port: http-backend
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  env: {}
+  # Additional environment variables (key: value).
+  # Example:
+  #   MODULO_LOG_LEVEL: debug
+  #   MODULO_DEV_MODE: "true"
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# -- SAQ Runner (runs pipeline jobs) ----------------------------------------
+saqRunner:
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/farnalabs/modulo/backend
+    digest: ""
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  # Command derived from docker-compose.yml: python -m saq modulo.core.saq_worker.runs_settings
+  command: ["python", "-m", "saq", "modulo.core.saq_worker.runs_settings"]
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  env: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# -- SAQ System (scheduler + reconcile + system crons) ----------------------
+saqSystem:
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/farnalabs/modulo/backend
+    digest: ""
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  # Command derived from docker-compose.yml: python -m modulo.core.saq_worker
+  command: ["python", "-m", "modulo.core.saq_worker"]
+
+  service:
+    type: ClusterIP
+    port: 8081
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  env: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# -- Frontend (nginx SPA) ---------------------------------------------------
+frontend:
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/farnalabs/modulo/frontend
+    digest: ""
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+  # Frontend is a static SPA — liveness/readiness are simple.
+  livenessProbe:
+    httpGet:
+      path: /
+      port: http-frontend
+    initialDelaySeconds: 5
+    periodSeconds: 15
+  readinessProbe:
+    httpGet:
+      path: /
+      port: http-frontend
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+  env: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# -- Ingress ----------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: modulo.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# -- HPA --------------------------------------------------------------------
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80

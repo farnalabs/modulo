@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "modulo.fullname" . }}-saq-system
+  namespace: {{ include "modulo.namespace" . }}
+  labels:
+    {{- include "modulo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: saq-system
+spec:
+  replicas: {{ .Values.saqSystem.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "modulo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: saq-system
+  template:
+    metadata:
+      labels:
+        {{- include "modulo.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: saq-system
+      {{- with .Values.saqSystem.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: saq-system
+          image: "{{ .Values.saqSystem.image.repository }}:{{ .Values.saqSystem.image.tag | default "latest" }}"
+          {{- if .Values.saqSystem.image.digest }}
+          image: "{{ .Values.saqSystem.image.repository }}@{{ .Values.saqSystem.image.digest }}"
+          {{- end }}
+          imagePullPolicy: {{ .Values.saqSystem.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.saqSystem.command | nindent 12 }}
+          ports:
+            - name: http-saq-system
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.fullname" . }}-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.fullname" . }}-secrets
+                  key: REDIS_URL
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.fullname" . }}-secrets
+                  key: SECRET_KEY
+                  optional: true
+            - name: FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.fullname" . }}-secrets
+                  key: FERNET_KEY
+                  optional: true
+            - name: SAQ_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.fullname" . }}-secrets
+                  key: SAQ_AUTH_USERNAME
+                  optional: true
+            - name: SAQ_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.fullname" . }}-secrets
+                  key: SAQ_AUTH_PASSWORD
+                  optional: true
+            {{- range $key, $value := .Values.saqSystem.env }}
+            {{- if and (ne $key "DATABASE_URL") (ne $key "REDIS_URL") (ne $key "SECRET_KEY") (ne $key "FERNET_KEY") (ne $key "SAQ_AUTH_USERNAME") (ne $key "SAQ_AUTH_PASSWORD") }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "modulo.fullname" . }}-config
+          resources:
+            {{- toYaml .Values.saqSystem.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.saqSystem.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.saqSystem.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.saqSystem.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
