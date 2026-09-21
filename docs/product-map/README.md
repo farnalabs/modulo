@@ -466,6 +466,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > individual + paginated retrieval (redacted), PATCH re-encrypting fresh
 > credentials, 204 DELETE, and the org-isolation 404 on a foreign-org
 > fetch/delete. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-21):** closed `feat-sso`'s "No BDD scenarios
+> for admin provider CRUD" gap (`auth/sso-provider-ui.md`). Registered the new
+> `auth/sso_admin_crud.feature` into the executing BDD suite from the new
+> `steps/test_sso_admin_crud.py`, driving the real `/api/v1/admin/sso`
+> provider CRUD routes with only the DB CRUD, RLS and outbound-network seams
+> patched (the TestClient + mock-org-session pattern of the conftest): 16
+> scenarios — 200 provider list with type badges, 201 OIDC create (client
+> secret never echoed, computed callback URL) and SAML 2.0 create, the FAR-855
+> unrestricted-provisioning 422 while the flag is off, duplicate-name 409,
+> 422 invalid provider type, 200 update / toggle, 400 empty update body,
+> 204 delete, 404 on a missing provider, the OIDC discovery-document and
+> SAML metadata-XML connection tests, group-to-team mapping set/get, and the
+> non-admin 403. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
