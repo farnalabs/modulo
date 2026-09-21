@@ -383,7 +383,7 @@ def _patch_mock_scores(
     gate_config: dict[str, Any],
     eval_defs: list[Any] | None,
 ) -> None:
-    """Patch EvalEngine.evaluate to use _mock_score per eval definition."""
+    """Patch EvalEngine.evaluate_result to use _mock_score per eval definition."""
     from modulo.core.eval_engine import EvalEngine, EvalResult
 
     score_map: dict[str, float] = {}
@@ -392,7 +392,7 @@ def _patch_mock_scores(
         if ms is not None:
             score_map[ed["name"]] = float(ms)
 
-    def _mock_evaluate(self, output, eval_def, *, run_id=None, llm_judge_callable=None):
+    def _mock_evaluate_result(self, output, eval_def, *, run_id=None, llm_judge_callable=None):
         mock_score = score_map.get(eval_def.name)
         if mock_score is not None:
             _passed = mock_score >= 0.5
@@ -409,7 +409,7 @@ def _patch_mock_scores(
             detail="mocked",
         )
 
-    _patcher = patch.object(EvalEngine, "evaluate", _mock_evaluate)
+    _patcher = patch.object(EvalEngine, "evaluate_result", _mock_evaluate_result)
     _patcher.start()
     try:
         _run_gate_fn(ctx, gate_config, state, eval_defs)
@@ -424,15 +424,20 @@ def _patch_eval_engine(
     gate_config: dict[str, Any],
     eval_defs: list[Any] | None,
 ) -> None:
-    """Patch EvalEngine.evaluate to return mock result, respecting failure_behaviour."""
-    from modulo.core.eval_engine import EvalBlockedError, EvalEngine, EvalResult
+    """Patch EvalEngine.evaluate_result to return mock result.
+
+    ``evaluate_result`` never raises ``EvalBlockedError``; the shared
+    persist-before-decide helper applies the block/warn decision after the
+    result is returned, so the mock must not raise either.
+    """
+    from modulo.core.eval_engine import EvalEngine, EvalResult
 
     _passed = mock_result.get("passed", False)
     _score = mock_result.get("score")
     _detail = mock_result.get("detail", "")
 
-    def _mock_evaluate(self, output, eval_def, *, run_id=None, llm_judge_callable=None):
-        result = EvalResult(
+    def _mock_evaluate_result(self, output, eval_def, *, run_id=None, llm_judge_callable=None):
+        return EvalResult(
             id=uuid.uuid4(),
             run_id=uuid.uuid4(),
             node_id="n1",
@@ -441,12 +446,8 @@ def _patch_eval_engine(
             score=_score,
             detail=_detail,
         )
-        # Simulate real EvalEngine behavior: block on failure.
-        if not result.passed and eval_def.failure_behaviour == "block":
-            raise EvalBlockedError(eval_def.name, result.detail)
-        return result
 
-    _patcher = patch.object(EvalEngine, "evaluate", _mock_evaluate)
+    _patcher = patch.object(EvalEngine, "evaluate_result", _mock_evaluate_result)
     _patcher.start()
     try:
         _run_gate_fn(ctx, gate_config, state, eval_defs)
