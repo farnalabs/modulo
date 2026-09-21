@@ -5,14 +5,14 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
  *
  * Exercises the combination where:
  *   1. An SSO provider is configured in "Email domain allowlist" mode with
- *      allowed_domains = ['allowlisted.example.com'] and default_role = 'viewer'.
+ *      allowed_domains = ['allowlisted.example.com'] and default_role = 'runner'.
  *   2. An admin invites a user whose domain is NOT allowlisted
  *      (invited@otherdomain.com) with org_role = 'operator'.
  *   3. The invited user accepts the invitation via the Accept Invite UI.
  *
  * Assertions:
  *   - The resulting membership carries the invitation's role (operator),
- *     NOT the provider's default role (viewer).
+ *     NOT the provider's default role (runner).
  *   - The invitation is consumed exactly once (no longer in the pending list).
  *
  * Staging safety:
@@ -31,7 +31,9 @@ const PROVIDER_NAME = `E2E Allowlist ${UNIQUE}`
 const INVITED_EMAIL = `invited-${UNIQUE}@otherdomain.com`
 const INVITED_PASSWORD = 'TestPass123!'
 const INVITED_ROLE = 'operator'
-const PROVIDER_DEFAULT_ROLE = 'viewer'
+// SSO providers may only JIT-provision operator|runner (SsoProviderCreate's
+// default_role pattern); 'viewer'/'admin' are rejected with a 422.
+const PROVIDER_DEFAULT_ROLE = 'runner'
 const ALLOWED_DOMAIN = 'allowlisted.example.com'
 
 let createdProviderId: string | null = null
@@ -46,9 +48,12 @@ let createdUserId: string | null = null
 test.afterEach(async ({ page, env }) => {
   if (env.name === 'local') return
 
-  // Navigate to a known authenticated page so localStorage has a fresh token.
-  // The page may be on /accept-invite (unauthenticated) after the invite flow.
-  await loginAsAdmin(page, env)
+  // Land on a known authenticated page so the cleanup API calls below have a
+  // valid token and `base` resolves to the origin. The admin session from
+  // step 1 is still live — accepting an invitation never mints one — so do NOT
+  // re-drive the login form: the router redirects an already-authenticated
+  // visitor away from /login, which makes loginAsAdmin() throw.
+  await page.goto('/admin/users').catch(() => {})
 
   const token = await page.evaluate(() => localStorage.getItem('modulo_access_token') ?? '')
   const base = page.url().replace(/\/admin\/users$/, '').replace(/\/$/, '')
@@ -106,7 +111,7 @@ test.describe('SSO Allowlist + Invitation', { tag: '@regression' }, () => {
       // ── Step 2: Seed SSO provider via API (DISABLED, domain-allowlist mode) ──
       //   auto_provision: true  → mode 2 (domain allowlist)
       //   allowed_domains: [ALLOWED_DOMAIN]
-      //   default_role: 'viewer'  → the role we expect to be overridden
+      //   default_role: 'runner'  → the role we expect to be overridden
       //   enabled: false  → NEVER appears on the login page
       const createProvResp = await page.request.post(`${base}/api/v1/admin/sso/providers`, {
         headers,
@@ -134,7 +139,7 @@ test.describe('SSO Allowlist + Invitation', { tag: '@regression' }, () => {
 
       // ── Step 3: Create invitation for a non-allowlisted domain ──
       //   The email domain (otherdomain.com) is NOT in allowed_domains.
-      //   The invitation role (operator) differs from the provider default (viewer).
+      //   The invitation role (operator) differs from the provider default (runner).
       const inviteResp = await page.request.post(`${base}/api/v1/admin/users/invite`, {
         headers,
         data: {
@@ -171,8 +176,11 @@ test.describe('SSO Allowlist + Invitation', { tag: '@regression' }, () => {
       await expect(page.getByTestId('accept-invite-success')).toBeVisible({ timeout: 15000 })
 
       // ── Step 5: Verify the invitation is consumed ──
-      //   Re-login as admin and check the pending invitations list.
-      await loginAsAdmin(page, env)
+      //   Reuse the live admin session from step 1 (accepting an invitation
+      //   never mints a session) and check the pending invitations list. The
+      //   router redirects an already-authenticated visitor away from /login,
+      //   so re-driving the login form here would throw.
+      await page.goto('/admin/users')
       const tokenAfter = await page.evaluate(() => localStorage.getItem('modulo_access_token') ?? '')
 
       const invitationsResp = await page.request.get(
@@ -208,7 +216,7 @@ test.describe('SSO Allowlist + Invitation', { tag: '@regression' }, () => {
       createdUserId = invitedUser.id
 
       // CRITICAL ASSERTION: the membership role must be the invitation's role
-      // (operator), NOT the provider's default role (viewer).
+      // (operator), NOT the provider's default role (runner).
       expect(invitedUser.org_role).toBe(INVITED_ROLE)
       expect(invitedUser.org_role).not.toBe(PROVIDER_DEFAULT_ROLE)
     },
