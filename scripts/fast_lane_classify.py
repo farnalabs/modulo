@@ -33,7 +33,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -205,6 +205,115 @@ def check_cap(
     if count >= cap:
         return False, f"fast-lane cap reached: {count}/{cap} in last {window_hours}h"
     return True, f"fast-lane cap OK: {count}/{cap} in last {window_hours}h"
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: suspension check (24h circuit breaker)
+# ---------------------------------------------------------------------------
+
+# Repository variable set by the post-merge review workflow when a critical or
+# major finding is discovered on a fast-lane-merged PR.  The variable holds an
+# ISO-8601 UTC timestamp; while the current time is before that timestamp the
+# fast lane is suspended and every fast-lane candidate is denied eligibility.
+
+_SUSPENSION_VAR = "FAST_LANE_SUSPENDED_UNTIL"
+_SUSPENSION_REASON_VAR = "FAST_LANE_SUSPENSION_REASON"
+
+
+def check_suspension(
+    repo: str,
+    gh_token: str | None = None,
+) -> tuple[bool, str]:
+    """Check whether the fast lane is currently suspended.
+
+    Reads the ``FAST_LANE_SUSPENDED_UNTIL`` repository variable via the
+    GitHub API and compares it to the current UTC time.
+
+    Returns ``(eligible, detail)``.
+
+    Fail-closed: if the variable cannot be read, the check denies
+    eligibility — an unreadable suspension state must never be treated as
+    "not suspended".
+    """
+    env = os.environ.copy()
+    if gh_token:
+        env["GH_TOKEN"] = gh_token
+
+    safe_repo = _safe_repo(repo)
+    if safe_repo is None:
+        return False, "suspension check denied (fail-closed): invalid repo"
+
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{safe_repo}/actions/variables/{_SUSPENSION_VAR}",
+        "--jq",
+        ".value",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            env=env,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        return False, f"suspension check denied (fail-closed): {exc}"
+
+    # gh api exits 0 on success; non-zero means the variable does not exist
+    # or the token lacks vars:read — both are "cannot determine" → fail closed.
+    if result.returncode != 0:
+        # Exit 4 is "Not Found" for a missing variable — not an error, just
+        # no active suspension.  Treat it as "not suspended" (eligible).
+        stderr = result.stderr.strip()
+        if result.returncode == 4 and ("Not Found" in stderr or "not found" in stderr.lower()):
+            return True, "no active suspension (variable not set)"
+        return False, f"suspension check denied (fail-closed): API error: {stderr}"
+
+    raw_value = result.stdout.strip()
+    if not raw_value:
+        return True, "no active suspension (variable empty)"
+
+    try:
+        suspended_until = datetime.fromisoformat(raw_value)
+    except (ValueError, TypeError):
+        return False, f"suspension check denied (fail-closed): unparseable timestamp {raw_value!r}"
+
+    now = datetime.now(tz=UTC)
+    if now < suspended_until:
+        # Active suspension — read the reason variable (best-effort; missing
+        # reason is acceptable).
+        reason = ""
+        reason_cmd = [
+            "gh",
+            "api",
+            f"repos/{safe_repo}/actions/variables/{_SUSPENSION_REASON_VAR}",
+            "--jq",
+            ".value",
+        ]
+        try:
+            reason_result = subprocess.run(
+                reason_cmd,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+                env=env,
+            )
+            if reason_result.returncode == 0:
+                reason = reason_result.stdout.strip()
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+        reason_text = f" — reason: {reason}" if reason else ""
+        return (
+            False,
+            (f"fast lane suspended until {suspended_until.isoformat()}{reason_text} (current time {now.isoformat()})"),
+        )
+
+    return True, f"suspension expired at {suspended_until.isoformat()} (current time {now.isoformat()})"
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +649,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"::error::fast-lane: {cap_detail}")
         return 1
 
-    # 2b. No test-weakening
+    # 2b. Suspension check (ADR 041 D3.4 — 24h circuit breaker)
+    susp_ok, susp_detail = check_suspension(safe_repo, gh_token)
+    print(f"  suspension: {susp_detail}")
+    if not susp_ok:
+        print(f"::error::fast-lane: {susp_detail}")
+        return 1
+
+    # 2c. No test-weakening
     repo_root = Path(__file__).resolve().parent.parent
     weaken_ok, weaken_violations = check_no_test_weakening(
         repo_root,
@@ -554,7 +670,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("::error::fast-lane: test-weakening detected — demoted to class-B")
         return 1
 
-    # 2c. SHA-pinning
+    # 2d. SHA-pinning
     pin_ok, pin_detail = check_sha_pinning(
         safe_repo,
         int(safe_pr),

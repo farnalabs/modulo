@@ -1,0 +1,157 @@
+name: "Fast Lane: Post-merge review"
+
+# ADR 041 Decision 3.4: "Post-merge review, not no review."
+#
+# When a PR is merged under the fast lane, the PR Reviewer runs on the squash
+# diff.  A critical/major finding raises a follow-up fix through the normal
+# lane and suspends the fast lane for 24 hours.
+#
+# Architectural constraint (known, not solvable in this workflow alone):
+#   - The PR Reviewer posts reviews via the GitHub formal review API.
+#   - GitHub refuses to post a review on a merged/closed PR (HTTP 422).
+#   - The review result therefore cannot be posted back to GitHub.
+#
+# What this workflow DOES:
+#   1. Detects fast-lane merge commits on main (the [auto-merge: test-infra]
+#      marker in the squash commit message).
+#   2. Dispatches the PR Reviewer webhook to app.modulo.run for analysis.
+#   3. The Modulo app (PR Reviewer pipeline) analyses the squash diff and
+#      can raise follow-up PRs and set the suspension via the Modulo admin API.
+#
+# What remains for full Deliverable 2:
+#   - The Modulo app must set FAST_LANE_SUSPENDED_UNTIL (repo variable) via
+#     the GitHub API when the PR Reviewer finds a critical/major issue.
+#   - The Modulo app must raise a follow-up PR through the normal lane.
+#   - These are app-side changes, not workflow changes.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  detect-fast-lane-merge:
+    name: Detect fast-lane merge commits
+    runs-on: ubicloud-standard-2
+    if: >-
+      !contains(github.event.head_commit.message, '[fast-lane-post-merge-skip]')
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Check if latest commit is a fast-lane merge
+        id: detect
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message || '' }}
+          COMMIT_AUTHOR: ${{ github.event.head_commit.author.username || '' }}
+          COMMIT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          # Fast-lane merges carry [auto-merge: test-infra] in the squash
+          # title and are authored by modulo-merge-bot.
+          if echo "$COMMIT_MSG" | grep -qi '\[auto-merge: test-infra\]'; then
+            echo "is_fast_lane=true" >> "$GITHUB_OUTPUT"
+            echo "Fast-lane merge detected: ${COMMIT_SHA:0:12}"
+          else
+            echo "is_fast_lane=false" >> "$GITHUB_OUTPUT"
+            echo "Not a fast-lane merge — skipping."
+          fi
+
+      - name: Extract PR number from merge commit
+        if: steps.detect.outputs.is_fast_lane == 'true'
+        id: pr
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message || '' }}
+        shell: bash
+        run: |
+          # The squash commit body contains "Merge PR #N: <title>"
+          PR_NUM=$(echo "$COMMIT_MSG" | grep -oP 'PR #\K\d+' | head -1)
+          if [ -n "$PR_NUM" ]; then
+            echo "pr_number=$PR_NUM" >> "$GITHUB_OUTPUT"
+            echo "Extracted PR #$PR_NUM from merge commit."
+          else
+            echo "Could not extract PR number from commit message."
+            echo "pr_number=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch PR Reviewer for post-merge review
+        if: steps.detect.outputs.is_fast_lane == 'true' && steps.pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        shell: bash
+        run: |
+          echo "Dispatching PR Reviewer for post-merge review of PR #${PR_NUMBER}..."
+
+          # Fetch PR details for the webhook payload.
+          PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" \
+            --jq '{head_sha: .head.sha, head_branch: .head.ref}' 2>/dev/null || echo "")
+          if [ -z "$PR_JSON" ]; then
+            echo "::warning::Could not fetch PR #${PR_NUMBER} details — PR may have been deleted after merge. Skipping review dispatch."
+            exit 0
+          fi
+          HEAD_SHA=$(echo "$PR_JSON" | jq -r '.head_sha')
+          HEAD_BRANCH=$(echo "$PR_JSON" | jq -r '.head_branch')
+
+          BODY=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --argjson prNumber "${PR_NUMBER}" \
+            --arg sha "${HEAD_SHA}" \
+            --arg ref "${HEAD_BRANCH}" \
+            --arg action "post_merge_review" \
+            '{action: $action, repository: {full_name: $repo}, pull_request: {number: $prNumber, head: {sha: $sha, ref: $ref}}}')
+
+          RESPONSE_FILE=$(mktemp)
+          trap 'rm -f "${RESPONSE_FILE}"' EXIT
+          ACCEPTED=false
+
+          for i in 1 2 3 4 5; do
+            TIMESTAMP=$(date +%s)
+            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+            : > "${RESPONSE_FILE}"
+            HTTP_CODE=$(curl -s --connect-timeout 10 --max-time 60 \
+              -o "${RESPONSE_FILE}" -w '%{http_code}' \
+              -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}") || HTTP_CODE="000"
+
+            echo "PR Reviewer webhook responded with HTTP ${HTTP_CODE} (attempt ${i}/5)"
+            cat "${RESPONSE_FILE}" || true
+            echo
+
+            case "${HTTP_CODE}" in
+              2*)
+                echo "Webhook POST accepted."
+                ACCEPTED=true
+                break
+                ;;
+              429|000|5*)
+                if [ "${i}" -eq 5 ]; then
+                  break
+                fi
+                DELAY=$((2 ** (i - 1) * 5))
+                echo "::warning::PR Reviewer webhook returned HTTP ${HTTP_CODE} (attempt ${i}/5) - retrying in ${DELAY}s"
+                sleep "${DELAY}"
+                ;;
+              *)
+                echo "::error::PR Reviewer webhook POST failed with HTTP ${HTTP_CODE} (non-retryable)."
+                exit 1
+                ;;
+            esac
+          done
+
+          if [ "${ACCEPTED}" != "true" ]; then
+            echo "::error::PR Reviewer webhook POST failed after 5 attempts. Post-merge review not dispatched."
+            echo "::notice::The fast-lane circuit breaker (suspension) must be set manually or via Modulo app infrastructure."
+            exit 1
+          fi
+
+          echo "Post-merge review dispatched for PR #${PR_NUMBER}."
+          echo "::notice::The review runs asynchronously on app.modulo.run. If a critical/major finding is discovered, the Modulo app will raise a follow-up PR through the normal lane and set the fast-lane suspension."

@@ -26,6 +26,7 @@ from fast_lane_classify import (  # noqa: E402
     check_cap,
     check_no_test_weakening,
     check_sha_pinning,
+    check_suspension,
     classify_path,
     classify_paths,
 )
@@ -243,12 +244,14 @@ class TestMainExitCode:
 
     @patch("fast_lane_classify.check_sha_pinning", return_value=(True, "SHA-pinned"))
     @patch("fast_lane_classify.check_no_test_weakening", return_value=(True, []))
+    @patch("fast_lane_classify.check_suspension", return_value=(True, "no suspension"))
     @patch("fast_lane_classify.check_cap", return_value=(True, "cap OK"))
     @patch("fast_lane_classify.subprocess.run")
     def test_class_a_with_label_exits_zero(
         self,
         mock_run: MagicMock,
         mock_cap: MagicMock,
+        mock_susp: MagicMock,
         mock_weaken: MagicMock,
         mock_pin: MagicMock,
     ) -> None:
@@ -374,3 +377,165 @@ class TestCheckNoTestWeakeningGitFailure:
         assert eligible is False
         assert len(violations) == 1
         assert "fail-closed" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: suspension check (24h circuit breaker)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckSuspensionFailClosed:
+    """check_suspension must deny eligibility when it cannot resolve."""
+
+    def test_invalid_repo_denies(self) -> None:
+        eligible, detail = check_suspension("invalid repo!; rm -rf /")
+        assert eligible is False
+        assert "fail-closed" in detail
+        assert "invalid repo" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_api_error_denies(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=1, stderr="rate limited", stdout="")
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is False
+        assert "fail-closed" in detail
+        assert "API error" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_timeout_denies(self, mock_run: MagicMock) -> None:
+        import subprocess as _sp
+
+        mock_run.side_effect = _sp.TimeoutExpired(cmd="gh", timeout=15)
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is False
+        assert "fail-closed" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_unparseable_timestamp_denies(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="not-a-timestamp\n", stderr="")
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is False
+        assert "fail-closed" in detail
+        assert "unparseable timestamp" in detail
+
+
+class TestCheckSuspensionActive:
+    """An active suspension must deny eligibility."""
+
+    @patch("fast_lane_classify.datetime")
+    @patch("fast_lane_classify.subprocess.run")
+    def test_active_suspension_denies(self, mock_run: MagicMock, mock_dt: MagicMock) -> None:
+        """A suspension that has not expired must deny eligibility (rc=1)."""
+        from datetime import datetime as _dt
+
+        # Current time: 2026-09-21T12:00:00 UTC
+        mock_dt.now.return_value = _dt(2026, 9, 21, 12, 0, 0)
+        mock_dt.fromisoformat = _dt.fromisoformat
+
+        # First call: FAST_LANE_SUSPENDED_UNTIL (active — future)
+        # Second call: FAST_LANE_SUSPENSION_REASON
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="2026-09-22T00:00:00\n", stderr=""),
+            MagicMock(returncode=0, stdout="critical finding in test file\n", stderr=""),
+        ]
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is False
+        assert "suspended" in detail.lower()
+        assert "2026-09-22" in detail
+        assert "critical finding" in detail
+
+
+class TestCheckSuspensionExpired:
+    """An expired suspension must allow eligibility."""
+
+    @patch("fast_lane_classify.datetime")
+    @patch("fast_lane_classify.subprocess.run")
+    def test_expired_suspension_allows(self, mock_run: MagicMock, mock_dt: MagicMock) -> None:
+        """A suspension that has expired must allow eligibility."""
+        from datetime import datetime as _dt
+
+        # Current time: 2026-09-23T00:00:00 UTC (after the suspension window)
+        mock_dt.now.return_value = _dt(2026, 9, 23, 0, 0, 0)
+        mock_dt.fromisoformat = _dt.fromisoformat
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="2026-09-22T00:00:00\n", stderr="")
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is True
+        assert "expired" in detail.lower()
+
+
+class TestCheckSuspensionNotSet:
+    """A missing variable must allow eligibility (no active suspension)."""
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_missing_variable_allows(self, mock_run: MagicMock) -> None:
+        """Variable not found (gh exit 4) means no suspension is active."""
+        mock_run.return_value = MagicMock(
+            returncode=4,
+            stdout="",
+            stderr="Not Found",
+        )
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is True
+        assert "not set" in detail.lower()
+
+
+class TestInWindowFollowUpIneligible:
+    """Prove that a follow-up PR raised during an active suspension is also
+    ineligible for the fast lane — this is the circuit-breaker property.
+
+    Scenario: a fast-lane PR merges and the post-merge review finds a critical
+    issue.  A follow-up fix PR is raised.  Because the suspension is still
+    active (within the 24h window), the follow-up is denied fast-lane
+    eligibility even though its paths may be class-A (test files).  The
+    suspension covers the entire window, so the fix cannot chain through the
+    fast lane.
+    """
+
+    @patch("fast_lane_classify.check_sha_pinning", return_value=(True, "SHA-pinned"))
+    @patch("fast_lane_classify.check_no_test_weakening", return_value=(True, []))
+    @patch("fast_lane_classify.check_cap", return_value=(True, "cap OK"))
+    @patch(
+        "fast_lane_classify.check_suspension",
+        return_value=(
+            False,
+            "fast lane suspended until 2026-09-22T00:00:00 — reason: critical finding in prior fast-lane merge (current time 2026-09-21T12:00:00)",
+        ),
+    )
+    @patch("fast_lane_classify.subprocess.run")
+    def test_followup_during_suspension_is_ineligible(
+        self,
+        mock_run: MagicMock,
+        mock_susp: MagicMock,
+        mock_cap: MagicMock,
+        mock_weaken: MagicMock,
+        mock_pin: MagicMock,
+    ) -> None:
+        """A class-A PR with the label is denied when the suspension is active.
+
+        This proves the circuit-breaker property: a follow-up fix raised during
+        the 24h suspension window cannot chain through the fast lane, regardless
+        of its path classification.
+        """
+        # gh pr diff returns a class-A path (the follow-up touches test files)
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="backend/tests/unit/test_foo.py\n", stderr=""
+        )
+        rc = classify_main(
+            [
+                "--pr-number",
+                "99",
+                "--head-sha",
+                "abc123def456",
+                "--repo",
+                "farnalabs/modulo",
+                "--base-ref",
+                "origin/main",
+                "--has-label",
+            ]
+        )
+        assert rc == 1, (
+            "Follow-up PR during active suspension must exit 1 (ineligible). "
+            "The circuit breaker must prevent the fix from chaining through "
+            "the fast lane."
+        )
