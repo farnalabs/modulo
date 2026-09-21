@@ -87,18 +87,28 @@ export async function setupLocalMockApi(page: Page) {
  * navigating to /login.
  */
 export async function completeLoginForm(page: Page, env: TestEnv): Promise<void> {
-  const slugInput = page.getByTestId('login-org-slug')
+  const slugInput = page.locator(env.credentials.orgSlugInputSelector)
   const emailInput = page.locator(env.credentials.loginFormEmailSelector)
 
+  // Race: whichever appears first wins — slug step on multi-org, email form
+  // on single-org.  A short timeout keeps the error message actionable.
+  const SLUG_TIMEOUT = 15_000
   await Promise.race([
-    slugInput.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {}),
-    emailInput.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {}),
+    slugInput.waitFor({ state: 'visible', timeout: SLUG_TIMEOUT }).catch(() => {}),
+    emailInput.waitFor({ state: 'visible', timeout: SLUG_TIMEOUT }).catch(() => {}),
   ])
 
   if (await slugInput.isVisible()) {
     await slugInput.fill(env.orgSlug)
-    await page.getByTestId('login-org-entry-submit').click()
-    await emailInput.waitFor({ state: 'visible', timeout: 30000 })
+    await page.locator(env.credentials.orgSlugSubmitSelector).click()
+    // Wait for the credential form to appear after slug submission.
+    const emailVisible = await emailInput.waitFor({ state: 'visible', timeout: SLUG_TIMEOUT }).then(() => true).catch(() => false)
+    if (!emailVisible) {
+      throw new Error(
+        `[login] Slug step submitted (org="${env.orgSlug}") but the credential form did not appear within ${SLUG_TIMEOUT}ms. ` +
+        `Current URL: ${page.url()}. Possible wrong org slug or the app layout changed.`,
+      )
+    }
   }
 }
 
