@@ -13,6 +13,21 @@
 # `.github/workflows/ci.yml` and via the pre-commit hook
 # (`scripts/run_semgrep.py`), so disabling the Qlty plugin does not remove
 # coverage.
+#
+# Why actionlint is disabled: actionlint's built-in runner-label list does not
+# include our custom `ubicloud-standard-2` runner. Qlty's actionlint plugin has
+# no configuration surface for custom runner labels, so all 55 findings on
+# every PR are false positives. actionlint is already covered by CI's own
+# workflow lint steps; disabling the Qlty plugin removes noise without losing
+# coverage.
+#
+# Why zizmor is disabled: zizmor reports CI-workflow design decisions (e.g.
+# unpinned action versions, missing permissions blocks) that are intentional
+# choices in this repo's workflow design. Qlty's zizmor plugin has no
+# configuration surface for suppressing specific zizmor rules, so all 142
+# findings on every PR are unactionable noise. zizmor findings are reviewed
+# manually as part of workflow maintenance; the Qlty plugin adds noise without
+# actionable signal.
 
 config_version = "0"
 
@@ -43,6 +58,12 @@ exclude_patterns = [
   "**/templates/**",
   "**/testdata/**",
   "**/vendor/**",
+  # Intentional semgrep rule test fixtures — not production code. These
+  # contain deliberate F821 (undefined-name) violations that are the POINT of
+  # the test fixture. Qlty's ruff plugin passes files explicitly, which
+  # bypasses ruff.toml's per-file-ignores, so without this exclusion the
+  # fixtures produce phantom findings on every PR.
+  "**/.semgrep/**",
 ]
 
 test_patterns = [
@@ -66,9 +87,13 @@ default = true
 
 [[plugin]]
 name = "actionlint"
+mode = "disabled"
 
 [[plugin]]
 name = "bandit"
+# Match the repo's pre-commit bandit invocation: -r backend/src/ -ll
+# (medium+high severity only) -x backend/src/modulo/model_backends/stub/
+args = ["-r", "backend/src/", "-ll", "-x", "backend/src/modulo/model_backends/stub/"]
 
 [[plugin]]
 name = "eslint"
@@ -98,6 +123,17 @@ mode = "comment"
 
 [[plugin]]
 name = "ruff"
+# Pin to the repo's ruff version (0.15.18) so formatting rules and lint
+# semantics match CI. Without this, qlty's default ruff version produces ~22
+# phantom formatting findings and 8 false-positive RUF100 unused-noqa on
+# # noqa: ASYNC240 (valid in 0.15.18).
+version = "0.15.18"
+# Force ruff to read the repo's ruff.toml for exclude patterns and
+# per-file-ignores. Qlty's ruff plugin passes files explicitly, which
+# bypasses the config file's directory-level exclusions. --config ensures the
+# repo's per-file-ignores (e.g. .semgrep/** -> F821, tests/** -> S101/S105)
+# are honoured even when files are passed explicitly.
+args = ["--config", "ruff.toml"]
 
 # Disabled: driver hardcodes `--config .semgrep.yaml`, which this repository
 # does not have (rules live in `.semgrep/`). See the note at the top of this
@@ -114,3 +150,4 @@ name = "trufflehog"
 
 [[plugin]]
 name = "zizmor"
+mode = "disabled"
