@@ -881,7 +881,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          HAS_LABEL=false
+          HAS_LABEL=""
           if echo '${{ toJSON(github.event.pull_request.labels.*.name) }}' | grep -q 'fast-lane:test-infra'; then
             HAS_LABEL="--has-label"
           fi
