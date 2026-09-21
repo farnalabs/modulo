@@ -5422,7 +5422,7 @@ class PipelineExecutor:
                         "run_id": str(run_id),
                     },
                 )
-                _record_suite_incomplete()
+                _record_suite_incomplete(reason="incomplete_suite_set")
                 results.append(
                     SuiteEvalResult(
                         suite_id=suite_id,

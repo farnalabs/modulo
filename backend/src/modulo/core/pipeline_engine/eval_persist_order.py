@@ -90,12 +90,16 @@ def _record_persist_failure(*, failure_behaviour: str) -> None:
         _log.warning("eval_persist_order.metrics_unavailable", exc_info=True)
 
 
-def _record_suite_incomplete() -> None:
-    """Best-effort counter increment when a suite's expected eval id set is not fully persisted."""
+def _record_suite_incomplete(*, reason: str) -> None:
+    """Best-effort counter increment when a suite's expected eval id set is not fully persisted.
+
+    Args:
+        reason: Label attribute for the counter (e.g. ``"incomplete_suite_set"``).
+    """
     try:
         _ensure_metrics()
         if _eval_suite_incomplete_total is not None:
-            _eval_suite_incomplete_total.add(1)
+            _eval_suite_incomplete_total.add(1, {"reason": reason})
     except Exception:
         _log.warning("eval_persist_order.metrics_unavailable", exc_info=True)
 

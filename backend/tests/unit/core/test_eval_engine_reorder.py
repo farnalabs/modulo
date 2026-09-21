@@ -159,6 +159,39 @@ def _fail_commit_factory(exc: Exception | None = None) -> tuple[Any, MagicMock]:
     return _session_factory(session), session
 
 
+def _counting_commit_factory(
+    exc: Exception | None = None,
+) -> tuple[Any, list[MagicMock]]:
+    """Factory that succeeds on the first call, fails on subsequent calls.
+
+    Returns (factory, sessions) where ``sessions`` is the list of mock
+    session objects created — one per ``session_factory()`` call.  The
+    first session commits successfully; the second (and any subsequent)
+    session raises on commit.
+
+    The production loop calls ``session_factory()`` once per eval definition
+    (each eval gets its own session/transaction), so with evals [A, B, C]:
+      - session_factory() call 1 → session_0 (commits OK)  → A persists
+      - session_factory() call 2 → session_1 (commit fails) → B halts
+      - C is never evaluated
+    """
+    sessions: list[MagicMock] = []
+
+    @asynccontextmanager
+    async def _factory():
+        call_idx = len(sessions)
+        if call_idx == 0:
+            s = _make_session(fail_on_commit=False)
+        else:
+            s = _make_session(fail_on_commit=True)
+            if exc:
+                s.commit = AsyncMock(side_effect=exc)
+        sessions.append(s)
+        yield s
+
+    return _factory, sessions
+
+
 def _fail_open_factory(exc: Exception | None = None) -> Any:
     """Factory that raises when session_factory() is called."""
     the_exc = exc or RuntimeError("session_factory() failed")
@@ -555,11 +588,21 @@ class TestC7PartialPersistence:
     """C7: A durable, B absent (persist failed), C never evaluated, run halts."""
 
     async def test_c7(self) -> None:
+        """Prove A's durability: [A(warn,fail), B(block), C(warn)] with
+        session_factory succeeding on A's commit and failing on B's.
+
+        The counting factory returns a working session on the first call
+        (eval A) and a commit-failing session on the second call (eval B).
+        This proves:
+          1. A's result was committed (durable) — the first session succeeded.
+          2. B's commit failed → block halt with persistence_failure marker.
+          3. C was never evaluated (no third session_factory() call).
+        """
         eval_a = _eval_def(name="A", pattern="pass", failure_behaviour="warn")
         eval_b = _eval_def(name="B", pattern="pass", failure_behaviour="block")
         eval_c = _eval_def(name="C", pattern="pass", failure_behaviour="warn")
 
-        factory, _session = _fail_commit_factory(RuntimeError("commit failed for B"))
+        factory, sessions = _counting_commit_factory(RuntimeError("commit failed for B"))
         run_id = uuid4()
         org_id = uuid4()
         _patch_rls()
@@ -577,10 +620,25 @@ class TestC7PartialPersistence:
         finally:
             patch.stopall()
 
+        # --- A's durability: session 0 committed successfully ----------
+        assert len(sessions) == 2, f"Expected 2 session_factory() calls (A and B), got {len(sessions)}"
+        session_a = sessions[0]
+        # session_a.commit was awaited (not failed) — A's row was persisted
+        session_a.commit.assert_awaited_once()
+        # A's row was added to the session
+        assert len(session_a.added) == 1, "A's session should have exactly one added row"
+        a_row = session_a.added[0]
+        assert a_row.eval_id == eval_a.id
+        assert a_row.passed is False  # pattern "fail" doesn't match "pass"
+
+        # --- B's failure: session 1 commit raised → block halt ---------
         assert exc_info.value.eval_name == "B"
         marker = json.loads(exc_info.value.detail)
         assert marker["persistence_failure"] is True
         assert marker["eval_id"] == str(eval_b.id)
+
+        # --- C never evaluated: no third session_factory() call --------
+        assert len(sessions) == 2, "C should not have triggered a session_factory() call"
 
 
 # ---------------------------------------------------------------------------
@@ -722,7 +780,7 @@ class TestC16HitlGateEvalPersistsBeforeRaise:
         factory = _session_factory(session)
         org_id = uuid4()
         events: list[str] = []
-        _patch_rls("modulo.core.pipeline_engine.node_runner")
+        _patch_rls()  # patch eval_persist_order where set_rls_org/ctx are called
 
         def _tracking_add(obj: Any) -> None:
             events.append("persist")
@@ -769,7 +827,7 @@ class TestC16HitlGateEvalPersistsBeforeRaise:
             org_id=org_id,
         )
         state: dict[str, Any] = {"text": "fail", "artifacts": [], "_hitl_gates": [], "_run_id": uuid4()}
-        _patch_rls("modulo.core.pipeline_engine.node_runner")
+        _patch_rls()  # patch eval_persist_order where set_rls_org/ctx are called
 
         try:
             with (
@@ -933,7 +991,7 @@ class TestC19SuiteCompletenessGuard:
         assert results[0].outcome == SuiteOutcome.INDETERMINATE
         assert results[0].passed is False
         assert results[0].aggregate_score == 0.0
-        mock_incomplete.assert_called_once()
+        mock_incomplete.assert_called_once_with(reason="incomplete_suite_set")
 
     async def test_duplicate_rows_do_not_false_fail(self) -> None:
         """Duplicate EvalResult rows for the same eval_id must NOT false-fail the guard.
