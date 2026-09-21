@@ -105,7 +105,7 @@ from modulo.core.pipeline_engine.error_codes import (
     _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
     sanitize_error_text,
 )
-from modulo.core.pipeline_engine.errors import RouterNoMatchError
+from modulo.core.pipeline_engine.errors import NodeMissingModelBackendError, RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.hitl_context import serialize_value, slice_with_marker
 from modulo.core.pipeline_engine.idempotency import (
@@ -3599,6 +3599,14 @@ def make_node_fn(
         # If no model_backend_id, fall back to stub behavior
         # (connector_binding nodes, manual nodes routed through wrong path, etc.).
         if not model_backend_id_str:
+            # FAR-1115: an agent node (model-backed by intent) whose agent
+            # resolves to no model_backend_id is a misconfiguration — not a
+            # legitimate stub.  Surface a clear, actionable error naming both
+            # the node and the agent so the operator can fix the config
+            # immediately.  Connector-binding / manual nodes without agent_id
+            # keep the original stub behavior (byte-identical).
+            if agent_id is not None:
+                raise NodeMissingModelBackendError(node_id=node_id, agent_id=str(agent_id))
             return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
 
         # FAR-418: context_scope — the agent's run_context VIEW (the keys fed to

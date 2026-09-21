@@ -69,11 +69,19 @@ async def test_make_node_fn_blocks_noncanonical_agent_id():
 
 
 async def test_make_node_fn_allows_ungated_agent():
-    """An un-gated agent executes normally (stub, no model invocation)."""
+    """An un-gated agent executes normally (no community gate block)."""
     agent_id = uuid.uuid4()
-    fn = nr.make_node_fn({"id": "n1", "agent_id": str(agent_id)})
-    result = await fn(_node_state(set()))
-    assert result["artifacts"][0]["status"] == "executed"
+    fn = nr.make_node_fn(
+        {
+            "id": "n1",
+            "agent_id": str(agent_id),
+            "model_backend_id": str(uuid.uuid4()),
+        }
+    )
+    # Mock _invoke_node_model to avoid needing a real ModelBackendHub.
+    with patch.object(nr, "_invoke_node_model", new=AsyncMock(return_value={"result": "ok"})):
+        result = await fn(_node_state(set()))
+    assert result["artifacts"][0]["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------
