@@ -133,13 +133,14 @@ async def _create_saml_provider(
 
 
 # Two committed orgs, each owning exactly ONE enabled SAML provider.
-# Org A's PROVIDER is created a decade earlier so it is reliably the legacy
-# "first enabled" singleton for the legacy-parity tests. The ORGS are created
-# "now": making org A a decade old too would collide with
-# ``test_saml_rls_resolution.two_orgs``, which relies on its own org being the
-# globally oldest (the target of ``_set_default_rls_org``'s first-org fallback)
-# — two decade-old orgs race for that slot and whichever fixture ran first wins
-# (FAR-1007 regression vs FAR-1058 #814).
+# Org A's PROVIDER is backdated a decade so it is reliably the legacy
+# "first enabled" singleton for the legacy-parity tests. The ORGS are NOT
+# backdated: the integration suite runs against one shared Postgres, and
+# ``_set_default_rls_org`` (``Organisation.created_at`` asc, limit 1) is a
+# global first-org slot claimed by ``test_saml_rls_resolution``'s first-org
+# fallback test. Backdating these orgs too would steal that slot and break the
+# older test (observed on main run 35537837965; FAR-1007 regression vs
+# FAR-1058 #814).
 @pytest_asyncio.fixture(scope="module")
 async def two_saml_orgs(db_engine: AsyncEngine) -> dict[str, str]:
     org_a_id, org_a_slug = await _create_org(db_engine, "a")
