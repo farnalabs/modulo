@@ -1,7 +1,6 @@
 import { defineConfig } from '@playwright/test'
 import { getTarget, getBaseUrl } from './tests/e2e/setup/env'
 
-const coverageEnabled = process.env.VITE_COVERAGE === 'true' || process.env.npm_lifecycle_event === 'test:e2e:coverage'
 const target = getTarget()
 const noServer = (process.env.E2E_NO_WEBSERVER || '').toLowerCase() === 'true'
 
@@ -28,5 +27,9 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
   } : undefined,
   globalSetup: require.resolve('./tests/e2e/setup/global-setup.ts'),
-  globalTeardown: coverageEnabled ? './tests/e2e/setup/coverage-teardown.ts' : undefined,
+  // Always run the teardown, not only when coverage is enabled: it is
+  // defensive (it logs and returns when no coverage directory/files exist), so
+  // it is safe on every target, and an unconditional teardown means a suite
+  // that did collect coverage is never skipped because the env flag was missed.
+  globalTeardown: './tests/e2e/setup/coverage-teardown.ts',
 })

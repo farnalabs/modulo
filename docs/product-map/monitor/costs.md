@@ -106,7 +106,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   implemented from `runs` (per-pipeline sums of `total_cost_usd`).
 
 ## QA History
-- 2026-09-20: **improve-architecture (product-map walk)** — closed the "No BDD for
+- 2026-09-20: **product-map review pass** — closed the "No BDD for
   the ceiling / scheduled-report / anomaly / cost-component surfaces" gap.
   `cost_controls.feature` gained executing scenarios for the FAR-391 `/ceiling`
   surface (GET remaining-budget arithmetic, PUT set/clear semantics with explicit
@@ -119,7 +119,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   cost-component CRUD (create 201 / duplicate 409 / self_reported-with-formula 422 /
   list / delete 204). Steps drive the real routes/controllers with mocked DB reads
   (`test_cost_controls.py`).
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/costs`, `/admin/costs/components`, `/admin/costs/controls`,
   `/admin/costs/limits`
@@ -128,7 +128,7 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/costs, /admin/costs/components, /admin/costs/controls`: the whole-page view(s) `AdminCostBreakdownView.vue, CostComponentsView.vue, AdminCostControlsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -136,23 +136,23 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-28: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-28: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-costs`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/costs.py`,
   `api/routes/cost_components.py`, `core/cost_controller/*` and the costs unit/BDD
   suites. Status: covered.
-- 2026-09-08: **improve-architecture (product-map walk)** — closed the anomaly
+- 2026-09-08: **product-map review pass** — closed the anomaly
   persistence gap: freshly detected anomalies are now written on first sight
   (`record_or_get_anomaly`) and uniqueness per detected org-day is enforced
   (`uq_spend_anomalies_org_date`, migration 0201_spend_anomaly_unique_org_date), so every returned anomaly has a
   stable id that `POST /anomalies/dismiss/{id}` can target and dismissal state
   survives repeat detection. Endpoint + CRUD unit suites updated.
-- 2026-09-09: **improve-architecture (product-map walk)** — closed the export
+- 2026-09-09: **product-map review pass** — closed the export
   façade gap: `GET /export` no longer silently maps `model` -> team nor crashes
   (`500`) on `pipeline`; unimplemented granularities now fail with an explicit
   422 naming `team` as the supported export grouping. `api/routes/costs.py` +
   `test_costs.py` / `test_costs_routes_coverage.py` updated.
-- 2026-09-10: **improve-architecture (product-map walk)** — closed the export
+- 2026-09-10: **product-map review pass** — closed the export
   granularity gap: `GET /export` now implements `pipeline` (per-pipeline
   `Σ runs.total_cost_usd` aggregation over the window) and `model` (per
   `self_reported` cost-component aggregation over the runs' `cost_breakdown`)

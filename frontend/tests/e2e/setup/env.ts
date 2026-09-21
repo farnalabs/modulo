@@ -21,10 +21,12 @@ export interface TestEnv {
     // is login-active.
     orgSlugInputSelector: string
     orgSlugSubmitSelector: string
-    // Always /login.  On multi-org instances the slug step is completed by
-    // completeLoginForm(); on single-org instances the credential form renders
-    // directly.  Never navigate to /login/<slug> from E2E — the slug step
-    // must be handled programmatically so the same code path covers both.
+    // Static fallback login path (always /login). The runtime path is resolved
+    // by resolveLoginPath() in login-path.ts, which queries login-context and
+    // returns /login/<slug> only when the instance is genuinely multi-org
+    // (E2E_ORG_SLUG is an override, ignored on single-org instances).
+    // completeLoginForm() then handles whichever layout rendered — the slug
+    // step on /login or the credential form directly.
     loginPath: string
   }
 }

@@ -55,13 +55,13 @@ redirected to this infra-health surface via `feat-infra-health`.
 
 ## QA History
 
-- 2026-08-26: **improve-architecture (product-map walk)** — closed the "No BDD feature
+- 2026-08-26: **product-map review pass** — closed the "No BDD feature
   files" gap: added `backend/tests/bdd/features/infra/health.feature` + `test_health_steps.py`
   (7 scenarios, self-contained: real health router in a fresh app with only the per-check
   probes patched). Covers liveness advisory, ok/degraded/unavailable aggregation, the 503
   gate, and the FAR-199 dispatcher-reconcile two-tier (unavailable gates, degraded stays
   advisory). Status: covered.
-- 2026-08-25: **improve-architecture (product-map walk)** — restored this entry as part of
+- 2026-08-25: **product-map review pass** — restored this entry as part of
   rebuilding the `docs/product-map/` feature graph that was lost from the public tree.
   Registered the dangling `feat-infra-health` reference: `backend/tests/unit/api/test_health.py`
   documented the per-check-timeout feature with a `feat-infra-health` tag that resolved

@@ -20,12 +20,14 @@ interface LoginContextResponse {
 }
 
 /**
- * Guard: only treat the response as multi-org when `multi_org` is strictly
- * boolean `true`. Any unexpected shape (missing, string, number, object)
- * is treated as single-org — the safe fallback.
+ * Normalise an untrusted login-context payload. Only a literal `true` counts
+ * as multi-org, so an error-shaped 200 body (e.g. `{detail: ...}` or a
+ * missing/renamed field) can never be mistaken for a multi-org instance and
+ * send the suite to /login/<slug>.
  */
-function isMultiOrg(ctx: LoginContextResponse): boolean {
-  return ctx.multi_org === true
+function parseLoginContext(raw: unknown): LoginContextResponse {
+  const multiOrg = (raw as { multi_org?: unknown } | null | undefined)?.multi_org
+  return { multi_org: multiOrg === true }
 }
 
 let cachedContext: LoginContextResponse | null = null
@@ -51,7 +53,7 @@ export async function resolveLoginPath(baseURL: string): Promise<string> {
         signal: AbortSignal.timeout(5000),
       })
       if (resp.ok) {
-        cachedContext = await resp.json()
+        cachedContext = parseLoginContext(await resp.json())
         cachedBaseURL = baseURL
       } else {
         fetchFailed = true
@@ -62,7 +64,7 @@ export async function resolveLoginPath(baseURL: string): Promise<string> {
     }
   }
 
-  if (cachedContext && isMultiOrg(cachedContext)) {
+  if (cachedContext && cachedContext.multi_org === true) {
     return `/login/${encodeURIComponent(overrideSlug)}`
   }
 

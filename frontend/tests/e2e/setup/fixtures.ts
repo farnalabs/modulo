@@ -192,7 +192,8 @@ export async function completeLoginForm(page: Page, env: TestEnv): Promise<Crede
  * Navigate to the login page and ensure the credential form is ready to fill.
  * Use this instead of a bare `page.goto('/login')` whenever the test is about
  * to enter credentials, so the suite works on both single-org and multi-org
- * targets. Returns the selectors for whichever form rendered.
+ * targets. Uses the dynamic resolver to pick the correct login path and
+ * returns the selectors for whichever form rendered.
  */
 export async function openLoginForm(page: Page, env: TestEnv): Promise<CredentialFormSelectors> {
   const baseURL = getBaseUrl(env.name)

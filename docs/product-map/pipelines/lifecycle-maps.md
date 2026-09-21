@@ -78,7 +78,7 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
 
 ## QA History
 
-- 2026-09-20: **improve-architecture (product-map walk)** — closed the "No BDD
+- 2026-09-20: **product-map review pass** — closed the "No BDD
   for lifecycle map journey detail view" gap. Registered
   `backend/tests/bdd/features/lifecycle_maps/journeys.feature` into the
   executing BDD suite (steps in `steps/test_lifecycle_maps.py`), driving the
@@ -93,7 +93,7 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   counted, never a whole-request 422) — and a matched journey is advanced with
   `status="complete"`. `_ORPHANED_BDD_FEATURES` stays empty.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `FilterBar` search surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the manifest `elements:`
   inventory for `/lifecycle-maps`: `LifecycleMapList.vue` passes a `search` prop
@@ -102,7 +102,7 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   component is now part of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for `/lifecycle-maps` and
   `/lifecycle-maps/:id`, both of which render the header's `#right` action slot, and
@@ -116,14 +116,14 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   ``:data-testid="expr"`` bindings (bare-identifier props like `dataTestId` are no
   longer misread as elements).
 
-- 2026-09-12: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-12: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/lifecycle-maps/:id/editor`: the whole-page view
   `lifecycle-map/LifecycleMapEditorView.vue` now maps to its owning view so a newly
   shipped testid on the lifecycle-map editor can no longer silently stay invisible to
   Remy's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/lifecycle-maps`: the whole-page view(s) `LifecycleMapList.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -131,17 +131,17 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+- 2026-09-11: **product-map review pass** — registered the
   journey-overflow chip testid (`journey-overflow-chip`) shipped by
   `components/lifecycle-map/LifecycleMapRenderer.vue` in the `/lifecycle-maps/:id`
   manifest `elements:` inventory and added the renderer to the reverse testid-coverage
   guard (`test_mapped_route_elements_cover_owning_view_testids`), so the capped-journeys
   chip can no longer drift invisible to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-09-10: **improve-architecture (product-map walk)** — registered the lifecycle
+- 2026-09-10: **product-map review pass** — registered the lifecycle
   map-journeys detail-view testids (`lifecycle-map-journeys-*`, `lifecycle-map-show-work-items`)
   in the manifest `elements:` inventory and added `LifecycleMapView.vue` to the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`).
-- 2026-09-07: **improve-architecture (product-map walk)** — added this
+- 2026-09-07: **product-map review pass** — added this
   behaviour-tracker for `feat-lifecycle-maps`, which previously had no
   `docs/product-map/` entry. Behaviours verified against
   `routes/lifecycle_maps.py`, `core/lifecycle_map/`, and the lifecycle-map

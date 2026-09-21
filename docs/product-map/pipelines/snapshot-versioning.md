@@ -53,20 +53,20 @@ error-path semantics stay unit-tested (
 
 ## QA History
 
-- 2026-08-29: **improve-architecture (product-map walk)** — closed the "no
+- 2026-08-29: **product-map review pass** — closed the "no
   dedicated standalone snapshot BDD feature file" gap: the snapshot scenarios
   (create-at-run-start, list/pagination, get, tag, delete + latest refusal, diff,
   rollback, missing-pipeline 404, empty-graph) were extracted from the
   higher-level ``crud.feature`` into ``tests/bdd/features/pipelines/snapshot_versioning.feature``
   and registered in ``tests/bdd/steps/test_pipelines.py``. ``bdd:`` now names the
   dedicated file; the standalone snapshot-versioning surface ships.
-- 2026-08-26: **improve-architecture (product-map walk)** — fixed a stale
+- 2026-08-26: **product-map review pass** — fixed a stale
   coverage claim: ``bdd:`` was empty while
   ``tests/bdd/features/pipelines/crud.feature`` (via
   ``tests/bdd/steps/test_pipelines.py``) already covered list/pagination, get,
   tag, delete + latest-snapshot refusal, and diff. Recorded the real BDD
   references and retired the outdated "no BDD" gap.
-- 2026-08-25: **improve-architecture (product-map walk)** — entry added to close the
+- 2026-08-25: **product-map review pass** — entry added to close the
   dangling `depends-on: feat-pipelines-pipeline-versioning` edge in
   `pipelines/pipeline-diff-rollback.md`. Behaviours re-verified against
   `db/crud/pipeline_snapshot_versioning.py` and the snapshot unit suites. Status:

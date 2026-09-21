@@ -100,7 +100,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
 
 ## QA History
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
   in the manifest `elements:` inventory for `/runs/diff`: the compared run-output
@@ -110,21 +110,21 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
   of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for `/runs`, which
   renders the header's `#right` action slot, and wired the component into the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) so the
   header action surface stays visible to Remy's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-11: **product-map review pass** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/runs` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
   guard, so the runs-list search control the page ships stays visible to Remy's
   docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/runs/diff`: the whole-page view(s) `AgentOutputDiffView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -132,7 +132,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — closed the
+- 2026-09-11: **product-map review pass** — closed the
   `/runs/:id` element-inventory drift for the HitlBriefing surface embedded in
   `hitl/HitlGateCard.vue`: the gate card renders `HitlBriefing.vue` (the
   gate reason/context briefing with its collapse toggle and condition-result
@@ -142,7 +142,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
   `HitlBriefing.vue` alongside the previously-closed shared components, so a
   newly shipped briefing testid can no longer drift invisible to Remy's docs
   indexer / `/api/v1/manifest`.
-- 2026-09-11: **improve-architecture (product-map walk)** — closed the
+- 2026-09-11: **product-map review pass** — closed the
   `/runs/:id` element-inventory drift for the shared components the Run Detail
   page renders: `shared/JsonViewer.vue` (the collapsible JSON explorer used for
   IO/output/telemetry inspection), `shared/ErrorAlert.vue` (its dismiss
@@ -154,17 +154,17 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
   the layout + those shared owning components, so a newly shipped run-detail /
   json-viewer / gate testid can no longer drift invisible to Remy's docs
   indexer / `/api/v1/manifest`.
-- 2026-09-09: **improve-architecture (product-map walk)** — closed the dead-BDD-file
+- 2026-09-09: **product-map review pass** — closed the dead-BDD-file
   Known Gap recorded here on 2026-09-08: `run_lifecycle.feature` / `run_sequential.feature`
   are no longer orphaned — they were wired into `steps/test_pipelines.py` (12 scenarios)
   when the same gap was closed on the `feat-pipelines` tracker, but this entry was not
   updated. Both files are now cited in `bdd:` and the run-lifecycle / sequential-ordering
   behaviour is ticked. Status: covered.
-- 2026-09-08: **improve-architecture (product-map walk)** — recorded `run_lifecycle.feature`
+- 2026-09-08: **product-map review pass** — recorded `run_lifecycle.feature`
   / `run_sequential.feature` as a dead-BDD-file known gap (run-time surfaces owned here that
   no step module registers). Superseded by the 2026-09-09 closure above once
   `steps/test_pipelines.py` registered both files.
-- 2026-08-28: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-28: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-runs`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/runs.py`,
   `api/routes/run_ws.py`, `db/crud/run.py`, `core/line_diff.py` and the runs unit/BDD

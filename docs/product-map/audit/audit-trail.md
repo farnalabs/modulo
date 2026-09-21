@@ -76,7 +76,7 @@ guarded against tampering at both the ORM and the database layer.
   chain.
 
 ## QA History
-- 2026-09-17: **improve-architecture (product-map walk)** — closed "No BDD
+- 2026-09-17: **product-map review pass** — closed "No BDD
   scenario for append-only tampering". New executing `audit/append_only.feature`
   (`steps/test_audit_append_only.py`) drives the REAL application-layer guard:
   `register_append_only_guard()` + the SQLAlchemy `before_update` /
@@ -87,7 +87,7 @@ guarded against tampering at both the ORM and the database layer.
   "Audit events are immutable" scenario (which merely asserted a generic 4xx
   from a nonexistent PATCH route) was removed along with its dummy steps.
   `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
   in the manifest `elements:` inventory for `/admin/audit`: the expanded audit-event
@@ -96,7 +96,7 @@ guarded against tampering at both the ORM and the database layer.
   `/api/v1/manifest`. The component is now part of the route's reverse testid-coverage
   guard (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/audit`
   and wired the two components into the reverse testid-coverage guard
@@ -104,7 +104,7 @@ guarded against tampering at both the ORM and the database layer.
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/audit`: the whole-page view(s) `AdminAuditView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -112,7 +112,7 @@ guarded against tampering at both the ORM and the database layer.
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-29: **improve-architecture (product-map walk)** — new behaviour
+- 2026-08-29: **product-map review pass** — new behaviour
   tracker for the registered `feat-audit` manifest feature (route `/admin/audit`,
   previously absent from the feature graph). Behaviours verified against
   `api/routes/audit.py`, `core/audit_logger/*`, the hash-chain model, and the
