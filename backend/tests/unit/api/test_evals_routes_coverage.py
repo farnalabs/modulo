@@ -479,6 +479,32 @@ def test_list_run_evals_unknown_run_returns_404(client: tuple[TestClient, AsyncM
     assert resp.json()["detail"] == "Run not found"
 
 
+def test_list_run_evals_applies_node_and_eval_filters(client: tuple[TestClient, AsyncMock]) -> None:
+    """Both optional filters (node_id, eval_id) add their predicate to the query."""
+    http, session = client
+    run = MagicMock()
+    filter_node_id = uuid.uuid4()
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=run),  # run lookup
+            _result(scalar=1),  # total count
+            _result(rows=[_eval_result_row(_EVAL_ID)]),  # page rows
+        ],
+    )
+
+    resp = http.get(
+        f"/api/v1/runs/{_RUN_ID}/evals",
+        params={"node_id": str(filter_node_id), "eval_id": str(_EVAL_ID)},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["eval_id"] == str(_EVAL_ID)
+
+
 # ---------------------------------------------------------------------------
 # POST /evals/compare — run-B 404 + mixed-result helper paths
 # ---------------------------------------------------------------------------

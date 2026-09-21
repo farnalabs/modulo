@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import modulo.core.pipeline_engine.node_runner as nr
+from modulo.core.pipeline_engine.error_codes import class_for, is_retryable, map_legacy_code
 from modulo.core.pipeline_engine.errors import NodeMissingModelBackendError
+from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.pipeline_engine.node_runner import _COMPLETED_EMISSION_STATUSES
 
 # ---------------------------------------------------------------------------
@@ -144,3 +146,63 @@ async def test_agent_node_with_both_id_and_backend_proceeds():
     with patch.object(nr, "_invoke_node_model", new=AsyncMock(return_value={"result": "ok"})):
         result = await fn(_node_state())
     assert result["artifacts"][0]["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Executor-level: the run terminalizes failed, not silently complete
+# ---------------------------------------------------------------------------
+
+
+def _mock_compiled_raising(exc: Exception) -> Any:
+    """A compiled-graph mock whose ``astream_events`` raises *exc*."""
+
+    async def _astream(state: Any, config: Any, *, version: str = "v1") -> Any:
+        raise exc
+        yield  # pragma: no cover  # makes this an async generator
+
+    c = MagicMock()
+    c.astream_events = _astream
+    return c
+
+
+async def test_executor_terminalizes_run_failed_with_canonical_missing_backend_code():
+    """Executor-level prove-the-fix for the read-surface contract.
+
+    Driving ``_stream_graph`` (the executor boundary, not ``make_node_fn`` in
+    isolation) with a graph whose node raises ``NodeMissingModelBackendError``
+    must terminalize the run as ``failed`` — never ``complete`` — and publish a
+    ``run_failed`` event. The raw class-name code the executor stores
+    (``type(exc).__name__``) must canonicalize through ``map_legacy_code`` to
+    ``config.missing_model_backend`` with the config class and non-retryable
+    default, so the run list / analytics / MCP read surfaces show the actionable
+    code rather than an unmapped ``harness.unknown`` fallback.
+    """
+    exc = NodeMissingModelBackendError(node_id="n-agent", agent_id=str(uuid.uuid4()))
+
+    broker = MagicMock()
+    broker.publish = MagicMock()
+    broker.is_closed = False
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+
+    status, error_code, _detail, _node_token_usage = await executor._stream_graph(
+        _mock_compiled_raising(exc),
+        None,
+        {"configurable": {"thread_id": "org:run"}},
+        {"n-agent"},
+        broker,
+        uuid.uuid4(),
+    )
+
+    assert status == "failed"
+    assert error_code == NodeMissingModelBackendError.__name__
+
+    # Read-surface canonicalization of the raw executor-written code.
+    assert map_legacy_code(error_code) == "config.missing_model_backend"
+    assert class_for(error_code) == "config"
+    assert is_retryable(error_code) is False
+
+    published = [c.args for c in broker.publish.call_args_list if c.args and c.args[0] == "run_failed"]
+    assert published
+    assert published[0][1]["error"] == NodeMissingModelBackendError.__name__

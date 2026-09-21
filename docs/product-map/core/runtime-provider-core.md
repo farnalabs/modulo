@@ -68,7 +68,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
 - 2026-09-02: **FAR-551** — collapsed the duplicate `/admin/environments` UI +
   `environments.py` router into `/environment-profiles`; ported the `/test`
   connectivity check; added the missing API feature-gate.
-- 2026-08-25: **improve-architecture (product-map walk)** — restored this entry as part of
+- 2026-08-25: **product-map review pass** — restored this entry as part of
   rebuilding the `docs/product-map/` feature graph. This entry is the one ADR 003
   requires to carry the ShellConnector deprecation notice
   (`Repos/devtools/adr/003-agent-dispatch-model.md`). Re-verified the runtime_provider package

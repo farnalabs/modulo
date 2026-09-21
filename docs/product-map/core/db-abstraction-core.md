@@ -54,7 +54,7 @@ and org-scoped tenant context injection that is backend-aware.
 
 ## QA History
 
-- 2026-08-25: **improve-architecture (product-map walk)** — entry added to close the
+- 2026-08-25: **product-map review pass** — entry added to close the
   dangling `depends-on: feat-core-db-abstraction-core` edge in `teams/org-entity.md`.
   Behaviours re-verified against `db/repositories/*`, `db/session.py`, and the
   multi-backend unit/BDD suites. Status: covered.

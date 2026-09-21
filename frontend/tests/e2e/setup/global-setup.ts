@@ -58,10 +58,17 @@ async function globalSetup(_config: FullConfig) {
   const page = await browser.newPage()
 
   await page.goto(baseURL + '/login')
-  await completeLoginForm(page, env)
-  await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
-  await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)
-  await page.click('button[type="submit"]')
+
+  // Handles the multi-org slug step (if present) and fails fast with a
+  // diagnostic if the credential form is unreachable — aborting the suite
+  // early instead of letting every test retry for 30 s. The returned
+  // selectors match whichever layout rendered (LoginView on single-org,
+  // OrgLoginView on multi-org).
+  const form = await completeLoginForm(page, env)
+
+  await page.fill(form.email, env.credentials.admin.email)
+  await page.fill(form.password, env.credentials.admin.password)
+  await page.click(form.submit)
   await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 60000 })
 
   await page.evaluate(() => {

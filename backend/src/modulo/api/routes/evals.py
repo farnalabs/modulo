@@ -1745,6 +1745,8 @@ async def list_run_evals(
     run_id: uuid.UUID,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    node_id: uuid.UUID | None = Query(None),
+    eval_id: uuid.UUID | None = Query(None),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
 ) -> dict[str, Any]:
@@ -1753,6 +1755,10 @@ async def list_run_evals(
     Returns a paginated list of eval results with the eval definition name
     included for convenience. Requires the run to belong to the caller's
     organisation.
+
+    Optional query parameters ``node_id`` and ``eval_id`` filter results
+    by the evaluation's target node or eval definition respectively. When
+    omitted the response is identical to the unfiltered call.
     """
     try:
         async with session.begin():
@@ -1771,21 +1777,23 @@ async def list_run_evals(
 
             from sqlalchemy import func as sa_func
 
-            total_q = select(sa_func.count(EvalResult.id)).where(
+            base_filters = [
                 EvalResult.run_id == run_id,
                 EvalResult.organisation_id == principal.organisation_id,
                 non_guardrail_eval_results_clause(),
-            )
+            ]
+            if node_id is not None:
+                base_filters.append(EvalResult.node_id == node_id)
+            if eval_id is not None:
+                base_filters.append(EvalResult.eval_id == eval_id)
+
+            total_q = select(sa_func.count(EvalResult.id)).where(*base_filters)
             total = (await session.execute(total_q)).scalar() or 0
 
             offset = (page - 1) * page_size
             q = (
                 select(EvalResult)
-                .where(
-                    EvalResult.run_id == run_id,
-                    EvalResult.organisation_id == principal.organisation_id,
-                    non_guardrail_eval_results_clause(),
-                )
+                .where(*base_filters)
                 .order_by(EvalResult.evaluated_at.desc())
                 .offset(offset)
                 .limit(page_size)

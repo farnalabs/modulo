@@ -80,7 +80,7 @@ rather than in the manifest registry.
 
 ## QA History
 
-- 2026-09-19: **improve-architecture (product-map walk)** — closed the "No
+- 2026-09-19: **product-map review pass** — closed the "No
   BDD feature files" gap. Registered ``backend/tests/bdd/features/infra/
   secrets_backend.feature`` into the executing BDD suite from
   ``steps/test_secrets_backend.py``, driving the REAL
@@ -94,7 +94,7 @@ rather than in the manifest registry.
   alien/corrupt ciphertext ``ValueError``, and the real factory default /
   unknown-name / unlicensed-``vault``-fallback logic (forced exactly as the
   unit suite does). `_ORPHANED_BDD_FEATURES` stays empty. Status: covered.
-- 2026-08-27: **improve-architecture (product-map walk)** — entry added to
+- 2026-08-27: **product-map review pass** — entry added to
   close the feature-graph gap for a shipped infra-only surface consumed by the
   connector / model-backend / notification / OTel-export credential paths but
   invisible to the product map. Behaviours verified against

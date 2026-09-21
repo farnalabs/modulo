@@ -1117,6 +1117,8 @@ async def test_eval_before_interrupt_persists_results(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
+    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
 
     gate_config = {"gate_id": "persist-gate"}
     eval_def = EvalDefinition(
@@ -1175,6 +1177,8 @@ async def test_eval_before_interrupt_persist_failure_does_not_block_interrupt(mo
 
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
+    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
 
     eval_def = EvalDefinition(
         id=_uuid.UUID("00000000-0000-0000-0000-0000000000c3"),
@@ -1214,6 +1218,8 @@ async def test_eval_before_interrupt_skips_persist_without_run_id(monkeypatch: p
 
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
+    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
 
     eval_def = EvalDefinition(
         id=_uuid.UUID("00000000-0000-0000-0000-0000000000c3"),

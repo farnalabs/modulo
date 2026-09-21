@@ -57,7 +57,7 @@ manage org-level licenses.
       (`system_admin_orgs.feature`, `system_admin_users.feature`)
 
 ## QA History
-- 2026-09-17: **improve-architecture (product-map walk)** — closed the "No BDD
+- 2026-09-17: **product-map review pass** — closed the "No BDD
   for org-level license management" gap: added 10 license scenarios to
   `system_admin_orgs.feature` (GET org-key resolution / system fallback /
   invalid-stored-key fallback / missing-org 404; PUT valid-200 + invalid-422 +
@@ -67,19 +67,19 @@ manage org-level licenses.
   read-modify-write. Removed the tracked known gap.
   Status: covered with no remaining known gaps.
 
-- 2026-09-17: **improve-architecture (product-map walk)** — closed the "No BDD
+- 2026-09-17: **product-map review pass** — closed the "No BDD
   for DELETE org" half of the `feat-system-orgs` BDD gap: added DELETE coverage
   to `system_admin_orgs.feature` (successful 204 delete, 404 for a missing org,
   and 403 for a regular org admin). The narrower license-management BDD gap was
   subsequently closed by the 2026-09-17 license walk above.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-12: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/system/orgs`: the whole-page view `AdminSystemOrgsView.vue` now maps to its
   owning view so a newly shipped testid on the system-orgs page can no longer silently
   stay invisible to Remy's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-07: **improve-architecture (product-map walk)** — added this
+- 2026-09-07: **product-map review pass** — added this
   behaviour-tracker for `feat-system-orgs`, which previously had no
   `docs/product-map/` entry. Behaviours verified against
   `routes/admin_orgs.py`, the admin orgs unit tests, and the system-admin BDD
