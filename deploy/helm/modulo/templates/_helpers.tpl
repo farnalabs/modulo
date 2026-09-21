@@ -67,10 +67,12 @@ Namespace name.
 {{- end }}
 
 {{/*
-Construct DATABASE_URL from external Postgres config.
+Construct DATABASE_URL from Postgres config.
+When postgres.host is set, builds the URL from individual fields.
+Otherwise falls back to backend.env.DATABASE_URL.
 */}}
 {{- define "modulo.databaseUrl" -}}
-{{- if .Values.postgres.enabled }}
+{{- if .Values.postgres.host }}
 {{- $host := .Values.postgres.host }}
 {{- $port := .Values.postgres.port | int }}
 {{- $db := .Values.postgres.database }}
@@ -84,17 +86,19 @@ Construct DATABASE_URL from external Postgres config.
 {{- else }}
 {{- $pass = .Values.postgres.password }}
 {{- end }}
-printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user $pass $host $port $db
+{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user $pass $host $port $db }}
 {{- else }}
 {{- .Values.backend.env.DATABASE_URL | default "" }}
 {{- end }}
 {{- end }}
 
 {{/*
-Construct REDIS_URL from external Redis config.
+Construct REDIS_URL from Redis config.
+When redis.host is set, builds the URL from individual fields.
+Otherwise falls back to backend.env.REDIS_URL.
 */}}
 {{- define "modulo.redisUrl" -}}
-{{- if .Values.redis.enabled }}
+{{- if .Values.redis.host }}
 {{- $host := .Values.redis.host }}
 {{- $port := .Values.redis.port | int }}
 {{- $db := .Values.redis.db | int }}
@@ -108,9 +112,9 @@ Construct REDIS_URL from external Redis config.
 {{- $pass = .Values.redis.password }}
 {{- end }}
 {{- if $pass }}
-printf "redis://:%s@%s:%d/%d" $pass $host $port $db
+{{- printf "redis://:%s@%s:%d/%d" $pass $host $port $db }}
 {{- else }}
-printf "redis://%s:%d/%d" $host $port $db
+{{- printf "redis://%s:%d/%d" $host $port $db }}
 {{- end }}
 {{- else }}
 {{- .Values.backend.env.REDIS_URL | default "redis://localhost:6379/0" }}

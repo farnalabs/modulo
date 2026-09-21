@@ -16,6 +16,12 @@
 nameOverride: ""
 fullnameOverride: ""
 
+# -- Image Pull Secrets -----------------------------------------------------
+# Required for private GHCR images (ghcr.io/farnalabs/modulo/*).
+# Example: imagePullSecrets: [{name: ghcr-secret}]
+# Public images would remove the need for this.
+imagePullSecrets: []
+
 # -- Namespace --------------------------------------------------------------
 namespace:
   create: true

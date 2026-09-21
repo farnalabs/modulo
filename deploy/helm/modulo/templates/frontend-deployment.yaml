@@ -23,6 +23,10 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 101
@@ -37,6 +41,10 @@ spec:
           image: "{{ .Values.frontend.image.repository }}@{{ .Values.frontend.image.digest }}"
           {{- end }}
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          # Skip the nginx docker-entrypoint.sh which writes into /etc/nginx/conf.d/
+          # (incompatible with readOnlyRootFilesystem). Our ConfigMap provides the
+          # full nginx config, so the entrypoint's template processing is unnecessary.
+          command: ["nginx", "-g", "daemon off;"]
           ports:
             - name: http-frontend
               containerPort: 80
@@ -52,6 +60,9 @@ spec:
           resources:
             {{- toYaml .Values.frontend.resources | nindent 12 }}
           securityContext:
+            # readOnlyRootFilesystem is safe for the nginx frontend: the entrypoint
+            # is skipped (command override), /var/cache/nginx and /var/run are
+            # writable emptyDirs, and the nginx config comes from a ConfigMap mount.
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -62,11 +73,16 @@ spec:
               mountPath: /var/cache/nginx
             - name: nginx-run
               mountPath: /var/run
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
       volumes:
         - name: nginx-cache
           emptyDir: {}
         - name: nginx-run
           emptyDir: {}
+        - name: nginx-config
+          configMap:
+            name: {{ include "modulo.fullname" . }}-frontend-nginx
       {{- with .Values.frontend.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
