@@ -46,5 +46,6 @@ rules:
   # template-injection (44 findings): genuine security class. Error-level
   # findings using attacker-controllable context (github.base_ref,
   # github.ref_name, github.event.inputs.*) in run: blocks are fixed in
-  # this PR. Info-level findings reading step outputs are lower risk and
-  # left visible.
+  # this PR. Two Low-severity findings remain -- `${{ env.branch_ref }}` in
+  # merge-queue.yml -- plus Info-level findings reading step outputs; both are
+  # lower risk and left visible.

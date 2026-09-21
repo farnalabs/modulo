@@ -14,20 +14,20 @@
 # (`scripts/run_semgrep.py`), so disabling the Qlty plugin does not remove
 # coverage.
 #
-# Why actionlint is disabled: actionlint's built-in runner-label list does not
-# include our custom `ubicloud-standard-2` runner. Qlty's actionlint plugin has
-# no configuration surface for custom runner labels, so all 55 findings on
-# every PR are false positives. actionlint is already covered by CI's own
-# workflow lint steps; disabling the Qlty plugin removes noise without losing
-# coverage.
+# actionlint is ENABLED (mode = "block"): the custom `ubicloud-standard-2`
+# runner label is declared in `.github/actionlint.yaml`, which Qlty's
+# actionlint plugin loads automatically (its `config_files` include
+# `.github/actionlint.yaml`). That removes the 55 false-positive runner-label
+# findings, so the plugin now runs clean and gates on genuine workflow errors.
 #
-# Why zizmor is disabled: zizmor reports CI-workflow design decisions (e.g.
-# unpinned action versions, missing permissions blocks) that are intentional
-# choices in this repo's workflow design. Qlty's zizmor plugin has no
-# configuration surface for suppressing specific zizmor rules, so all 142
-# findings on every PR are unactionable noise. zizmor findings are reviewed
-# manually as part of workflow maintenance; the Qlty plugin adds noise without
-# actionable signal.
+# zizmor is ENABLED (mode = "comment"): `.github/zizmor.yml` (also declared in
+# the plugin's `config_files`) suppresses the four accepted-decision rules
+# (unpinned-uses, self-repository, cache-poisoning, secrets-inherit), and this
+# PR fixed the 15 error-level template-injection findings. The remaining
+# genuine design findings (excessive-permissions, artipacked, low/info-level
+# template-injection) are intentionally left visible rather than suppressed, so
+# the plugin reports reality. `comment` surfaces them on PRs without failing
+# the quality gate on findings we have deliberately accepted.
 
 config_version = "0"
 
@@ -89,7 +89,9 @@ default = true
 
 [[plugin]]
 name = "actionlint"
-mode = "disabled"
+# Runner labels are declared in .github/actionlint.yaml, so this runs clean
+# and can gate on genuine workflow errors.
+mode = "block"
 
 [[plugin]]
 name = "bandit"
@@ -156,4 +158,6 @@ name = "trufflehog"
 
 [[plugin]]
 name = "zizmor"
-mode = "disabled"
+# Accepted-decision rules are suppressed in zizmor.yml; remaining genuine
+# findings are left visible. `comment` reports them without failing the gate.
+mode = "comment"
