@@ -245,7 +245,7 @@ may decide.
 
 ## QA History
 
-- 2026-09-17: **improve-architecture (product-map walk)** — closed the "No
+- 2026-09-17: **product-map review pass** — closed the "No
   executing BDD surface for modify-then-approve, `human_only` refusal, or
   overdue warnings" Known Gap: registered the new `gate_policies.feature`
   (scenarios in `test_hitl_gate_policies.py`) into the executing BDD suite,
@@ -257,14 +257,14 @@ may decide.
   `_ORPHANED_BDD_FEATURES` stays empty; the three behaviours are now
   BDD-covered as well as unit-covered. Status: covered.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-11: **product-map review pass** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/settings/hitl-review`
   manifest `elements:` inventory and wired the component into the reverse
   testid-coverage guard, so the HITL review search control the page ships stays
   visible to Remy's docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — closed the
+- 2026-09-11: **product-map review pass** — closed the
   `/settings/hitl-review` element-inventory drift for the shared gate-card
   surface: the page renders `hitl/HitlGateCard.vue` (whose `hitl-gate-foreign-claim`
   state was never registered here) and the `HitlBriefing.vue` briefing embedded in
@@ -273,7 +273,7 @@ may decide.
   `test_mapped_route_elements_cover_owning_view_testids` maps the route to the view
   plus `HitlGateCard.vue` / `HitlBriefing.vue`, so a newly shipped gate/briefing
   testid can no longer drift invisible to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-08-29: **improve-architecture (product-map walk)** — new behaviour
+- 2026-08-29: **product-map review pass** — new behaviour
   tracker for the registered `feat-hitl` manifest feature (route
   `/settings/hitl-review`, previously absent from the feature graph).
   Behaviours verified against `api/routes/hitl.py`, `core/hitl_manager/*`,
@@ -286,7 +286,7 @@ may decide.
   folded into `bdd:` here: that feature file ships but no step module registers
   it via `scenarios(...)`, so citing it would claim BDD coverage for scenarios
   that never execute. Status: covered.
-- 2026-09-08: **improve-architecture (product-map walk)** — registered the
+- 2026-09-08: **product-map review pass** — registered the
   FAR-727 HITL review queue testids (`hitl-review-column-headers`,
   `hitl-review-node-name`, `hitl-review-pipeline-name`) in the manifest
   `/settings/hitl-review` `elements` list. They shipped in the view
@@ -294,7 +294,7 @@ may decide.
   element-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`);
   the elements list now covers the owning view's testids exactly. Status:
   covered.
-- 2026-09-07: **improve-architecture (product-map walk)** — closed the stale-BDD
+- 2026-09-07: **product-map review pass** — closed the stale-BDD
   drift: removed the never-executed, superseded feature files
   (`hitl/approval_gate.feature` marked `@deprecated`, `hitl/human_only_gate.feature`,
   `hitl/modify_then_approve.feature`, `hitl/overdue_warning.feature`) and the

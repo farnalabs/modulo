@@ -57,7 +57,7 @@ org/`days` to keep the landing page fast.
   headline pass rate does not reflect guardrail-blocked runs.
 
 ## QA History
-- 2026-09-18: **improve-architecture (product-map walk)** — closed the "No BDD for
+- 2026-09-18: **product-map review pass** — closed the "No BDD for
   `/summary` / `/trends` / `/daily-run-counts`" gap: registered
   `dashboard/dashboard_summary.feature` (+ colocated steps
   `features/dashboard/test_dashboard_summary_steps.py`) and
@@ -71,7 +71,7 @@ org/`days` to keep the landing page fast.
   day/status-keyed daily counts, cross-status accumulation, default 30 and custom
   `days` windows, and the 1..365 `days` bound. Removed the tracked known gap;
   `/trends` was already covered by `hitl_trends.feature`.
-- 2026-09-15: **improve-architecture (product-map walk)** — closed the dashboard
+- 2026-09-15: **product-map review pass** — closed the dashboard
   notifications-panel product-map gap: the `DashboardNotificationsPanel.vue` paging
   controls ship static `data-testid`s (`panel-prev-page` / `panel-next-page`) on the
   home page while the `/` manifest `elements:` inventory registered only its
@@ -81,13 +81,13 @@ org/`days` to keep the landing page fast.
   Registered both buttons in the `/` inventory and wired
   `components/DashboardNotificationsPanel.vue` into the guard as an owned view of the
   dashboard, so the panel surface can no longer drift unguarded.
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for the home dashboard
   (`/`), which renders the header's `#right` action slot, and wired the component into
   the reverse testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`)
   so the header action surface stays visible to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/views`
   and wired the two components into the reverse testid-coverage guard
@@ -95,7 +95,7 @@ org/`days` to keep the landing page fast.
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-08-28: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-28: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-dashboard`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/dashboard.py`,
   `api/routes/views.py`, `api/routes/daily_run_counts.py` and the dashboard/views

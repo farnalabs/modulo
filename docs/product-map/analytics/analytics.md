@@ -73,7 +73,7 @@ reports resolve against a consistent fact model.
 
 ## QA History
 
-- 2026-09-21: **improve-architecture (product-map walk)** — closed the
+- 2026-09-21: **product-map review pass** — closed the
   "No server-side streaming / scan export for the whole org in one response"
   gap. Added `GET /api/v1/analytics/scan` (NDJSON `application/x-ndjson`
   default, CSV attachment for `format=csv`) with a new
@@ -89,7 +89,7 @@ reports resolve against a consistent fact model.
   isolation, feature-gate 402, unauthenticated 401). The manifest `feat-analytics`
   deferral is demoted to only the Redis-scaled limiter follow-up.
 
-- 2026-09-19: **improve-architecture (product-map walk)** — closed the "No
+- 2026-09-19: **product-map review pass** — closed the "No
   dedicated BDD feature files for `/analytics`" gap. Registered
   `analytics/query.feature` into the executing BDD suite from the colocated
   `features/analytics/test_analytics_query_steps.py`, driving the REAL
@@ -105,7 +105,7 @@ reports resolve against a consistent fact model.
   the advisory-only guardrail scorecard. Status remains covered;
   `_ORPHANED_BDD_FEATURES` stays empty.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/analytics`: the whole-page view(s) `AnalyticsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -113,7 +113,7 @@ reports resolve against a consistent fact model.
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-analytics`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/analytics.py`,
   `core/analytics/*` and the analytics unit/integration suites. Status: covered.

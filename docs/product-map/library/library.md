@@ -90,7 +90,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 
 ## QA History
 
-- 2026-09-13: **improve-architecture (product-map walk)** — closed the contribution BDD
+- 2026-09-13: **product-map review pass** — closed the contribution BDD
   gap: wired `library/contribute.feature` into the executing suite via the new
   `steps/test_library_contributions.py` (11 scenarios) and dropped the file from the
   tracked orphaned-BDD debt list (`_ORPHANED_BDD_FEATURES`). The rewritten feature
@@ -100,14 +100,14 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   `contribution.publish`), version-bump (201 draft, 409 on draft original) and the
   contribution/version list surfaces. Contribution is no longer unit-tested only.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for `/library`, which
   renders the header's `#right` action slot, and wired the component into the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) so the
   header action surface stays visible to Remy's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/library/:id/create-pipeline`: the whole-page view(s) `LibraryPipelineWizard.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -115,30 +115,30 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-11: **product-map review pass** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/library` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
   guard, so the search control the page ships stays visible to Remy's docs indexer
   and `/api/v1/manifest`.
 
-- 2026-09-10: **improve-architecture (product-map walk)** — registered the
+- 2026-09-10: **product-map review pass** — registered the
   `library-collection-badge` testid of `LibraryPrimitiveCard.vue` in the `/library`
   manifest `elements:` inventory, so the collection-membership badge on library
   cards is no longer invisible to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-09-10: **improve-architecture (product-map walk)** — registered the collection
+- 2026-09-10: **product-map review pass** — registered the collection
   authoring/detail and collections-tab testids (`collection-*`,
   `library-section-collections`, `library-create-collection`, `library-collections-error`)
   in the manifest `elements:` inventory and added `LibraryView.vue`,
   `CollectionCreateView.vue` and `CollectionDetailView.vue` to the reverse testid-coverage
   guard (`test_mapped_route_elements_cover_owning_view_testids`), so the FAR-760 collection
   surface can no longer ship controls invisible to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-09-10: **improve-architecture (product-map walk)** — added the FAR-760 library
+- 2026-09-10: **product-map review pass** — added the FAR-760 library
   collections behaviour (flag-gated draft → publish lifecycle) and cited the collection
   unit test and frontend views; the graph-root registry index now lists the collection
   routes. Verified against `backend/tests/unit/api/test_library_collection.py`,
   `frontend/src/views/CollectionCreateView.vue` and `CollectionDetailView.vue`.
-- 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-library`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/library.py`,
   `core/library_sync`, `core/library_service/*` and the library BDD/unit suites.

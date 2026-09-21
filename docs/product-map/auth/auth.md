@@ -90,7 +90,7 @@ clients.
       (`backend/tests/bdd/features/auth/rbac.feature`)
 
 ## QA History
-- 2026-09-17: **improve-architecture (product-map walk)** — closed the "No
+- 2026-09-17: **product-map review pass** — closed the "No
   dedicated BDD for `/me` password-change forced flow" gap. `auth/change_password.feature`
   gained the "Forced password change clears the admin-reset flag in the same
   transaction" scenario (driven by `steps/test_change_password.py`), asserting the
@@ -99,7 +99,7 @@ clients.
   the flagship forced-flow behaviour that was previously unit-tested only
   (`tests/unit/api/test_me_password.py::test_successful_password_change_clears_must_change_flag`).
 
-- 2026-09-13: **improve-architecture (product-map walk)** — removed the phantom
+- 2026-09-13: **product-map review pass** — removed the phantom
   `force-change-password-sign-out` element from the `/admin/my-profile` manifest
   `elements:` inventory: its only render site is the app-level forced-password-gate
   (`frontend/src/views/ForceChangePasswordView.vue`, mounted by `App.vue`), never the
@@ -108,7 +108,7 @@ clients.
   requires every registered element's testid to render within its route's owning-view
   closure, closing the mis-attribution drift direction none of the existing guards covered.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/my-profile`
   and wired the two components into the reverse testid-coverage guard
@@ -116,7 +116,7 @@ clients.
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/oauth/authorize`: the whole-page view(s) `OAuthConsentView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -124,7 +124,7 @@ clients.
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/my-profile`: the whole-page view(s) `MyProfileView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -132,7 +132,7 @@ clients.
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-07: **improve-architecture (product-map walk)** — added this
+- 2026-09-07: **product-map review pass** — added this
   behaviour-tracker for `feat-auth`, which previously had behaviours only in
   `manifest.yaml` inline. Behaviours verified against `routes/auth.py`,
   `routes/sso.py`, the auth unit+BDD suites, and frontend views. Status: covered.

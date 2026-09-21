@@ -39,7 +39,7 @@ signature verification, wired into the SSO ACS flow (`feat-sso`).
 
 ## QA History
 
-- 2026-08-25: **improve-architecture (product-map walk)** — entry added to close the
+- 2026-08-25: **product-map review pass** — entry added to close the
   dangling `depends-on: feat-core-saml-integration` edge in `auth/sso-provider-ui.md`.
   Behaviours re-verified against `auth/saml_handler.py`, `sso_saml.feature`, and unit
   tests. Status: covered.

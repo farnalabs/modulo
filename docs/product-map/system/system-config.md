@@ -35,12 +35,12 @@ with sensitive value masking.
       (`backend/tests/bdd/features/system_admin/system_admin_config.feature`)
 
 ## QA History
-- 2026-09-17: **improve-architecture (product-map walk)** — closed the last
+- 2026-09-17: **product-map review pass** — closed the last
   `feat-system-config` BDD gap: added DELETE coverage to
   `system_admin_config.feature` (successful 204 delete, 404 for an unknown key,
   and 403 for a regular org admin), closing the "No BDD for DELETE system
   config" known gap. Status: covered with no remaining known gaps.
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
   in the manifest `elements:` inventory for `/admin/system/config`: each config
@@ -50,7 +50,7 @@ with sensitive value masking.
   of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/system/config`
   and wired the two components into the reverse testid-coverage guard
@@ -58,7 +58,7 @@ with sensitive value masking.
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-07: **improve-architecture (product-map walk)** — added this
+- 2026-09-07: **product-map review pass** — added this
   behaviour-tracker for `feat-system-config`, which previously had no
   `docs/product-map/` entry. Behaviours verified against
   `routes/admin_system_config.py`, the system-config unit tests, and the

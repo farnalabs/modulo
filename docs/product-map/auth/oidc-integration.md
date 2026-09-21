@@ -41,7 +41,7 @@ the SSO callback flow (`feat-sso`).
 
 ## QA History
 
-- 2026-09-21: **improve-architecture (product-map walk)** — added
+- 2026-09-21: **product-map review pass** — added
   `backend/tests/integration/auth/test_oidc_rls_resolution.py` (real-Postgres
   multi-org RLS regression for the per-provider OIDC surface, closing the
   `feat-sso` deferral). Proves the system leg resolves an OIDC provider owned by
@@ -52,7 +52,7 @@ the SSO callback flow (`feat-sso`).
   session sees zero OIDC providers, and `GET /oidc/{provider}/login`
   307-redirects cross-org while an unknown slug is a 400 not a 500.
 
-- 2026-08-25: **improve-architecture (product-map walk)** — entry added to close the
+- 2026-08-25: **product-map review pass** — entry added to close the
   dangling `depends-on: feat-core-oidc-integration` edge in `auth/sso-provider-ui.md`.
   Behaviours re-verified against `auth/oidc_verify.py`, `sso_oidc.feature`, and unit
   tests. Status: covered.
