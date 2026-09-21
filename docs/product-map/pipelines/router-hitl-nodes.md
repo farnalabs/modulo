@@ -89,7 +89,7 @@ registry (`feat-router`).
 
 ## QA History
 
-- 2026-09-17: **improve-architecture (product-map walk)** — closed the
+- 2026-09-17: **product-map review pass** — closed the
   "No BDD feature scenarios" Known Gap. Added
   `backend/tests/bdd/features/pipelines/router_nodes.feature` (wired from
   `steps/test_router_nodes.py`), exercising the real shipped seams: the
@@ -102,7 +102,7 @@ registry (`feat-router`).
   `failed` classification, plus the `TERMINAL_STATUSES` contract. All 9
   scenarios executing green; `_ORPHANED_BDD_FEATURES` stays empty.
 
-- 2026-08-29: **improve-architecture (product-map walk)** — entry added to close
+- 2026-08-29: **product-map review pass** — entry added to close
   the feature-graph gap behind the manifest `feat-router` registry entry (with
   `/pipelines` route referencing it) that shipped in FAR-415 but had no
   behaviour-tracker node. Behaviours re-verified against ADR 025,

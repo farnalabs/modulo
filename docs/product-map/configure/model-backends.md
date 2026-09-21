@@ -83,7 +83,7 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
   registered backends is not modelled; each worker re-reads backend state via the hub.
 
 ## QA History
-- 2026-09-20: **improve-architecture (product-map walk)** — closed the "no standalone
+- 2026-09-20: **product-map review pass** — closed the "no standalone
   model-backend health endpoint exists" `@awaiting-implementation` gap. The four
   `model_backends/health_check.feature` scenarios now execute against the REAL
   `POST /api/v1/model-backends/{id}/health-check` route (PRD 8.1 re-check) with only the
@@ -92,7 +92,7 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
   `healthy`. The stale `@awaiting-implementation` comments in the feature (which claimed
   the endpoint does not exist) were replaced by the real contract. Removed from
   `PINNED_AWAITING_IMPLEMENTATION`.
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/model-backends`
   and wired the two components into the reverse testid-coverage guard
@@ -100,19 +100,19 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-12: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/setup/model-backend/:id`: the whole-page view setup/ModelBackendSetupView.vue now
   maps to its owning view so a newly shipped testid on the model-backend setup flow
   can no longer silently stay invisible to Remy's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-10: **improve-architecture (product-map walk)** — registered the preset
+- 2026-09-10: **product-map review pass** — registered the preset
   picker/testids of `AdminModelBackendsView.vue` (`admin-model-backends-*` preset and
   manual-entry controls) in the manifest `elements:` inventory and added the view to the
   reverse testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`),
   so a newly shipped panel on the model-backends page can no longer ship invisible to
   Remy's docs indexer / `/api/v1/manifest`.
-- 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-model-backends`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/model_backends.py`,
   `core/model_backend_hub`, `backend/src/modulo/model_backends/*` and the model-backends

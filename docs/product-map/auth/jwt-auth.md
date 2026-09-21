@@ -53,7 +53,7 @@ covered by `jwt_security.feature`.
 
 ## QA History
 
-- 2026-09-18: **improve-architecture (product-map walk)** — closed the
+- 2026-09-18: **product-map review pass** — closed the
   "No standalone BDD feature file" gap. Registered
   `auth/jwt_auth_crypto.feature` into the executing BDD suite from the new
   `steps/test_jwt_auth_crypto.py`, driving the real `modulo.auth.jwt` seams
@@ -65,7 +65,7 @@ covered by `jwt_security.feature`.
   credential class into the new access token, `decode_claim_token` HITL-gate
   run/gate scoping with a wrong-gate refusal, and the legacy no-`client_kind`
   token decoding as `browser`. `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-08-25: **improve-architecture (product-map walk)** — entry added to close the
+- 2026-08-25: **product-map review pass** — entry added to close the
   dangling `depends-on: feat-auth-jwt-auth` edge in `teams/org-entity.md`. Behaviours
   re-verified against `auth/jwt.py` and `backend/tests/unit/auth/test_jwt.py`. Status:
   covered.

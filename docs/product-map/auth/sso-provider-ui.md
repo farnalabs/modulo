@@ -76,7 +76,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   states only "This action cannot be undone".
 
 ## QA History
-- 2026-09-21: **improve-architecture (product-map walk)** — closed the OIDC
+- 2026-09-21: **product-map review pass** — closed the OIDC
   multi-org real-DB (RLS) integration gap (manifest `feat-sso` deferral). New
   `backend/tests/integration/auth/test_oidc_rls_resolution.py` mirrors the SAML
   RLS regression for the per-provider OIDC surface: the system role resolves an
@@ -88,7 +88,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   and `GET /oidc/{provider}/login` 307s cross-org with the resolved provider's
   client_id while an unknown slug is a 400 not a 500. Demoted the OIDC deferral
   and added the behaviour lines to `frontend/src/manifest.yaml`.
-- 2026-09-21: **improve-architecture (product-map walk)** — closed the
+- 2026-09-21: **product-map review pass** — closed the
   "No BDD scenarios for admin provider CRUD" gap. Registered
   `auth/sso_admin_crud.feature` into the executing BDD suite from the new
   `steps/test_sso_admin_crud.py`, driving the real `/api/v1/admin/sso` routes
@@ -102,7 +102,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   (`_test_oidc_connection` / `_test_saml_connection` parse for real, only the
   pinned HTTP client patched), group-to-team mapping set/get, and the non-admin
   403. `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-09-17: **improve-architecture (product-map walk)** — registered the
+- 2026-09-17: **product-map review pass** — registered the
   `SsoProviderForm.vue` provider-form surface in the manifest `elements:`
   inventory for `/settings/sso`: the form ships the tenant-domain input
   (`sso-tenant-domain`) and the callback-URL copy control
@@ -114,7 +114,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   (`test_mapped_route_elements_cover_owning_view_testids`), so a newly shipped
   provider-form control can no longer silently drift out of the product map.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
   in the manifest `elements:` inventory for `/settings/sso`: a successful connection
@@ -124,7 +124,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/sso`
   and wired the two components into the reverse testid-coverage guard
@@ -132,7 +132,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/sso`: the whole-page view(s) `SettingsSsoView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -140,7 +140,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-25: **improve-architecture (product-map walk)** — shipped the login-page SSO
+- 2026-08-25: **product-map review pass** — shipped the login-page SSO
   provider buttons (``LoginView.vue`` consumes ``GET /api/v1/auth/sso/providers`` and
   renders OIDC/SAML buttons that link to the existing login endpoints). Coverage added in
   ``frontend/src/__tests__/LoginView.spec.ts`` (5 cases, incl. fails-closed on 402 / empty

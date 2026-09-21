@@ -98,7 +98,7 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   published as a distinct surface here.
 
 ## QA History
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/mcp`
   and wired the two components into the reverse testid-coverage guard
@@ -106,7 +106,7 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-09: **improve-architecture (product-map walk)** — closed the
+- 2026-09-09: **product-map review pass** — closed the
   "no executing BDD surface for MCP onboarding" gap. `mcp/onboarding.feature`
   is now registered by `tests/bdd/steps/test_mcp_onboarding_steps.py` and
   executes against the shipped contracts: the discoverable tool inventory
@@ -117,7 +117,7 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   server (its middleware rejects unauthenticated introspection fail-closed),
   so it was rewritten to describe the real contract and dropped from the
   tracked orphaned-BDD debt list.
-- 2026-08-30: **improve-architecture (product-map walk)** — new behaviour
+- 2026-08-30: **product-map review pass** — new behaviour
   tracker for the registered `feat-mcp` manifest feature (route `/settings/mcp`,
   previously absent from the feature graph). Behaviours verified against
   `api/mcp_server.py`, `api/mcp_tool_registry.py`, `core/mcp/scope_validator.py`,
