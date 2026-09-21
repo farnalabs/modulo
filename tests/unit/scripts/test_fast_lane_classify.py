@@ -499,7 +499,11 @@ class TestInWindowFollowUpIneligible:
         "fast_lane_classify.check_suspension",
         return_value=(
             False,
-            "fast lane suspended until 2026-09-22T00:00:00 — reason: critical finding in prior fast-lane merge (current time 2026-09-21T12:00:00)",
+            (
+                "fast lane suspended until 2026-09-22T00:00:00"
+                " — reason: critical finding in prior fast-lane merge"
+                " (current time 2026-09-21T12:00:00)"
+            ),
         ),
     )
     @patch("fast_lane_classify.subprocess.run")
@@ -518,9 +522,7 @@ class TestInWindowFollowUpIneligible:
         of its path classification.
         """
         # gh pr diff returns a class-A path (the follow-up touches test files)
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="backend/tests/unit/test_foo.py\n", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="backend/tests/unit/test_foo.py\n", stderr="")
         rc = classify_main(
             [
                 "--pr-number",
