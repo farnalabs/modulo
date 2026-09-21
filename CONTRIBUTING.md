@@ -485,10 +485,11 @@ and re-verifies review approval — no direct commits to `main`. All CI checks
 must pass before merge.
 
 Most PRs follow this standard review process. However, a PR whose changed
-files are **entirely** test code, markdown, or non-YAML GitHub configuration
-(e.g. `.github/CODEOWNERS`) may qualify for the "fast lane" and be merged
-without review. These file types cannot alter product behaviour, so the risk
-profile is different.
+files are **entirely** test code in the dedicated test directories
+(`backend/tests/`, `frontend/tests/`, `tests/`), markdown, or non-YAML
+GitHub configuration (e.g. `.github/CODEOWNERS`) may qualify for the "fast
+lane" and be merged without review. These file types cannot alter product
+behaviour, so the risk profile is different.
 
 Changes that always go through the standard reviewed path:
 
