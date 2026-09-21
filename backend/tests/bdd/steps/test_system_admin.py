@@ -743,7 +743,10 @@ def _all_orgs_listed(request):
     slugs = {item["slug"] for item in body}
     assert {"acme-corp", "beta-ltd"} <= slugs, f"expected the seeded orgs, got {slugs!r}"
     for item in body:
-        assert "id" in item and "name" in item and "status" in item and "created_at" in item
+        assert "id" in item
+        assert "name" in item
+        assert "status" in item
+        assert "created_at" in item
 
 
 @then("reserved infrastructure orgs are hidden")
