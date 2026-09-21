@@ -75,6 +75,7 @@ jobs:
       with:
         ref: main
         fetch-depth: 1
+        persist-credentials: false
 
       # Design contract: every gh/flyctl call is wrapped so an API hiccup
       # logs a ::warning:: and exits 0 (failing safe - never dispatch blind).
@@ -86,7 +87,6 @@ jobs:
       # re-runs full pre-deploy CI and deploys once CI passes - the throttle
       # never needs bypassing, and bypassing it on a red main would only
       # re-fire the Branch Fixer webhook on every tick.
-        persist-credentials: false
     - name: Check prod staleness and re-dispatch deploy if needed
       id: watchdog
       shell: bash
