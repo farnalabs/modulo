@@ -38,7 +38,16 @@ async function requestWorker(method: string, path: string, body?: unknown, optio
     })
     return res
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    // Report a timeout only when the local 30s timer caused the abort. A
+    // caller-supplied signal (drag-save supersede, unmount) aborts the controller
+    // too, but that is a cancellation, not a timeout, so its AbortError must be
+    // propagated unchanged.
+    if (
+      err instanceof DOMException &&
+      err.name === 'AbortError' &&
+      controller.signal.aborted &&
+      !options?.signal?.aborted
+    ) {
       throw new Error('Request timed out')
     }
     throw err

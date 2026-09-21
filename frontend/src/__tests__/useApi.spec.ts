@@ -324,6 +324,31 @@ describe('useApi timeout', () => {
     await assertion
   })
 
+  it('propagates a caller-initiated abort instead of reporting a timeout', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockImplementation(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal
+          if (!signal) {
+            reject(new Error('no signal provided'))
+            return
+          }
+          signal.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted.', 'AbortError')),
+          )
+        }),
+    )
+
+    const api = useApi()
+    const caller = new AbortController()
+    const pending = api.get('/api/v1/widgets', { signal: caller.signal })
+    const assertion = expect(pending).rejects.toThrow('The operation was aborted.')
+
+    caller.abort()
+    await assertion
+  })
+
   it('completes normally when the request settles before the timeout', async () => {
     vi.useFakeTimers()
     fetchMock.mockResolvedValue(jsonResponse(200, { id: 1 }))
