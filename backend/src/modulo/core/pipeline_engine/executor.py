@@ -56,7 +56,6 @@ from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
     EvalBlockedError,
-    EvalEngine,
     EvalSuiteBlockedError,
     SuiteEvalResult,
     evaluate_suite,
@@ -93,6 +92,7 @@ from modulo.core.pipeline_engine.error_codes import (
     sanitize_error_text,
 )
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
+from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.evidence import (
     EvidenceProvider,
@@ -2303,16 +2303,12 @@ class PipelineExecutor:
         org_id: uuid.UUID | None,
         node_type_map: dict[str, str] | None = None,
     ) -> None:
-        """FAR-305: run node-scoped evals for a completed node (standalone path).
+        """FAR-305/FAR-971: run node-scoped evals for a completed node (standalone path).
 
-        This is the non-HITL counterpart to ``make_hitl_gate_fn``'s
-        eval-before-interrupt: it evaluates each of the node's eval definitions
-        against the node's CONTRACT output — the agent's actual return (what
-        users see as the node return; for a sandbox_agent that is
-        ``artifacts[0].output.output_json``), matching what the HITL gate
-        evaluates against state after FAR-311 — and persists the results to the
-        ``eval_results`` table so post-run suite-level threshold checks can
-        read them.
+        Per-eval compute→persist→decide (persist-before-decide, FAR-971 chunk 2).
+        Each ``EvalResult`` is committed in its own transaction *before* the
+        block/warn decision is taken, so a ``block`` eval's result is always
+        durable when ``EvalBlockedError`` propagates.
 
         If a ``block`` eval fails, ``EvalBlockedError`` propagates to
         ``_stream_graph``'s existing handler, transitioning the run to
@@ -2320,6 +2316,8 @@ class PipelineExecutor:
         """
         eval_defs = eval_definitions_by_node.get(node_id)
         if not eval_defs:
+            return
+        if self._session_factory is None or org_id is None:
             return
         # The captured ``output`` is the envelope ``{"artifacts": [...],
         # "output": {...}}``. Validate the node's CONTRACT output (what the
@@ -2329,49 +2327,14 @@ class PipelineExecutor:
         # pr_url / changed_files).
         eval_target = _resolve_post_node_eval_target(node_id, envelope, node_type_map)
 
-        engine = EvalEngine()
-        results: dict[str, EngineEvalResult] = {}
-        for eval_def in eval_defs:
-            eval_result = engine.evaluate(eval_target, eval_def, run_id=run_id)
-            results[eval_def.name] = eval_result
-            _log.info(
-                "post_node_eval.result",
-                extra={
-                    "node_id": node_id,
-                    "eval_name": eval_def.name,
-                    "eval_id": str(eval_def.id),
-                    "passed": eval_result.passed,
-                    "score": eval_result.score,
-                    "detail": eval_result.detail,
-                },
-            )
-
-        # Persist eval results to the eval_results table so post-run
-        # suite-level threshold checks can read them.
-        if self._session_factory is not None and org_id is not None:
-            try:
-                async with self._session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    await set_rls_execution_context(session)
-                    for eval_def in eval_defs:
-                        eval_result = results[eval_def.name]
-                        node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
-                        session.add(
-                            EvalResult(
-                                organisation_id=org_id,
-                                run_id=run_id,
-                                node_id=node_uuid,
-                                eval_id=eval_def.id,
-                                eval_definition_version=eval_def.version,
-                                passed=eval_result.passed,
-                                score=eval_result.score,
-                                detail=eval_result.detail,
-                            )
-                        )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("post_node_eval.persist_failed", extra={"node_id": node_id})
+        await run_evals_persist_before_decide(
+            eval_defs=eval_defs,
+            eval_target=eval_target,
+            run_id=run_id,
+            org_id=org_id,
+            session_factory=self._session_factory,
+            node_id=node_id,
+        )
 
     async def _init_model_backend_hub(self, org_id: uuid.UUID) -> ModelBackendHub | None:
         """Load active model backends for the org and initialise ModelBackendHub.

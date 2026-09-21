@@ -106,6 +106,7 @@ from modulo.core.pipeline_engine.error_codes import (
     sanitize_error_text,
 )
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
+from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.hitl_context import serialize_value, slice_with_marker
 from modulo.core.pipeline_engine.idempotency import (
@@ -4348,32 +4349,31 @@ async def _run_gate_evals(
     session_factory: Any,
     org_id: Any,
 ) -> dict[str, EvalResult]:
-    """Run the gate's node-scoped evals (eval-before-interrupt) and persist results."""
-    eval_results_by_name: dict[str, EvalResult] = {}
-    if eval_definitions:
-        engine = EvalEngine()
-        for eval_def in eval_definitions:
-            llm_judge_callable = _resolve_llm_judge_callable(eval_def)
-            eval_result = engine.evaluate(
-                _resolve_gate_eval_target(state, eval_def.node_id, node_type_map),
-                eval_def,
-                llm_judge_callable=llm_judge_callable,
-            )
-            eval_results_by_name[eval_def.name] = eval_result
-            _log.info(
-                "hitl_gate.eval_result",
-                extra={
-                    "gate_id": gate_id,
-                    "eval_name": eval_def.name,
-                    "eval_id": str(eval_def.id),
-                    "passed": eval_result.passed,
-                    "score": eval_result.score,
-                    "detail": eval_result.detail,
-                },
-            )
-        # If any block eval failed, EvalBlockedError was raised above.
-        await _persist_gate_eval_results(state, eval_definitions, eval_results_by_name, session_factory, org_id)
-    return eval_results_by_name
+    """Run the gate's node-scoped evals (eval-before-interrupt) and persist results.
+
+    Per-eval compute→persist→decide (persist-before-decide, FAR-971 chunk 2).
+    Each ``EvalResult`` is committed in its own transaction *before* the
+    block/warn decision is taken, so a ``block`` eval's result is always
+    durable when ``EvalBlockedError`` propagates.
+    """
+    if not eval_definitions:
+        return {}
+    # All gate evals are scoped to the same source node — resolve the
+    # eval target once using the first definition's node_id.
+    first_node_id = eval_definitions[0].node_id
+    eval_target = _resolve_gate_eval_target(state, first_node_id, node_type_map)
+    _run_id = state.get("_run_id")
+    if _run_id is None:
+        _run_id = uuid.uuid4()
+    return await run_evals_persist_before_decide(
+        eval_defs=eval_definitions,
+        eval_target=eval_target,
+        run_id=_run_id,
+        org_id=org_id,
+        session_factory=session_factory,
+        node_id=first_node_id,
+        resolve_llm_judge=_resolve_llm_judge_callable,
+    )
 
 
 def _hitl_gate_eval_condition_skip(
