@@ -4,6 +4,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
   # NOTE (FAR-773): the weekly Bundled Runner backstop cron deliberately does
   # NOT live here. A schedule trigger fires the ENTIRE fast-validation suite;
@@ -898,25 +899,13 @@ jobs:
         id: classify
         env:
           GH_TOKEN: ${{ github.token }}
-          # The label list is passed through an env var rather than
-          # interpolated into the shell script text: a label name containing a
-          # single quote would otherwise break out of the quoted string and
-          # inject shell commands running with github.token.
-          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
-          HAS_LABEL=""
-          # Exact array membership (not a substring grep): this avoids matching
-          # labels such as "fast-lane:test-infra2".
-          if printf '%s' "$PR_LABELS" | jq -e 'index("fast-lane:test-infra") != null' >/dev/null 2>&1; then
-            HAS_LABEL="--has-label"
-          fi
           set +e
           uv run --no-build --project backend --no-sync python scripts/fast_lane_classify.py \
             --pr-number ${{ github.event.pull_request.number }} \
             --head-sha ${{ github.event.pull_request.head.sha }} \
             --repo ${{ github.repository }} \
-            --base-ref "origin/${{ github.event.pull_request.base.ref }}" \
-            $HAS_LABEL
+            --base-ref "origin/${{ github.event.pull_request.base.ref }}"
           rc=$?
           echo "classify_rc=$rc" >> "$GITHUB_OUTPUT"
           # Always exit 0: the job stays green (workflow run = success) for

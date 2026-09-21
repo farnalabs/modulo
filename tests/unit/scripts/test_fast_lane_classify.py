@@ -24,6 +24,7 @@ from fast_lane_classify import (  # noqa: E402
     _safe_pr,
     _safe_repo,
     check_cap,
+    check_label_live,
     check_no_test_weakening,
     check_sha_pinning,
     check_suspension,
@@ -246,10 +247,12 @@ class TestMainExitCode:
     @patch("fast_lane_classify.check_no_test_weakening", return_value=(True, []))
     @patch("fast_lane_classify.check_suspension", return_value=(True, "no suspension"))
     @patch("fast_lane_classify.check_cap", return_value=(True, "cap OK"))
+    @patch("fast_lane_classify.check_label_live", return_value=(True, "label present"))
     @patch("fast_lane_classify.subprocess.run")
     def test_class_a_with_label_exits_zero(
         self,
         mock_run: MagicMock,
+        mock_label: MagicMock,
         mock_cap: MagicMock,
         mock_susp: MagicMock,
         mock_weaken: MagicMock,
@@ -271,13 +274,17 @@ class TestMainExitCode:
                 "farnalabs/modulo",
                 "--base-ref",
                 "origin/main",
-                "--has-label",
             ]
         )
         assert rc == 0, "class-A with label and guardrails pass must exit 0"
 
+    @patch("fast_lane_classify.check_label_live", return_value=(False, "label absent"))
     @patch("fast_lane_classify.subprocess.run")
-    def test_class_a_without_label_exits_nonzero(self, mock_run: MagicMock) -> None:
+    def test_class_a_without_label_exits_nonzero(
+        self,
+        mock_run: MagicMock,
+        mock_label: MagicMock,
+    ) -> None:
         """A class-A PR without the label must exit 1 (standard lane)."""
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -294,7 +301,6 @@ class TestMainExitCode:
                 "farnalabs/modulo",
                 "--base-ref",
                 "origin/main",
-                # no --has-label
             ]
         )
         assert rc == 1, "class-A without label must exit 1 (standard lane)"
@@ -522,6 +528,85 @@ class TestCheckSuspensionNaiveTimestamp:
         assert "expired" in detail.lower()
 
 
+# ---------------------------------------------------------------------------
+# Live label check (FAR-1132)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckLabelLive:
+    """check_label_live reads the PR's labels from the GitHub API (live)."""
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_label_present_returns_true(self, mock_run: MagicMock) -> None:
+        """A PR with fast-lane:test-infra in its live labels returns True."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="agent-generated\nfast-lane:test-infra\n",
+            stderr="",
+        )
+        has_label, detail = check_label_live("farnalabs/modulo", 42)
+        assert has_label is True
+        assert "present" in detail.lower()
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_label_absent_returns_false(self, mock_run: MagicMock) -> None:
+        """A PR without fast-lane:test-infra in its live labels returns False."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="agent-generated\n",
+            stderr="",
+        )
+        has_label, detail = check_label_live("farnalabs/modulo", 42)
+        assert has_label is False
+        assert "absent" in detail.lower()
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_api_error_fail_closed(self, mock_run: MagicMock) -> None:
+        """An API error must deny (fail-closed), not grant label presence."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="rate limited",
+        )
+        has_label, detail = check_label_live("farnalabs/modulo", 42)
+        assert has_label is False
+        assert "fail-closed" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_timeout_fail_closed(self, mock_run: MagicMock) -> None:
+        """A timeout must deny (fail-closed)."""
+        import subprocess as _sp
+
+        mock_run.side_effect = _sp.TimeoutExpired(cmd="gh", timeout=15)
+        has_label, detail = check_label_live("farnalabs/modulo", 42)
+        assert has_label is False
+        assert "fail-closed" in detail
+
+    def test_invalid_repo_fail_closed(self) -> None:
+        """An invalid repo slug must deny (fail-closed)."""
+        has_label, detail = check_label_live("invalid repo!", 42)
+        assert has_label is False
+        assert "fail-closed" in detail
+
+    def test_invalid_pr_fail_closed(self) -> None:
+        """An invalid PR number must deny (fail-closed)."""
+        has_label, detail = check_label_live("farnalabs/modulo", -1)
+        assert has_label is False
+        assert "fail-closed" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_empty_output_denies(self, mock_run: MagicMock) -> None:
+        """Empty stdout (no labels at all) must deny."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        has_label, detail = check_label_live("farnalabs/modulo", 42)
+        assert has_label is False
+        assert "absent" in detail.lower()
+
+
 class TestInWindowFollowUpIneligible:
     """Prove that a follow-up PR raised during an active suspension is also
     ineligible for the fast lane — this is the circuit-breaker property.
@@ -537,13 +622,14 @@ class TestInWindowFollowUpIneligible:
     @patch("fast_lane_classify.check_sha_pinning", return_value=(True, "SHA-pinned"))
     @patch("fast_lane_classify.check_no_test_weakening", return_value=(True, []))
     @patch("fast_lane_classify.check_cap", return_value=(True, "cap OK"))
+    @patch("fast_lane_classify.check_label_live", return_value=(True, "label present"))
     @patch(
         "fast_lane_classify.check_suspension",
         return_value=(
             False,
             (
                 "fast lane suspended until 2026-09-22T00:00:00"
-                " — reason: critical finding in prior fast-lane merge"
+                " - reason: critical finding in prior fast-lane merge"
                 " (current time 2026-09-21T12:00:00)"
             ),
         ),
@@ -553,6 +639,7 @@ class TestInWindowFollowUpIneligible:
         self,
         mock_run: MagicMock,
         mock_susp: MagicMock,
+        mock_label: MagicMock,
         mock_cap: MagicMock,
         mock_weaken: MagicMock,
         mock_pin: MagicMock,
@@ -575,7 +662,6 @@ class TestInWindowFollowUpIneligible:
                 "farnalabs/modulo",
                 "--base-ref",
                 "origin/main",
-                "--has-label",
             ]
         )
         assert rc == 1, (
