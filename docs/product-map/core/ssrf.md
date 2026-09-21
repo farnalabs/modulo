@@ -83,7 +83,7 @@ route, so it is tracked here rather than in the manifest registry.
 
 ## QA History
 
-- 2026-09-18: **improve-architecture (product-map walk)** — closed the
+- 2026-09-18: **product-map review pass** — closed the
   tracked "No BDD feature files" gap. Registered ``security/ssrf_guard.feature``
   into the executing BDD suite (``steps/test_ssrf_guard.py``), driving the real
   ``modulo.core.ssrf`` seams — literal-IP fail-closed blocking (loopback /
@@ -97,7 +97,7 @@ route, so it is tracked here rather than in the manifest registry.
   rejection — all network-free. ``_ORPHANED_BDD_FEATURES`` stays empty.
   The private-httpcore-seam gap above remains tracked.
 
-- 2026-08-27: **improve-architecture (product-map walk)** — entry added to
+- 2026-08-27: **product-map review pass** — entry added to
   close the feature-graph gap for a shipped infra-only surface whose tests
   and call sites were previously invisible to the product map. Behaviours
   verified against ``backend/src/modulo/core/ssrf.py`` and the 73-test-function

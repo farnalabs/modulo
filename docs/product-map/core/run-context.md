@@ -49,7 +49,7 @@ telemetry emits gate-outcome events for observability.
 
 ## QA History
 
-- 2026-08-25: **improve-architecture (product-map walk)** — entry added to close the
+- 2026-08-25: **product-map review pass** — entry added to close the
   dangling `depends-on: feat-core-run-context` edge in `teams/org-entity.md`.
   Behaviours re-verified against `core/run_context/*` and its unit/BDD suites.
   Status: covered.

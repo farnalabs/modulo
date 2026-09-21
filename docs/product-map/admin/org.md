@@ -44,7 +44,7 @@ kill-switch, authorization enforcement).
   yet built for the org-settings route).
 
 ## QA History
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/feature-flags`, `/admin/org`
   and wired the two components into the reverse testid-coverage guard
@@ -52,7 +52,7 @@ kill-switch, authorization enforcement).
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/org`: the whole-page view(s) `AdminOrgSettingsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -60,14 +60,14 @@ kill-switch, authorization enforcement).
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-11: **product-map review pass** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/admin/feature-flags` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
   guard, so the feature-flag search control the page ships stays visible to Remy's
   docs indexer and `/api/v1/manifest`.
 
-- 2026-09-07: **improve-architecture (product-map walk)** — added this
+- 2026-09-07: **product-map review pass** — added this
   behaviour-tracker for `feat-org`, which previously had no `docs/product-map/`
   entry. Behaviours verified against `routes/org_settings.py`,
   `routes/admin_orgs.py`, and the admin org unit tests. Status: covered.

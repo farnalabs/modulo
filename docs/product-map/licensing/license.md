@@ -68,7 +68,7 @@ and feature-flag inspection endpoints.
 
 ## QA History
 
-- 2026-09-14: **improve-architecture (product-map walk)** — closed the "no executing BDD
+- 2026-09-14: **product-map review pass** — closed the "no executing BDD
   surface for feature-flag inspection" gap: wired `licensing/feature_flag_inspection.feature`
   into the executing suite via the new `steps/test_feature_flag_inspection.py` (5 scenarios)
   and dropped the file from the tracked orphaned-BDD debt list (`_ORPHANED_BDD_FEATURES`).
@@ -78,7 +78,7 @@ and feature-flag inspection endpoints.
   presence, the unknown-flag 404, the toggle override write-back (`overridden: true`) and
   the public `/api/v1/license` surface. Feature-flag inspection is no longer unit-tested only.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/license`: the whole-page view(s) `SettingsLicenseView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -86,7 +86,7 @@ and feature-flag inspection endpoints.
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-license`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `core/license.py`,
   `core/license_signing.py`, `api/routes/admin_license.py` and the licensing BDD/unit

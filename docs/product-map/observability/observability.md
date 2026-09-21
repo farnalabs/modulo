@@ -100,7 +100,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   unit/BDD-verified at the API layer only.
 
 ## QA History
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/errors`, `/admin/errors/:id`, `/settings/error-forwarders`,
   `/settings/monitoring`, `/settings/observability`
@@ -112,7 +112,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   without importing it, so the entitlement gate could not resolve and the whole
   page surface silently degraded to an unresolved custom element.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   surface the `/admin/errors/:id`, `/settings/error-forwarders` and
   `/settings/monitoring` whole-page views render (`components/shared/JsonViewer.vue`
   and `components/shared/ErrorAlert.vue` static testids `json-viewer*` /
@@ -124,14 +124,14 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   `SettingsMonitorConfigView.vue`, so the error-detail / forwarders / browser-monitor
   surfaces stay visible to Remy's docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-11: **product-map review pass** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/admin/errors` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
   guard, so the error-list search control the page ships stays visible to Remy's
   docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/observability`: the whole-page view(s) `SettingsObservabilityView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -139,7 +139,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **improve-architecture (product-map walk)** — added this entry to
+- 2026-08-27: **product-map review pass** — added this entry to
   close the coverage gap for the registered `feat-observability` feature (no
   behaviour-tracker existed). Behaviours verified against `core/error_tracking/`,
   the `/api/v1/errors*` + `/api/v1/settings/observability` +

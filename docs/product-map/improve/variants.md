@@ -65,7 +65,7 @@ than left as false coverage promises.
 
 ## QA History
 
-- 2026-09-20: **improve-architecture (product-map walk)** — closed the
+- 2026-09-20: **product-map review pass** — closed the
   "BDD scenarios tagged `@awaiting-implementation`" gap
   (`variant_groups.feature`). The sequential-order scenario now drives the REAL
   `run_variant_batch` seam with the same mock-session machinery as the batch-run
@@ -80,7 +80,7 @@ than left as false coverage promises.
   already lock) — leaving them tagged would keep false coverage promises in the
   suite. No `@awaiting-implementation` scenarios remain in the feature.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
   in the manifest `elements:` inventory for `/variants/compare` and
@@ -90,7 +90,7 @@ than left as false coverage promises.
   `/api/v1/manifest`. The component is now part of both routes' reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/variants/compare` and `/variants/compare/:batchId`: the whole-page view(s) `VariantCompareView.vue` and `VariantBatchCompareView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -107,7 +107,7 @@ than left as false coverage promises.
   opens the builder, the `pipeline_id` deep-link from PipelineListView pre-selects
   the pipeline, and firing a batch navigates to the batch-compare detail route.
 
-- 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-variants`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/variants.py` and
   `tests/bdd/features/variants/variant_groups.feature`. Status: covered (with the known

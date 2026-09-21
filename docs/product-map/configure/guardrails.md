@@ -123,7 +123,7 @@ compensation, and single-node self-correction. Built on the eval engine
   external/unmediated runtimes.
 
 ## QA History
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/guardrails`
   and wired the two components into the reverse testid-coverage guard
@@ -131,7 +131,7 @@ compensation, and single-node self-correction. Built on the eval engine
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/guardrails`: the whole-page view(s) `SettingsGuardrailsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -139,7 +139,7 @@ compensation, and single-node self-correction. Built on the eval engine
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-08: **improve-architecture (product-map walk)** — added the FAR-664
+- 2026-09-08: **product-map review pass** — added the FAR-664
   newline-safe bridge handoff behaviour + citation: the loop-intercept bridge
   receives the rendered agent command via a command file (`bash <file>` after
   `--`) instead of inline interpolation, so multi-line / post-heredoc
@@ -148,7 +148,7 @@ compensation, and single-node self-correction. Built on the eval engine
   Verified in `core/guardrails/loop_intercept.py` +
   `core/pipeline_engine/node_runner.py` and unit-covered in
   `tests/unit/pipeline_engine/test_node_runner_residual.py`.
-- 2026-08-30: **improve-architecture (product-map walk)** — new behaviour
+- 2026-08-30: **product-map review pass** — new behaviour
   tracker for the registered `feat-guardrails` manifest feature (route
   `/settings/guardrails`, previously absent from the feature graph and invisible
   to Remy's docs indexer). Behaviours verified against
