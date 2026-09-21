@@ -143,6 +143,22 @@ describe('useApi request contracts', () => {
     await expect(api.delete('/api/v1/widgets/1')).resolves.toBeUndefined()
     expect(fetchMock.mock.results[0].value).toBeInstanceOf(Promise)
   })
+
+  it('throws a descriptive error when the response body is not valid JSON', async () => {
+    fetchMock.mockResolvedValue({
+      status: 200,
+      ok: true,
+      statusText: 'OK',
+      json: vi.fn(async () => {
+        throw new SyntaxError('Unexpected token < in JSON')
+      }),
+    } as unknown as Response)
+    const api = useApi()
+
+    await expect(api.get('/api/v1/widgets')).rejects.toThrow(
+      'Invalid JSON response from server (HTTP 200)',
+    )
+  })
 })
 
 describe('useApi 401 refresh flow', () => {
@@ -318,9 +334,34 @@ describe('useApi timeout', () => {
 
     const api = useApi()
     const pending = api.get('/api/v1/widgets')
-    const assertion = expect(pending).rejects.toThrow('The operation was aborted.')
+    const assertion = expect(pending).rejects.toThrow('Request timed out')
 
     await vi.advanceTimersByTimeAsync(30_000)
+    await assertion
+  })
+
+  it('propagates a caller-initiated abort instead of reporting a timeout', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockImplementation(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal
+          if (!signal) {
+            reject(new Error('no signal provided'))
+            return
+          }
+          signal.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted.', 'AbortError')),
+          )
+        }),
+    )
+
+    const api = useApi()
+    const caller = new AbortController()
+    const pending = api.get('/api/v1/widgets', { signal: caller.signal })
+    const assertion = expect(pending).rejects.toThrow('The operation was aborted.')
+
+    caller.abort()
     await assertion
   })
 

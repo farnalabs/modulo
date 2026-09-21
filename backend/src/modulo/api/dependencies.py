@@ -54,6 +54,50 @@ from modulo.settings import Settings, get_settings
 _CODE_PERMISSION_DENIED = "permission.denied"
 
 
+async def _assert_tenant_permission(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    permission: str,
+    required: str,
+) -> None:
+    """Resolve authz enforce and assert the principal's org role.
+
+    Single-sources the kill-switch read, fail-closed default, and 403 mapping
+    shared by ``require_permission`` and ``require_permission_any_credential``.
+    """
+    token: Token[bool | None] | None = None
+    try:
+        if principal.organisation_id is not None:
+            try:
+                async with session.begin():
+                    enforce = await resolve_authz_enforce(session, principal.organisation_id)
+            except SQLAlchemyError:
+                # Kill-switch read failure defaults to ENFORCE (fail-closed,
+                # ADR 017 DECISION 3): a DB blip must not fail-open the
+                # org-role gate.
+                logger.exception("permission.kill_switch_read_failed")
+                enforce = True
+            token = set_authz_enforce(enforce)
+        try:
+            assert_org_role(principal.org_role, required, permission)
+        except PermissionDenied as exc:
+            logger.warning(
+                _CODE_PERMISSION_DENIED,
+                extra={
+                    "permission": permission,
+                    "required": required,
+                    "actual": principal.org_role,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{permission}' requires '{required}' role",
+            ) from exc
+    finally:
+        if token is not None:
+            reset_authz_enforce(token)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,38 +140,8 @@ def require_permission(permission: str) -> Any:
         principal: TenantPrincipal = Depends(get_current_tenant_user),
         session: AsyncSession = Depends(get_db_session),
     ) -> TenantPrincipal:
-        token: Token[bool | None] | None = None
-        try:
-            if principal.organisation_id is not None:
-                try:
-                    async with session.begin():
-                        enforce = await resolve_authz_enforce(session, principal.organisation_id)
-                except SQLAlchemyError:
-                    # Kill-switch read failure defaults to ENFORCE (fail-closed,
-                    # ADR 017 DECISION 3): a DB blip must not fail-open the
-                    # org-role gate.
-                    logger.exception("permission.kill_switch_read_failed")
-                    enforce = True
-                token = set_authz_enforce(enforce)
-            try:
-                assert_org_role(principal.org_role, required, permission)
-            except PermissionDenied as exc:
-                logger.warning(
-                    _CODE_PERMISSION_DENIED,
-                    extra={
-                        "permission": permission,
-                        "required": required,
-                        "actual": principal.org_role,
-                    },
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Permission '{permission}' requires '{required}' role",
-                ) from exc
-            return principal
-        finally:
-            if token is not None:
-                reset_authz_enforce(token)
+        await _assert_tenant_permission(session, principal, permission, required)
+        return principal
 
     return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant")
 
@@ -185,38 +199,8 @@ def require_permission_any_credential(permission: str) -> Any:
         principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
         session: AsyncSession = Depends(get_db_session),
     ) -> TenantPrincipal:
-        token: Token[bool | None] | None = None
-        try:
-            if principal.organisation_id is not None:
-                try:
-                    async with session.begin():
-                        enforce = await resolve_authz_enforce(session, principal.organisation_id)
-                except SQLAlchemyError:
-                    # Kill-switch read failure defaults to ENFORCE (fail-closed,
-                    # ADR 017 DECISION 3): a DB blip must not fail-open the
-                    # org-role gate for JWT or API-key callers.
-                    logger.exception("permission.kill_switch_read_failed")
-                    enforce = True
-                token = set_authz_enforce(enforce)
-            try:
-                assert_org_role(principal.org_role, required, permission)
-            except PermissionDenied as exc:
-                logger.warning(
-                    _CODE_PERMISSION_DENIED,
-                    extra={
-                        "permission": permission,
-                        "required": required,
-                        "actual": principal.org_role,
-                    },
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Permission '{permission}' requires '{required}' role",
-                ) from exc
-            return principal
-        finally:
-            if token is not None:
-                reset_authz_enforce(token)
+        await _assert_tenant_permission(session, principal, permission, required)
+        return principal
 
     return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant_or_api_key")
 

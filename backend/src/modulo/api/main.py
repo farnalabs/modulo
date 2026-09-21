@@ -1084,7 +1084,18 @@ DeprecationHeaderMiddleware.deprecate(
 app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
 app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)
-app.add_middleware(RequestTimeoutMiddleware, timeout_seconds=120, overrides={"/healthz": 5, "/healthz/ready": 15})
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
+_HEALTHZ_TIMEOUT_SECONDS = 5
+_HEALTHZ_READY_TIMEOUT_SECONDS = 15
+
+app.add_middleware(
+    RequestTimeoutMiddleware,
+    timeout_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    overrides={
+        "/healthz": _HEALTHZ_TIMEOUT_SECONDS,
+        "/healthz/ready": _HEALTHZ_READY_TIMEOUT_SECONDS,
+    },
+)
 
 app.include_router(health_router)
 app.include_router(admin_router)
