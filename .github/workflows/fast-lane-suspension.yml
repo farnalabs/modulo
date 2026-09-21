@@ -1,0 +1,261 @@
+name: "Fast Lane: Suspension Signal"
+
+# ADR 041 Decision 3.4 — the consumer of the fast-lane suspension signal.
+#
+# When the PR Reviewer (modulo-reviewbot) posts a comment carrying the
+# <!-- FAST_LANE_SUSPENSION: <severity> --> marker on a merged PR, this
+# workflow:
+#
+#   1. Authorises ONLY the reviewer identity (modulo-reviewbot).
+#   2. Parses the marker and computes the 24h suspension window.
+#   3. Sets FAST_LANE_SUSPENDED_UNTIL and FAST_LANE_SUSPENSION_REASON
+#      repository variables via the GitHub API.
+#   4. Posts an auditable confirmation comment on the PR.
+#   5. Dispatches the Branch Fixer so the finding gets a fix through
+#      the normal lane.
+#
+# The follow-up raised by the Branch Fixer is NOT fast-lane eligible,
+# and we do NOT need to label it: the suspension variable covers the
+# whole 24-hour window, so any PR merged inside that window is also
+# ineligible.  Labelling the follow-up as fast-lane would be
+# redundant and potentially confusing to a future reader.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  set-suspension:
+    name: Set fast-lane suspension
+    runs-on: ubicloud-standard-2
+    # Only run on PR comments (not issue comments) and only when the
+    # repository variable write permission is available.
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: write
+    if: >-
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, 'FAST_LANE_SUSPENSION:')
+    steps:
+      # ------------------------------------------------------------------
+      # Step 1: Authorise the actor
+      # ------------------------------------------------------------------
+      - name: Authorise reviewer identity
+        env:
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          # Only modulo-reviewbot may suspend the fast lane.  Anyone can
+          # comment on a public repo; an unauthenticated or third-party
+          # comment must NOT be able to set this variable.
+          if [ "$ACTOR" != "modulo-reviewbot" ]; then
+            echo "::error::Suspension comment rejected: actor '$ACTOR' is not modulo-reviewbot. Fast-lane suspension denied."
+            exit 1
+          fi
+          echo "Actor authorised: $ACTOR"
+
+      # ------------------------------------------------------------------
+      # Step 2: Parse the suspension marker
+      # ------------------------------------------------------------------
+      - name: Checkout (for the helper script)
+        uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+
+      - name: Parse suspension marker
+        id: parse
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          # Parse the marker using the pure-logic helper.
+          RESULT=$(uv run --no-build --project backend python -c "
+          import json, sys
+          sys.path.insert(0, 'scripts')
+          from fast_lane_suspension import parse_suspension_marker, compute_expiry, build_reason
+
+          body = '''${COMMENT_BODY}'''
+          severity = parse_suspension_marker(body)
+          if severity is None:
+              print(json.dumps({'severity': None}))
+          else:
+              expiry = compute_expiry()
+              reason = build_reason(
+                  pr_number=${PR_NUMBER},
+                  severity=severity,
+              )
+              print(json.dumps({'severity': severity, 'expiry': expiry, 'reason': reason}))
+          ")
+
+          SEVERITY=$(echo "$RESULT" | python -c "import sys,json; d=json.load(sys.stdin); print(d.get('severity') or '')")
+          EXPIRY=$(echo "$RESULT" | python -c "import sys,json; d=json.load(sys.stdin); print(d.get('expiry') or '')")
+          REASON=$(echo "$RESULT" | python -c "import sys,json; d=json.load(sys.stdin); print(d.get('reason') or '')")
+
+          if [ -z "$SEVERITY" ]; then
+            echo "No valid suspension marker found in comment — skipping."
+            exit 0
+          fi
+
+          echo "severity=$SEVERITY" >> "$GITHUB_OUTPUT"
+          echo "expiry=$EXPIRY" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          echo "Suspension: severity=$SEVERITY, expiry=$EXPIRY"
+
+      # ------------------------------------------------------------------
+      # Step 3: Set the suspension repository variables
+      # ------------------------------------------------------------------
+      - name: Set suspension variables
+        if: steps.parse.outputs.severity != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPIRY: ${{ steps.parse.outputs.expiry }}
+          REASON: ${{ steps.parse.outputs.reason }}
+        shell: bash
+        run: |
+          REPO="${{ github.repository }}"
+          VAR_NAME="FAST_LANE_SUSPENDED_UNTIL"
+          REASON_VAR="FAST_LANE_SUSPENSION_REASON"
+
+          # Try to create the variable; if it already exists, update it.
+          # The GitHub API rejects a create on an existing name, so we
+          # attempt create first and fall through to update on 422.
+          CREATE_RESPONSE=$(gh api "repos/$REPO/actions/variables" \
+            -f name="$VAR_NAME" \
+            -f value="$EXPIRY" \
+            2>&1) || CREATE_RC=$?
+          CREATE_RC=${CREATE_RC:-0}
+
+          if [ "$CREATE_RC" -ne 0 ]; then
+            if echo "$CREATE_RESPONSE" | grep -qi "already exists"; then
+              echo "Variable $VAR_NAME already exists — updating."
+              gh api -X PATCH "repos/$REPO/actions/variables/$VAR_NAME" \
+                -f value="$EXPIRY" \
+                || { echo "::error::Failed to update $VAR_NAME"; exit 1; }
+            else
+              echo "::error::Failed to create/update $VAR_NAME: $CREATE_RESPONSE"
+              exit 1
+            fi
+          else
+            echo "Variable $VAR_NAME created with value $EXPIRY."
+          fi
+
+          # Set the reason variable.
+          CREATE_REASON_RESPONSE=$(gh api "repos/$REPO/actions/variables" \
+            -f name="$REASON_VAR" \
+            -f value="$REASON" \
+            2>&1) || CREATE_REASON_RC=$?
+          CREATE_REASON_RC=${CREATE_REASON_RC:-0}
+
+          if [ "$CREATE_REASON_RC" -ne 0 ]; then
+            if echo "$CREATE_REASON_RESPONSE" | grep -qi "already exists"; then
+              echo "Variable $REASON_VAR already exists — updating."
+              gh api -X PATCH "repos/$REPO/actions/variables/$REASON_VAR" \
+                -f value="$REASON" \
+                || { echo "::error::Failed to update $REASON_VAR"; exit 1; }
+            else
+              echo "::error::Failed to create/update $REASON_VAR: $CREATE_REASON_RESPONSE"
+              exit 1
+            fi
+          else
+            echo "Variable $REASON_VAR created with value $REASON."
+          fi
+
+          echo "Suspension set: $VAR_NAME=$EXPIRY, $REASON_VAR=$REASON"
+
+      # ------------------------------------------------------------------
+      # Step 4: Post confirmation comment
+      # ------------------------------------------------------------------
+      - name: Post suspension confirmation
+        if: steps.parse.outputs.severity != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          SEVERITY: ${{ steps.parse.outputs.severity }}
+          EXPIRY: ${{ steps.parse.outputs.expiry }}
+          REASON: ${{ steps.parse.outputs.reason }}
+        shell: bash
+        run: |
+          gh pr comment "$PR_NUMBER" --body \
+            "## Fast-lane suspension activated
+
+          | Field | Value |
+          |---|---|
+          | **Severity** | \`${{ env.SEVERITY }}\` |
+          | **Expiry** | \`${{ env.EXPIRY }}\` |
+          | **Reason** | ${{ env.REASON }} |
+
+          The fast lane is now suspended.  All fast-lane candidates will be
+          denied eligibility until the expiry time.
+
+          The Branch Fixer has been dispatched to create a fix for this
+          finding through the normal lane."
+
+      # ------------------------------------------------------------------
+      # Step 5: Dispatch the Branch Fixer for the follow-up fix
+      # ------------------------------------------------------------------
+      # The follow-up raised by the Branch Fixer is NOT fast-lane
+      # eligible, and we do NOT need to label it.  The suspension variable
+      # (set above) covers the whole 24-hour window, so any PR merged
+      # inside that window is automatically ineligible.  Labelling the
+      # follow-up would be redundant and potentially confusing to a
+      # future reader wondering why a normal-lane PR carries a fast-lane
+      # label.
+      - name: Dispatch Branch Fixer
+        if: steps.parse.outputs.severity != ''
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          SEVERITY: ${{ steps.parse.outputs.severity }}
+        shell: bash
+        run: |
+          # Dispatch the Branch Fixer so the finding gets a fix.
+          # branchName: main signals "create a fix branch from main"
+          # (the PR has already been merged to main).
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg branchName "main" \
+            --argjson prNumber "${PR_NUMBER}" \
+            --arg failureDescription "Fast-lane suspension (${SEVERITY} finding on merged PR #${PR_NUMBER}). The Branch Fixer should create a fix branch from main, diagnose and fix the finding, and raise a PR through the normal lane." \
+            --arg repo "${{ github.repository }}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+
+          DISPATCHED="false"
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "Branch Fixer accepted (run: $(echo "$BODY_RESP" | jq -r '.run_id // "unknown"'))"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo "$BODY_RESP" | jq -r '.detail // "unknown"')"
+              break
+            fi
+          done
+          if [ "$DISPATCHED" != "true" ]; then
+            echo "::error::Branch Fixer webhook dispatch failed — the suspension was set but the follow-up fix was not dispatched."
+            exit 1
+          fi
+
+          echo "Branch Fixer dispatched for PR #${PR_NUMBER}."
