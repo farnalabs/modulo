@@ -58,11 +58,13 @@ exclude_patterns = [
   "**/templates/**",
   "**/testdata/**",
   "**/vendor/**",
-  # Intentional semgrep rule test fixtures — not production code. These
-  # contain deliberate F821 (undefined-name) violations that are the POINT of
-  # the test fixture. Qlty's ruff plugin passes files explicitly, which
-  # bypasses ruff.toml's per-file-ignores, so without this exclusion the
-  # fixtures produce phantom findings on every PR.
+  # Intentional semgrep rule test fixtures — not production code and not part
+  # of any lint gate. `.semgrep/tests/` contains deliberate violations that are
+  # the POINT of the fixture (the ruff findings actually raised there are
+  # S110/SIM105/F841/N806, not F821). Qlty's ruff plugin passes each target
+  # explicitly, and ruff's `exclude` only skips paths found by directory
+  # discovery — it does not skip files named on the command line — so without
+  # this exclusion the fixtures produce phantom findings on every PR.
   "**/.semgrep/**",
 ]
 
@@ -123,17 +125,21 @@ mode = "comment"
 
 [[plugin]]
 name = "ruff"
-# Pin to the repo's ruff version (0.15.18) so formatting rules and lint
-# semantics match CI. Without this, qlty's default ruff version produces ~22
-# phantom formatting findings and 8 false-positive RUF100 unused-noqa on
-# # noqa: ASYNC240 (valid in 0.15.18).
-version = "0.15.18"
-# Force ruff to read the repo's ruff.toml for exclude patterns and
-# per-file-ignores. Qlty's ruff plugin passes files explicitly, which
-# bypasses the config file's directory-level exclusions. --config ensures the
-# repo's per-file-ignores (e.g. .semgrep/** -> F821, tests/** -> S101/S105)
-# are honoured even when files are passed explicitly.
-args = ["--config", "ruff.toml"]
+# Pin to the ruff version the repo actually gates on: backend/uv.lock pins
+# ruff==0.16.8 and CI's Lint (Backend) job runs it (`uv run --no-build
+# --no-sync ruff check .`), as does the pre-commit hook. Without an explicit
+# pin qlty installs its own default (0.14.x) and reports ~22 phantom
+# formatting findings plus 8 false-positive RUF100 unused-noqa on
+# `# noqa: ASYNC240` (valid in the repo's version).
+version = "0.16.8"
+# Do NOT pass ["--config", "ruff.toml"] here. That flag overrides ruff's
+# per-file config discovery for every target: backend files would stop using
+# backend/pyproject.toml, whose `src = ["src"]` informs isort first-party
+# resolution, and qlty would report ~1200 false I001 unsorted-imports.
+# Qlty runs `ruff check <target>`, and ruff resolves the nearest config by the
+# target file's path — exactly matching CI and pre-commit — so the repo's
+# per-file-ignores (backend/pyproject.toml for backend, ruff.toml elsewhere)
+# and the `.semgrep/**` qlty exclusion above remain in force.
 
 # Disabled: driver hardcodes `--config .semgrep.yaml`, which this repository
 # does not have (rules live in `.semgrep/`). See the note at the top of this
