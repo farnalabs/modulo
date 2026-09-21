@@ -283,6 +283,10 @@ jobs:
             docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null && { echo "Postgres ready"; break; }
             sleep 2
           done
+          # Fail fast: a never-ready Postgres must not sleep through the loop and
+          # only surface as a confusing failure in the test step.
+          docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null \
+            || { echo "::error::Postgres did not become ready within 120s"; exit 1; }
 
       - name: Start Redis
         shell: bash
@@ -293,6 +297,10 @@ jobs:
             docker exec modulo-ci-redis redis-cli ping 2>/dev/null && { echo "Redis ready"; break; }
             sleep 2
           done
+          # Fail fast: a never-ready Redis must not sleep through the loop and
+          # only surface as a confusing failure in the test step.
+          docker exec modulo-ci-redis redis-cli ping 2>/dev/null \
+            || { echo "::error::Redis did not become ready within 60s"; exit 1; }
 
       # Per-test timeout: without it a single hung test stalls the whole job
       # silently until the job-level kill (observed 2026-08-27, run
