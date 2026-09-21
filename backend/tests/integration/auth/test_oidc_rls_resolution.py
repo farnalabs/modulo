@@ -125,13 +125,14 @@ async def _create_oidc_provider(
     return slug
 
 
-# Two committed orgs: org_a created a DECADE earlier (it is reliably the
-# "first org" for _set_default_rls_org, even after conftest's own seeded
-# orgs); each org owns one enabled OIDC provider.
+# Two committed orgs; each owns one enabled OIDC provider. The orgs are NOT
+# backdated: the session-global "first org" that _set_default_rls_org resolves
+# is owned by auth/conftest.py's ``first_sso_org`` (shared with the SAML
+# suite) — a module-local org must not race for that slot.
 @pytest_asyncio.fixture(scope="module")
 async def two_orgs(db_engine: AsyncEngine) -> dict[str, str]:
-    org_a_id, org_a_slug = await _create_org(db_engine, "a", created_at_offset_seconds=315_360_000)
-    org_b_id, org_b_slug = await _create_org(db_engine, "b", created_at_offset_seconds=0)
+    org_a_id, org_a_slug = await _create_org(db_engine, "a")
+    org_b_id, org_b_slug = await _create_org(db_engine, "b")
     oidc_a = await _create_oidc_provider(db_engine, org_id=org_a_id)
     oidc_b = await _create_oidc_provider(db_engine, org_id=org_b_id)
     return {
@@ -238,21 +239,32 @@ class TestSystemLegResolution:
     @pytest.mark.asyncio
     async def test_app_fallback_without_system_role_resolves_first_org_only(
         self,
+        db_engine: AsyncEngine,
+        first_sso_org: uuid.UUID,
         app_session_factory: async_sessionmaker[AsyncSession],
         two_orgs: dict[str, str],
     ) -> None:
         """``system_session=None`` (system role unprovisioned) → app fallback
-        scoped to the FIRST org: org A's provider resolves, org B's fails
-        closed (all-None). The scoped-transaction fix (FAR-1058 parity) makes
-        this work on a transaction-less autobegin=False app session."""
+        scoped to the FIRST org: the first org's provider resolves, a sibling
+        org's fails closed (all-None). The scoped-transaction fix (FAR-1058
+        parity) makes this work on a transaction-less autobegin=False app
+        session.
+
+        The provider is attached to ``first_sso_org`` — the session-global
+        first org — not this module's ``org_a``: the fallback binds to the
+        globally earliest Organisation, which is a shared resource across the
+        one-Postgres integration suite (see ``auth/conftest.py``), so a
+        module-local org cannot claim it.
+        """
+        first_oidc = await _create_oidc_provider(db_engine, org_id=first_sso_org)
         with patch("modulo.auth.sso.validate_outbound_url_async", AsyncMock()):
             async with app_session_factory() as app_session:
-                resolved_a = await _resolve_oidc_provider(two_orgs["oidc_a"], None, app_session, _settings())
+                resolved_a = await _resolve_oidc_provider(first_oidc, None, app_session, _settings())
                 assert not app_session.in_transaction()
                 resolved_b = await _resolve_oidc_provider(two_orgs["oidc_b"], None, app_session, _settings())
-        assert resolved_a[0] == f"client-{two_orgs['oidc_a']}"
+        assert resolved_a[0] == f"client-{first_oidc}"
         assert resolved_a[4] is not None
-        assert str(resolved_a[4].organisation_id) == two_orgs["org_a_id"]
+        assert str(resolved_a[4].organisation_id) == str(first_sso_org)
         assert resolved_b == (None, None, None, None, None)
 
 

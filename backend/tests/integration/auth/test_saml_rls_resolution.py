@@ -191,14 +191,15 @@ async def app_session_factory(modulo_app_engine: AsyncEngine) -> AsyncGenerator[
     yield async_sessionmaker(modulo_app_engine, expire_on_commit=False, autobegin=False)
 
 
-# Two committed orgs: org_a created a DECADE earlier (it is reliably the
-# "first org" for _set_default_rls_org, even after conftest's own seeded
-# orgs); each org owns one enabled SAML provider; org_a also owns one OIDC
-# provider so the org-login route's type mix is exercised.
+# Two committed orgs; each owns one enabled SAML provider; org_a also owns one
+# OIDC provider so the org-login route's type mix is exercised. The orgs are
+# NOT backdated: the session-global "first org" that _set_default_rls_org
+# resolves is owned by auth/conftest.py's ``first_sso_org`` (shared with the
+# OIDC suite) — a module-local org must not race for that slot.
 @pytest_asyncio.fixture(scope="module")
 async def two_orgs(db_engine: AsyncEngine) -> dict[str, str]:
-    org_a_id, org_a_slug = await _create_org(db_engine, "a", created_at_offset_seconds=315_360_000)
-    org_b_id, org_b_slug = await _create_org(db_engine, "b", created_at_offset_seconds=0)
+    org_a_id, org_a_slug = await _create_org(db_engine, "a")
+    org_b_id, org_b_slug = await _create_org(db_engine, "b")
     saml_a = await _create_saml_provider(db_engine, org_id=org_a_id)
     oidc_a = await _create_oidc_provider(db_engine, org_id=org_a_id)
     saml_b = await _create_saml_provider(db_engine, org_id=org_b_id)
@@ -259,15 +260,25 @@ class TestSystemLegResolution:
     @pytest.mark.asyncio
     async def test_app_fallback_without_system_role_resolves_first_org(
         self,
+        db_engine: AsyncEngine,
+        first_sso_org: uuid.UUID,
         app_session_factory: async_sessionmaker[AsyncSession],
         two_orgs: dict[str, str],
     ) -> None:
         """``system_session=None`` (system role unprovisioned) → app fallback:
         the RLS binding now runs INSIDE a scoped transaction, so the first
-        org's provider resolves and other orgs' providers fail closed."""
+        org's provider resolves and other orgs' providers fail closed.
+
+        The provider is attached to ``first_sso_org`` — the session-global
+        first org — not this module's ``org_a``: the fallback binds to the
+        globally earliest Organisation, which is a shared resource across the
+        one-Postgres integration suite (see ``auth/conftest.py``), so a
+        module-local org cannot claim it.
+        """
+        first_saml = await _create_saml_provider(db_engine, org_id=first_sso_org)
         async with app_session_factory() as app_session:
-            provider = await _resolve_saml_for_route(two_orgs["saml_a"], None, app_session)
-            assert provider.provider_id == two_orgs["saml_a"]
+            provider = await _resolve_saml_for_route(first_saml, None, app_session)
+            assert provider.provider_id == first_saml
             with pytest.raises(HTTPException) as exc_info:
                 await _resolve_saml_for_route(two_orgs["saml_b"], None, app_session)
             assert exc_info.value.status_code == 404
