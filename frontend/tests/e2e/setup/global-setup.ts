@@ -38,26 +38,6 @@ async function waitForTargetHealth(target: string, baseURL: string, healthUrl: s
   )
 }
 
-/**
- * Fail-fast guard: after completing the slug step, assert the credential form
- * is visible within a tight budget.  If the login page is broken (wrong org
- * slug, changed layout, API outage), this aborts the suite in seconds instead
- * of letting 233 tests each retry for 30 s.
- */
-async function verifyCredentialFormReachable(page: import('@playwright/test').Page, env: ReturnType<typeof getTestEnv>): Promise<void> {
-  const emailInput = page.locator(env.credentials.loginFormEmailSelector)
-  const visible = await emailInput.waitFor({ state: 'visible', timeout: 10_000 }).then(() => true).catch(() => false)
-  if (!visible) {
-    throw new Error(
-      `[global-setup] Login page did not render the credential form within 10 s. ` +
-      `Current URL: ${page.url()}. ` +
-      `Either the org slug "${env.orgSlug}" is wrong, the login page layout changed, ` +
-      `or the login-context API is returning an unexpected response. ` +
-      `Every @regression test will fail the same way — aborting the suite early.`,
-    )
-  }
-}
-
 async function globalSetup(_config: FullConfig) {
   const target = getTarget()
   const baseURL = getBaseUrl(target)
@@ -79,10 +59,10 @@ async function globalSetup(_config: FullConfig) {
 
   await page.goto(baseURL + '/login')
 
-  // Handle the multi-org slug step (if present) and verify the credential
-  // form is reachable — abort early if the login page is broken.
+  // Handles the multi-org slug step (if present) and fails fast with a
+  // diagnostic if the credential form is unreachable — aborting the suite
+  // early instead of letting every test retry for 30 s.
   await completeLoginForm(page, env)
-  await verifyCredentialFormReachable(page, env)
 
   await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
   await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)

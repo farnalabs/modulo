@@ -80,36 +80,60 @@ export async function setupLocalMockApi(page: Page) {
   })
 }
 
+// Budgets for the login handshake.  The step race is generous enough for a
+// cold SPA boot; the credential-form guard is tighter so a broken login page
+// aborts in seconds instead of letting every test retry for 30 s.
+const LOGIN_STEP_TIMEOUT = 15_000
+const CREDENTIAL_FORM_TIMEOUT = 10_000
+
 /**
- * Advance past the multi-org slug-entry step (if present) so the
+ * Fail fast unless the credential (email/password) form renders within the
+ * budget.  Shared by every login entry point so a broken login page produces
+ * one actionable diagnostic instead of a 30 s timeout per test.
+ */
+async function requireCredentialForm(page: Page, env: TestEnv, slugStepTaken: boolean): Promise<void> {
+  const emailInput = page.locator(env.credentials.loginFormEmailSelector)
+  const visible = await emailInput
+    .waitFor({ state: 'visible', timeout: CREDENTIAL_FORM_TIMEOUT })
+    .then(() => true)
+    .catch(() => false)
+  if (visible) return
+
+  const hint = slugStepTaken
+    ? `the org slug "${env.orgSlug}" may be wrong`
+    : 'the login page layout or login-context API may have changed'
+  throw new Error(
+    `[login] Credential form did not appear within ${CREDENTIAL_FORM_TIMEOUT}ms ` +
+    `(slugStepTaken=${slugStepTaken}). Current URL: ${page.url()}. ${hint}. ` +
+    'Every test that signs in will fail the same way.',
+  )
+}
+
+/**
+ * Advance past the multi-org slug-entry step (if present) and guarantee the
  * email/password credential form is on screen. Single-org instances render the
- * credential form directly on /login and this is a no-op. Must be called after
- * navigating to /login.
+ * credential form directly on /login. Throws a diagnostic if the form never
+ * appears, so every caller fails fast instead of timing out per test. Must be
+ * called after navigating to /login.
  */
 export async function completeLoginForm(page: Page, env: TestEnv): Promise<void> {
   const slugInput = page.locator(env.credentials.orgSlugInputSelector)
   const emailInput = page.locator(env.credentials.loginFormEmailSelector)
 
-  // Race: whichever appears first wins — slug step on multi-org, email form
-  // on single-org.  A short timeout keeps the error message actionable.
-  const SLUG_TIMEOUT = 15_000
+  // Race: whichever appears first wins — the slug step on multi-org targets,
+  // the credential form on single-org targets.
   await Promise.race([
-    slugInput.waitFor({ state: 'visible', timeout: SLUG_TIMEOUT }).catch(() => {}),
-    emailInput.waitFor({ state: 'visible', timeout: SLUG_TIMEOUT }).catch(() => {}),
+    slugInput.waitFor({ state: 'visible', timeout: LOGIN_STEP_TIMEOUT }).catch(() => {}),
+    emailInput.waitFor({ state: 'visible', timeout: LOGIN_STEP_TIMEOUT }).catch(() => {}),
   ])
 
-  if (await slugInput.isVisible()) {
+  const slugStepTaken = await slugInput.isVisible()
+  if (slugStepTaken) {
     await slugInput.fill(env.orgSlug)
     await page.locator(env.credentials.orgSlugSubmitSelector).click()
-    // Wait for the credential form to appear after slug submission.
-    const emailVisible = await emailInput.waitFor({ state: 'visible', timeout: SLUG_TIMEOUT }).then(() => true).catch(() => false)
-    if (!emailVisible) {
-      throw new Error(
-        `[login] Slug step submitted (org="${env.orgSlug}") but the credential form did not appear within ${SLUG_TIMEOUT}ms. ` +
-        `Current URL: ${page.url()}. Possible wrong org slug or the app layout changed.`,
-      )
-    }
   }
+
+  await requireCredentialForm(page, env, slugStepTaken)
 }
 
 /**
