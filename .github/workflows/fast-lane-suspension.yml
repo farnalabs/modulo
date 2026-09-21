@@ -78,20 +78,26 @@ jobs:
           REPO: ${{ github.repository }}
         shell: bash
         run: |
-          # Parse the marker using the pure-logic helper.
+          # Parse the marker using the pure-logic helper.  The comment body is
+          # read from the environment (os.environ) rather than interpolated
+          # into the Python source: comment bodies are attacker-influenced
+          # (findings quote PR content) and any quote/triple-quote in them
+          # would otherwise break out of the shell/Python quoting — arbitrary
+          # command execution in the runner, or a silent SyntaxError that
+          # drops the marker.  COMMENT_BODY is already set above.
           RESULT=$(uv run --no-build --project backend python -c "
-          import json, sys
+          import json, os, sys
           sys.path.insert(0, 'scripts')
           from fast_lane_suspension import parse_suspension_marker, compute_expiry, build_reason
 
-          body = '''${COMMENT_BODY}'''
+          body = os.environ['COMMENT_BODY']
           severity = parse_suspension_marker(body)
           if severity is None:
               print(json.dumps({'severity': None}))
           else:
               expiry = compute_expiry()
               reason = build_reason(
-                  pr_number=${PR_NUMBER},
+                  pr_number=int(os.environ['PR_NUMBER']),
                   severity=severity,
               )
               print(json.dumps({'severity': severity, 'expiry': expiry, 'reason': reason}))
@@ -126,49 +132,39 @@ jobs:
           VAR_NAME="FAST_LANE_SUSPENDED_UNTIL"
           REASON_VAR="FAST_LANE_SUSPENSION_REASON"
 
-          # Try to create the variable; if it already exists, update it.
-          # The GitHub API rejects a create on an existing name, so we
-          # attempt create first and fall through to update on 422.
-          CREATE_RESPONSE=$(gh api "repos/$REPO/actions/variables" \
-            -f name="$VAR_NAME" \
-            -f value="$EXPIRY" \
-            2>&1) || CREATE_RC=$?
-          CREATE_RC=${CREATE_RC:-0}
-
-          if [ "$CREATE_RC" -ne 0 ]; then
-            if echo "$CREATE_RESPONSE" | grep -qi "already exists"; then
-              echo "Variable $VAR_NAME already exists — updating."
-              gh api -X PATCH "repos/$REPO/actions/variables/$VAR_NAME" \
-                -f value="$EXPIRY" \
-                || { echo "::error::Failed to update $VAR_NAME"; exit 1; }
-            else
-              echo "::error::Failed to create/update $VAR_NAME: $CREATE_RESPONSE"
-              exit 1
+          # Upsert a repository variable.
+          #
+          # The Actions variables API has no single upsert endpoint:
+          # PATCH updates an existing variable and returns HTTP 404 when it is
+          # absent; POST creates one and returns HTTP 409
+          # ("Already exists - Variable already exists") when it is present.
+          # We therefore PATCH first and only POST on a 404 not-found signal,
+          # so the common path (refreshing an already-set suspension) never
+          # touches the duplicate-name error path at all — no reliance on the
+          # wording of a 409 body.  The not-found detection mirrors
+          # scripts/fast_lane_classify.py::_is_missing_variable.
+          upsert_variable() {
+            local name="$1" value="$2" err
+            if err=$(gh api -X PATCH "repos/$REPO/actions/variables/$name" \
+                       -f value="$value" 2>&1); then
+              echo "Variable $name updated."
+              return 0
             fi
-          else
-            echo "Variable $VAR_NAME created with value $EXPIRY."
-          fi
-
-          # Set the reason variable.
-          CREATE_REASON_RESPONSE=$(gh api "repos/$REPO/actions/variables" \
-            -f name="$REASON_VAR" \
-            -f value="$REASON" \
-            2>&1) || CREATE_REASON_RC=$?
-          CREATE_REASON_RC=${CREATE_REASON_RC:-0}
-
-          if [ "$CREATE_REASON_RC" -ne 0 ]; then
-            if echo "$CREATE_REASON_RESPONSE" | grep -qi "already exists"; then
-              echo "Variable $REASON_VAR already exists — updating."
-              gh api -X PATCH "repos/$REPO/actions/variables/$REASON_VAR" \
-                -f value="$REASON" \
-                || { echo "::error::Failed to update $REASON_VAR"; exit 1; }
-            else
-              echo "::error::Failed to create/update $REASON_VAR: $CREATE_REASON_RESPONSE"
-              exit 1
+            if echo "$err" | grep -qiE 'not found|http 404'; then
+              if err=$(gh api "repos/$REPO/actions/variables" \
+                         -f name="$name" -f value="$value" 2>&1); then
+                echo "Variable $name created."
+                return 0
+              fi
+              echo "::error::Failed to create $name: $err"
+              return 1
             fi
-          else
-            echo "Variable $REASON_VAR created with value $REASON."
-          fi
+            echo "::error::Failed to update $name: $err"
+            return 1
+          }
+
+          upsert_variable "$VAR_NAME" "$EXPIRY"
+          upsert_variable "$REASON_VAR" "$REASON"
 
           echo "Suspension set: $VAR_NAME=$EXPIRY, $REASON_VAR=$REASON"
 
