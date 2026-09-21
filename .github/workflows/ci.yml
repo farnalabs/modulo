@@ -835,6 +835,49 @@ jobs:
           TESTCONTAINERS_RYUK_DISABLED: "true"
         run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -p no:warnings
 
+  fast-lane-classify:
+    # FAR-1099: Classify PRs for fast-lane eligibility. Runs the classifier
+    # script that checks (1) all changed paths are class-A (test-infra only),
+    # (2) guardrails pass (cap, no test-weakening, SHA-pinned check). The
+    # result is a GitHub check run on the PR's head SHA that the merge-queue
+    # reads when evaluating fast-lane eligibility.
+    name: Fast-lane classify
+    if: github.event_name == 'pull_request'
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Run fast-lane classifier
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HAS_LABEL=false
+          if echo '${{ toJSON(github.event.pull_request.labels.*.name) }}' | grep -q 'fast-lane:test-infra'; then
+            HAS_LABEL="--has-label"
+          fi
+          uv run --no-build --project backend --no-sync python scripts/fast_lane_classify.py \
+            --pr-number ${{ github.event.pull_request.number }} \
+            --head-sha ${{ github.event.pull_request.head.sha }} \
+            --repo ${{ github.repository }} \
+            --base-ref "origin/${{ github.event.pull_request.base.ref }}" \
+            $HAS_LABEL
+      - name: Report fast-lane eligibility
+        if: always()
+        run: |
+          if [ "${{ steps.classify.outcome }}" = "success" ]; then
+            echo "PR is fast-lane eligible (class-A, guardrails pass)."
+          else
+            echo "PR is NOT fast-lane eligible (class-B or guardrail violation). Standard lane."
+          fi
+
   notify-pr-failure:
     name: Trigger Branch Fixer
     # The `manual-delivery` label must only suppress the webhook dispatch step
@@ -845,7 +888,7 @@ jobs:
     # step so it keeps its documented meaning ("do not auto-dispatch the
     # Branch Fixer").
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, schema-freshness, gitleaks, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, schema-freshness, gitleaks, break-glass-deploy-gate, fast-lane-classify]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
