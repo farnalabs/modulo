@@ -26,6 +26,8 @@ bdd:
   - backend/tests/bdd/features/organisation/org_deletion.feature
   - backend/tests/bdd/features/organisation/org_scoping.feature
   - backend/tests/bdd/features/organisation/multi_backend.feature
+  - backend/tests/bdd/features/system_admin/system_admin_orgs.feature
+  - backend/tests/bdd/features/system_admin/system_admin_users.feature
 depends-on:
   - feat-auth-jwt-auth
   - feat-core-db-abstraction-core
@@ -72,12 +74,20 @@ authorization cleanup.
 
 - **Stale `created_by` FK design** — deliberately not an FK (bootstrap), so no
   referential integrity on the creator field.
-- **No org-CRUD BDD feature file** — system-admin org CRUD is unit-tested only; BDD
-  covers deletion/scoping/RLS/multi-backend.
 - **No E2E smoke test for `AdminOrgSettingsView`** — vitest coverage only.
 
 ## QA History
 
+- 2026-09-21: **product-map walk** — closed the "No org-CRUD BDD feature
+  file" gap. `system_admin_orgs.feature` gained org-listing coverage (system-admin
+  list success, the reserved infrastructure orgs — nil-UUID error-ingest and
+  modulo-library registry — filtered from the list, and a regular-admin 403) and
+  `system_admin_users.feature` gained the create-user error paths (an email
+  already a member of the org → 409, a local account holding a password in
+  another org → 409 (SECURITY #1189 cross-tenant takeover refusal), an invalid
+  `org_role` → 422, a weak password → 422, a missing org → 404), all driving the
+  real `/api/v1/admin/orgs` routes with DB seams patched
+  (`steps/test_system_admin.py`).
 - 2026-08-29: **product-map review pass** — removed the stale
   "no ``organisation exists`` shared BDD step" Known Gap: the step
   ``Given the organisation exists`` is now defined once in the top-level

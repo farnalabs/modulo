@@ -69,6 +69,26 @@ def _org_holds_invalid_license(request):
     request.node._org_has_invalid_key = True
 
 
+@given("the system has several organisations")
+def _system_has_orgs(request):
+    request.node._system_orgs = ["acme-corp", "beta-ltd"]
+
+
+@given("the system holds reserved infrastructure orgs")
+def _system_has_reserved_orgs(request):
+    request.node._system_reserved = True
+
+
+@given(parsers.parse('a user with email "{email}" is already a member of org "{org_slug}"'))
+def _existing_org_member(email: str, org_slug: str, request):
+    request.node._create_user_scenario = "existing_member"
+
+
+@given(parsers.parse('a local account with email "{email}" holds a password in another org'))
+def _roaming_local_account(email: str, request):
+    request.node._create_user_scenario = "roaming_local"
+
+
 # ===========================================================================
 # Helpers
 # ===========================================================================
@@ -94,6 +114,7 @@ def _make_mock_org(**kwargs):
     org.name = kwargs.get("name", "Test Org")
     org.slug = kwargs.get("slug", "test-org")
     org.status = kwargs.get("status", "active")
+    org.plan_id = kwargs.get("plan_id")
     org.created_at = kwargs.get("created_at", datetime.now(UTC))
     return org
 
@@ -387,18 +408,106 @@ def _create_org_user(email: str, org_slug: str, request, client):
     mock_account = _make_mock_account(email=email)
     mock_membership = _make_mock_membership(role="runner")
 
-    with (
-        patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=mock_org),
-        patch("modulo.api.routes.admin_orgs.get_account_by_email", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.admin_orgs.validate_password_strength"),
-        patch("modulo.api.routes.admin_orgs.hash_password", return_value="mock_hash"),
-        patch("modulo.api.routes.admin_orgs.create_account", new_callable=AsyncMock, return_value=mock_account),
-        patch(
-            "modulo.api.routes.admin_orgs.create_membership",
-            new_callable=AsyncMock,
-            return_value=mock_membership,
-        ) as mock_create_membership,
-    ):
+    scenario = getattr(request.node, "_create_user_scenario", None)
+    body = {
+        "email": email,
+        "display_name": "New User",
+        "password": "password123",
+        "org_role": "runner",
+    }
+
+    if scenario == "existing_member":
+        # SECURITY (#1189): an account already in the org is refused before
+        # any membership write (409), even for a system admin.
+        with (
+            patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=mock_org),
+            patch(
+                "modulo.api.routes.admin_orgs.get_account_by_email",
+                new_callable=AsyncMock,
+                return_value=mock_account,
+            ),
+            patch(
+                "modulo.api.routes.admin_orgs.get_membership_by_account_and_org",
+                new_callable=AsyncMock,
+                return_value=mock_membership,
+            ),
+        ):
+            resp = client.post(f"/api/v1/admin/orgs/{org_id}/users", json=body)
+    elif scenario == "roaming_local":
+        # SECURITY (#1189): adopting a local account that holds a password in
+        # another org would overwrite its hash cross-tenant — refused (409).
+        mock_account.password_hash = "existing_hash"
+        mock_account.auth_provider = "local"
+        with (
+            patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=mock_org),
+            patch(
+                "modulo.api.routes.admin_orgs.get_account_by_email",
+                new_callable=AsyncMock,
+                return_value=mock_account,
+            ),
+            patch(
+                "modulo.api.routes.admin_orgs.get_membership_by_account_and_org",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            resp = client.post(f"/api/v1/admin/orgs/{org_id}/users", json=body)
+    else:
+        with (
+            patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=mock_org),
+            patch("modulo.api.routes.admin_orgs.get_account_by_email", new_callable=AsyncMock, return_value=None),
+            patch("modulo.api.routes.admin_orgs.validate_password_strength"),
+            patch("modulo.api.routes.admin_orgs.hash_password", return_value="mock_hash"),
+            patch("modulo.api.routes.admin_orgs.create_account", new_callable=AsyncMock, return_value=mock_account),
+            patch(
+                "modulo.api.routes.admin_orgs.create_membership",
+                new_callable=AsyncMock,
+                return_value=mock_membership,
+            ) as mock_create_membership,
+        ):
+            resp = client.post(f"/api/v1/admin/orgs/{org_id}/users", json=body)
+        request.node._mock_create_membership = mock_create_membership
+    request.node._resp = resp
+    request.node._org_uuid = org_id
+
+
+@when(parsers.parse('I create a user with email "{email}" role "{role}" in org "{org_slug}"'))
+def _create_org_user_invalid_role(email: str, role: str, org_slug: str, request, client):
+    _set_auth_override(True)
+    org_id = uuid.uuid5(uuid.NAMESPACE_DNS, org_slug)
+    resp = client.post(
+        f"/api/v1/admin/orgs/{org_id}/users",
+        json={
+            "email": email,
+            "display_name": "New User",
+            "password": "password123",
+            "org_role": role,
+        },
+    )
+    request.node._resp = resp
+
+
+@when(parsers.parse('I create a user with email "{email}" password "{password}" in org "{org_slug}"'))
+def _create_org_user_weak_password(email: str, password: str, org_slug: str, request, client):
+    _set_auth_override(True)
+    org_id = uuid.uuid5(uuid.NAMESPACE_DNS, org_slug)
+    resp = client.post(
+        f"/api/v1/admin/orgs/{org_id}/users",
+        json={
+            "email": email,
+            "display_name": "New User",
+            "password": password,
+            "org_role": "runner",
+        },
+    )
+    request.node._resp = resp
+
+
+@when(parsers.parse('I create a user with email "{email}" in missing org "{org_slug}"'))
+def _create_org_user_missing_org(email: str, org_slug: str, request, client):
+    _set_auth_override(True)
+    org_id = uuid.uuid5(uuid.NAMESPACE_DNS, org_slug)
+    with patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None):
         resp = client.post(
             f"/api/v1/admin/orgs/{org_id}/users",
             json={
@@ -409,8 +518,6 @@ def _create_org_user(email: str, org_slug: str, request, client):
             },
         )
     request.node._resp = resp
-    request.node._mock_create_membership = mock_create_membership
-    request.node._org_uuid = org_id
 
 
 @when(parsers.parse('I attempt to create a user in org "{org_slug}"'))
@@ -425,6 +532,40 @@ def _attempt_create_org_user(org_slug: str, request, client):
             "org_role": "runner",
         },
     )
+    request.node._resp = resp
+
+
+@when("I list all organisations")
+def _list_all_orgs(request, client):
+    _set_auth_override(True)
+
+    mock_orgs = [
+        _make_mock_org(name="Acme Corp", slug="acme-corp"),
+        _make_mock_org(name="Beta Ltd", slug="beta-ltd"),
+    ]
+    if getattr(request.node, "_system_reserved", False):
+        mock_orgs.extend(
+            [
+                _make_mock_org(
+                    name="Orphan Ingest",
+                    slug="orphan-ingest",
+                    id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
+                ),
+                _make_mock_org(
+                    name="Modulo Registry",
+                    slug="modulo-registry",
+                    id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                ),
+            ]
+        )
+    with patch("modulo.api.routes.admin_orgs.list_organisations", new_callable=AsyncMock, return_value=mock_orgs):
+        resp = client.get("/api/v1/admin/orgs")
+    request.node._resp = resp
+
+
+@when("I attempt to list all organisations")
+def _attempt_list_all_orgs(request, client):
+    resp = client.get("/api/v1/admin/orgs")
     request.node._resp = resp
 
 
@@ -591,6 +732,31 @@ def _user_belongs_to_org(org_slug: str, request):
     mock_create_membership.assert_called_once()
     _, kwargs = mock_create_membership.call_args
     assert kwargs["org_id"] == expected_org_id, f"Expected org_id {expected_org_id}, got {kwargs['org_id']}"
+
+
+@then("I see all organisations")
+def _all_orgs_listed(request):
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
+    body = resp.json()
+    assert isinstance(body, list), f"expected a list of organisations, got {type(body)}"
+    slugs = {item["slug"] for item in body}
+    assert {"acme-corp", "beta-ltd"} <= slugs, f"expected the seeded orgs, got {slugs!r}"
+    for item in body:
+        assert "id" in item and "name" in item and "status" in item and "created_at" in item
+
+
+@then("reserved infrastructure orgs are hidden")
+def _reserved_orgs_hidden(request):
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
+    body = resp.json()
+    assert isinstance(body, list), f"expected a list of organisations, got {body!r}"
+    slugs = {item["slug"] for item in body}
+    assert slugs == {"acme-corp", "beta-ltd"}, f"reserved orgs should be filtered out, got {slugs!r}"
+    ids = {item["id"] for item in body}
+    assert str(uuid.UUID("00000000-0000-0000-0000-000000000000")) not in ids, "orphan ingest org leaked"
+    assert str(uuid.UUID("00000000-0000-0000-0000-000000000001")) not in ids, "modulo registry org leaked"
 
 
 @then("the config value is saved")

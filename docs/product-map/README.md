@@ -518,6 +518,21 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `PINNED_AWAITING_IMPLEMENTATION`; the feature is now executing BDD coverage,
 > cited from both `feat-runs` (`build/runs.md`) and `feat-observability`.
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-21):** closed `feat-teams-org-entity`'s
+> "No org-CRUD BDD feature file" gap
+> (`teams/org-entity.md`). `system_admin_orgs.feature` gained 3 org-listing
+> scenarios (system-admin list success, reserved infrastructure orgs — the
+> nil-UUID error-ingest org and the modulo-library registry org — filtered from
+> the list, and a regular-admin 403) and `system_admin_users.feature` gained 5
+> create-user error-path scenarios (email already a member of the org → 409, a
+> local account holding a password in another org → 409 — the SECURITY #1189
+> cross-tenant adoption refusal —, an invalid `org_role` → 422, a weak password
+> → 422, and a missing org → 404), all driving the REAL `/api/v1/admin/orgs`
+> routes (`admin_create_org_user` / `admin_list_orgs`) with only DB seams
+> patched (`steps/test_system_admin.py`). The `feat-system-orgs` tracker gained
+> the corresponding behaviour lines (`system/system-orgs.md`) and the manifest
+> registry entry is now `status: covered`.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
