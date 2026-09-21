@@ -598,8 +598,21 @@ async def _resolve_oidc_provider(
     """
     db_provider = await _read_system_oidc_provider(system_session, provider_id)
     if db_provider is None and app_session is not None:
-        await _set_default_rls_org(app_session)
-        db_provider = await get_provider_by_provider_id(app_session, provider_id)
+        # FAR-1058 parity: the app fallback must run inside an active
+        # transaction. set_rls_org requires one (it raises RuntimeError
+        # otherwise), and the caller's app session may hand us the resolver
+        # with NO transaction open (autobegin=False). Open a scoped
+        # transaction when the caller has none (its LOCAL binding reverts at
+        # commit, so the binding cannot leak into a later caller transaction);
+        # read in place when the caller already holds one (the OIDC login /
+        # callback routes always wrap in session.begin()).
+        if app_session.in_transaction():
+            await _set_default_rls_org(app_session)
+            db_provider = await get_provider_by_provider_id(app_session, provider_id)
+        else:
+            async with app_session.begin():
+                await _set_default_rls_org(app_session)
+                db_provider = await get_provider_by_provider_id(app_session, provider_id)
     if db_provider is not None and db_provider.provider_type == "oidc" and db_provider.enabled:
         discovery_url = db_provider.discovery_url
         if discovery_url:
