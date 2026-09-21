@@ -379,6 +379,58 @@ def test_non_sandbox_node_returns_empty_caps() -> None:
     assert caps == {}
 
 
+def test_unrecognised_node_policy_returns_refusal() -> None:
+    """An unrecognised node egress_policy is a refusal, not a provider default (FAR-1085)."""
+    result = resolve_egress(
+        node_egress_policy="nope",
+        node_egress_allowlist=None,
+        profile_network_policy=None,
+        tier="e2b",
+    )
+    assert result.policy is None
+    assert result.refusal is not None
+    assert "unrecognised node" in result.refusal.lower()
+    assert "nope" in result.refusal
+
+
+def test_unrecognised_profile_policy_returns_refusal() -> None:
+    """An unrecognised profile network_policy is a refusal, not a provider default (FAR-1085)."""
+    result = resolve_egress(
+        node_egress_policy=None,
+        node_egress_allowlist=None,
+        profile_network_policy="bogus",
+        tier="e2b",
+    )
+    assert result.policy is None
+    assert result.refusal is not None
+    assert "unrecognised profile" in result.refusal.lower()
+    assert "bogus" in result.refusal
+
+
+def test_valid_node_policy_case_insensitive() -> None:
+    """A valid node value in any case still resolves normally (lowercasing works)."""
+    result = resolve_egress(
+        node_egress_policy="DENY_ALL",
+        node_egress_allowlist=None,
+        profile_network_policy=None,
+        tier="e2b",
+    )
+    assert result.policy == "deny_all"
+    assert result.refusal is None
+
+
+def test_valid_profile_policy_case_insensitive() -> None:
+    """A valid profile value in any case still resolves normally (lowercasing works)."""
+    result = resolve_egress(
+        node_egress_policy=None,
+        node_egress_allowlist=None,
+        profile_network_policy="None",
+        tier="e2b",
+    )
+    assert result.policy == "deny_all"
+    assert result.refusal is None
+
+
 def test_egress_resolution_is_frozen() -> None:
     """EgressResolution is a frozen dataclass."""
     r = EgressResolution(policy=None, allowlist=None, refusal=None)

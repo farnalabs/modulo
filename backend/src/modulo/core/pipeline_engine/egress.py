@@ -64,8 +64,9 @@ def _map_profile_to_canonical(network_policy: str | None) -> str | None:
         return None  # provider default
     if value == "selected":
         return "selected"
-    # Unknown profile value — treat as provider default (fail-open to
-    # the tier default, not to a hardcoded policy).
+    # Defensive dead code: an unrecognised value should now be caught by
+    # the validation guard in resolve_egress() before we get here.  This
+    # branch is unreachable for any valid call path.
     return None
 
 
@@ -87,8 +88,9 @@ def _map_node_to_canonical(egress_policy: str | None) -> str | None:
         return "deny_all"
     if value == "selected":
         return "selected"
-    # Unknown node value — treat as provider default (fail-open to the
-    # tier default rather than silently granting or denying).
+    # Defensive dead code: an unrecognised value should now be caught by
+    # the validation guard in resolve_egress() before we get here.  This
+    # branch is unreachable for any valid call path.
     return None
 
 
@@ -142,6 +144,31 @@ def resolve_egress(
     **Tier capability check.**  A tier that cannot enforce the resolved
     policy returns ``refusal`` set with a clear, actionable reason.
     """
+    # --- Validate raw inputs against their vocabularies before mapping ---
+    # An unrecognised value is a refusal (fail-closed): a typo'd or
+    # directly-written policy must not silently fall back to the provider
+    # default, which would grant egress.
+    _node_raw = node_egress_policy.strip().lower() if isinstance(node_egress_policy, str) else node_egress_policy
+    if _node_raw is not None and _node_raw not in NODE_EGRESS_POLICIES:
+        return EgressResolution(
+            policy=None,
+            allowlist=None,
+            refusal=(f"unrecognised node egress_policy {node_egress_policy!r}; valid values: {NODE_EGRESS_POLICIES}"),
+        )
+    _profile_raw = (
+        profile_network_policy.strip().lower() if isinstance(profile_network_policy, str) else profile_network_policy
+    )
+    if _profile_raw is not None and _profile_raw not in PROFILE_NETWORK_POLICIES:
+        return EgressResolution(
+            policy=None,
+            allowlist=None,
+            refusal=(
+                f"unrecognised profile network_policy"
+                f" {profile_network_policy!r};"
+                f" valid values: {PROFILE_NETWORK_POLICIES}"
+            ),
+        )
+
     canonical_node = _map_node_to_canonical(node_egress_policy)
     canonical_profile = _map_profile_to_canonical(profile_network_policy)
 
