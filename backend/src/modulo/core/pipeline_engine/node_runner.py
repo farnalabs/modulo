@@ -7143,6 +7143,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
 
     _resolved_provider: str = RUNNER_PROVIDER_E2B
 
+    # FAR-1085: the profile's canonical network policy is only available when a
+    # dispatch route was resolved (i.e. a DB-backed dispatch). Session-factory-
+    # less invocations take the legacy E2B path with no bound profile, so the
+    # policy stays unset and the canonical resolver falls through to the tier
+    # default.
+    _profile_net_policy: str | None = None
+
     # D4 dispatch adapter (FAR-590): branch on the PIPELINE-LEVEL bound
     # profile's provider_type (the validated, same-org-enforced
     # PipelineSnapshot.environment_profile_id — consumed at dispatch).
@@ -7163,6 +7170,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _ctx = get_conformance_ctx()
         _env_profile_id = _ctx[2] if _ctx else None
         _route = await resolve_sandbox_dispatch_route(session_factory, state.get("_org_id"), _env_profile_id)
+        if _route.profile is not None:
+            _profile_net_policy = getattr(_route.profile, "network_policy", None)
         if _route.provider_type == "runner_docker":
             from modulo.core.bundled_runner.runner_dispatch import run_bundled_runner_node
 
@@ -7669,11 +7678,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         if resource_limits:
             _metadata["resource_limits"] = json.dumps(resource_limits)
         # FAR-1085: use canonical egress resolution instead of ad-hoc mapping.
-        # The E2B route threads the profile's network_policy so the canonical
-        # resolver can apply the node→profile→provider-default precedence chain.
+        # The E2B route threads the profile's network_policy (resolved above)
+        # so the canonical resolver can apply the node→profile→provider-default
+        # precedence chain.
         from modulo.core.pipeline_engine.egress import resolve_egress
 
-        _profile_net_policy = getattr(_route.profile, "network_policy", None) if _route.profile is not None else None
         _egress_resolved = resolve_egress(
             node_egress_policy=egress_policy,
             node_egress_allowlist=egress_allowlist,
