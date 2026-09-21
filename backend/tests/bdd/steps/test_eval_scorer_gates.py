@@ -2,8 +2,7 @@
 
 Wires up ``evals/eval_llm_judge.feature`` and ``evals/eval_regex.feature`` — two
 feature files that shipped under ``tests/bdd/features/evals/`` but were never bound
-to a step module, so their scenarios never executed (product-map
-review pass). The steps drive the real ``modulo.core.eval_engine`` so the
+to a step module, so their scenarios never executed. The steps drive the real ``modulo.core.eval_engine`` so the
 scenarios lock the actual scorer contracts: regex scoring against an output
 field, LLM-as-judge callable wiring (incl. a dedicated judge model backend and
 the guarded rubric prompt), warn-vs-block ``failure_behaviour``, and the

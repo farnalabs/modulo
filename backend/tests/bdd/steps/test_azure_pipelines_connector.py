@@ -1,7 +1,7 @@
 """Step definitions for the Azure Pipelines connector BDD feature.
 
 Wires ``features/connectors/azure_pipelines.feature`` into the executing
-suite (the product-map review pass) by driving the REAL
+BDD suite by driving the REAL
 ``AzurePipelinesConnector`` against a respx-mocked Azure DevOps REST API v7.0
 — mirroring ``backend/tests/unit/connectors/test_azure_pipelines.py`` so the
 executing BDD surface locks the same contract the unit suite does: listing

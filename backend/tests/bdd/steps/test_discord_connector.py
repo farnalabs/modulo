@@ -1,7 +1,7 @@
 """Step definitions for the Discord connector BDD feature.
 
-Wires ``features/connectors/discord.feature`` into the executing suite (the
-product-map review pass) by driving the REAL ``DiscordConnector``
+Wires ``features/connectors/discord.feature`` into the executing BDD
+suite by driving the REAL ``DiscordConnector``
 against a respx-mocked Discord REST API v10 — mirroring
 ``backend/tests/unit/connectors/test_discord.py`` so the executing BDD surface
 locks the same contract the unit suite does: bot-token validation via

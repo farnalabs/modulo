@@ -1,7 +1,7 @@
 """Step definitions for the Buildkite connector BDD feature.
 
-Wires ``features/connectors/buildkite.feature`` into the executing suite (the
-2026-09-14 product-map review pass) by driving the REAL
+Wires ``features/connectors/buildkite.feature`` into the executing BDD
+suite by driving the REAL
 ``BuildkiteConnector`` against a respx-mocked Buildkite REST API v2 — mirroring
 ``backend/tests/unit/connectors/test_buildkite.py`` so the executing BDD surface
 locks the same contract the unit suite does: token validation via ``/user``,

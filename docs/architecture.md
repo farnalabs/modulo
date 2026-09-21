@@ -172,11 +172,11 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 | `AzureKeyVaultConnector` | `secrets` | read secrets |
 | `SharePointConnector` | `documentation` | read/write files and pages |
 | `CodeClimateConnector` | `quality` | query code quality metrics |
-| *(41 built-in connectors total; see `modulo/connectors/`)* | | |
+| *(40 built-in connectors total; see `modulo/connectors/`)* | | |
 
 #### Integration Validation Levels (FAR-935)
 
-Every connector type and model backend provider resolves to a validation level — a four-tier classification of how thoroughly the integration has been tested:
+Every connector type and model backend provider resolves to a validation level: a four-tier classification of how thoroughly the integration has been tested:
 
 | Level | Meaning |
 |-------|---------|
@@ -590,7 +590,7 @@ Or equivalently:
 stmt = select(Model).where(Model.id == uid).execution_options(include_deleted=True)
 ```
 
-The opt-out is scoped to the individual statement and does not leak across concurrent operations on the same session. Existing hand-written `deleted_at.is_(None)` predicates are now redundant but harmless — they are left in place to avoid risky churn.
+The opt-out is scoped to the individual statement and does not leak across concurrent operations on the same session. Existing hand-written `deleted_at.is_(None)` predicates are now redundant but harmless: they are left in place to avoid risky churn.
 
 **CRUD `include_deleted` parameter pattern:** CRUD functions that accept `include_deleted: bool = False` must bridge to the opt-out when `include_deleted=True`:
 
@@ -605,7 +605,7 @@ Without this bridge, `include_deleted=True` becomes a no-op because the global f
 
 ### Run-Execution Service Identity (ADR 038)
 
-When a pipeline runs, the run executes with the **pipeline owner's authority** — not the triggering user's grants. This is a service identity scoped to the pipeline's `owner_team_id` (or the org when `owner_team_id` is NULL).
+When a pipeline runs, the run executes with the **pipeline owner's authority**, not the triggering user's grants. This is a service identity scoped to the pipeline's `owner_team_id` (or the org when `owner_team_id` is NULL).
 
 **Key properties:**
 
@@ -619,7 +619,7 @@ See ADR 038 (`Repos/devtools/adr/038-rbac-security-boundary.md`) for the full de
 
 ### Folder Security Model (ADR 038)
 
-`PipelineFolder` is **organisation-scoped only** — it has no `owner_team_id`, no `visibility`, and no security cascade. Pipeline ownership is explicit on the pipeline itself (`Pipeline.owner_team_id`), not inherited from a folder. Folders are a UI organisation concept, not a security boundary.
+`PipelineFolder` is **organisation-scoped only**: it has no `owner_team_id`, no `visibility`, and no security cascade. Pipeline ownership is explicit on the pipeline itself (`Pipeline.owner_team_id`), not inherited from a folder. Folders are a UI organisation concept, not a security boundary.
 
 This is an explicit decision: any future proposal to add folder-level security (inherited ownership, visibility cascading, team-scoped folder access) must address ADR 038's rationale for rejecting folders-as-security. See ADR 038 for the full reasoning.
 
@@ -740,7 +740,7 @@ ADRs live in the private `farnalabs/devtools` repo at `Repos/devtools/adr/` (mig
 | 020 | Analytics: run_daily_facts + typed-params query surface | Accepted |
 | 025 | Generic REST Integration Connector | Accepted |
 | 029 | Agent Execution Tiers + the Bundled Runner | Accepted |
-| 038 | RBAC as a Security Boundary — One Rule, One Principal | Accepted |
+| 038 | RBAC as a Security Boundary: One Rule, One Principal | Accepted |
 
 Note: ADR numbers 003/004/005 are shared by two distinct ADR files each (the numbering mirrors the filesystem). ADR 017/018 – Centralized Authorization – exists as both `017-centralized-authorization.md` and `018-centralized-authorization.md` (a duplicated file), so it is listed once here under the combined number.
 

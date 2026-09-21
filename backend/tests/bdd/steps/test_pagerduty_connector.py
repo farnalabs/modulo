@@ -1,7 +1,7 @@
 """Step definitions for the PagerDuty connector BDD feature.
 
-Wires ``features/connectors/pagerduty.feature`` into the executing suite (the
-2026-09-14 product-map review pass) by driving the REAL
+Wires ``features/connectors/pagerduty.feature`` into the executing BDD
+suite by driving the REAL
 ``PagerDutyConnector`` against a respx-mocked PagerDuty API — mirroring
 ``backend/tests/unit/connectors/test_pagerduty.py`` so the executing BDD surface
 locks the same contract the unit suite does: token validation via ``/users``,

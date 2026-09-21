@@ -267,6 +267,8 @@ async def build_live_manifest(
     # FAR-212 PR A: the sandbox capability surface for a sandbox_agent node —
     # mechanically derived from the node's ACTUAL config (egress_policy, the
     # read-only workspace flag, git-credential scope), not a declared claim.
+    # FAR-1085: plumb the profile's network_policy so the certified capability
+    # matches the runtime outcome for every (node, profile, tier) combination.
     # Lazy import keeps this module's import surface light: sandbox_mode itself
     # is dependency-free, but the pipeline_engine package init (LangGraph,
     # executor, DB) is heavy and must not be pulled in by guardrail consumers
@@ -274,7 +276,28 @@ async def build_live_manifest(
     if node_def is not None:
         from modulo.core.pipeline_engine.sandbox_mode import derive_sandbox_capabilities
 
-        _add_sandbox_surface(registered, derive_sandbox_capabilities(node_def))
+        # Resolve profile_network_policy from the loaded profile row (if any).
+        _profile_network_policy: str | None = None
+        if environment_profile_id is not None:
+            from modulo.db.models.environment_profile import EnvironmentProfile as EpModel
+
+            try:
+                _ep_row = (
+                    await session.execute(select(EpModel).where(EpModel.id == environment_profile_id))
+                ).scalar_one_or_none()
+                if _ep_row is not None:
+                    _profile_network_policy = getattr(_ep_row, "network_policy", None)
+            except Exception:
+                _log.debug(
+                    "guardrail.conformance.profile_network_policy_read_failed",
+                    extra={"environment_profile_id": str(environment_profile_id)},
+                    exc_info=True,
+                )
+
+        _add_sandbox_surface(
+            registered,
+            derive_sandbox_capabilities(node_def, profile_network_policy=_profile_network_policy),
+        )
 
     return registered
 

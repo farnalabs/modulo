@@ -1,7 +1,7 @@
 """Step definitions for pipeline graph validation (save-time).
 
-Wires ``features/pipelines/validation.feature`` into the executing suite (the
-2026-09-16 product-map review pass) by driving the REAL
+Wires ``features/pipelines/validation.feature`` into the executing BDD
+suite by driving the REAL
 ``modulo.core.graph_validator.GraphValidator.validate_definition`` against a
 mocked sqlalchemy session — the save-time surface the pipelines graph PATCH
 route calls via ``_validate_graph_save``. Mirrors the DB-free pattern of

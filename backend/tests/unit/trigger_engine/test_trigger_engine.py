@@ -40,6 +40,7 @@ from modulo.core.trigger_engine import (
     CiFailureCoalescedError,
     ConcurrentRunLimitError,
     DuplicateWebhookError,
+    EventNotAcceptedError,
     HmacValidationError,
     PipelineRateLimitError,
     ReplayNotFoundError,
@@ -1341,13 +1342,13 @@ async def test_handle_webhook_busy_lock_not_acquired() -> None:
 
 
 async def test_handle_webhook_event_type_not_accepted() -> None:
-    """accepted_events configured but payload has no matching event -> RuntimeError + event logged."""
+    """accepted_events configured but payload has no matching event -> EventNotAcceptedError + event logged."""
     trigger = _make_trigger(accepted_events=["pull_request"])
     session = _make_session(trigger=trigger, active_run_count=0)
 
     with (
         patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
-        pytest.raises(RuntimeError, match="none of the accepted event types"),
+        pytest.raises(EventNotAcceptedError, match="none of the accepted event types"),
     ):
         await TriggerEngine().handle_webhook(
             session,
@@ -1431,7 +1432,7 @@ async def test_handle_webhook_event_value_filter_rejects() -> None:
     with (
         patch("modulo.core.trigger_engine.create_run") as mock_create,
         patch("modulo.core.trigger_engine.TriggerEngine._try_insert_dedup") as mock_dedup,
-        pytest.raises(RuntimeError, match="event value filters"),
+        pytest.raises(EventNotAcceptedError, match="event value filters"),
     ):
         await TriggerEngine().handle_webhook(
             session,
@@ -1459,7 +1460,7 @@ async def test_handle_webhook_event_value_filter_missing_key_rejects() -> None:
 
     with (
         patch("modulo.core.trigger_engine.create_run") as mock_create,
-        pytest.raises(RuntimeError, match="event value filters"),
+        pytest.raises(EventNotAcceptedError, match="event value filters"),
     ):
         await TriggerEngine().handle_webhook(
             session,
@@ -1914,7 +1915,7 @@ async def test_replay_event_event_type_not_accepted() -> None:
         stored_payload=_make_stored_payload(raw_payload={"action": "opened"}),
         active_run_count=0,
     )
-    with pytest.raises(RuntimeError, match="none of the accepted event types"):
+    with pytest.raises(EventNotAcceptedError, match="none of the accepted event types"):
         await TriggerEngine().replay_event(
             session,
             event_id=event.id,
@@ -1937,7 +1938,7 @@ async def test_replay_event_value_filter_not_accepted() -> None:
     )
     with (
         patch("modulo.core.trigger_engine.create_run") as mock_create,
-        pytest.raises(RuntimeError, match="event value filters"),
+        pytest.raises(EventNotAcceptedError, match="event value filters"),
     ):
         await TriggerEngine().replay_event(
             session,

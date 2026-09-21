@@ -118,6 +118,12 @@ from modulo.core.pipeline_engine.jmespath_eval import (
     compile_jmespath,
     evaluate_jmespath_condition,
 )
+from modulo.core.pipeline_engine.sandbox_errors import (
+    SandboxNodeFailedError as SandboxNodeFailedError,  # noqa: PLC0414 - explicit re-export
+)
+from modulo.core.pipeline_engine.sandbox_errors import (
+    SandboxTierRefusedError as SandboxTierRefusedError,  # noqa: PLC0414 - explicit re-export
+)
 from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
 from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
@@ -357,25 +363,6 @@ def _normalize_required_team_id(gate_id: str, raw: Any) -> str | None:
         return None
 
 
-class SandboxNodeFailedError(Exception):
-    """A sandbox-agent node failed due to sandbox infrastructure (retryable).
-
-    Raised for a stall (idle watchdog), a command timeout, or a non-zero exit
-    code with no parseable ``output.json``. The executor maps this to the
-    retryable path (fenced reset to ``pending`` + SAQ retry) instead of a
-    silent wrong-success completion.
-
-    ``node_id`` is carried so the executor's FAR-228 idempotency gate (guard B)
-    can resolve which node failed without re-deriving it from the message.
-    Omitting ``node_id`` (e.g. ``SandboxNodeFailedError("msg")`` in tests)
-    disables guard B — the transient retry proceeds exactly as before.
-    """
-
-    def __init__(self, message: str = "", *, node_id: str | None = None) -> None:
-        super().__init__(message)
-        self.node_id = node_id
-
-
 class SupersededNodeError(Exception):
     """The sandbox dispatch marker was denied (claim superseded / not running).
 
@@ -474,24 +461,6 @@ class SandboxBindingResolutionError(SandboxNodeFailedError):
     that code's rate — so a re-dispatch re-resolves the (possibly reconfigured)
     binding. The sandbox was NEVER created and the script PROCESS was NEVER
     started, so re-dispatch is safe.
-    """
-
-
-class SandboxTierRefusedError(SandboxNodeFailedError):
-    """A provider tier refused this dispatch at provision time (FAR-592 D6).
-
-    Terminal (D7-refusal posture): the tier cannot safely honour the dispatch,
-    so it refuses rather than failing open. Raised by two call sites:
-
-    * The Local (host-subprocess) tier, when bindings inject standing host-env
-      credentials and the profile lacks ``allow_runner_env_bindings`` — the
-      Local tier has no container isolation, so it MUST refuse.
-    * The Docker / Bundled Runner tier, when the profile requests
-      ``network_policy='selected'`` — Docker cannot enforce per-host egress
-      allowlists (no ``NET_ADMIN`` in the hardened workspace), so it MUST
-      refuse instead of silently granting full outbound (FAR-1064).
-
-    Maps to ``sandbox.tier_refused`` via the executor's LEGACY_ALIASES.
     """
 
 
@@ -7177,6 +7146,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
 
     _resolved_provider: str = RUNNER_PROVIDER_E2B
 
+    # FAR-1085: the profile's canonical network policy is only available when a
+    # dispatch route was resolved (i.e. a DB-backed dispatch). Session-factory-
+    # less invocations take the legacy E2B path with no bound profile, so the
+    # policy stays unset and the canonical resolver falls through to the tier
+    # default.
+    _profile_net_policy: str | None = None
+
     # D4 dispatch adapter (FAR-590): branch on the PIPELINE-LEVEL bound
     # profile's provider_type (the validated, same-org-enforced
     # PipelineSnapshot.environment_profile_id — consumed at dispatch).
@@ -7190,7 +7166,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     #  - none -> the historical E2B default route, unchanged.
     if session_factory is not None:
         from modulo.core.bundled_runner.runner_dispatch import (
-            profile_denies_egress,
             resolve_sandbox_dispatch_route,
             validate_e2b_dispatch_timeout,
         )
@@ -7198,6 +7173,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _ctx = get_conformance_ctx()
         _env_profile_id = _ctx[2] if _ctx else None
         _route = await resolve_sandbox_dispatch_route(session_factory, state.get("_org_id"), _env_profile_id)
+        if _route.profile is not None:
+            _profile_net_policy = getattr(_route.profile, "network_policy", None)
         if _route.provider_type == "runner_docker":
             from modulo.core.bundled_runner.runner_dispatch import run_bundled_runner_node
 
@@ -7211,14 +7188,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             )
         if _route.provider_type == "e2b":
             validate_e2b_dispatch_timeout(sandbox_timeout)
-            # FAR-1065: when the node-level egress_policy is unset, consult
-            # the environment profile's network_policy and map "none" → deny_all.
-            # A profile network_policy="none" must mean deny-all regardless of
-            # route — the node-level value always wins when explicitly set. The
-            # profile→egress semantics are single-sourced in
-            # runner_dispatch.profile_denies_egress.
-            if egress_policy is None and _route.profile is not None and profile_denies_egress(_route.profile):
-                egress_policy = "deny_all"
 
     run_context: dict[str, Any] = state.get("run_context") or {}
     raw_input: Any = run_context.get("input", {})
@@ -7711,8 +7680,22 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _metadata: dict[str, str] = {}
         if resource_limits:
             _metadata["resource_limits"] = json.dumps(resource_limits)
-        if egress_policy == "selected" and egress_allowlist:
-            _metadata["egress_allowlist"] = json.dumps(egress_allowlist)
+        # FAR-1085: use canonical egress resolution instead of ad-hoc mapping.
+        # The E2B route threads the profile's network_policy (resolved above)
+        # so the canonical resolver can apply the node→profile→provider-default
+        # precedence chain.
+        from modulo.core.pipeline_engine.egress import resolve_egress
+
+        _egress_resolved = resolve_egress(
+            node_egress_policy=egress_policy,
+            node_egress_allowlist=egress_allowlist,
+            profile_network_policy=_profile_net_policy,
+            tier="e2b",
+        )
+        if _egress_resolved.refusal is not None:
+            raise SandboxTierRefusedError(f"Node '{node_id}' egress refused on E2B tier: {_egress_resolved.refusal}")
+        if _egress_resolved.policy == "selected" and _egress_resolved.allowlist:
+            _metadata["egress_allowlist"] = json.dumps(_egress_resolved.allowlist)
         # FAR-296 Phase 4a: E2B concurrent-sandbox rate limits (429 / resource
         # exhausted) are TRANSIENT. Retry ``AsyncSandbox.create`` with
         # exponential backoff, bounded by the create timeout window and the
@@ -7754,7 +7737,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             # "1320.0" with 400 (int32 unmarshal), instantly
                             # failing every sandbox create.
                             timeout=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
-                            allow_internet_access=(egress_policy not in ("deny_all", "selected")),
+                            allow_internet_access=(_egress_resolved.policy is None),
                             # deny_all/selected -> no internet; default/None ->
                             # internet allowed (e2b default). IMPORTANT
                             # (FAR-296 Phase 3b-3): ``selected`` DENIES ALL egress
@@ -7987,11 +7970,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # (an unresolvable host stays denied — fail-closed). The policy is
         # best-effort at the command level (each step is itself fail-closed) and
         # never wedges the dispatch.
+        # FAR-1085: use the resolved egress values from resolve_egress, not the
+        # raw config values, so the policy step enforces the same policy the
+        # capability derivation certifies.
+        _resolved_egress_for_policy = _egress_resolved.policy
+        _resolved_allowlist_for_policy = _egress_resolved.allowlist
         if _should_apply_sandbox_policy(
             read_only=read_only,
             git_credentials=git_credentials,
-            egress_policy=egress_policy,
-            egress_allowlist=egress_allowlist,
+            egress_policy=_resolved_egress_for_policy,
+            egress_allowlist=_resolved_allowlist_for_policy,
         ):
             from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
 
@@ -8006,8 +7994,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 sandbox,
                 read_only=read_only,
                 git_credentials=git_credentials,
-                egress_policy=egress_policy,
-                egress_allowlist=await _resolve_egress_allowlist(egress_allowlist),
+                egress_policy=_resolved_egress_for_policy,
+                egress_allowlist=await _resolve_egress_allowlist(_resolved_allowlist_for_policy),
                 allowed_hosts=node_def.get("allowed_hosts") if git_credentials == "scoped" else None,
             )
 

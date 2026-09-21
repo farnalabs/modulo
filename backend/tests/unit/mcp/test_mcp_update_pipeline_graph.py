@@ -197,7 +197,7 @@ def _hitl_node(node_id: uuid.UUID, hitl_config: dict | None) -> dict:
 
 
 class TestUpdatePipelineGraphHitlDescription:
-    """qa-iterate iteration-1 MAJOR-4 (FAR-613): the MCP graph-write path
+    """Review iteration 1, MAJOR-4 (FAR-613): the MCP graph-write path
     bypasses the REST Pydantic contract for node-level ``hitl_config`` (a
     plain ``dict[str, Any]``) and never runs the full graph validator, so the
     HITL gate-description requirement is enforced explicitly before the
