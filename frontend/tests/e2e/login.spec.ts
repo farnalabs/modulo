@@ -1,4 +1,4 @@
-import { test, expect, openLoginForm } from './setup/fixtures'
+import { test, expect, openLoginForm, completeLoginForm } from './setup/fixtures'
 
 test.describe('Login Flow', () => {
   test('shows login form fields', { tag: "@regression" }, async ({ page, env }) => {
@@ -92,5 +92,36 @@ test.describe('Login Flow', () => {
 
     await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 15000 })
     await expect(page.getByTestId('dashboard-title')).toContainText('Dashboard')
+  })
+
+  test('completes the multi-org slug step onto the org credential form', { tag: '@regression' }, async ({ page, env }) => {
+    // Simulate a genuinely multi-org instance: /login renders the slug step,
+    // and submitting it navigates to OrgLoginView whose credential inputs use
+    // the `org-login-*` testids (not LoginView's `login-*`). Without the
+    // org-view-aware selectors this is exactly the FAR-1114 scenario that used
+    // to fire the misleading "org slug may be wrong" guard.
+    await page.route('**/api/v1/auth/login-context', (route) =>
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ multi_org: true }),
+      }),
+    )
+    await page.route('**/api/v1/auth/org-login/**', (route) =>
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ org: { name: 'Acme', slug: env.orgSlug }, providers: [], password_enabled: true, saml: false }),
+      }),
+    )
+
+    await page.goto('/login')
+
+    const form = await completeLoginForm(page, env)
+
+    expect(form.email).toBe('[data-testid="org-login-email"]')
+    expect(form.password).toBe('[data-testid="org-login-password"]')
+    await expect(page.getByTestId('org-login-email')).toBeVisible()
+    await expect(page.getByTestId('org-login-password')).toBeVisible()
   })
 })
