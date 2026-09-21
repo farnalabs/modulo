@@ -132,3 +132,99 @@ class TestClassifyPaths:
             "docs/readme.md",
         ]
         assert classify_paths(paths) == "B"
+
+
+# ---------------------------------------------------------------------------
+# Exit-code contract: class-B exits non-zero, class-A exits 0
+# ---------------------------------------------------------------------------
+
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+from fast_lane_classify import main as classify_main  # noqa: E402
+
+
+class TestMainExitCode:
+    """Verify the exit-code contract that CI's continue-on-error depends on.
+
+    The fast-lane-classify CI job uses ``continue-on-error: true`` so the
+    workflow stays "success" for every PR.  The merge-queue reads the
+    *job-level* check conclusion, which is "failure" when the script exits
+    non-zero (class-B) and "success" when it exits 0 (class-A eligible).
+    """
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_class_b_exits_nonzero(self, mock_run: MagicMock) -> None:
+        """A class-B PR (backend/src/ change) must exit 1."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="backend/src/modulo/api/routes/pipelines.py\n",
+            stderr="",
+        )
+        rc = classify_main(
+            [
+                "--pr-number",
+                "42",
+                "--head-sha",
+                "abc123",
+                "--repo",
+                "farnalabs/modulo",
+                "--base-ref",
+                "origin/main",
+            ]
+        )
+        assert rc == 1, "class-B must exit 1 (job-level check = failure)"
+
+    @patch("fast_lane_classify.check_sha_pinning", return_value=(True, "SHA-pinned"))
+    @patch("fast_lane_classify.check_no_test_weakening", return_value=(True, []))
+    @patch("fast_lane_classify.check_cap", return_value=(True, "cap OK"))
+    @patch("fast_lane_classify.subprocess.run")
+    def test_class_a_with_label_exits_zero(
+        self,
+        mock_run: MagicMock,
+        mock_cap: MagicMock,
+        mock_weaken: MagicMock,
+        mock_pin: MagicMock,
+    ) -> None:
+        """A class-A PR with the label and passing guardrails must exit 0."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="backend/tests/unit/test_foo.py\n",
+            stderr="",
+        )
+        rc = classify_main(
+            [
+                "--pr-number",
+                "42",
+                "--head-sha",
+                "abc123",
+                "--repo",
+                "farnalabs/modulo",
+                "--base-ref",
+                "origin/main",
+                "--has-label",
+            ]
+        )
+        assert rc == 0, "class-A with label and guardrails pass must exit 0"
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_class_a_without_label_exits_nonzero(self, mock_run: MagicMock) -> None:
+        """A class-A PR without the label must exit 1 (standard lane)."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="backend/tests/unit/test_foo.py\n",
+            stderr="",
+        )
+        rc = classify_main(
+            [
+                "--pr-number",
+                "42",
+                "--head-sha",
+                "abc123",
+                "--repo",
+                "farnalabs/modulo",
+                "--base-ref",
+                "origin/main",
+                # no --has-label
+            ]
+        )
+        assert rc == 1, "class-A without label must exit 1 (standard lane)"
