@@ -212,6 +212,18 @@ def _parse_uuid(value: Any) -> uuid.UUID | None:
         return None
 
 
+def profile_denies_egress(profile: Any) -> bool:
+    """Whether an environment profile's ``network_policy`` denies egress.
+
+    Single-sourced profile→egress semantics (FAR-1065): both the Bundled
+    Runner workspace route (:func:`_workspace_spec_for_dispatch`) and the E2B
+    node route (``node_runner._sandbox_agent_impl``) derive their egress
+    decision from this, so the ``network_policy`` vocabulary, the ``outbound``
+    default, and the ``none`` → deny mapping live in exactly one place.
+    """
+    return (getattr(profile, "network_policy", None) or "outbound").strip().lower() == "none"
+
+
 def _workspace_spec_for_dispatch(
     profile: Any,
     *,
@@ -273,7 +285,7 @@ def _workspace_spec_for_dispatch(
         capabilities=getattr(profile, "capabilities_json", None) or [],
         timeout_seconds=int(cfg.get("timeout_seconds", 3600)),
         resource_limits={"memory_mb": int(cfg.get("memory_mb", 1024))},
-        egress_policy="none" if egress == "none" else "outbound",
+        egress_policy="none" if profile_denies_egress(profile) else "outbound",
         persistence_policy=getattr(profile, "persistence_policy", "ephemeral"),
         labels={},
         workspace_metadata={key: value for key, value in metadata.items() if value},
