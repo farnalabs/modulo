@@ -24,6 +24,7 @@ Create Date: 2026-09-21
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
@@ -32,6 +33,7 @@ from typing import Any
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import text
+from sqlalchemy.dialects import postgresql
 
 revision = "0251_eval_backfill_cutover"
 down_revision = "0250_eval_policy_gate"
@@ -81,7 +83,6 @@ _FK_EVAL_RESULTS_EVAL_ID = "eval_results_eval_id_fkey"
 _TRIGGER_EVAL_RESULTS_EVAL_ID_TENANT = "trg_eval_results_eval_id_tenant"
 
 # Known-expected object disposition (spec §3.2 Step 5a, §3.2 known-objects table).
-_KNOWN_FKS_INTO_EVAL_DEFINITIONS: set[str] = set()  # none except the one we repoint
 _KNOWN_TRIGGERS_ON_EVAL_RESULTS: set[str] = {
     _TRIGGER_EVAL_RESULTS_EVAL_ID_TENANT,  # drop + recreate
     "trg_eval_results_run_id_tenant",  # leave unchanged
@@ -121,7 +122,9 @@ def _drain_check() -> None:
     """Poll for in-flight runs; abort if any remain after timeout."""
     deadline = time.monotonic() + _DRAIN_TIMEOUT_S
     active_sql = (
-        "SELECT id FROM runs WHERE status IN (" + ", ".join(f"'{s}'" for s in _ACTIVE_RUN_STATUSES) + ") LIMIT 20"
+        "SELECT id FROM runs WHERE status IN ("  # nosec B608
+        + ", ".join(f"'{s}'" for s in _ACTIVE_RUN_STATUSES)  # nosec B608
+        + ") LIMIT 20"
     )
     while True:
         stuck_ids = [str(r[0]) for r in op.get_bind().execute(text(active_sql)).fetchall()]
@@ -214,7 +217,7 @@ def _create_violation_table() -> None:
             sa.Column("eval_name", sa.Text(), nullable=True),
             sa.Column("eval_type", sa.Text(), nullable=False),
             sa.Column("node_id", sa.Uuid(), nullable=True),
-            sa.Column("violated_exclusions", sa.JSON(), nullable=False),
+            sa.Column("violated_exclusions", postgresql.JSONB(), nullable=False),
             sa.Column(
                 "created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
             ),
@@ -304,7 +307,7 @@ def _record_violations(violations: list[dict[str, Any]]) -> None:
                 "ename": v["eval_name"],
                 "etype": v["eval_type"],
                 "nid": v["node_id"],
-                "vej": str(v["violated_exclusions"]),
+                "vej": json.dumps(v["violated_exclusions"]),
             },
         )
 
@@ -323,7 +326,7 @@ def _backfill_evals() -> int:
         rows = (
             op.get_bind()
             .execute(
-                text("SELECT id, " + cols_sql + " FROM eval_definitions ORDER BY id LIMIT :lim OFFSET :off"),
+                text("SELECT id, " + cols_sql + " FROM eval_definitions ORDER BY id LIMIT :lim OFFSET :off"),  # nosec B608
                 {"lim": _BATCH_SIZE, "off": offset},
             )
             .fetchall()
@@ -332,7 +335,7 @@ def _backfill_evals() -> int:
             break
         # Build parameterised insert — ON CONFLICT DO NOTHING for idempotency.
         insert_sql = (
-            "INSERT INTO evals (id, " + cols_sql + ") "
+            "INSERT INTO evals (id, " + cols_sql + ") "  # nosec B608
             "VALUES (:id, " + ", ".join(f":{c}" for c in _EVAL_COPY_COLUMNS) + ") "
             "ON CONFLICT (id) DO NOTHING"
         )
@@ -675,7 +678,17 @@ def downgrade() -> None:
             gates_with_decisions,
         )
     _execute("DELETE FROM policy_gates WHERE id NOT IN (SELECT DISTINCT policy_gate_id FROM policy_gate_decisions)")
-    _execute("DELETE FROM evals")
+
+    # policy_gate_decisions also has ON DELETE RESTRICT to evals.id, so guard
+    # the eval delete the same way.
+    evals_with_decisions = _scalar("SELECT COUNT(DISTINCT pgd.eval_id) FROM policy_gate_decisions pgd")
+    if evals_with_decisions:
+        logger.warning(
+            "Cannot delete %d Eval(s) referenced by policy_gate_decisions (FK RESTRICT).  "
+            "They will remain as dead data.",
+            evals_with_decisions,
+        )
+    _execute("DELETE FROM evals WHERE id NOT IN (SELECT DISTINCT eval_id FROM policy_gate_decisions)")
 
     # ---- Drop audit table ----
     inspector = sa.inspect(op.get_bind())
