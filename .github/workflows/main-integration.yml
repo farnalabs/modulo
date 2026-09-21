@@ -106,7 +106,11 @@ jobs:
     runs-on: ubicloud-standard-2
     steps:
       - name: Post Linear comment (fail-open)
-        if: ${{ secrets.LINEAR_API_KEY != '' }}
+        # `secrets` is NOT an allowed context in a step-level `if` — referencing
+        # it made the whole workflow file invalid, so GitHub never ran it (the
+        # failed run had zero jobs). Seed the secret into env and gate on
+        # env.LINEAR_API_KEY instead.
+        if: env.LINEAR_API_KEY != ''
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           COMMIT_SHA: ${{ github.sha }}
@@ -121,17 +125,36 @@ jobs:
             echo "No FAR- ticket in commit title — skipping Linear comment."
             exit 0
           fi
-          BODY="Integration tests failed on main post-merge (${COMMIT_SHA:0:7}). Run: ${RUN_URL}"
-          # Post comment via Linear API (best-effort, fail-open).
-          HTTP_CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
-            -X POST "https://api.linear.app/graphql" \
+          # commentCreate takes the issue's internal UUID, NOT the human
+          # identifier. Resolve "FAR-123" -> UUID first (same lookup as
+          # merge-queue.yml); passing the identifier directly was a permanent
+          # GraphQL error, so this notification could never fire.
+          ISSUE_ID=$(curl -sS --max-time 15 -X POST "https://api.linear.app/graphql" \
             -H "Content-Type: application/json" \
             -H "Authorization: ${LINEAR_API_KEY}" \
-            -d "{\"query\":\"mutation { commentCreate(input: {issueId: \\\"${FAR_ID}\\\", body: \\\"${BODY}\\\"}) { success } }\"}") || HTTP_CODE="000"
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            -d "{\"query\":\"query(\$identifier: String!) { issue(id: \$identifier) { id } }\",\"variables\":{\"identifier\":\"${FAR_ID}\"}}" \
+            | jq -r '.data.issue.id // empty' 2>/dev/null || echo "")
+          if [ -z "$ISSUE_ID" ]; then
+            echo "::warning::Linear ticket ${FAR_ID} not found — skipping comment (fail-open)."
+            exit 0
+          fi
+          BODY="Integration tests failed on main post-merge (${COMMIT_SHA:0:7}). Run: ${RUN_URL}"
+          # Build the payload via jq --arg so values are passed as variables,
+          # never string-interpolated into the GraphQL query (best-effort,
+          # fail-open).
+          COMMENT_PAYLOAD=$(jq -n \
+            --arg q 'mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success } }' \
+            --arg id "$ISSUE_ID" --arg body "$BODY" \
+            '{query: $q, variables: { input: { issueId: $id, body: $body } } }')
+          COMMENT_OK=$(curl -sS --max-time 15 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: ${LINEAR_API_KEY}" \
+            -d "$COMMENT_PAYLOAD" \
+            | jq -r '.data.commentCreate.success // empty' 2>/dev/null || echo "")
+          if [ "$COMMENT_OK" = "true" ]; then
             echo "Linear comment posted on ${FAR_ID}."
           else
-            echo "::warning::Linear comment post failed (HTTP $HTTP_CODE) — integration failure logged in run only (fail-open)."
+            echo "::warning::Linear comment post failed — integration failure logged in run only (fail-open)."
           fi
 
       - name: Fail loud on integration regression
