@@ -4,8 +4,8 @@ name: "Main: Integration tests"
 # integration job is the same suite, but it only runs when the deploy
 # throttle fires — a PR can be green while an untouched integration test
 # is red (ci.yml's integration job is changed-files-scoped). Running on
-# main post-merge surfaces the same red at merge time (minutes) instead
-# of at the next deploy attempt (hours).
+# main post-merge surfaces the same red immediately after the merge
+# (minutes) instead of at the next deploy attempt (hours).
 #
 # This job does NOT gate merges — it runs AFTER the merge. On failure it
 # is LOUD: fail the run, post a Linear comment if LINEAR_API_KEY is
@@ -27,6 +27,12 @@ on:
 concurrency:
   group: main-integration-${{ github.ref_name }}
   cancel-in-progress: true
+
+# Read-only: the notify job resolves the failing commit message via `gh api`
+# (`repos/.../commits/<sha>`), which needs contents:read — without the scope
+# the API can return 404 (a token-scope 404, not a missing commit).
+permissions:
+  contents: read
 
 env:
   GIT_CONFIG_COUNT: "1"
@@ -106,13 +112,17 @@ jobs:
     runs-on: ubicloud-standard-2
     steps:
       - name: Post Linear comment (fail-open)
-        # `secrets` is NOT an allowed context in a step-level `if` — referencing
-        # it made the whole workflow file invalid, so GitHub never ran it (the
-        # failed run had zero jobs). Seed the secret into env and gate on
-        # env.LINEAR_API_KEY instead.
-        if: env.LINEAR_API_KEY != ''
+        # Gate inside the script, not with `if: env.LINEAR_API_KEY != ''`. The
+        # step's own `env` block is not reliably populated in the `env` context
+        # when that step's `if` is evaluated, so an empty secret could silently
+        # skip the step. (`secrets` is not a permitted context in a step-level
+        # `if` at all — that invalid reference was the original failure.)
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # gh CLI reads GH_TOKEN from the environment; it is not auto-exported
+          # into steps, so without this the commit lookup below fails and the
+          # notification is skipped before it can fire.
+          GH_TOKEN: ${{ github.token }}
           COMMIT_SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -123,6 +133,10 @@ jobs:
           FAR_ID="$(echo "$TITLE" | grep -oE 'FAR-[0-9]+' | head -1 || true)"
           if [ -z "$FAR_ID" ]; then
             echo "No FAR- ticket in commit title — skipping Linear comment."
+            exit 0
+          fi
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "::warning::LINEAR_API_KEY not configured — integration failure logged in run only (fail-open)."
             exit 0
           fi
           # commentCreate takes the issue's internal UUID, NOT the human
