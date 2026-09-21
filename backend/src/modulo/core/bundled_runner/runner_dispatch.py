@@ -237,6 +237,21 @@ def _workspace_spec_for_dispatch(
         "modulo.node.id": node_id,
     }
     egress = (getattr(profile, "network_policy", None) or "outbound").strip().lower()
+    # FAR-1064: Docker / Bundled Runner tier cannot enforce per-host egress
+    # allowlists (no NET_ADMIN in the hardened workspace).  Refuse early
+    # rather than silently granting full outbound — the operator must switch
+    # to 'outbound' or 'none', or use a tier that supports host allowlists.
+    if egress == "selected":
+        from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
+
+        raise SandboxTierRefusedError(
+            f"Environment profile '{getattr(profile, 'name', profile)}' has "
+            "network_policy='selected' (egress allowlist), but the Docker / "
+            "Bundled Runner tier cannot enforce per-host egress allowlists — "
+            "Docker lacks the host-filtering mechanism required. Use "
+            "network_policy='outbound' (full egress) or network_policy='none' "
+            "(no egress), or switch to a tier that supports host allowlists."
+        )
     # Defense-in-depth (FAR-1020): validate workspace_network at dispatch
     # even if the CRUD boundary already validated it — a value written
     # directly to the DB could bypass the route validation.
