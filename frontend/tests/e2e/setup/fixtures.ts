@@ -1,6 +1,7 @@
 import { test as base, expect, type Page } from '@playwright/test'
 import { startCoverage, stopCoverage } from './coverage'
-import { getTestEnv, type TestEnv } from './env'
+import { getTestEnv, getBaseUrl, type TestEnv } from './env'
+import { resolveLoginPath } from './login-path'
 import { loginThroughUi } from './login'
 
 export const test = base.extend<{ env: TestEnv }>({
@@ -106,10 +107,12 @@ export async function completeLoginForm(page: Page, env: TestEnv): Promise<void>
  * Navigate to the login page and ensure the credential form is ready to fill.
  * Use this instead of a bare `page.goto('/login')` whenever the test is about
  * to enter credentials, so the suite works on both single-org and multi-org
- * targets.
+ * targets. Uses the dynamic resolver to pick the correct login path.
  */
 export async function openLoginForm(page: Page, env: TestEnv): Promise<void> {
-  await page.goto('/login')
+  const baseURL = getBaseUrl(env.name)
+  const loginPath = await resolveLoginPath(baseURL)
+  await page.goto(baseURL + loginPath)
   await completeLoginForm(page, env)
 }
 

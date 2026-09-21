@@ -11,6 +11,11 @@ export default defineConfig({
   testDir: './tests/e2e',
   retries: target !== 'local' ? 2 : 0,
   timeout: target !== 'local' ? 180_000 : 30_000,
+  // Suite-level budget: comfortably above a healthy full run (~30-40 min for
+  // staging workers:1) but FAR below the CI step's 90-min timeout. Catches
+  // login-path regressions (FAR-1123) in minutes instead of burning the full
+  // step budget on selector timeouts.
+  globalTimeout: target !== 'local' ? 3_000_000 : undefined,
   workers: target === 'staging' ? 1 : undefined,
   use: {
     baseURL,

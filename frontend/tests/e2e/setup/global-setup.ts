@@ -1,5 +1,6 @@
 import { type FullConfig, chromium } from '@playwright/test'
 import { getTarget, getBaseUrl, getTestEnv } from './env'
+import { resolveLoginPath } from './login-path'
 import { completeLoginForm } from './fixtures'
 import { seedTargetEnvironment } from './seeder'
 
@@ -57,7 +58,8 @@ async function globalSetup(_config: FullConfig) {
   const browser = await chromium.launch()
   const page = await browser.newPage()
 
-  await page.goto(baseURL + '/login')
+  const loginPath = await resolveLoginPath(baseURL)
+  await page.goto(baseURL + loginPath)
   await completeLoginForm(page, env)
   await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
   await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)
