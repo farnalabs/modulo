@@ -191,7 +191,7 @@ def main() -> int:
     env = {k: v for k, v in os.environ.items() if k not in _GIT_STATE_ENV}
     # Resource bounds prevent OOM on machines with limited free memory.
     # --jobs 1: single-threaded to cap RSS (semgrep-core spawns per-core workers
-    #   that each load the full rule set; 8 workers × 845 files × 64 rules
+    #   that each load the full rule set; 8 workers x 845 files x 64 rules
     #   exhausts 16 GB on this machine).
     # --max-memory 2048: hard cap at 2 GB; semgrep exits gracefully instead of
     #   the OS OOM-killer taking the process (and potentially other agents).

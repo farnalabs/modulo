@@ -389,9 +389,6 @@ __all__ = [
     #     node_runner._sandbox_agent_impl; vulture cannot see prod call sites) ---
     "AUDIT_NODE_ID",
     "WorkspaceInputAuditRecord",
-    "record_resolved_inputs",
-    "record_drift",
-    "redact_url",
     # --- FAR-801 compensating sweep (wired into dispatcher_reconcile;
     #     vulture cannot see the lazy-import call site) ---
     "_sweep_workspace_input_drift_flags",

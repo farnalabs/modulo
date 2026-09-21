@@ -25,6 +25,7 @@ from modulo.core.bundled_runner.runner_dispatch import (
     resolve_sandbox_dispatch_route,
     validate_e2b_dispatch_timeout,
 )
+from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
 from modulo.util import WorkspaceNetworkValidationError
 
 _ORG = uuid.uuid4()
@@ -245,6 +246,22 @@ def test_workspace_spec_none_egress_opt_in_maps_to_none_policy() -> None:
     profile = _profile("runner_docker", network_policy="none")
     spec = _workspace_spec_for_dispatch(profile, org_id=_ORG, run_id="run-123", node_id="node-9", run_uuid=uuid.uuid4())
     assert spec.egress_policy == "none"
+
+
+def test_workspace_spec_selected_egress_refused_on_docker_tier() -> None:
+    """FAR-1064: network_policy='selected' (egress allowlist) must be refused on
+    the Docker / Bundled Runner tier — Docker cannot enforce per-host egress
+    allowlists, so granting full outbound would be a fail-open on a security
+    control.  The operator must use 'outbound' or 'none', or switch tiers."""
+    profile = _profile("runner_docker", network_policy="selected")
+    with pytest.raises(SandboxTierRefusedError, match="network_policy='selected'"):
+        _workspace_spec_for_dispatch(
+            profile,
+            org_id=_ORG,
+            run_id="run-123",
+            node_id="node-9",
+            run_uuid=uuid.uuid4(),
+        )
 
 
 def test_workspace_spec_blank_metadata_values_dropped() -> None:

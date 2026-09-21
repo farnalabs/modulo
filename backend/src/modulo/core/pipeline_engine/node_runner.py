@@ -478,12 +478,20 @@ class SandboxBindingResolutionError(SandboxNodeFailedError):
 
 
 class SandboxTierRefusedError(SandboxNodeFailedError):
-    """The Local (host-subprocess) provider tier refused this dispatch (FAR-592 D6).
+    """A provider tier refused this dispatch at provision time (FAR-592 D6).
 
-    Terminal (D7-refusal posture): bindings inject standing host-env
-    credentials and the Local tier has no container isolation, so a Local
-    profile without ``allow_runner_env_bindings`` MUST refuse at provision
-    time. Maps to ``sandbox.tier_refused`` via the executor's LEGACY_ALIASES.
+    Terminal (D7-refusal posture): the tier cannot safely honour the dispatch,
+    so it refuses rather than failing open. Raised by two call sites:
+
+    * The Local (host-subprocess) tier, when bindings inject standing host-env
+      credentials and the profile lacks ``allow_runner_env_bindings`` — the
+      Local tier has no container isolation, so it MUST refuse.
+    * The Docker / Bundled Runner tier, when the profile requests
+      ``network_policy='selected'`` — Docker cannot enforce per-host egress
+      allowlists (no ``NET_ADMIN`` in the hardened workspace), so it MUST
+      refuse instead of silently granting full outbound (FAR-1064).
+
+    Maps to ``sandbox.tier_refused`` via the executor's LEGACY_ALIASES.
     """
 
 
