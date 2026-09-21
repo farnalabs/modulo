@@ -461,10 +461,73 @@ def _sse_event(event: str, detail: str) -> str:
     return f"data: {data}\n\n"
 
 
+# Provider registry -> canonical egress tier.  The tier vocabulary is owned
+# by ``modulo.core.pipeline_engine.egress`` (``_TIER_ENFORCEMENT``); the
+# provider identity (``provider_id`` + ``provider_aliases``) is owned by the
+# runtime-provider classes.  Sourcing both means a new provider alias cannot
+# drift from the egress tier it maps to (FAR-1065 lesson).
+_PROVIDER_TIER_SOURCES: tuple[tuple[str, str, str], ...] = (
+    ("modulo.core.runtime_provider.e2b", "E2BRuntimeProvider", "e2b"),
+    ("modulo.core.runtime_provider.docker", "DockerRuntimeProvider", "docker"),
+    ("modulo.core.runtime_provider.local", "LocalRuntimeProvider", "local"),
+)
+
+
+def _egress_tier_for_provider_type(provider_type: str) -> str | None:
+    """Return the canonical egress tier for a profile ``provider_type``.
+
+    Provider aliases are read from the runtime-provider classes themselves
+    (the single source of truth) rather than duplicated here — ``local_docker``
+    is a Docker alias (``DockerRuntimeProvider.provider_aliases``), NOT the
+    host-process local tier.  Returns ``None`` for an unrecognised provider
+    type; the caller then fails closed.
+    """
+    normalized = (provider_type or "").strip().lower()
+    from importlib import import_module
+
+    for module_name, class_name, tier in _PROVIDER_TIER_SOURCES:
+        try:
+            provider_cls = getattr(import_module(module_name), class_name)
+        except ImportError:
+            # Optional provider dependency not installed — skip; the provider
+            # cannot have been resolved for this profile anyway.
+            continue
+        if normalized in {provider_cls.provider_id, *provider_cls.provider_aliases}:
+            return tier
+    return None
+
+
 def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
+    from modulo.core.pipeline_engine.egress import resolve_egress
     from modulo.core.runtime_provider import WorkspaceSpec
 
     cfg = profile.config_json or {}
+    # FAR-1085: use canonical egress resolution instead of the raw profile
+    # network_policy.  The sandbox test dispatches to whichever tier the
+    # profile's provider_type resolves to — resolve that tier from the
+    # provider registry.  An unknown provider_type fails CLOSED: the raw
+    # value is passed through as the tier so resolve_egress refuses
+    # ("unknown tier") rather than silently defaulting to an enforceable one.
+    _provider_type = (profile.provider_type or "").strip().lower()
+    _tier = _egress_tier_for_provider_type(_provider_type) or _provider_type
+    _egress = resolve_egress(
+        node_egress_policy=None,  # No node in the test path — profile only
+        node_egress_allowlist=None,
+        profile_network_policy=profile.network_policy,
+        tier=_tier,
+    )
+    if _egress.refusal is not None:
+        from modulo.core.pipeline_engine.sandbox_errors import (  # nosemgrep: inline-import-route-files
+            SandboxTierRefusedError,
+        )
+
+        raise SandboxTierRefusedError(
+            f"Sandbox test refused for profile '{profile.name}' "
+            f"(provider_type={profile.provider_type!r}, tier={_tier!r}): "
+            f"{_egress.refusal}"
+        )
+    # Map canonical policy to WorkspaceSpec egress_policy vocabulary.
+    _spec_egress = "none" if _egress.policy == "deny_all" else "outbound"
     return WorkspaceSpec(
         environment_profile_id=profile.id,
         organisation_id=profile.organisation_id,
@@ -473,7 +536,7 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
         capabilities=profile.capabilities_json or [],
         timeout_seconds=cfg.get("timeout_seconds", 3600),
         resource_limits=cfg,
-        egress_policy=profile.network_policy or "deny_all",
+        egress_policy=_spec_egress,
         persistence_policy=profile.persistence_policy,
         labels={"profile_name": profile.name},
     )
@@ -521,7 +584,14 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
         yield _sse_event("destroyed", "Sandbox destroyed successfully")
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
+        from modulo.core.pipeline_engine.sandbox_errors import (  # nosemgrep: inline-import-route-files
+            SandboxTierRefusedError,
+        )
+
+        if isinstance(exc, SandboxTierRefusedError):
+            yield _sse_event("failed", str(exc))
+            return
         _log.exception("Sandbox test failed for profile %s", profile.id)
         yield _sse_event("failed", "Test failed — check server logs for details")
         if provider_ref and provider is not None:

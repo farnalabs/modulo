@@ -872,6 +872,59 @@ async def test_build_live_manifest_sandbox_unknown_surface_fail_closed():
     assert derivation.state == "unknown"
 
 
+async def test_build_live_manifest_sandbox_plumbs_profile_network_policy(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1085: a sandbox node with a bound profile plumbs the profile's
+    network_policy into the canonical egress resolution, so the certified
+    capability matches the runtime outcome (profile 'none' -> deny_all)."""
+    pid = uuid.uuid4()
+    row = _row_profile(pid, ["sandbox.e2b"])
+    row.network_policy = "none"
+    session = _manifest_session(profile=row)
+    _patch_select(monkeypatch, session)
+    registered = await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=pid,
+        agent_id=None,
+        node_def=_sandbox_node(),  # egress_policy unset -> the profile fills it
+    )
+    assert registered.get("sandbox.egress") is True
+
+
+async def test_build_live_manifest_sandbox_profile_missing_uses_node_only(monkeypatch: pytest.MonkeyPatch):
+    """A missing profile row leaves profile_network_policy None, so the sandbox
+    capability falls back to the node-only derivation (never a crash)."""
+    pid = uuid.uuid4()
+    session = _manifest_session(profile=None)
+    _patch_select(monkeypatch, session)
+    registered = await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=pid,
+        agent_id=None,
+        node_def=_sandbox_node(egress_policy="deny_all"),
+    )
+    assert registered.get("sandbox.egress") is True
+
+
+async def test_build_live_manifest_sandbox_profile_read_failure_falls_back():
+    """A failed profile network_policy read is swallowed (debug-logged) and the
+    node-only resolution is used — never a crash, never a silent grant."""
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=RuntimeError("db down"))
+    registered = await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=uuid.uuid4(),
+        agent_id=None,
+        node_def=_sandbox_node(egress_policy="deny_all"),
+    )
+    assert registered.get("sandbox.egress") is True
+
+
 # ---------------------------------------------------------------------------
 # Full gate: sandbox capability claims reach check_node_start (FAR-212 PR A)
 # ---------------------------------------------------------------------------
