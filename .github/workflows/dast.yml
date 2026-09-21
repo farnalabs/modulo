@@ -3,7 +3,7 @@ name: "DAST (OWASP ZAP)"
 on:
   schedule:
     # Nightly against staging, 02:25 UTC. Report-only harness; does not block deploys.
-    - cron: '25 2 * * *'
+  - cron: '25 2 * * *'
   workflow_dispatch:
     inputs:
       target_url:
@@ -32,66 +32,68 @@ jobs:
     runs-on: ubicloud-standard-2
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+    - uses: actions/checkout@v7
 
-      - name: Run OWASP ZAP scan
-        id: zap
-        shell: bash
-        run: |
-          TARGET="${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}"
-          SCAN_TYPE="${{ github.event.inputs.scan_type || 'baseline' }}"
-          mkdir -p zap-report
-          # The zaproxy container runs as uid 1000 (the zap user). Grant write
-          # access ONLY to that uid (S2612: no world-writable dirs) - ZAP still
-          # writes its reports, and the runner user keeps read access for the
-          # upload-artifact step (ZAP emits 644 files under a 755 dir).
-          sudo chown 1000:1000 zap-report
-          EXIT=0
-          if [ "$SCAN_TYPE" = "full" ]; then
-            docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py -t "$TARGET" -r zap-report.html -J zap-report.json -a || EXIT=$?
-          else
-            docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t "$TARGET" -r zap-report.html -J zap-report.json -a || EXIT=$?
-          fi
-          echo "zap_exit=${EXIT}"
-          echo "zap_exit=${EXIT}" >> "$GITHUB_OUTPUT"
-          # Report-only harness: do NOT fail the workflow on ZAP findings. ZAP baseline
-          # exits 0/1/2/3 (clean/fail-high/warn-medium/info). A non-zero exit only reflects
-          # findings, never a harness failure. The Summarize step reports them and the
-          # report artifact always uploads. The enforcement point is the dast-gate job in
-          # deploy.yml (FAR-449), not this nightly.
-          exit 0
+      with:
+        persist-credentials: false
+    - name: Run OWASP ZAP scan
+      id: zap
+      shell: bash
+      run: |
+        TARGET="${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}"
+        SCAN_TYPE="${{ github.event.inputs.scan_type || 'baseline' }}"
+        mkdir -p zap-report
+        # The zaproxy container runs as uid 1000 (the zap user). Grant write
+        # access ONLY to that uid (S2612: no world-writable dirs) - ZAP still
+        # writes its reports, and the runner user keeps read access for the
+        # upload-artifact step (ZAP emits 644 files under a 755 dir).
+        sudo chown 1000:1000 zap-report
+        EXIT=0
+        if [ "$SCAN_TYPE" = "full" ]; then
+          docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py -t "$TARGET" -r zap-report.html -J zap-report.json -a || EXIT=$?
+        else
+          docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t "$TARGET" -r zap-report.html -J zap-report.json -a || EXIT=$?
+        fi
+        echo "zap_exit=${EXIT}"
+        echo "zap_exit=${EXIT}" >> "$GITHUB_OUTPUT"
+        # Report-only harness: do NOT fail the workflow on ZAP findings. ZAP baseline
+        # exits 0/1/2/3 (clean/fail-high/warn-medium/info). A non-zero exit only reflects
+        # findings, never a harness failure. The Summarize step reports them and the
+        # report artifact always uploads. The enforcement point is the dast-gate job in
+        # deploy.yml (FAR-449), not this nightly.
+        exit 0
 
-      - name: Upload ZAP report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-report-${{ github.run_id }}
-          path: zap-report/
-          if-no-files-found: ignore
+    - name: Upload ZAP report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: zap-report-${{ github.run_id }}
+        path: zap-report/
+        if-no-files-found: ignore
 
-      - name: Summarize findings
-        if: always()
-        shell: bash
-        run: |
-          echo "ZAP scan exit code: ${{ steps.zap.outputs.zap_exit }}"
-          python3 - <<'PYEOF'
-          import json, os, sys
-          path = "zap-report/zap-report.json"
-          if not os.path.exists(path):
-              print("No JSON report generated - check the scan step output.")
-              sys.exit(0)
-          with open(path) as f:
-              data = json.load(f)
-          totals = {}
-          for site in data.get("site", []):
-              for alert in site.get("alerts", []):
-                  risk = alert.get("riskdesc", "?")
-                  name = alert.get("name", "?")
-                  cnt = alert.get("count", 1)
-                  key = f"{risk} | {name}"
-                  totals[key] = totals.get(key, 0) + cnt
-          print("=== ZAP findings summary ===")
-          for key in sorted(totals):
-              print(f"{totals[key]:>3} x {key}")
-          print(f"=== Total distinct findings: {len(totals)} ===")
-          PYEOF
+    - name: Summarize findings
+      if: always()
+      shell: bash
+      run: |
+        echo "ZAP scan exit code: ${{ steps.zap.outputs.zap_exit }}"
+        python3 - <<'PYEOF'
+        import json, os, sys
+        path = "zap-report/zap-report.json"
+        if not os.path.exists(path):
+            print("No JSON report generated - check the scan step output.")
+            sys.exit(0)
+        with open(path) as f:
+            data = json.load(f)
+        totals = {}
+        for site in data.get("site", []):
+            for alert in site.get("alerts", []):
+                risk = alert.get("riskdesc", "?")
+                name = alert.get("name", "?")
+                cnt = alert.get("count", 1)
+                key = f"{risk} | {name}"
+                totals[key] = totals.get(key, 0) + cnt
+        print("=== ZAP findings summary ===")
+        for key in sorted(totals):
+            print(f"{totals[key]:>3} x {key}")
+        print(f"=== Total distinct findings: {len(totals)} ===")
+        PYEOF

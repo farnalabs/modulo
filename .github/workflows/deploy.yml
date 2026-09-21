@@ -28,6 +28,9 @@ env:
   GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
   GIT_CONFIG_VALUE_0: "https://github.com/"
 
+permissions:
+  contents: read
+
 jobs:
 
   deploy-throttle:

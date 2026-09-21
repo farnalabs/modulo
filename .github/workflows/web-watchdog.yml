@@ -48,7 +48,7 @@ name: "Recover: Web Machine"
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+  - cron: '*/5 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -71,158 +71,160 @@ jobs:
       # Scheduled runs start from an empty workspace - check out the repo so
       # the pinned installer script below exists. Same checkout ref the other
       # workflows use (deploy.yml, ci.yml); the job only needs contents: read.
-      - uses: actions/checkout@v7
+    - uses: actions/checkout@v7
 
       # Installed the same way the deploy workflow installs flyctl (the
       # pinned, sha256-verified installer in .github/scripts/) so both
       # workflows run the same flyctl.
-      - name: Install flyctl
-        run: |
-          bash .github/scripts/install-flyctl.sh
-          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+      with:
+        persist-credentials: false
+    - name: Install flyctl
+      run: |
+        bash .github/scripts/install-flyctl.sh
+        echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
 
-      - name: Detect critical service check and restart if guards pass
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
+    - name: Detect critical service check and restart if guards pass
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
 
-          APP="app-modulo"
-          FRESHNESS_SECS=900          # 15-minute boot grace period
-          MAX_RESTARTS_PER_RUN=5      # hard cap against pathological states
+        APP="app-modulo"
+        FRESHNESS_SECS=900          # 15-minute boot grace period
+        MAX_RESTARTS_PER_RUN=5      # hard cap against pathological states
 
-          SUMMARY="${GITHUB_STEP_SUMMARY:?GITHUB_STEP_SUMMARY not set}"
+        SUMMARY="${GITHUB_STEP_SUMMARY:?GITHUB_STEP_SUMMARY not set}"
 
-          # Deploy-guard query: number of deploy runs in progress or queued,
-          # or "unknown" when the query fails or returns anything non-numeric
-          # (fail-closed below).
-          active_deploy_runs() {
-            local count
-            count="$(gh run list --repo "${GITHUB_REPOSITORY}" \
-              --workflow deploy.yml \
-              --json databaseId,status \
-              --jq '[.[] | select(.status == "in_progress" or .status == "queued")] | length' \
-              </dev/null 2>/dev/null || true)"
-            case "$count" in
-              '' | *[!0-9]*) echo "unknown" ;;
-              *) echo "$count" ;;
-            esac
-          }
+        # Deploy-guard query: number of deploy runs in progress or queued,
+        # or "unknown" when the query fails or returns anything non-numeric
+        # (fail-closed below).
+        active_deploy_runs() {
+          local count
+          count="$(gh run list --repo "${GITHUB_REPOSITORY}" \
+            --workflow deploy.yml \
+            --json databaseId,status \
+            --jq '[.[] | select(.status == "in_progress" or .status == "queued")] | length' \
+            </dev/null 2>/dev/null || true)"
+          case "$count" in
+            '' | *[!0-9]*) echo "unknown" ;;
+            *) echo "$count" ;;
+          esac
+        }
 
-          # --- Detection -------------------------------------------------
-          # The machines list JSON embeds each machine's checks array
-          # (verified against live flyctl output: fields id, state,
-          # updated_at, config.metadata.fly_process_group, checks[].name /
-          # .status / .output). A machine-state query failure is fail-safe:
-          # log, take no action, exit 0.
-          MACHINES_JSON=""
-          MACHINES_JSON="$(fly machines list --app "$APP" --json 2>/dev/null || true)"
-          if [ -z "$MACHINES_JSON" ]; then
-            echo "::warning::fly machines list failed or returned nothing - machine state unknown; no action taken (next run retries)."
-            {
-              echo "### Recover: Web Machine"
-              echo ""
-              echo "no-op: app machine state could not be determined (flyctl query failed) - no action taken; the next scheduled run retries."
-            } >> "$SUMMARY"
-            exit 0
-          fi
-
-          cat > /tmp/wd-candidates.jq <<'JQ'
-          [
-            .[]
-            | select(((.state // "") | tostring) == "started")
-            | select((((.config.metadata.fly_process_group // .config.env.FLY_PROCESS_GROUP // "") | tostring)) == "app")
-            | . as $m
-            | (($m.checks // [])[])
-            | select((((.name // "") | tostring) | startswith("servicecheck")) and ((((.status // "") | tostring)) == "critical"))
-            | {machine_id: ($m.id // "?"), check_name: (.name // "?"), output: ((.output // "") | tostring), updated_at: ($m.updated_at // "")}
-          ]
-          | unique_by(.machine_id)
-          | .[]
-          JQ
-
-          JQ_RC=0
-          CANDIDATES="$(printf '%s' "$MACHINES_JSON" | jq -c -f /tmp/wd-candidates.jq 2>/dev/null)" || JQ_RC=$?
-          if [ -z "$CANDIDATES" ] && [ "$JQ_RC" -ne 0 ]; then
-            # Empty filter output with a non-zero exit: the flyctl output
-            # could not be parsed or the filter itself failed - machine state
-            # is unknown, so never claim "all healthy" here.
-            echo "::warning::jq filter failed (exit ${JQ_RC}) on the flyctl machines output - machine state could not be determined; no action taken (next run retries)."
-            {
-              echo "### Recover: Web Machine"
-              echo ""
-              echo "no-op: app machine state could not be determined (flyctl output could not be parsed/filtered) - no action taken; the next scheduled run retries."
-            } >> "$SUMMARY"
-            exit 0
-          fi
-          if [ -z "$CANDIDATES" ]; then
-            # Filter exited 0 with no matches: valid JSON, genuinely healthy.
-            echo "All app machines healthy - nothing to do."
-            echo "no-op: all app machines healthy" >> "$SUMMARY"
-            exit 0
-          fi
-
-          # --- Guards + restart -------------------------------------------
-          NOW_TS="$(date -u +%s)"
-          DEPLOY_STATE="$(active_deploy_runs)"
-          RESTARTED=0
-
+        # --- Detection -------------------------------------------------
+        # The machines list JSON embeds each machine's checks array
+        # (verified against live flyctl output: fields id, state,
+        # updated_at, config.metadata.fly_process_group, checks[].name /
+        # .status / .output). A machine-state query failure is fail-safe:
+        # log, take no action, exit 0.
+        MACHINES_JSON=""
+        MACHINES_JSON="$(fly machines list --app "$APP" --json 2>/dev/null || true)"
+        if [ -z "$MACHINES_JSON" ]; then
+          echo "::warning::fly machines list failed or returned nothing - machine state unknown; no action taken (next run retries)."
           {
             echo "### Recover: Web Machine"
             echo ""
+            echo "no-op: app machine state could not be determined (flyctl query failed) - no action taken; the next scheduled run retries."
           } >> "$SUMMARY"
+          exit 0
+        fi
 
-          while IFS= read -r CAND; do
-            [ -z "$CAND" ] && continue
-            MID="$(printf '%s' "$CAND" | jq -r '.machine_id // "?"')"
-            CHECK_NAME="$(printf '%s' "$CAND" | jq -r '.check_name // "?"')"
-            CHECK_OUT="$(printf '%s' "$CAND" | jq -r '.output // ""')"
-            UPDATED_AT="$(printf '%s' "$CAND" | jq -r '.updated_at // ""')"
+        cat > /tmp/wd-candidates.jq <<'JQ'
+        [
+          .[]
+          | select(((.state // "") | tostring) == "started")
+          | select((((.config.metadata.fly_process_group // .config.env.FLY_PROCESS_GROUP // "") | tostring)) == "app")
+          | . as $m
+          | (($m.checks // [])[])
+          | select((((.name // "") | tostring) | startswith("servicecheck")) and ((((.status // "") | tostring)) == "critical"))
+          | {machine_id: ($m.id // "?"), check_name: (.name // "?"), output: ((.output // "") | tostring), updated_at: ($m.updated_at // "")}
+        ]
+        | unique_by(.machine_id)
+        | .[]
+        JQ
 
-            # Guard 1: freshness (never restart-loop a booting machine).
-            UPDATED_TS="$(date -u -d "$UPDATED_AT" +%s 2>/dev/null || true)"
-            if [ -z "$UPDATED_TS" ]; then
-              echo "::warning::Machine ${MID} check ${CHECK_NAME} is critical but its updated_at ('${UPDATED_AT}') could not be parsed - skipping restart (treated as too fresh)."
-              echo "- Skipped \`${MID}\` (check \`${CHECK_NAME}\` critical): machine timestamp unparseable - treated as still booting; retrying next run." >> "$SUMMARY"
-              continue
-            fi
-            AGE=$(( NOW_TS - UPDATED_TS ))
-            if [ "$AGE" -lt "$FRESHNESS_SECS" ]; then
-              echo "::warning::Machine ${MID} check ${CHECK_NAME} is critical but the machine was updated ${AGE}s ago (< ${FRESHNESS_SECS}s boot grace) - skipping restart."
-              echo "- Skipped \`${MID}\` (check \`${CHECK_NAME}\` critical): machine updated ${AGE}s ago (< 15 min boot grace); retrying next run." >> "$SUMMARY"
-              continue
-            fi
+        JQ_RC=0
+        CANDIDATES="$(printf '%s' "$MACHINES_JSON" | jq -c -f /tmp/wd-candidates.jq 2>/dev/null)" || JQ_RC=$?
+        if [ -z "$CANDIDATES" ] && [ "$JQ_RC" -ne 0 ]; then
+          # Empty filter output with a non-zero exit: the flyctl output
+          # could not be parsed or the filter itself failed - machine state
+          # is unknown, so never claim "all healthy" here.
+          echo "::warning::jq filter failed (exit ${JQ_RC}) on the flyctl machines output - machine state could not be determined; no action taken (next run retries)."
+          {
+            echo "### Recover: Web Machine"
+            echo ""
+            echo "no-op: app machine state could not be determined (flyctl output could not be parsed/filtered) - no action taken; the next scheduled run retries."
+          } >> "$SUMMARY"
+          exit 0
+        fi
+        if [ -z "$CANDIDATES" ]; then
+          # Filter exited 0 with no matches: valid JSON, genuinely healthy.
+          echo "All app machines healthy - nothing to do."
+          echo "no-op: all app machines healthy" >> "$SUMMARY"
+          exit 0
+        fi
 
-            # Guard 2: no restart mid-rolling-deploy (fail-closed). Queued
-            # deploy runs count too - a queued run can transition to running
-            # between this check and the restart.
-            if [ "$DEPLOY_STATE" = "unknown" ]; then
-              echo "::warning::Machine ${MID} check ${CHECK_NAME} is critical but the deploy-run status could not be queried - skipping restart (fail-closed; retrying next run)."
-              echo "- Skipped \`${MID}\` (check \`${CHECK_NAME}\` critical): deploy-run status unknown (query failed); retrying next run." >> "$SUMMARY"
-              continue
-            fi
-            if [ "$DEPLOY_STATE" -gt 0 ] 2>/dev/null; then
-              echo "::warning::Machine ${MID} check ${CHECK_NAME} is critical but ${DEPLOY_STATE} deploy run(s) in progress or queued - skipping restart (never restart mid-rolling-deploy)."
-              echo "- Skipped \`${MID}\` (check \`${CHECK_NAME}\` critical): deploy run(s) in progress or queued (${DEPLOY_STATE}); retrying next run." >> "$SUMMARY"
-              continue
-            fi
+        # --- Guards + restart -------------------------------------------
+        NOW_TS="$(date -u +%s)"
+        DEPLOY_STATE="$(active_deploy_runs)"
+        RESTARTED=0
 
-            # --- Action -----------------------------------------------------
-            echo "::notice::Restarting wedged machine ${MID} (check ${CHECK_NAME} critical)."
-            if fly machine restart "$MID" --app "$APP" </dev/null; then
-              RESTARTED=$(( RESTARTED + 1 ))
-              TRUNCATED_OUT="$(printf '%s' "$CHECK_OUT" | tr '\n\r\t' '   ' | tr -d '`' | cut -c1-300)"
-              {
-                echo "- **Restarted \`${MID}\`** at $(date -u '+%Y-%m-%dT%H:%M:%SZ'): check \`${CHECK_NAME}\` critical, machine updated_at older than 15 minutes, no deploy in progress."
-                echo "  - check output (truncated): \`${TRUNCATED_OUT}\`"
-              } >> "$SUMMARY"
-            else
-              echo "::error::fly machine restart failed for ${MID}."
-              echo "- ERROR: restart command failed for \`${MID}\` (check \`${CHECK_NAME}\` critical) - manual attention may be required." >> "$SUMMARY"
-            fi
+        {
+          echo "### Recover: Web Machine"
+          echo ""
+        } >> "$SUMMARY"
 
-            [ "$RESTARTED" -ge "$MAX_RESTARTS_PER_RUN" ] && break
-          done <<< "$CANDIDATES"
+        while IFS= read -r CAND; do
+          [ -z "$CAND" ] && continue
+          MID="$(printf '%s' "$CAND" | jq -r '.machine_id // "?"')"
+          CHECK_NAME="$(printf '%s' "$CAND" | jq -r '.check_name // "?"')"
+          CHECK_OUT="$(printf '%s' "$CAND" | jq -r '.output // ""')"
+          UPDATED_AT="$(printf '%s' "$CAND" | jq -r '.updated_at // ""')"
 
-          echo "Watchdog run complete (restarted: ${RESTARTED})."
+          # Guard 1: freshness (never restart-loop a booting machine).
+          UPDATED_TS="$(date -u -d "$UPDATED_AT" +%s 2>/dev/null || true)"
+          if [ -z "$UPDATED_TS" ]; then
+            echo "::warning::Machine ${MID} check ${CHECK_NAME} is critical but its updated_at ('${UPDATED_AT}') could not be parsed - skipping restart (treated as too fresh)."
+            echo "- Skipped \`${MID}\` (check \`${CHECK_NAME}\` critical): machine timestamp unparseable - treated as still booting; retrying next run." >> "$SUMMARY"
+            continue
+          fi
+          AGE=$(( NOW_TS - UPDATED_TS ))
+          if [ "$AGE" -lt "$FRESHNESS_SECS" ]; then
+            echo "::warning::Machine ${MID} check ${CHECK_NAME} is critical but the machine was updated ${AGE}s ago (< ${FRESHNESS_SECS}s boot grace) - skipping restart."
+            echo "- Skipped \`${MID}\` (check \`${CHECK_NAME}\` critical): machine updated ${AGE}s ago (< 15 min boot grace); retrying next run." >> "$SUMMARY"
+            continue
+          fi
+
+          # Guard 2: no restart mid-rolling-deploy (fail-closed). Queued
+          # deploy runs count too - a queued run can transition to running
+          # between this check and the restart.
+          if [ "$DEPLOY_STATE" = "unknown" ]; then
+            echo "::warning::Machine ${MID} check ${CHECK_NAME} is critical but the deploy-run status could not be queried - skipping restart (fail-closed; retrying next run)."
+            echo "- Skipped \`${MID}\` (check \`${CHECK_NAME}\` critical): deploy-run status unknown (query failed); retrying next run." >> "$SUMMARY"
+            continue
+          fi
+          if [ "$DEPLOY_STATE" -gt 0 ] 2>/dev/null; then
+            echo "::warning::Machine ${MID} check ${CHECK_NAME} is critical but ${DEPLOY_STATE} deploy run(s) in progress or queued - skipping restart (never restart mid-rolling-deploy)."
+            echo "- Skipped \`${MID}\` (check \`${CHECK_NAME}\` critical): deploy run(s) in progress or queued (${DEPLOY_STATE}); retrying next run." >> "$SUMMARY"
+            continue
+          fi
+
+          # --- Action -----------------------------------------------------
+          echo "::notice::Restarting wedged machine ${MID} (check ${CHECK_NAME} critical)."
+          if fly machine restart "$MID" --app "$APP" </dev/null; then
+            RESTARTED=$(( RESTARTED + 1 ))
+            TRUNCATED_OUT="$(printf '%s' "$CHECK_OUT" | tr '\n\r\t' '   ' | tr -d '`' | cut -c1-300)"
+            {
+              echo "- **Restarted \`${MID}\`** at $(date -u '+%Y-%m-%dT%H:%M:%SZ'): check \`${CHECK_NAME}\` critical, machine updated_at older than 15 minutes, no deploy in progress."
+              echo "  - check output (truncated): \`${TRUNCATED_OUT}\`"
+            } >> "$SUMMARY"
+          else
+            echo "::error::fly machine restart failed for ${MID}."
+            echo "- ERROR: restart command failed for \`${MID}\` (check \`${CHECK_NAME}\` critical) - manual attention may be required." >> "$SUMMARY"
+          fi
+
+          [ "$RESTARTED" -ge "$MAX_RESTARTS_PER_RUN" ] && break
+        done <<< "$CANDIDATES"
+
+        echo "Watchdog run complete (restarted: ${RESTARTED})."

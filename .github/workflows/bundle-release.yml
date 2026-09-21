@@ -39,6 +39,9 @@ defaults:
   run:
     shell: bash
 
+permissions:
+  contents: read
+
 jobs:
   version-parity:
     # Shared-constants rule (ADR 031, Decision 3/11): the bundle's pinned
