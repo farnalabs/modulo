@@ -1,7 +1,7 @@
 """Step definitions for the Opsgenie connector BDD feature.
 
 Wires ``features/connectors/opsgenie_connector.feature`` into the executing
-suite (the improve-architecture product-map walk) by driving the REAL
+suite (the product-map review pass) by driving the REAL
 ``OpsgenieConnector`` against a respx-mocked Opsgenie REST API v2 — mirroring
 ``backend/tests/unit/connectors/test_opsgenie.py`` so the executing BDD surface
 locks the same contract the unit suite does: listing alerts / teams /

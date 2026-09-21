@@ -1,7 +1,7 @@
 """Step definitions for the Azure Repos connector BDD feature.
 
 Wires ``features/connectors/azure_repos.feature`` into the executing suite (the
-improve-architecture product-map walk) by driving the REAL
+product-map review pass) by driving the REAL
 ``AzureReposConnector`` against a respx-mocked Azure DevOps REST API v7.0 —
 mirroring ``backend/tests/unit/connectors/test_azure_repos.py`` so the
 executing BDD surface locks the same contract the unit suite does: PAT

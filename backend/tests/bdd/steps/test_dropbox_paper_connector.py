@@ -1,7 +1,7 @@
 """Step definitions for the Dropbox Paper connector BDD feature.
 
 Wires ``features/connectors/dropbox_paper.feature`` into the executing suite (the
-2026-09-16 improve-architecture product-map walk) by driving the REAL
+2026-09-16 product-map review pass) by driving the REAL
 ``DropboxPaperConnector`` against a respx-mocked Dropbox API v2 — mirroring
 ``backend/tests/unit/connectors/test_dropbox_paper.py`` so the executing BDD surface
 locks the same contract the unit suite does: account validation via
