@@ -13,9 +13,19 @@
  * the email form, burning 90 minutes on selector timeouts.
  */
 
+/** Shape returned by /api/v1/auth/login-context. */
 interface LoginContextResponse {
-  multi_org: boolean
+  multi_org?: unknown
   /** Other fields (orgs list, etc.) are ignored. */
+}
+
+/**
+ * Guard: only treat the response as multi-org when `multi_org` is strictly
+ * boolean `true`. Any unexpected shape (missing, string, number, object)
+ * is treated as single-org — the safe fallback.
+ */
+function isMultiOrg(ctx: LoginContextResponse): boolean {
+  return ctx.multi_org === true
 }
 
 let cachedContext: LoginContextResponse | null = null
@@ -52,7 +62,7 @@ export async function resolveLoginPath(baseURL: string): Promise<string> {
     }
   }
 
-  if (cachedContext?.multi_org) {
+  if (cachedContext && isMultiOrg(cachedContext)) {
     return `/login/${encodeURIComponent(overrideSlug)}`
   }
 

@@ -138,4 +138,59 @@ describe('resolveLoginPath', () => {
     expect(path2).toBe('/login')
     expect(mockFetch).toHaveBeenCalledTimes(2)
   })
+
+  it('treats multi_org as single-org when value is a string (not strict boolean)', async () => {
+    process.env.E2E_ORG_SLUG = 'acme'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ multi_org: 'true' }),
+    }))
+
+    const path = await resolveLoginPath(BASE_URL)
+    expect(path).toBe('/login')
+  })
+
+  it('treats multi_org as single-org when value is a number', async () => {
+    process.env.E2E_ORG_SLUG = 'acme'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ multi_org: 1 }),
+    }))
+
+    const path = await resolveLoginPath(BASE_URL)
+    expect(path).toBe('/login')
+  })
+
+  it('treats multi_org as single-org when field is missing from response', async () => {
+    process.env.E2E_ORG_SLUG = 'acme'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ orgs: [{ slug: 'acme' }] }),
+    }))
+
+    const path = await resolveLoginPath(BASE_URL)
+    expect(path).toBe('/login')
+  })
+
+  it('treats multi_org as single-org when value is null', async () => {
+    process.env.E2E_ORG_SLUG = 'acme'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ multi_org: null }),
+    }))
+
+    const path = await resolveLoginPath(BASE_URL)
+    expect(path).toBe('/login')
+  })
+
+  it('treats multi_org as single-org when value is an object', async () => {
+    process.env.E2E_ORG_SLUG = 'acme'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ multi_org: { enabled: true } }),
+    }))
+
+    const path = await resolveLoginPath(BASE_URL)
+    expect(path).toBe('/login')
+  })
 })
