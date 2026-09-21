@@ -842,6 +842,39 @@ class TestAnthropicTitleInjection:
 
         assert "title" not in original_schema
 
+    async def test_existing_title_preserved(self) -> None:
+        """A schema that already has a title is NOT overridden.
+
+        Covers the false arm of the title-injection check: when the caller's
+        schema already carries a top-level title, it must be passed through
+        unchanged rather than replaced with the default.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import HumanMessage
+
+        from modulo.model_backends.anthropic import AnthropicBackend
+
+        schema_with_title = {**_TITLELESS_SCHEMA, "title": "MyCustomTitle"}
+
+        with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_structured = AsyncMock()
+            mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice"})
+            mock_chat.with_structured_output = MagicMock(return_value=mock_structured)
+            mock_chat_cls.return_value = mock_chat
+
+            backend = AnthropicBackend(api_key="sk-ant-test", model_id="claude-haiku-4-5")
+            await backend.invoke(
+                [HumanMessage(content="hi")],
+                output_schema=schema_with_title,
+            )
+
+        call_kwargs = mock_chat.with_structured_output.call_args
+        passed_schema = call_kwargs.kwargs.get("schema") or call_kwargs[1].get("schema")
+        assert passed_schema["title"] == "MyCustomTitle"
+        assert schema_with_title["title"] == "MyCustomTitle"
+
     async def test_construction_failure_falls_back(self) -> None:
         """When with_structured_output raises ValueError, invoke() falls back."""
         from unittest.mock import AsyncMock, MagicMock, patch
