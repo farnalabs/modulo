@@ -40,6 +40,34 @@ const TESTID_SELECTORS = {
   orgSlugSubmit: '[data-testid="login-org-entry-submit"]',
 }
 
+// The app's data-testids and the login path are identical across local,
+// staging and app, so the nine credential-form fields are defined once and
+// spread into each target's `credentials` instead of repeated verbatim.
+type CredentialSelectors = Pick<
+  TestEnv['credentials'],
+  | 'loginFormEmailSelector'
+  | 'loginFormPasswordSelector'
+  | 'loginFormSubmitSelector'
+  | 'orgLoginFormEmailSelector'
+  | 'orgLoginFormPasswordSelector'
+  | 'orgLoginFormSubmitSelector'
+  | 'orgSlugInputSelector'
+  | 'orgSlugSubmitSelector'
+  | 'loginPath'
+>
+
+const SHARED_CREDENTIALS: CredentialSelectors = {
+  loginFormEmailSelector: TESTID_SELECTORS.email,
+  loginFormPasswordSelector: TESTID_SELECTORS.password,
+  loginFormSubmitSelector: TESTID_SELECTORS.submit,
+  orgLoginFormEmailSelector: TESTID_SELECTORS.orgEmail,
+  orgLoginFormPasswordSelector: TESTID_SELECTORS.orgPassword,
+  orgLoginFormSubmitSelector: TESTID_SELECTORS.orgSubmit,
+  orgSlugInputSelector: TESTID_SELECTORS.orgSlugInput,
+  orgSlugSubmitSelector: TESTID_SELECTORS.orgSlugSubmit,
+  loginPath: '/login',
+}
+
 function getOrgSlug(): string {
   return process.env.E2E_ORG_SLUG || 'default'
 }
@@ -50,15 +78,7 @@ const ENVS: Record<string, TestEnv> = {
     orgSlug: getOrgSlug(),
     credentials: {
       admin: { email: 'admin@example.com', password: 'password123' },
-      loginFormEmailSelector: TESTID_SELECTORS.email,
-      loginFormPasswordSelector: TESTID_SELECTORS.password,
-      loginFormSubmitSelector: TESTID_SELECTORS.submit,
-      orgLoginFormEmailSelector: TESTID_SELECTORS.orgEmail,
-      orgLoginFormPasswordSelector: TESTID_SELECTORS.orgPassword,
-      orgLoginFormSubmitSelector: TESTID_SELECTORS.orgSubmit,
-      orgSlugInputSelector: TESTID_SELECTORS.orgSlugInput,
-      orgSlugSubmitSelector: TESTID_SELECTORS.orgSlugSubmit,
-      loginPath: '/login',
+      ...SHARED_CREDENTIALS,
     },
   },
   staging: {
@@ -68,15 +88,7 @@ const ENVS: Record<string, TestEnv> = {
       // Staging uses the real admin account, provided via E2E_ADMIN_EMAIL /
       // E2E_ADMIN_PASSWORD (must match the deployment's MODULO_USERS).
       admin: { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD },
-      loginFormEmailSelector: TESTID_SELECTORS.email,
-      loginFormPasswordSelector: TESTID_SELECTORS.password,
-      loginFormSubmitSelector: TESTID_SELECTORS.submit,
-      orgLoginFormEmailSelector: TESTID_SELECTORS.orgEmail,
-      orgLoginFormPasswordSelector: TESTID_SELECTORS.orgPassword,
-      orgLoginFormSubmitSelector: TESTID_SELECTORS.orgSubmit,
-      orgSlugInputSelector: TESTID_SELECTORS.orgSlugInput,
-      orgSlugSubmitSelector: TESTID_SELECTORS.orgSlugSubmit,
-      loginPath: '/login',
+      ...SHARED_CREDENTIALS,
     },
   },
   app: {
@@ -84,15 +96,7 @@ const ENVS: Record<string, TestEnv> = {
     orgSlug: getOrgSlug(),
     credentials: {
       admin: { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD || 'admin123' },
-      loginFormEmailSelector: TESTID_SELECTORS.email,
-      loginFormPasswordSelector: TESTID_SELECTORS.password,
-      loginFormSubmitSelector: TESTID_SELECTORS.submit,
-      orgLoginFormEmailSelector: TESTID_SELECTORS.orgEmail,
-      orgLoginFormPasswordSelector: TESTID_SELECTORS.orgPassword,
-      orgLoginFormSubmitSelector: TESTID_SELECTORS.orgSubmit,
-      orgSlugInputSelector: TESTID_SELECTORS.orgSlugInput,
-      orgSlugSubmitSelector: TESTID_SELECTORS.orgSlugSubmit,
-      loginPath: '/login',
+      ...SHARED_CREDENTIALS,
     },
   },
 }

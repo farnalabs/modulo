@@ -129,16 +129,23 @@ async function requireCredentialForm(
   slugStepTaken: boolean,
 ): Promise<CredentialFormSelectors> {
   const candidates = [singleOrgCredentialForm(env), orgCredentialForm(env)]
-  const resolved = await Promise.race(
-    candidates.map((form) =>
-      page
-        .locator(form.email)
-        .waitFor({ state: 'visible', timeout: CREDENTIAL_FORM_TIMEOUT })
-        .then(() => form)
-        .catch(() => null),
-    ),
-  )
-  if (resolved) return resolved
+  // Wait once for whichever layout's email field appears first. A single
+  // union selector avoids racing two waitFor()s and leaving the loser's
+  // timer dangling for the rest of the budget after one resolves.
+  const emailSelectors = candidates.map((form) => form.email).join(', ')
+  const appeared = await page
+    .locator(emailSelectors)
+    .first()
+    .waitFor({ state: 'visible', timeout: CREDENTIAL_FORM_TIMEOUT })
+    .then(() => true)
+    .catch(() => false)
+
+  if (appeared) {
+    // Disambiguate which layout rendered so callers fill its own fields.
+    for (const form of candidates) {
+      if (await page.locator(form.email).isVisible()) return form
+    }
+  }
 
   const hint = slugStepTaken
     ? `the org slug "${env.orgSlug}" may be wrong, or /login/${env.orgSlug} did not render a credential form`
