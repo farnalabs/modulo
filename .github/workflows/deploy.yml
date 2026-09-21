@@ -406,16 +406,25 @@ jobs:
     # overlap is intentional belt-and-braces — a duplicate dispatch is cheap,
     # a missed one is not.
     #
-    # Condition: at least one job failed AND the deploy was actually attempted
-    # (deploy-throttle succeeded with should_deploy == 'true'). A throttled run
-    # skips every downstream job (all results 'skipped'), so it can never match
-    # (no 'failure' exists). deploy-throttle failing itself is signalled loudly
-    # to the Actions tab (see the audit table below), not routed here, so
-    # FAILED_STAGES below is never empty when this job runs.
+    # Condition: at least one job failed or was cancelled AND the deploy was
+    # actually attempted (deploy-throttle succeeded with should_deploy == 'true').
+    # A throttled run skips every downstream job (all results 'skipped'), so it
+    # can never match (no 'failure' or 'cancelled' exists). deploy-throttle
+    # failing itself is signalled loudly to the Actions tab (see the audit
+    # table below), not routed here, so FAILED_STAGES below is never empty
+    # when this job runs.
+    #
+    # 'cancelled' is included because GitHub Actions reports a job that hits
+    # its job-level timeout-minutes as 'cancelled', not 'failure'. Without
+    # this, a hung deploy stage that times out vanishes silently — the
+    # incident that motivated this change (2026-09-18→21: staging E2E hung,
+    # prod stuck on stale build, nothing notified because 'cancelled' didn't
+    # match the 'failure'-only condition).
+    #
     # This job sends the Branch Fixer webhook pointing at main
     # (branchName: main, prNumber: 0). The Branch Fixer creates its own fix
     # branch from main, diagnoses the failure, fixes it, and raises the PR.
-    if: always() && needs.deploy-throttle.outputs.should_deploy == 'true' && contains(needs.*.result, 'failure')
+    if: always() && needs.deploy-throttle.outputs.should_deploy == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubicloud-standard-2
     steps:
       - name: Dispatch Branch Fixer webhook
@@ -436,12 +445,14 @@ jobs:
         shell: bash
         run: |
           # Build a context-specific failure description from the job results.
+          # Match both 'failure' and 'cancelled' (job-level timeout produces
+          # 'cancelled', not 'failure' — GitHub Actions convention).
           FAILED_STAGES=""
-          [ "${PRE_DEPLOY_RESULT}" = "failure" ] && FAILED_STAGES="${FAILED_STAGES} pre-deploy-gate"
-          [ "${STAGING_DEPLOY_RESULT}" = "failure" ] && FAILED_STAGES="${FAILED_STAGES} deploy-staging"
-          [ "${STAGING_E2E_RESULT}" = "failure" ] && FAILED_STAGES="${FAILED_STAGES} staging-e2e"
-          [ "${PROD_DEPLOY_RESULT}" = "failure" ] && FAILED_STAGES="${FAILED_STAGES} deploy-production"
-          [ "${PROD_SMOKE_RESULT}" = "failure" ] && FAILED_STAGES="${FAILED_STAGES} prod-smoke"
+          [ "${PRE_DEPLOY_RESULT}" = "failure" -o "${PRE_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} pre-deploy-gate"
+          [ "${STAGING_DEPLOY_RESULT}" = "failure" -o "${STAGING_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-staging"
+          [ "${STAGING_E2E_RESULT}" = "failure" -o "${STAGING_E2E_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} staging-e2e"
+          [ "${PROD_DEPLOY_RESULT}" = "failure" -o "${PROD_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-production"
+          [ "${PROD_SMOKE_RESULT}" = "failure" -o "${PROD_SMOKE_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} prod-smoke"
           FAILED_STAGES="${FAILED_STAGES# }"  # trim leading space
 
           FEEDBACK="Deploy pipeline failed on main at ${{ github.sha }}. Failed stage(s): ${FAILED_STAGES}. The Branch Fixer should create a fix branch from main, diagnose the failure, fix it, and raise a PR."
@@ -496,9 +507,15 @@ jobs:
     # notify-deploy-failure job only covers pre-deploy gate failures; this
     # closes the gap for the post-deploy E2E stage.
     #
+    # 'cancelled' included: GitHub reports job-level timeout as 'cancelled',
+    # not 'failure'. A hung Playwright regression that hits the 90-min job
+    # timeout would otherwise vanish silently (the step-level timeout fires
+    # 'failure', but a completely stuck process may bypass it and hit the
+    # job-level timeout instead).
+    #
     # branchName: main, prNumber: 0 signals "create a fix branch from main,
     # diagnose, and raise a PR" — the same contract as notify-deploy-failure.
-    if: always() && needs.staging-e2e.result == 'failure'
+    if: always() && (needs.staging-e2e.result == 'failure' || needs.staging-e2e.result == 'cancelled')
     runs-on: ubicloud-standard-2
     steps:
       - name: Dispatch Branch Fixer webhook
@@ -552,7 +569,10 @@ jobs:
     # FAR-906 follow-up: same gap exists for prod smoke test failures. A
     # production deploy that passes staging E2E but fails @smoke tests would
     # also have no autonomous fix attempt.
-    if: always() && needs.prod-smoke.result == 'failure'
+    #
+    # 'cancelled' included: same rationale as notify-staging-e2e-failure —
+    # job-level timeout produces 'cancelled', not 'failure'.
+    if: always() && (needs.prod-smoke.result == 'failure' || needs.prod-smoke.result == 'cancelled')
     runs-on: ubicloud-standard-2
     steps:
       - name: Dispatch Branch Fixer webhook
@@ -614,7 +634,10 @@ jobs:
     # Distinguishable from code-failure notifications: the FEEDBACK text
     # begins with "INFRASTRUCTURE FAILURE" so a human reading it knows this
     # is not a code regression.
-    if: always() && needs.deploy-staging.result == 'failure'
+    #
+    # 'cancelled' included: a deploy-staging job that hits its 180-min
+    # timeout is reported as 'cancelled', not 'failure'.
+    if: always() && (needs.deploy-staging.result == 'failure' || needs.deploy-staging.result == 'cancelled')
     runs-on: ubicloud-standard-2
     steps:
       - name: Dispatch Branch Fixer webhook (triage)
@@ -666,6 +689,11 @@ jobs:
     name: Deploy to staging
     needs: [pre-deploy-gate]
     runs-on: ubicloud-standard-2
+    # 180 min budget: build (~15m) + rehearsal (~40m) + pre-migrate (~40m) +
+    # deploy (~15m) + health gate (~45m) + margin. Without this, the GitHub
+    # default of 360 min (6h) silently swallows a hang as 'cancelled' rather
+    # than routing it to the fix loop.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1788,6 +1816,10 @@ jobs:
     needs: [pre-deploy-gate, staging-e2e]
     if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
+    # 180 min budget: same structure as deploy-staging (build + rehearsal +
+    # pre-migrate + deploy + health gate). Without this, the GitHub default
+    # of 360 min (6h) silently swallows a hang as 'cancelled'.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
         with:
@@ -2808,7 +2840,10 @@ jobs:
     #
     # The FEEDBACK text begins with "INFRASTRUCTURE FAILURE" to distinguish
     # from code-failure notifications (notify-deploy-failure, etc.).
-    if: always() && needs.deploy-production.result == 'failure'
+    #
+    # 'cancelled' included: a deploy-production job that hits its 180-min
+    # timeout is reported as 'cancelled', not 'failure'.
+    if: always() && (needs.deploy-production.result == 'failure' || needs.deploy-production.result == 'cancelled')
     runs-on: ubicloud-standard-2
     steps:
       - name: Dispatch Branch Fixer webhook (triage)
@@ -2861,6 +2896,10 @@ jobs:
     needs: [deploy-production]
     if: always() && needs.deploy-production.result == 'success'
     runs-on: ubicloud-standard-2
+    # 30 min budget: checkout + pnpm install + playwright install + smoke
+    # tests (step-level 10 min timeout). Without this, the GitHub default
+    # of 360 min (6h) silently swallows a hang as 'cancelled'.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: frontend

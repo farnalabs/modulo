@@ -1,0 +1,141 @@
+name: "Main: Integration tests"
+
+# Run the full integration suite on main post-merge. The deploy gate's
+# integration job is the same suite, but it only runs when the deploy
+# throttle fires — a PR can be green while an untouched integration test
+# is red (ci.yml's integration job is changed-files-scoped). Running on
+# main post-merge surfaces the same red at merge time (minutes) instead
+# of at the next deploy attempt (hours).
+#
+# This job does NOT gate merges — it runs AFTER the merge. On failure it
+# is LOUD: fail the run, post a Linear comment if LINEAR_API_KEY is
+# available (fail-open on the comment only).
+#
+# NO high-frequency schedule: this repo has documented evidence that
+# GitHub drops high-frequency crons under load (AGENTS.md: "GitHub's
+# scheduler DROPS high-frequency cron events on high-activity repos").
+# A push-triggered workflow is reliable; a cron here would not be.
+# workflow_dispatch is provided for manual re-runs.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One run per push — overlapping pushes cancel the previous run rather
+# than piling up.
+concurrency:
+  group: main-integration-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
+  GIT_CONFIG_VALUE_0: "https://github.com/"
+
+jobs:
+  integration:
+    name: "Integration tests (main post-merge)"
+    runs-on: ubicloud-standard-2
+    # 90 min budget — matches the deploy gate's integration-tests job.
+    # The same suite, same invocation, same service containers.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync deps
+        working-directory: backend
+        run: uv sync --frozen
+
+      # --- Service containers (copied verbatim from deploy.yml integration-tests) ---
+      - name: Start Postgres
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-pg 2>/dev/null || true
+          docker run -d --name modulo-ci-pg \
+            -e POSTGRES_USER=modulo_test \
+            -e POSTGRES_PASSWORD=modulo_test \
+            -e POSTGRES_DB=modulo_test \
+            -p 5433:5432 \
+            postgres:16-alpine
+          for i in $(seq 1 60); do
+            docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null && { echo "Postgres ready"; break; }
+            sleep 2
+          done
+
+      - name: Start Redis
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-redis 2>/dev/null || true
+          docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
+          for i in $(seq 1 30); do
+            docker exec modulo-ci-redis redis-cli ping 2>/dev/null && { echo "Redis ready"; break; }
+            sleep 2
+          done
+
+      # Exact invocation from deploy.yml's integration-tests job.
+      # Per-test timeout: without it a single hung test stalls the whole job
+      # silently until the job-level kill. Tier 1b testcontainers suites are
+      # excluded (they own dedicated jobs with sized boot budgets).
+      - name: Integration tests
+        working-directory: backend
+        run: uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 -q
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+
+      - name: Stop containers
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-pg 2>/dev/null || true
+          docker rm -f modulo-ci-redis 2>/dev/null || true
+
+  notify-failure:
+    name: Signal integration failure
+    needs: [integration]
+    if: always() && needs.integration.result == 'failure'
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Post Linear comment (fail-open)
+        if: ${{ secrets.LINEAR_API_KEY != '' }}
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          # Extract FAR- ticket from the commit message, if present.
+          TITLE="$(gh api "repos/${REPO}/commits/${COMMIT_SHA}" --jq '.commit.message' 2>/dev/null | head -1)"
+          FAR_ID="$(echo "$TITLE" | grep -oE 'FAR-[0-9]+' | head -1 || true)"
+          if [ -z "$FAR_ID" ]; then
+            echo "No FAR- ticket in commit title — skipping Linear comment."
+            exit 0
+          fi
+          BODY="Integration tests failed on main post-merge (${COMMIT_SHA:0:7}). Run: ${RUN_URL}"
+          # Post comment via Linear API (best-effort, fail-open).
+          HTTP_CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+            -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: ${LINEAR_API_KEY}" \
+            -d "{\"query\":\"mutation { commentCreate(input: {issueId: \\\"${FAR_ID}\\\", body: \\\"${BODY}\\\"}) { success } }\"}") || HTTP_CODE="000"
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Linear comment posted on ${FAR_ID}."
+          else
+            echo "::warning::Linear comment post failed (HTTP $HTTP_CODE) — integration failure logged in run only (fail-open)."
+          fi
+
+      - name: Fail loud on integration regression
+        shell: bash
+        run: |
+          echo "::error::Integration tests failed on main post-merge — the suite that gates deploys is red. Investigate immediately: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          exit 1
