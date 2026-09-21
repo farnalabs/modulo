@@ -209,9 +209,11 @@ class TestMainExitCode:
     The classifier step captures its exit code into a step output and always
     exits 0 (so the workflow stays "success" for every PR).  A separate step
     creates a named ``fast-lane-eligible`` check run: conclusion ``success``
-    means class-A eligible, ``failure`` means ineligible.  The merge-queue
-    reads that check run.  The script's non-zero exit for class-B is the
-    signal the CI step captures — this test verifies that signal.
+    means class-A eligible, ``neutral`` means merely ineligible (class-B or
+    unlabelled — not a failure), and ``failure`` is reserved for a genuine
+    classifier error (rc=2).  The merge-queue reads that check run and grants
+    the fast lane only on ``success``.  The script's non-zero exit for class-B
+    is the signal the CI step captures — this test verifies that signal.
     """
 
     @patch("fast_lane_classify.subprocess.run")
@@ -234,7 +236,7 @@ class TestMainExitCode:
                 "origin/main",
             ]
         )
-        assert rc == 1, "class-B must exit 1 (job-level check = failure)"
+        assert rc == 1, "class-B must exit 1 (check run = neutral, not a failure)"
 
     @patch("fast_lane_classify.check_sha_pinning", return_value=(True, "SHA-pinned"))
     @patch("fast_lane_classify.check_no_test_weakening", return_value=(True, []))
