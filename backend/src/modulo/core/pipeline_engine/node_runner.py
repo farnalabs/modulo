@@ -6150,6 +6150,7 @@ class _SandboxWatchdog:
             _log.info(
                 "sandbox_agent.log_drain_probe_failed",
                 extra={"node_id": self._node_id},
+                exc_info=True,
             )
             return
         if size <= self._drain_offset:
@@ -6251,6 +6252,7 @@ class _SandboxWatchdog:
             _log.info(
                 "sandbox_agent.watch_log_probe_failed",
                 extra={"node_id": self._node_id, "path": self._watch_log_path},
+                exc_info=True,
             )
             return
         if self._watch_log_prev_size is not None and size > self._watch_log_prev_size:
@@ -6273,6 +6275,7 @@ class _SandboxWatchdog:
             _log.info(
                 "sandbox_agent.watch_fs_probe_failed",
                 extra={"node_id": self._node_id},
+                exc_info=True,
             )
             return
         try:

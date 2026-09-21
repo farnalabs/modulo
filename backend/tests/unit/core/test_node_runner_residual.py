@@ -1874,6 +1874,21 @@ async def test_watchdog_drain_read_failure_keeps_offset(caplog):
     assert any("log_drain_failed" in m for m in caplog.messages)
 
 
+async def test_watchdog_drain_probe_failure_keeps_offset_and_preserves_exc(caplog):
+    """A get_info probe failure logs the static token WITH the exception (FAR-909)."""
+    sandbox = MagicMock()
+    sandbox.files.get_info = AsyncMock(side_effect=OSError("session factory down"))
+    wd = _watchdog(sandbox=sandbox)
+    with caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.node_runner"):
+        await wd.drain_sandbox_log()
+    assert wd._drain_offset == 0
+    assert not wd._drained_chunks
+    assert any("log_drain_probe_failed" in m for m in caplog.messages)
+    records = [r for r in caplog.records if "log_drain_probe_failed" in r.getMessage()]
+    assert records and records[0].exc_info is not None
+    assert isinstance(records[0].exc_info[1], OSError)
+
+
 async def test_watchdog_drain_read_reraises_cancellation():
     sandbox = MagicMock()
     sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=10))
@@ -1891,6 +1906,10 @@ async def test_watchdog_probe_log_growth_failure_is_quiet(caplog):
         await wd.probe_log_growth()
     assert wd._watch_log_prev_size is None
     assert any("watch_log_probe_failed" in m for m in caplog.messages)
+    # FAR-909: the static token must not discard the underlying exception.
+    records = [r for r in caplog.records if "watch_log_probe_failed" in r.getMessage()]
+    assert records and records[0].exc_info is not None
+    assert isinstance(records[0].exc_info[1], OSError)
 
 
 async def test_watchdog_probe_log_growth_reraises_cancellation():
@@ -1945,6 +1964,10 @@ async def test_watchdog_probe_filesystem_list_failure_is_quiet(caplog):
         await wd.probe_filesystem()
     assert not wd._fs_state
     assert any("watch_fs_probe_failed" in m for m in caplog.messages)
+    # FAR-909: the static token must not discard the underlying exception.
+    records = [r for r in caplog.records if "watch_fs_probe_failed" in r.getMessage()]
+    assert records and records[0].exc_info is not None
+    assert isinstance(records[0].exc_info[1], OSError)
 
 
 async def test_watchdog_probe_filesystem_touches_on_changed_stat():
