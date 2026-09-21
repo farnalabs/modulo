@@ -909,7 +909,7 @@ async def test_build_live_manifest_sandbox_profile_missing_uses_node_only(monkey
     assert registered.get("sandbox.egress") is True
 
 
-async def test_build_live_manifest_sandbox_profile_read_failure_falls_back(monkeypatch: pytest.MonkeyPatch):
+async def test_build_live_manifest_sandbox_profile_read_failure_falls_back():
     """A failed profile network_policy read is swallowed (debug-logged) and the
     node-only resolution is used — never a crash, never a silent grant."""
     session = AsyncMock()
