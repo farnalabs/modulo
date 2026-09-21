@@ -27,7 +27,18 @@ _EXPECTED_COUNT = 84
 # default inline, and CollectionInstallEntity.entity_id is a supplied key with no
 # default). They are out of scope for this frozen migration's coverage contract —
 # including them would make the count drift on every table added after 0194.
-_POST_0194_TABLES = frozenset({"collection_install", "collection_install_entity", "variant_batch_state"})
+# evals / policy_gates / policy_gate_decisions (0250_eval_policy_gate) set
+# gen_random_uuid() inline on their id columns, same as the tables above.
+_POST_0194_TABLES = frozenset(
+    {
+        "collection_install",
+        "collection_install_entity",
+        "variant_batch_state",
+        "evals",
+        "policy_gates",
+        "policy_gate_decisions",
+    }
+)
 
 
 def _load_migration() -> ModuleType:

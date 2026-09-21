@@ -598,8 +598,21 @@ async def _resolve_oidc_provider(
     """
     db_provider = await _read_system_oidc_provider(system_session, provider_id)
     if db_provider is None and app_session is not None:
-        await _set_default_rls_org(app_session)
-        db_provider = await get_provider_by_provider_id(app_session, provider_id)
+        # FAR-1058 parity: the app fallback must run inside an active
+        # transaction. set_rls_org requires one (it raises RuntimeError
+        # otherwise), and the caller's app session may hand us the resolver
+        # with NO transaction open (autobegin=False). Open a scoped
+        # transaction when the caller has none (its LOCAL binding reverts at
+        # commit, so the binding cannot leak into a later caller transaction);
+        # read in place when the caller already holds one (the OIDC login /
+        # callback routes always wrap in session.begin()).
+        if app_session.in_transaction():
+            await _set_default_rls_org(app_session)
+            db_provider = await get_provider_by_provider_id(app_session, provider_id)
+        else:
+            async with app_session.begin():
+                await _set_default_rls_org(app_session)
+                db_provider = await get_provider_by_provider_id(app_session, provider_id)
     if db_provider is not None and db_provider.provider_type == "oidc" and db_provider.enabled:
         discovery_url = db_provider.discovery_url
         if discovery_url:
@@ -1207,6 +1220,15 @@ async def saml_process_response(
     compatibility. Provider resolution uses the system session (``modulo_system``
     role, instance-global); JIT provisioning writes via the app session,
     RLS-scoped to the resolved provider's org (or first-org fallback).
+
+    Replay posture (accepted, FAR-1006 review): responses are processed as
+    HTTP-POST bearer assertions without ``InResponseTo``/AuthnRequest-ID
+    correlation. There is no cross-request store of outstanding AuthnRequest
+    IDs, so an observed (network-captured, TLS-terminated) Response could be
+    replayed within its ``NotOnOrAfter`` window. This matches the standard
+    web-SSO bearer choice python3-saml itself implements; hardening it
+    (per-runtime AuthnRequest store) is tracked as a future defence-in-depth
+    item, not required for correctness here.
     """
     idp_metadata, entity_id, sp_key, sp_cert, db_saml = await _resolve_saml_config(
         system_session, app_session, settings, provider_id=provider_id

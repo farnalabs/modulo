@@ -14,8 +14,8 @@ All nullable — runs without schema enforcement have NULLs.  No data backfill
 
 Downgrade: drops all four columns.
 
-Revision ID: 0250b_enforcement_daily_facts
-Revises: 0250_schema_enforcement_telemetry
+Revision ID: 0252_enforcement_daily_facts
+Revises: 0251_schema_enforcement_telemetry
 Create Date: 2026-09-20
 """
 
@@ -23,8 +23,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0250b_enforcement_daily_facts"
-down_revision = "0250_schema_enforcement_telemetry"
+revision = "0252_enforcement_daily_facts"
+down_revision = "0251_schema_enforcement_telemetry"
 branch_labels = None
 depends_on = None
 

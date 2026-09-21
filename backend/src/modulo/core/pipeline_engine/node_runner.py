@@ -478,12 +478,20 @@ class SandboxBindingResolutionError(SandboxNodeFailedError):
 
 
 class SandboxTierRefusedError(SandboxNodeFailedError):
-    """The Local (host-subprocess) provider tier refused this dispatch (FAR-592 D6).
+    """A provider tier refused this dispatch at provision time (FAR-592 D6).
 
-    Terminal (D7-refusal posture): bindings inject standing host-env
-    credentials and the Local tier has no container isolation, so a Local
-    profile without ``allow_runner_env_bindings`` MUST refuse at provision
-    time. Maps to ``sandbox.tier_refused`` via the executor's LEGACY_ALIASES.
+    Terminal (D7-refusal posture): the tier cannot safely honour the dispatch,
+    so it refuses rather than failing open. Raised by two call sites:
+
+    * The Local (host-subprocess) tier, when bindings inject standing host-env
+      credentials and the profile lacks ``allow_runner_env_bindings`` — the
+      Local tier has no container isolation, so it MUST refuse.
+    * The Docker / Bundled Runner tier, when the profile requests
+      ``network_policy='selected'`` — Docker cannot enforce per-host egress
+      allowlists (no ``NET_ADMIN`` in the hardened workspace), so it MUST
+      refuse instead of silently granting full outbound (FAR-1064).
+
+    Maps to ``sandbox.tier_refused`` via the executor's LEGACY_ALIASES.
     """
 
 
@@ -7250,6 +7258,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     #  - none -> the historical E2B default route, unchanged.
     if session_factory is not None:
         from modulo.core.bundled_runner.runner_dispatch import (
+            profile_denies_egress,
             resolve_sandbox_dispatch_route,
             validate_e2b_dispatch_timeout,
         )
@@ -7270,6 +7279,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             )
         if _route.provider_type == "e2b":
             validate_e2b_dispatch_timeout(sandbox_timeout)
+            # FAR-1065: when the node-level egress_policy is unset, consult
+            # the environment profile's network_policy and map "none" → deny_all.
+            # A profile network_policy="none" must mean deny-all regardless of
+            # route — the node-level value always wins when explicitly set. The
+            # profile→egress semantics are single-sourced in
+            # runner_dispatch.profile_denies_egress.
+            if egress_policy is None and _route.profile is not None and profile_denies_egress(_route.profile):
+                egress_policy = "deny_all"
 
     run_context: dict[str, Any] = state.get("run_context") or {}
     raw_input: Any = run_context.get("input", {})

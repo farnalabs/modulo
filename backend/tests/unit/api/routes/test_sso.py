@@ -8,11 +8,12 @@ fake session; the callback is mocked to perform a ``session.execute()`` (standin
 for the JIT-provisioning queries) so the pre-fix handler fails loudly.
 """
 
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import Request
 
-from modulo.api.routes.sso import oidc_callback
+from modulo.api.routes.sso import _resolve_saml_for_route, oidc_callback
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
@@ -32,6 +33,9 @@ class _AutobeginAwareSession:
 
     def __init__(self) -> None:
         self._in_tx = False
+
+    def in_transaction(self) -> bool:
+        return self._in_tx
 
     def begin(self) -> "_BeginCtx":
         return _BeginCtx(self)
@@ -108,3 +112,38 @@ async def test_oidc_callback_runs_db_work_inside_begin() -> None:
     assert resp.status_code == 307
     assert "access_token=at" in resp.headers["location"]
     assert "refresh_token=rt" in resp.headers["location"]
+
+
+async def test_saml_app_fallback_opens_scoped_transaction_when_caller_has_none() -> None:
+    """FAR-1058: the SAML app fallback must open its own scoped transaction.
+
+    The per-provider login/ACS routes hand the resolver an app session with no
+    active transaction (``autobegin=False``). The pre-fix resolver bound RLS via
+    ``_set_default_rls_org`` OUTSIDE any transaction, so every fallback hit
+    raised ``RuntimeError`` -> HTTP 500 (a slug-enumeration oracle). The fake
+    session only allows ``execute()`` inside ``begin()``, so the pre-fix path
+    fails loudly while the fixed one binds inside its own scoped transaction.
+    """
+    fake = _AutobeginAwareSession()
+    provider = SimpleNamespace(provider_type="saml", enabled=True)
+
+    async def fake_set_default_rls_org(session: object) -> None:
+        assert session is fake
+        await fake.execute(MagicMock())
+
+    async def fake_get_provider(session: object, provider_id: str) -> object:
+        assert session is fake
+        return provider
+
+    with (
+        patch(
+            "modulo.api.routes.sso._read_system_saml_provider_by_slug",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("modulo.api.routes.sso._set_default_rls_org", new=fake_set_default_rls_org),
+        patch("modulo.api.routes.sso.get_provider_by_provider_id", new=fake_get_provider),
+    ):
+        resolved = await _resolve_saml_for_route("okta-saml", None, fake)
+
+    assert resolved is provider
+    assert not fake.in_transaction()

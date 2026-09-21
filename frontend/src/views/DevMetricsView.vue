@@ -4,11 +4,12 @@
       title="Web Vitals Analytics"
       subtitle="Frontend performance metrics — LCP, FCP, CLS, INP, TTFB"
     >
-      <template #actions>
+      <template #right>
         <select
           v-model="selectedDays"
           class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
           aria-label="Metrics time range"
+          data-testid="dev-metrics-time-range"
           @change="loadData"
         >
           <option :value="7">Last 7 days</option>
@@ -17,6 +18,7 @@
         </select>
         <button type="button"
           class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm hover:bg-accent"
+          data-testid="dev-metrics-refresh"
           @click="loadData"
           :disabled="loading"
         >

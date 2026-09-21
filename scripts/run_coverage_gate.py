@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Changed-lines coverage gate — enforces a per-PR coverage threshold on the
-lines each PR actually changes (the analogue of SonarCloud's ``new_coverage``).
+"""Changed-lines coverage gate — enforces per-PR coverage thresholds on the
+lines each PR actually changes, plus a project-wide floor ratchet.
 
 Why this exists: farnalabs/modulo is on free SonarCloud, which does NOT allow
 customising or assigning quality gates.  SonarCloud still computes and
@@ -16,7 +16,41 @@ relative to ``frontend/`` rather than the repo root.  It prints a clear
 summary per language and exits non-zero when a threshold is breached or a
 required report is missing.
 
+In addition to the diff-cover line-coverage check, the script computes branch
+coverage on changed lines by parsing the raw reports directly:
+
+- **Cobertura XML** (``backend/coverage.xml``): ``<line number="N" hits="H"
+  branch="true" condition-coverage="50% (1/2)">`` with child
+  ``<conditions><condition number=".." type="jump"
+  coverage="50%"/></conditions>``.  Total = number of ``<condition>``
+  entries (or the ``(a/b)`` denominator); covered = those with
+  ``coverage="100%"``.
+
+- **LCOV** (``frontend/coverage/lcov.info``):
+  ``BRDA:<line>,<block>,<branch>,<taken>``.  ``taken`` is ``"-"`` when the
+  branch never executed.  Covered = ``taken`` is present and ``> 0``.
+
+Branch records are attributed to their source line and intersected with the
+lines the PR added (via ``git diff --unified=0``).  Branch coverage is
+computed over that intersection.
+
+Project-wide floor (the ratchet): a whole-project check on BOTH metrics from
+the full reports (not diff-limited).  ``MIN_PROJECT_LINE_COVERAGE`` and
+``MIN_PROJECT_BRANCH_COVERAGE`` are deliberately conservative initial floors
+that cannot fail on today's repo — the point is to install the mechanism, not
+to pick the final number.  These floors are a ratchet: raise as coverage
+improves, never lower, and lowering requires an explicit justified commit
+message.
+
+.. note::
+
+   The project-wide percentage is computed over the CI coverage run's
+   instrumented set (``pytest --cov=src/modulo``, ``vitest run src``) and will
+   therefore NOT equal the SonarCloud badge figure, which analyses a wider
+   scope.
+
 Gate semantics (fail-closed):
+
 - **Report file missing** → ERROR, exit 1.  A missing report means the
   upstream job that produces it failed or its artifact download broke.
   Fail-closed so a broken pipeline never silently disables the gate.
@@ -45,6 +79,21 @@ Gate semantics (fail-closed):
   lines).  Counting those against a tested module would make a fully-covered
   module mathematically unable to clear the threshold.
 
+Branch coverage edge cases:
+
+- **Zero branches on changed lines** → vacuous pass.  When no branch records
+  exist for any changed line, branch coverage is undefined and the branch
+  gate passes with a note ("vacuous — no branch records on changed lines").
+  The parsers retain only branch records, so a changed line that has no
+  branch (straight-line code) is indistinguishable from a missing branch
+  record: neither contributes a branch, and neither is scored as 0%.  A
+  straight-line diff therefore passes the branch gate vacuously no matter
+  how many lines it changes.
+- **Branch records present but none taken** → 0%, FAIL.  When branch records
+  exist on changed lines but every ``taken`` value is ``"-"`` (never
+  executed), branch coverage is 0% and the gate fails.  This is NOT a
+  vacuous pass — the branches exist and were not exercised.
+
 Usage (local)::
 
     uv run --project backend python scripts/run_coverage_gate.py \\
@@ -67,15 +116,27 @@ import re
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Threshold constant — the single source of truth for the coverage floor.
-# Change this value to adjust the gate across all PRs.
+# Threshold constants — the single source of truth for the coverage floors.
+# Change these values to adjust the gate across all PRs.
 # ---------------------------------------------------------------------------
-COVERAGE_THRESHOLD = 90
+COVERAGE_THRESHOLD = 98  # Changed-lines line coverage minimum (%)
+BRANCH_COVERAGE_THRESHOLD = 98  # Changed-lines branch coverage minimum (%)
+
+# Project-wide floor (the ratchet).  These are deliberately conservative
+# initial floors that cannot fail on today's repo — the point is to install
+# the mechanism, not to pick the final number.  Raise as coverage improves;
+# never lower.  Lowering requires an explicit justified commit message.
+#
+# Computed over the CI coverage run's instrumented set (pytest --cov=src/modulo,
+# vitest run src), NOT the full SonarCloud scope.
+MIN_PROJECT_LINE_COVERAGE = 88.0
+MIN_PROJECT_BRANCH_COVERAGE = 80.0
 
 # Files/patterns excluded from the gate's denominator.  These mirror the
 # ``sonar.coverage.exclusions`` in sonar-project.properties — test paths,
@@ -138,9 +199,7 @@ _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 # Matches a standalone Python string literal (triple-quoted or single/double
 # quoted) with no other code around it.  Used to exclude docstrings and bare
 # strings from the executable-line count (coverage.py does not instrument them).
-_PYTHON_STRING_LITERAL_RE = re.compile(
-    r"""^\s*(?:('{3}|"{3})[\s\S]*\1|('{1}|"{1})[^\n]*\2)\s*$"""
-)
+_PYTHON_STRING_LITERAL_RE = re.compile(r"""^\s*(?:('{3}|"{3})[\s\S]*\1|('{1}|"{1})[^\n]*\2)\s*$""")
 
 # ``git diff`` filter and language pathspecs for changed-file discovery.
 _DIFF_FILTER = "--diff-filter=ACM"
@@ -203,6 +262,7 @@ def _is_excluded(path: str) -> bool:
 # Executable-line detection — used to exclude non-executable changed lines
 # (comments, docstrings, blank lines) from the coverage denominator.
 # ---------------------------------------------------------------------------
+
 
 def _is_executable_python_line(line: str) -> bool:
     """Return True if a Python line is an executable statement.
@@ -670,6 +730,320 @@ def _normalize_js_report(report_path: Path, src_root: str) -> Path | None:
     return tmp_path
 
 
+# ---------------------------------------------------------------------------
+# Branch coverage — raw report parsing for per-line branch taken/not-taken.
+# ---------------------------------------------------------------------------
+
+
+def _parse_cobertura_branches(report_path: Path) -> dict[str, dict[int, tuple[int, int]]]:
+    """Parse Cobertura XML for per-line branch coverage.
+
+    Returns ``{filepath: {line_number: (covered_conditions, total_conditions)}}``.
+    Each ``<condition>`` child of a ``<line branch="true">`` is counted:
+    covered when ``coverage="100%"``, uncovered otherwise.  Only lines with
+    ``branch="true"`` are included.
+    """
+    result: dict[str, dict[int, tuple[int, int]]] = {}
+    try:
+        tree = ET.parse(str(report_path))  # noqa: S314 — internal trusted report
+    except (ET.ParseError, OSError):
+        return result
+    root = tree.getroot()
+    for cls in root.iter("class"):
+        filename = cls.get("filename", "")
+        lines_data: dict[int, tuple[int, int]] = {}
+        for line_el in cls.iter("line"):
+            if line_el.get("branch") != "true":
+                continue
+            line_no = int(line_el.get("number", "0"))
+            conditions = line_el.findall(".//condition")
+            if not conditions:
+                continue
+            total = len(conditions)
+            covered = sum(1 for c in conditions if c.get("coverage") == "100%")
+            lines_data[line_no] = (covered, total)
+        if lines_data:
+            result[filename] = lines_data
+    return result
+
+
+def _parse_lcov_count(value: str) -> int:
+    """Parse a numeric LCOV field, treating a malformed value as 0.
+
+    LCOV uses ``-`` for "never executed" and a decimal count otherwise.  A
+    malformed (non-numeric) value must not crash the gate — it cannot be shown
+    to be covered, so it fail-closes to 0, exactly like ``-``.
+    """
+    try:
+        return int(value)
+    except ValueError:
+        return 0
+
+
+def _parse_lcov_branches(report_path: Path) -> dict[str, dict[int, tuple[int, int]]]:
+    """Parse LCOV ``BRDA`` records for per-line branch coverage.
+
+    Returns ``{filepath: {line_number: (taken_branches, total_branches)}}``.
+    Each ``BRDA:<line>,<block>,<branch>,<taken>`` record is attributed to
+    its line.  ``taken`` is ``"-"`` when the branch was never executed
+    (uncovered).  ``taken`` > 0 means covered.
+    """
+    result: dict[str, dict[int, tuple[int, int]]] = {}
+    try:
+        lines = report_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return result
+    current_file = ""
+    for raw in lines:
+        if raw.startswith("SF:"):
+            current_file = raw[3:]
+        elif raw.startswith("BRDA:"):
+            parts = raw[5:].split(",")
+            if len(parts) < 4:
+                continue
+            line_no = _parse_lcov_count(parts[0])
+            if line_no <= 0:
+                continue
+            taken_str = parts[3].strip()
+            if current_file not in result:
+                result[current_file] = {}
+            prev = result[current_file].get(line_no, (0, 0))
+            total = prev[1] + 1
+            covered = prev[0] + (1 if _parse_lcov_count(taken_str) > 0 else 0)
+            result[current_file][line_no] = (covered, total)
+    return result
+
+
+def _parse_added_line_numbers(diff_text: str) -> set[int]:
+    """Extract new-file line numbers of added lines from ``git diff --unified=0``.
+
+    Parses ``@@ -old,count +new,count @@`` hunk headers and counts ``+``
+    lines within each hunk.
+    """
+    added: set[int] = set()
+    current_line = 0
+    for raw in diff_text.splitlines():
+        m = _HUNK_HEADER_RE.match(raw)
+        if m:
+            current_line = int(m.group(1))
+            continue
+        if raw.startswith(("+++", "---", "\\")):
+            continue
+        if raw.startswith("+"):
+            added.add(current_line)
+            current_line += 1
+        elif raw.startswith("-"):
+            continue
+        else:
+            current_line += 1
+    return added
+
+
+def _match_report_key_to_changed(
+    raw_key: str,
+    changed_files: Iterable[str],
+    language: str,
+    js_src_root: str = DEFAULT_JS_SRC_ROOT,
+) -> str | None:
+    """Return the repo-relative changed-file key that *raw_key* names.
+
+    Coverage reports do not carry repo-relative paths.  coverage.py emits
+    Cobertura ``filename`` values relative to its ``source`` root (this repo:
+    ``src/modulo``), and vitest emits LCOV ``SF:`` values relative to
+    ``frontend/`` (the gate normalises the report to absolute paths before
+    evaluation).  The changed-file keys from ``git diff`` are always
+    repo-relative (``backend/src/modulo/...``, ``frontend/src/...``), so a
+    naive ``branch_data.get(filepath)`` never matches and every changed JS /
+    Python production file is scored as ``branch_total == 0`` — a false 0%
+    branch failure regardless of real coverage.  Resolve *raw_key* into the
+    changed-file namespace by exact match, then by a unique path-segment
+    suffix match; return ``None`` when nothing matches.
+    """
+    changed = {path.replace("\\", "/") for path in changed_files}
+    normalized = raw_key.replace("\\", "/")
+    candidates: list[str] = []
+    if Path(normalized).is_absolute():
+        with contextlib.suppress(ValueError, OSError):
+            candidates.append(Path(normalized).resolve().relative_to(REPO_ROOT).as_posix())
+    else:
+        candidates.append(normalized)
+        prefix = "backend" if language == "Python" else js_src_root
+        candidates.append(f"{prefix}/{normalized}")
+
+    for candidate in candidates:
+        if candidate in changed:
+            return candidate
+
+    # The report path may be relative to a deeper source root (coverage.py
+    # relativises to ``src/modulo``), so ``core/foo.py`` names
+    # ``backend/src/modulo/core/foo.py``.  Match on whole path segments and
+    # require a unique hit so a shared basename can never cross-attribute.
+    for candidate in sorted(candidates, key=len, reverse=True):
+        suffix = "/" + candidate.lstrip("/")
+        matches = [path for path in changed if path == candidate or path.endswith(suffix)]
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
+def _normalize_branch_data_keys(
+    branch_data: dict[str, dict[int, tuple[int, int]]],
+    changed_files: Iterable[str],
+    language: str,
+    js_src_root: str = DEFAULT_JS_SRC_ROOT,
+) -> dict[str, dict[int, tuple[int, int]]]:
+    """Re-key raw report branch data onto the repo-relative changed-file keys.
+
+    Report entries that do not correspond to a changed production file can
+    never contribute to the gate and are dropped.  Entries that map to the
+    same changed file are merged, so a report listing a file under more than
+    one spelling counts each line only once.
+    """
+    normalized: dict[str, dict[int, tuple[int, int]]] = {}
+    for raw_key, line_branches in branch_data.items():
+        target = _match_report_key_to_changed(raw_key, changed_files, language, js_src_root)
+        if target is None:
+            continue
+        normalized.setdefault(target, {}).update(line_branches)
+    return normalized
+
+
+def _compute_branch_coverage_from_raw(
+    changed_files: dict[str, int],
+    report_path: Path | None,
+    compare_branch: str,
+    language: str,
+    js_src_root: str = DEFAULT_JS_SRC_ROOT,
+) -> tuple[int, int, int]:
+    """Parse raw coverage report and compute branch coverage on changed lines.
+
+    Uses ``git diff --unified=0`` to find the exact added line numbers, then
+    intersects with branch records from the raw report.  Report file keys are
+    re-aligned to the repo-relative changed-file keys (see
+    :func:`_normalize_branch_data_keys`) because the report's paths come from
+    a different working directory than the diff.
+
+    Returns ``(branch_covered, branch_total, branch_unmeasured)``.
+    """
+    if report_path is None or not report_path.exists():
+        return 0, 0, sum(changed_files.values())
+
+    diff_range = f"{compare_branch}...HEAD"
+    safe_range = _safe_repo_path(diff_range)
+    if safe_range is None:
+        return 0, 0, sum(changed_files.values())
+
+    added_lines: dict[str, set[int]] = {}
+    for filepath in changed_files:
+        safe_path = _safe_repo_path(filepath)
+        if safe_path is None:
+            continue
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--unified=0", safe_range, "--", safe_path],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=str(REPO_ROOT),
+            )
+            if result.returncode == 0 and result.stdout:
+                added_lines[filepath] = _parse_added_line_numbers(result.stdout)
+        except Exception:  # noqa: S112 — best-effort per-file parse, skip on any error
+            continue
+
+    raw_branch_data = (
+        _parse_cobertura_branches(report_path) if language == "Python" else _parse_lcov_branches(report_path)
+    )
+    branch_data = _normalize_branch_data_keys(raw_branch_data, changed_files, language, js_src_root)
+
+    branch_covered = 0
+    branch_total = 0
+    branch_unmeasured = 0
+
+    for filepath, changed_count in changed_files.items():
+        file_added = added_lines.get(filepath, set())
+        file_branch = branch_data.get(filepath, {})
+
+        if file_branch:
+            for line_no, (covered, total) in file_branch.items():
+                if line_no in file_added:
+                    branch_covered += covered
+                    branch_total += total
+            measured_lines = {ln for ln in file_branch if ln in file_added}
+            branch_unmeasured += len(file_added - measured_lines)
+        else:
+            branch_unmeasured += len(file_added) if file_added else changed_count
+
+    return branch_covered, branch_total, branch_unmeasured
+
+
+def _compute_project_wide_metrics_cobertura(report_path: Path) -> tuple[float, float | None] | None:
+    """Compute project-wide line and branch coverage from Cobertura XML.
+
+    Returns ``(line_pct, branch_pct)`` or ``None`` on parse error.
+    ``branch_pct`` is ``None`` when the report carries no branch records at
+    all (no branch data to measure), which is distinct from ``0.0`` (branch
+    records exist but none are covered).  The caller must not treat the two
+    as equivalent: the project floor is only meaningful when branch data
+    actually exists.
+    """
+    try:
+        tree = ET.parse(str(report_path))  # noqa: S314 — internal trusted report
+    except (ET.ParseError, OSError):
+        return None
+    root = tree.getroot()
+    total_lines = 0
+    covered_lines = 0
+    total_conditions = 0
+    covered_conditions = 0
+    for line_el in root.iter("line"):
+        hits = int(line_el.get("hits", "0"))
+        total_lines += 1
+        if hits > 0:
+            covered_lines += 1
+        if line_el.get("branch") == "true":
+            for cond in line_el.findall(".//condition"):
+                total_conditions += 1
+                if cond.get("coverage") == "100%":
+                    covered_conditions += 1
+    line_pct = (covered_lines / total_lines * 100.0) if total_lines else 0.0
+    branch_pct = (covered_conditions / total_conditions * 100.0) if total_conditions else None
+    return line_pct, branch_pct
+
+
+def _compute_project_wide_metrics_lcov(report_path: Path) -> tuple[float, float | None] | None:
+    """Compute project-wide line and branch coverage from LCOV.
+
+    Returns ``(line_pct, branch_pct)`` or ``None`` on parse error.
+    ``branch_pct`` is ``None`` when the report carries no ``BRDA`` records at
+    all — see :func:`_compute_project_wide_metrics_cobertura`.
+    """
+    try:
+        lines = report_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    total_lines = 0
+    hit_lines = 0
+    total_branches = 0
+    hit_branches = 0
+    for raw in lines:
+        if raw.startswith("DA:"):
+            parts = raw[3:].split(",")
+            if len(parts) >= 2:
+                total_lines += 1
+                if _parse_lcov_count(parts[1]) > 0:
+                    hit_lines += 1
+        elif raw.startswith("BRDA:"):
+            parts = raw[5:].split(",")
+            if len(parts) >= 4:
+                total_branches += 1
+                if _parse_lcov_count(parts[3].strip()) > 0:
+                    hit_branches += 1
+    line_pct = (hit_lines / total_lines * 100.0) if total_lines else 0.0
+    branch_pct = (hit_branches / total_branches * 100.0) if total_branches else None
+    return line_pct, branch_pct
+
+
 @dataclass(frozen=True)
 class GateResult:
     """Result of evaluating one language's coverage gate."""
@@ -684,23 +1058,49 @@ class GateResult:
     tiny_diff: bool = False
     measured_lines: int = 0
     unmeasured_lines: int = 0
+    # Branch coverage fields
+    branch_covered: int = 0
+    branch_total: int = 0
+    # Changed lines with no branch record.  Diagnostic only: the parsers keep
+    # only branch records, so this cannot distinguish "no branch on the line"
+    # from "branch record missing", and it never drives the pass/fail decision
+    # (a zero ``branch_total`` is a vacuous pass — see ``evaluate``).
+    branch_unmeasured: int = 0
+    branch_actual_pct: float | None = None
+    branch_passed: bool | None = None  # None = no branch data (vacuous)
+    branch_threshold: int = 0
 
     def summary(self) -> str:
         if self.skipped:
             return f"[{self.language}] SKIPPED — {self.skip_reason}"
         if self.tiny_diff:
+            # Tiny diffs are line-only by design: ``evaluate`` returns before
+            # measuring branches, so ``branch_passed`` is always None and there
+            # is no branch status to surface here.
             return f"[{self.language}] PASS — tiny diff ({self.changed_lines} lines, ≤{TINY_DIFF_THRESHOLD} threshold)"
         if self.unmeasured_lines > 0 and not self.passed:
-            return (
+            line_part = (
                 f"[{self.language}] FAIL — {self.actual_pct:.1f}% effective coverage, "
                 f"{self.unmeasured_lines} unmeasured line(s) at 0% < {self.threshold}%"
             )
-        if self.passed:
+        elif self.passed:
             pct = f"{self.actual_pct:.1f}%" if self.actual_pct is not None else "?"
-            return f"[{self.language}] PASS — {pct} >= {self.threshold}%"
-        if self.actual_pct is not None:
-            return f"[{self.language}] FAIL — {self.actual_pct:.1f}% < {self.threshold}%"
-        return f"[{self.language}] FAIL — {self.skip_reason}"
+            line_part = f"[{self.language}] PASS — {pct} >= {self.threshold}%"
+        elif self.actual_pct is not None:
+            line_part = f"[{self.language}] FAIL — {self.actual_pct:.1f}% < {self.threshold}%"
+        else:
+            line_part = f"[{self.language}] FAIL — {self.skip_reason}"
+        if self.branch_passed is None:
+            branch_part = " (vacuous — no branch records on changed lines)"
+        elif self.branch_actual_pct is not None:
+            bpct = f"{self.branch_actual_pct:.1f}%"
+            if self.branch_passed:
+                branch_part = f" | branch {bpct} >= {self.branch_threshold}%"
+            else:
+                branch_part = f" | branch {bpct} < {self.branch_threshold}%"
+        else:
+            branch_part = ""
+        return line_part + branch_part
 
 
 def _run_diff_cover(
@@ -868,8 +1268,10 @@ def evaluate(
     fail_under: int,
     *,
     allow_missing: bool = False,
+    branch_fail_under: int = BRANCH_COVERAGE_THRESHOLD,
+    js_src_root: str = DEFAULT_JS_SRC_ROOT,
 ) -> GateResult:
-    """Evaluate one language's changed-lines coverage.
+    """Evaluate one language's changed-lines coverage (line + branch).
 
     When *allow_missing* is False (the CI default), a missing or unreadable
     report is a gate failure — the upstream job or artifact download broke.
@@ -950,6 +1352,9 @@ def evaluate(
             changed_lines=changed_lines,
             measured_lines=0,
             unmeasured_lines=changed_lines,
+            branch_actual_pct=0.0,
+            branch_passed=False,
+            branch_threshold=branch_fail_under,
         )
 
     # --- Extract measured coverage (production files only) ---
@@ -996,10 +1401,6 @@ def evaluate(
         else:
             reason = ""
     elif rc == 0:
-        # diff-cover exited 0 but produced no parseable coverage line.  The
-        # no-changed-lines case returned above, so reaching here means the
-        # output was unparseable (a diff-cover output/protocol change, or
-        # truncated output).  Fail closed rather than silently passing.
         passed = False
         reason = f"diff-cover exited 0 but produced no parseable coverage result for {language}"
     elif _THRESHOLD_NOT_MET_RE.search(output):
@@ -1009,6 +1410,33 @@ def evaluate(
         passed = False
         error_lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
         reason = error_lines[-1] if error_lines else "diff-cover returned non-zero"
+
+    # --- Branch coverage on changed lines ---
+    branch_covered, branch_total, branch_unmeasured = _compute_branch_coverage_from_raw(
+        changed_files,
+        report_path,
+        compare_branch,
+        language,
+        js_src_root,
+    )
+    branch_actual_pct: float | None = None
+    branch_passed_val: bool | None = None
+    if branch_total == 0:
+        # No branch records on any changed line: there is no branch to
+        # measure, so the branch gate passes vacuously.  The report parsers
+        # retain only branch records, so a changed line that simply has no
+        # branch (straight-line code) is indistinguishable from one whose
+        # branch record is absent — neither carries a branch into the
+        # denominator.  Treating the former as 0% spuriously failed every
+        # branch-free diff of more than TINY_DIFF_THRESHOLD lines.
+        # ``branch_unmeasured`` is retained as a diagnostic only; it never
+        # drives the pass/fail decision.  Genuinely unexercised branches
+        # still surface as ``branch_total > 0`` with 0% coverage, and a
+        # brand-new untested file still fails the line gate.
+        branch_passed_val = None  # vacuous
+    else:
+        branch_actual_pct = (branch_covered / branch_total) * 100.0
+        branch_passed_val = branch_actual_pct >= branch_fail_under
 
     return GateResult(
         language=language,
@@ -1020,6 +1448,12 @@ def evaluate(
         changed_lines=scored_lines,
         measured_lines=measured_lines,
         unmeasured_lines=unmeasured_lines,
+        branch_covered=branch_covered,
+        branch_total=branch_total,
+        branch_unmeasured=branch_unmeasured,
+        branch_actual_pct=branch_actual_pct,
+        branch_passed=branch_passed_val,
+        branch_threshold=branch_fail_under,
     )
 
 
@@ -1027,42 +1461,50 @@ def _write_summary(results: list[GateResult]) -> None:
     """Write a GitHub step summary table and emit ::error:: annotations on failure."""
     summary_lines = [
         "## Coverage Gate (Changed Lines)\n",
-        "| Language | Status | Coverage | Threshold | Changed Lines | Measured | Unmeasured |",
-        "|----------|--------|----------|-----------|---------------|----------|------------|",
+        "| Language | Status | Line % | Line Thr | Branch % | Branch Thr | Changed Lines | Measured | Unmeasured |",
+        "|----------|--------|--------|----------|----------|------------|---------------|----------|------------|",
     ]
     for r in results:
         if r.skipped:
             status = "SKIPPED"
             pct = "—"
+            bpct = "—"
         elif r.tiny_diff:
+            # Tiny diffs are line-only (branch is never measured); there is no
+            # branch status to display.  See ``GateResult.summary``.
             status = "PASS (tiny)"
             pct = "—"
+            bpct = "—"
         elif r.passed:
-            status = "PASS"
+            status = "PASS" if (r.branch_passed is not False) else "FAIL (branch)"
             pct = f"{r.actual_pct:.1f}%" if r.actual_pct is not None else "?"
+            bpct = f"{r.branch_actual_pct:.1f}%" if r.branch_actual_pct is not None else "—"
         else:
             status = "FAIL"
             pct = f"{r.actual_pct:.1f}%" if r.actual_pct is not None else "N/A"
+            bpct = f"{r.branch_actual_pct:.1f}%" if r.branch_actual_pct is not None else "—"
+        bthr = f"{r.branch_threshold}%" if r.branch_threshold else "—"
         summary_lines.append(
             f"| {r.language} | {status} | {pct} | {r.threshold}% "
+            f"| {bpct} | {bthr} "
             f"| {r.changed_lines} | {r.measured_lines} | {r.unmeasured_lines} |"
         )
 
     summary_lines.append("")
 
-    # Write to GITHUB_STEP_SUMMARY if available
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if step_summary:
         with Path(step_summary).open("a") as f:
             f.write("\n".join(summary_lines) + "\n")
 
-    # Also print to stdout
     print("\n".join(summary_lines))
 
-    # Emit ::error:: annotations for failures
     for r in results:
         if not r.skipped and not r.passed and not r.tiny_diff:
             msg = f"[{r.language}] Coverage gate failed: {r.summary()}"
+            print(f"::error::{msg}")
+        elif r.branch_passed is False:
+            msg = f"[{r.language}] Branch coverage gate failed: {r.summary()}"
             print(f"::error::{msg}")
 
 
@@ -1080,6 +1522,12 @@ def main() -> int:
         type=int,
         default=COVERAGE_THRESHOLD,
         help=f"Minimum coverage percentage for changed lines (default: {COVERAGE_THRESHOLD}).",
+    )
+    parser.add_argument(
+        "--branch-fail-under",
+        type=int,
+        default=BRANCH_COVERAGE_THRESHOLD,
+        help=f"Minimum branch coverage percentage for changed lines (default: {BRANCH_COVERAGE_THRESHOLD}).",
     )
     parser.add_argument(
         "--python-report",
@@ -1129,9 +1577,18 @@ def main() -> int:
 
     # Normalise the LCOV report so diff-cover can match its paths (see
     # _normalize_js_report).  The temp file, if any, is cleaned up below.
+    #
+    # Keep the ORIGINAL report path: the project-wide floor is computed after
+    # the finally block has unlinked the normalised temp copy, so it must read
+    # the raw report (which still exists) rather than ``js_report``.  In CI the
+    # vitest LCOV always uses relative ``SF:`` paths, so ``_normalize_js_report``
+    # always returns a temp file and ``js_report`` always points at the deleted
+    # copy — reading it would silently skip the JavaScript project-wide floor on
+    # every run.
+    raw_js_report = js_report
     normalised_js_report: Path | None = None
+    js_src_root = _sanitize_path(args.js_src_root, "js-src-root")
     if js_report is not None and js_report.exists():
-        js_src_root = _sanitize_path(args.js_src_root, "js-src-root")
         normalised = _normalize_js_report(js_report, js_src_root)
         if normalised is not None:
             normalised_js_report = normalised
@@ -1147,6 +1604,8 @@ def main() -> int:
                     args.compare_branch,
                     args.fail_under,
                     allow_missing=args.allow_missing_reports,
+                    branch_fail_under=args.branch_fail_under,
+                    js_src_root=js_src_root,
                 )
             )
     finally:
@@ -1154,26 +1613,83 @@ def main() -> int:
             with contextlib.suppress(OSError):
                 normalised_js_report.unlink()
 
+    # --- Branch coverage summary ---
+    any_branch_failed = any(r.branch_passed is False for r in results)
+
+    # --- Project-wide floor check (the ratchet) ---
+    project_floor_failed = False
+    project_metrics: list[str] = []
+    if python_report is not None and python_report.exists():
+        py_metrics = _compute_project_wide_metrics_cobertura(python_report)
+        if py_metrics is not None:
+            pl, pb = py_metrics
+            branch_display = f"{pb:.1f}%" if pb is not None else "n/a (no branch data)"
+            project_metrics.append(f"  Python project-wide: line {pl:.1f}%, branch {branch_display}")
+            if pl < MIN_PROJECT_LINE_COVERAGE:
+                project_floor_failed = True
+                project_metrics.append(
+                    f"  FAIL: Python line {pl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — coverage regressed below floor"
+                )
+            if pb is not None and pb < MIN_PROJECT_BRANCH_COVERAGE:
+                project_floor_failed = True
+                project_metrics.append(
+                    f"  FAIL: Python branch {pb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — coverage regressed below floor"
+                )
+    if raw_js_report is not None and raw_js_report.exists():
+        js_metrics = _compute_project_wide_metrics_lcov(raw_js_report)
+        if js_metrics is not None:
+            jl, jb = js_metrics
+            branch_display = f"{jb:.1f}%" if jb is not None else "n/a (no branch data)"
+            project_metrics.append(f"  JavaScript project-wide: line {jl:.1f}%, branch {branch_display}")
+            if jl < MIN_PROJECT_LINE_COVERAGE:
+                project_floor_failed = True
+                project_metrics.append(
+                    f"  FAIL: JavaScript line {jl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — coverage regressed below floor"
+                )
+            if jb is not None and jb < MIN_PROJECT_BRANCH_COVERAGE:
+                project_floor_failed = True
+                project_metrics.append(
+                    f"  FAIL: JavaScript branch {jb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — coverage regressed below floor"
+                )
+
     # --- Summary ---
     print("\n=== Coverage Gate Summary ===")
     for r in results:
         print(f"  {r.summary()}")
     print()
 
+    if project_metrics:
+        print("=== Project-wide Coverage Floor (ratchet) ===")
+        for line in project_metrics:
+            print(line)
+        print(
+            f"  Floors: MIN_PROJECT_LINE_COVERAGE={MIN_PROJECT_LINE_COVERAGE}%, "
+            f"MIN_PROJECT_BRANCH_COVERAGE={MIN_PROJECT_BRANCH_COVERAGE}%"
+        )
+        print("  Raise floors as coverage improves; never lower without justification.")
+        print()
+
     all_skipped = all(r.skipped for r in results)
-    any_failed = any(not r.skipped and not r.passed for r in results)
+    any_line_failed = any(not r.skipped and not r.passed for r in results)
 
     if all_skipped:
         print("No coverage data to check — gate passed (all languages skipped).")
         _write_summary(results)
         return 0
 
-    if any_failed:
-        print("FAILED: one or more languages did not meet the coverage threshold or are missing reports.")
+    if any_line_failed or any_branch_failed or project_floor_failed:
+        reasons = []
+        if any_line_failed:
+            reasons.append("line coverage threshold")
+        if any_branch_failed:
+            reasons.append("branch coverage threshold")
+        if project_floor_failed:
+            reasons.append("project-wide floor")
+        print(f"FAILED: one or more languages did not meet the {' and '.join(reasons)}.")
         _write_summary(results)
         return 1
 
-    print("PASSED: all languages met the coverage threshold.")
+    print("PASSED: all languages met the coverage thresholds.")
     _write_summary(results)
     return 0
 

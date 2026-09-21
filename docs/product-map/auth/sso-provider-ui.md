@@ -24,6 +24,7 @@ bdd:
   - backend/tests/bdd/features/auth/sso_oidc.feature
   - backend/tests/bdd/features/auth/sso_saml.feature
   - backend/tests/bdd/features/auth/sso_team_mapping.feature
+  - backend/tests/bdd/features/auth/sso_admin_crud.feature
 depends-on:
   - feat-core-oidc-integration
   - feat-core-saml-integration
@@ -71,12 +72,36 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
 - **Sidebar entry tier-gated but not SSO-skill-gated** — the nav entry hides for
   community (team tier required) but does not re-check the `sso` license key; the page
   renders a locked prompt via `FeatureGate show-disabled`.
-- **No BDD scenarios for admin provider CRUD** — BDD covers the auth flows only; admin CRUD
-  is unit-tested.
 - **Delete-provider confirmation does not warn about active SSO sessions** — the dialog
   states only "This action cannot be undone".
 
 ## QA History
+- 2026-09-21: **improve-architecture (product-map walk)** — closed the OIDC
+  multi-org real-DB (RLS) integration gap (manifest `feat-sso` deferral). New
+  `backend/tests/integration/auth/test_oidc_rls_resolution.py` mirrors the SAML
+  RLS regression for the per-provider OIDC surface: the system role resolves an
+  OIDC provider owned by a NON-first org, unknown slugs fail closed all-None
+  (never RuntimeError→500), the app fallback resolves first-org-only inside a
+  scoped transaction (FAR-1058 parity — `_resolve_oidc_provider` now opens its
+  own `session.begin()` when the caller has none, matching
+  `_resolve_saml_for_route`), an unbound app session sees zero OIDC providers,
+  and `GET /oidc/{provider}/login` 307s cross-org with the resolved provider's
+  client_id while an unknown slug is a 400 not a 500. Demoted the OIDC deferral
+  and added the behaviour lines to `frontend/src/manifest.yaml`.
+- 2026-09-21: **improve-architecture (product-map walk)** — closed the
+  "No BDD scenarios for admin provider CRUD" gap. Registered
+  `auth/sso_admin_crud.feature` into the executing BDD suite from the new
+  `steps/test_sso_admin_crud.py`, driving the real `/api/v1/admin/sso` routes
+  with only the DB CRUD, RLS and outbound-network seams patched — 16 scenarios:
+  200 provider list with type badges (O/S), 201 OIDC create (client secret never
+  echoed in the clear, computed callback URL) and SAML 2.0 create, the FAR-855
+  unrestricted-provisioning 422 while the flag is off and duplicate-name 409,
+  422 invalid provider type, 200 update / toggle (enabled=false), 400 empty
+  update body, 204 delete, 404 on a missing provider for update/delete, the
+  OIDC discovery-document and SAML metadata-XML connection tests
+  (`_test_oidc_connection` / `_test_saml_connection` parse for real, only the
+  pinned HTTP client patched), group-to-team mapping set/get, and the non-admin
+  403. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-17: **improve-architecture (product-map walk)** — registered the
   `SsoProviderForm.vue` provider-form surface in the manifest `elements:`
   inventory for `/settings/sso`: the form ships the tenant-domain input

@@ -36,9 +36,11 @@ def _run_gh(repo: str):
     """Invoke gh to count matching release-freeze refs. Returns (rc, stdout, stderr)."""
     proc = subprocess.run(
         [
-            "gh", "api",
+            "gh",
+            "api",
             f"repos/{repo}/git/matching-refs/tags/release-freeze",
-            "--jq", "length",
+            "--jq",
+            "length",
         ],
         capture_output=True,
         text=True,

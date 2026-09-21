@@ -5098,6 +5098,24 @@ features:
             - "[x] Parameter set values are validated against the parent schema's parameter definitions (POST /api/v1/parameter-schemas/{id}/validate)"
     feat-sso:
         description: Single sign-on (SSO)
+        status: covered
+        behaviours:
+            # SAML per-org (multi-org) — regression coverage in
+            # backend/tests/integration/auth/test_saml_per_org_regression.py
+            - "[x] SAML provider resolution is per-org under RLS: GET /saml/login/{provider_slug} and /saml/acs/{provider_slug} resolve the provider ONLY from the caller's org's enabled provider rows (system-session lookup scoped by the RLS org context) — org A's IdP configuration is invisible to org B and a slug owned by another org resolves 404"
+            - "[x] Per-provider SP metadata (GET /saml/metadata/{provider_slug}) emits each org's own SP Entity ID (urn:modulo:sp:{org_short}) and a provider-specific ACS URL (/saml/acs/{provider_slug}); the instance-wide legacy route emits the first enabled provider's entity ID with the unsegmented legacy ACS"
+            - "[x] Cross-org assertion reuse fails closed: a response minted for org A's entity ID, replayed to org B's ACS, is rejected (401 SAML response validation failed) — python3-saml audience/destination/recipient checks plus the explicit audience-containment enforcement (FAR-1010)"
+            - "[x] The per-provider login redirect embeds an HMAC-signed RelayState token bound to the provider slug; a replay of the same signed response with a RelayState minted for another org is rejected (401, 'does not match')"
+            - "[x] IdP-initiated SSO (no RelayState) is accepted on the per-provider ACS — absence is tolerated, only a PRESENT-and-mismatched RelayState is fatal"
+            - "[x] Legacy single-tenant parity: /saml/login and /saml/acs (unsegmented) keep working against the first enabled provider; the legacy RelayState is python3-saml's self-derived SP self URL rather than a signed per-provider token"
+            # OIDC per-org (multi-org) — regression coverage in
+            # backend/tests/integration/auth/test_oidc_rls_resolution.py
+            - "[x] Per-provider OIDC resolution mirrors the SAML two-leg RLS contract (FAR-1001 parity): the system role (BYPASSRLS) resolves an OIDC provider owned by ANY org (a second-created org's slug resolves even though a first-org-bound app session can never see the row); the app fallback (smart NOBYPASSRLS, first-org scoped) resolves only the first org's provider and returns all-None for a sibling org's slug (fail-closed)"
+            - "[x] The OIDC app fallback runs inside a scoped transaction (FAR-1058 parity — set_rls_org requires an active transaction, autobegin=False session factories otherwise raised RuntimeError → 500): a provider read on a transaction-less app session resolves in its own begin() and leaves the caller's session transaction-less; the login/callback routes (always wrapped in session.begin()) read in place"
+            - "[x] An unbound pre-auth app session sees ZERO OIDC providers; an unknown OIDC slug fails closed all-None at the resolver and 400 (not 500) on GET /oidc/{provider}/login; GET /oidc/{provider}/login for a cross-org provider 307-redirects to the IdP authorization endpoint with the resolved provider's client_id + callback redirect_uri"
+        deferrals:
+            - IdP-initiated SSO and ACS paths are exercised with the XML-signature step mocked (xmlsec cannot sign/verify round-trip on this Windows host); a Linux CI job with a real signed response would close the gap
+            - SAML single logout (SLO) and SCIM deprovisioning are not implemented yet
     feat-system-config:
         description: System-level configuration administration
     feat-system-orgs:

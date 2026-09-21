@@ -389,9 +389,6 @@ __all__ = [
     #     node_runner._sandbox_agent_impl; vulture cannot see prod call sites) ---
     "AUDIT_NODE_ID",
     "WorkspaceInputAuditRecord",
-    "record_resolved_inputs",
-    "record_drift",
-    "redact_url",
     # --- FAR-801 compensating sweep (wired into dispatcher_reconcile;
     #     vulture cannot see the lazy-import call site) ---
     "_sweep_workspace_input_drift_flags",
@@ -410,4 +407,8 @@ __all__ = [
     # --- FAR-902 schema enforcement observability (public API; callers wired in node_runner) ---
     "build_enforcement_record",  # per-attempt enforcement record builder (D2)
     "aggregate_run_enforcement",  # run-level aggregation (D4)
+    # --- FAR-1060 eval/policy-gate module (unwired chunk 1;
+    #     production callers wired in chunk 3) ---
+    "resolve_policy_gate",  # policy gate resolution (unwired until chunk 3)
+    "validate_binding",  # policy gate binding validation (unwired until chunk 3)
 ]

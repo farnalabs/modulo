@@ -212,6 +212,18 @@ def _parse_uuid(value: Any) -> uuid.UUID | None:
         return None
 
 
+def profile_denies_egress(profile: Any) -> bool:
+    """Whether an environment profile's ``network_policy`` denies egress.
+
+    Single-sourced profile→egress semantics (FAR-1065): both the Bundled
+    Runner workspace route (:func:`_workspace_spec_for_dispatch`) and the E2B
+    node route (``node_runner._sandbox_agent_impl``) derive their egress
+    decision from this, so the ``network_policy`` vocabulary, the ``outbound``
+    default, and the ``none`` → deny mapping live in exactly one place.
+    """
+    return (getattr(profile, "network_policy", None) or "outbound").strip().lower() == "none"
+
+
 def _workspace_spec_for_dispatch(
     profile: Any,
     *,
@@ -237,6 +249,29 @@ def _workspace_spec_for_dispatch(
         "modulo.node.id": node_id,
     }
     egress = (getattr(profile, "network_policy", None) or "outbound").strip().lower()
+    # FAR-1064: Docker / Bundled Runner tier cannot enforce per-host egress
+    # allowlists (no NET_ADMIN in the hardened workspace).  Refuse early
+    # rather than silently granting full outbound — the operator must switch
+    # to 'outbound' or 'none', or use a tier that supports host allowlists.
+    if egress == "selected":
+        # Lazy import: node_runner imports this module lazily too, so a
+        # module-level import here would close the cycle.
+        from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
+
+        profile_label = (
+            getattr(profile, "name", None)
+            or getattr(profile, "id", None)
+            or getattr(profile, "provider_type", None)
+            or "unknown"
+        )
+        raise SandboxTierRefusedError(
+            f"Environment profile '{profile_label}' has "
+            "network_policy='selected' (egress allowlist), but the Docker / "
+            "Bundled Runner tier cannot enforce per-host egress allowlists — "
+            "Docker lacks the host-filtering mechanism required. Use "
+            "network_policy='outbound' (full egress) or network_policy='none' "
+            "(no egress), or switch to a tier that supports host allowlists."
+        )
     # Defense-in-depth (FAR-1020): validate workspace_network at dispatch
     # even if the CRUD boundary already validated it — a value written
     # directly to the DB could bypass the route validation.
@@ -250,7 +285,7 @@ def _workspace_spec_for_dispatch(
         capabilities=getattr(profile, "capabilities_json", None) or [],
         timeout_seconds=int(cfg.get("timeout_seconds", 3600)),
         resource_limits={"memory_mb": int(cfg.get("memory_mb", 1024))},
-        egress_policy="none" if egress == "none" else "outbound",
+        egress_policy="none" if profile_denies_egress(profile) else "outbound",
         persistence_policy=getattr(profile, "persistence_policy", "ephemeral"),
         labels={},
         workspace_metadata={key: value for key, value in metadata.items() if value},

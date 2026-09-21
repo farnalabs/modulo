@@ -122,14 +122,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Flood protection rejects when at max concurrent runs",
         }
     ),
-    "tests/bdd/features/variants/variant_groups.feature": frozenset(
-        {
-            "Sequential execution order matches insertion order",
-            "Variant comparison returns eval scores per node and token cost",
-            "Eval coverage gap is detected when variants diverge but evals match",
-            "Comparison shows token cost breakdown per variant",
-        }
-    ),
     "tests/bdd/features/workflows/import.feature": frozenset(
         {
             "Import valid pipeline bundle",
@@ -204,14 +196,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
         {
             "Run detail exposes the active-run observability fields",
             "Run event stream exposes node lifecycle events",
-        }
-    ),
-    "tests/bdd/features/model_backends/health_check.feature": frozenset(
-        {
-            "Health check respects org scoping",
-            "Healthy model backend returns ok",
-            "Stub backend always returns healthy",
-            "Unhealthy model backend returns error",
         }
     ),
     "tests/bdd/features/pipelines/concurrency.feature": frozenset(

@@ -91,3 +91,121 @@ Feature: Cost Controls
     Given I am authenticated as a viewer in org "acme"
     When I GET /api/v1/admin/costs
     Then the response status is 403
+
+  # ── Hard spend ceilings (FAR-391, dedicated /ceiling surface) ──────────────
+
+  Scenario: Admin reads the org spend ceiling and remaining budget
+    Given org "acme" has cost ceilings with max_run_cost $5.00 and spend_ceiling $100.00
+    And org "acme" has consumed $25.00 of its ceiling
+    When I GET /api/v1/admin/costs/ceiling
+    Then the response status is 200
+    And the response contains spend_ceiling of 100.0
+    And the response contains max_run_cost of 5.0
+    And the response contains remaining_budget_usd of 75.0
+
+  Scenario: Admin sets a fresh org spend ceiling
+    When I PUT /api/v1/admin/costs/ceiling with spend_ceiling $100.00
+    Then the response status is 200
+    And the response contains spend_ceiling of 100.0
+    And the response ceiling was stored as 10000 cents
+
+  Scenario: Explicit null clears one ceiling and preserves the other
+    Given org "acme" has cost ceilings with max_run_cost $5.00 and spend_ceiling $100.00
+    When I PUT /api/v1/admin/costs/ceiling with spend_ceiling null
+    Then the response status is 200
+    And the response contains max_run_cost of 5.0
+    And the response spend_ceiling is null
+
+  Scenario: A negative ceiling value is rejected
+    When I PUT /api/v1/admin/costs/ceiling with an invalid negative ceiling
+    Then the response status is 422
+
+  # ── Ceiling enforcement at run finalize (hard stop, never billed beyond) ───
+
+  Scenario: Run above the org ceiling is refused and halts
+    Given org "acme" has a spend ceiling of $1.00 and has consumed it all
+    When a run with cost $2.00 is finalized
+    Then the run terminalizes as "cost_ceiling_exceeded"
+    And the refusal reason is "org_spend_ceiling_exceeded"
+    And the org cumulative spend is not incremented
+
+  Scenario: Run above the per-run ceiling is refused
+    Given org "acme" has a per-run ceiling of $1.00
+    When a run with cost $2.00 is finalized
+    Then the run terminalizes as "cost_ceiling_exceeded"
+    And the refusal reason is "run_cost_ceiling_exceeded"
+
+  Scenario: Run within ceilings increments the org cumulative spend
+    Given org "acme" has cost ceilings with max_run_cost $5.00 and spend_ceiling $100.00
+    And org "acme" has consumed $5.00 of its ceiling
+    When a run with cost $3.00 is finalized
+    Then the run ledger is accepted
+    And the org cumulative spend is incremented by $3.00
+
+  # ── Scheduled cost reports (/reports) ──────────────────────────────────────
+
+  Scenario: Admin creates a scheduled cost report
+    When I POST /api/v1/admin/costs/reports with a weekly team CSV report
+    Then the response status is 201
+    And the response contains report id and period "weekly"
+
+  Scenario: Scheduled report requires at least one recipient
+    When I POST /api/v1/admin/costs/reports without recipients
+    Then the response status is 422
+
+  Scenario: Admin lists scheduled cost reports
+    Given org "acme" has a scheduled weekly report
+    When I GET /api/v1/admin/costs/reports
+    Then the response status is 200
+    And the response contains one scheduled report
+
+  Scenario: Admin deletes a scheduled cost report
+    Given org "acme" has a scheduled weekly report with id "30000000-0000-0000-0000-000000000001"
+    When I DELETE /api/v1/admin/costs/reports/30000000-0000-0000-0000-000000000001
+    Then the response status is 204
+
+  Scenario: Deleting a missing scheduled report is 404
+    When I DELETE /api/v1/admin/costs/reports/30000000-0000-0000-0000-000000000099
+    Then the response status is 404
+
+  # ── Spend anomaly detection (/anomalies) ───────────────────────────────────
+
+  Scenario: A spend spike is surfaced as a dismissible anomaly
+    Given org "acme" has a detected spend anomaly of $5.00 against a $1.00 baseline
+    When I GET /api/v1/admin/costs/anomalies
+    Then the response status is 200
+    And the response contains one fresh anomaly
+    And the anomaly carries a persisted id
+    When I dismiss the reported anomaly
+    Then the response status is 204
+
+  Scenario: Dismissing a missing anomaly is 404
+    When I POST /api/v1/admin/costs/anomalies/dismiss/40000000-0000-0000-0000-000000000099
+    Then the response status is 404
+
+  # ── Cost components (/api/v1/admin/costs/components) ───────────────────────
+
+  Scenario: Admin creates a cost component
+    When I POST /api/v1/admin/costs/components with a reportable self_reported component
+    Then the response status is 201
+    And the response contains component name "reported_cost"
+
+  Scenario: Duplicate cost component names are rejected
+    Given a cost component named "llm_tokens" already exists
+    When I POST /api/v1/admin/costs/components named "llm_tokens"
+    Then the response status is 409
+
+  Scenario: A self_reported component cannot carry a formula
+    When I POST /api/v1/admin/costs/components with a self_reported component that has a formula
+    Then the response status is 422
+
+  Scenario: Admin lists cost components
+    Given org "acme" has cost components configured
+    When I GET /api/v1/admin/costs/components
+    Then the response status is 200
+    And the response contains the configured components
+
+  Scenario: Admin deletes a cost component
+    Given a cost component with id "50000000-0000-0000-0000-000000000001"
+    When I DELETE /api/v1/admin/costs/components/50000000-0000-0000-0000-000000000001
+    Then the response status is 204

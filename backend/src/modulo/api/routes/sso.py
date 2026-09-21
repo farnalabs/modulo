@@ -19,6 +19,7 @@ from modulo.api.dependencies import (
     resolve_anonymous_plan_context,
 )
 from modulo.auth.sso import (
+    _read_system_saml_provider_by_slug,
     _set_default_rls_org,
     oidc_get_authorize_url,
     oidc_process_callback,
@@ -34,6 +35,7 @@ from modulo.db.crud.sso_provider import (
     get_provider_by_provider_id,
     list_enabled_oidc_providers,
 )
+from modulo.db.models.sso_provider import SsoProvider
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -315,24 +317,47 @@ async def oidc_callback(
 
 async def _resolve_saml_for_route(
     provider_id: str,
-    system_session: AsyncSession,
+    system_session: AsyncSession | None,
     app_session: AsyncSession,
-) -> None:
+) -> SsoProvider:
     """Resolve a SAML provider by slug for per-provider routes.
 
-    Uses the system session (BYPASSRLS) first, then the app session with
-    ``_set_default_rls_org`` fallback (mirrors OIDC). Raises a uniform 404
-    for unknown / disabled / non-SAML slugs (ADR 036 anti-enumeration).
+    Two-leg resolution (FAR-1001 / FAR-1058), fail-closed:
+    1. System session (``modulo_system``, BYPASSRLS) — instance-global slug
+       read; resolves a provider owned by ANY org.
+    2. Fallback (system role unprovisioned, or slug not visible there): the
+       app session (``modulo_app``, NOBYPASSRLS) scoped to the first org via
+       ``_set_default_rls_org`` (single-org self-hosted behaviour).
+
+    FAR-1058 fix: the app fallback previously called ``_set_default_rls_org``
+    OUTSIDE any transaction on the app session — ``set_rls_org`` requires an
+    active transaction, so every request reaching the fallback (an
+    unknown/disabled slug in system-provisioned deployments; every slug in
+    fallback deployments) raised ``RuntimeError`` → HTTP 500 instead of the
+    uniform 404, breaking the ADR 036 anti-enumeration contract. The fallback
+    read now runs inside a transaction: its own scoped one when the caller's
+    app session has none (``set_config(..., is_local=true)`` reverts at
+    commit, so the binding cannot leak into the caller's later transaction);
+    in-place when the caller already opened one (the metadata route keeps its
+    outer ``session.begin()``).
+
+    Raises a uniform 404 for unknown / disabled / non-SAML slugs.
+    Returns the resolved (enabled, SAML) provider row.
     """
-    provider = None
-    if system_session is not None:
-        async with system_session.begin():
-            provider = await get_provider_by_provider_id(system_session, provider_id)
+    provider = await _read_system_saml_provider_by_slug(system_session, provider_id)
     if provider is None:
-        await _set_default_rls_org(app_session)
-        provider = await get_provider_by_provider_id(app_session, provider_id)
+        if app_session.in_transaction():
+            # Caller (e.g. the metadata route) already opened a transaction —
+            # read in place so we never nest ``session.begin()``.
+            await _set_default_rls_org(app_session)
+            provider = await get_provider_by_provider_id(app_session, provider_id)
+        else:
+            async with app_session.begin():
+                await _set_default_rls_org(app_session)
+                provider = await get_provider_by_provider_id(app_session, provider_id)
     if provider is None or provider.provider_type != "saml" or not provider.enabled:
         raise _SAML_NOT_FOUND
+    return provider
 
 
 async def _saml_login_redirect(
@@ -505,16 +530,11 @@ async def saml_metadata_provider(
     """Per-provider SP metadata — Entity ID and ACS Location are scoped to this provider."""
     try:
         async with session.begin():
-            # Resolve provider globally (system session first, then app fallback).
-            provider = None
-            if system_session is not None:
-                async with system_session.begin():
-                    provider = await get_provider_by_provider_id(system_session, provider_id)
-            if provider is None:
-                await _set_default_rls_org(session)
-                provider = await get_provider_by_provider_id(session, provider_id)
-            if provider is None or provider.provider_type != "saml" or not provider.enabled:
-                raise _SAML_NOT_FOUND
+            # Resolve provider globally (system session first, then app
+            # fallback) — same two-leg resolution as the ACS/login routes
+            # (FAR-1058: single shared helper; the app fallback runs inside
+            # this outer transaction, so the RLS binding has a live tx).
+            provider = await _resolve_saml_for_route(provider_id, system_session, session)
 
             entity_id = provider.entity_id or f"{settings.modulo_public_url.rstrip('/')}/api/v1/auth/saml/{provider_id}"
             public_url = settings.modulo_public_url.rstrip("/")

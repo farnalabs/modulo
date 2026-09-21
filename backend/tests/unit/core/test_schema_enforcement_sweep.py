@@ -32,7 +32,7 @@ _MIGRATION_PATH = (
     / "db"
     / "migrations"
     / "versions"
-    / "0250_schema_enforcement_telemetry.py"
+    / "0251_schema_enforcement_telemetry.py"
 )
 
 # The sweep module source.

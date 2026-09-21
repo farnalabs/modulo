@@ -7,6 +7,7 @@ code:
   - backend/src/modulo/auth/sso.py
 unit-tests:
   - backend/tests/unit/auth/test_oidc_verify.py
+  - backend/tests/integration/auth/test_oidc_rls_resolution.py
 bdd:
   - backend/tests/bdd/features/auth/sso_oidc.feature
   - backend/tests/bdd/steps/test_sso_oidc.py
@@ -39,6 +40,17 @@ the SSO callback flow (`feat-sso`).
   workers; a rotated key set resolves within one TTL per worker.
 
 ## QA History
+
+- 2026-09-21: **improve-architecture (product-map walk)** — added
+  `backend/tests/integration/auth/test_oidc_rls_resolution.py` (real-Postgres
+  multi-org RLS regression for the per-provider OIDC surface, closing the
+  `feat-sso` deferral). Proves the system leg resolves an OIDC provider owned by
+  a non-first org via the real `modulo_system` role, unknown slugs fail closed
+  all-None (never RuntimeError→500), the app fallback resolves only the first
+  org's provider inside a scoped transaction (FAR-1058 parity — the resolver now
+  opens its own `session.begin()` when the caller has none), an unbound app
+  session sees zero OIDC providers, and `GET /oidc/{provider}/login`
+  307-redirects cross-org while an unknown slug is a 400 not a 500.
 
 - 2026-08-25: **improve-architecture (product-map walk)** — entry added to close the
   dangling `depends-on: feat-core-oidc-integration` edge in `auth/sso-provider-ui.md`.

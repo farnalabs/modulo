@@ -17,8 +17,8 @@ aggregate counter updates (``dispatcher_reconcile`` 60s path).
 
 Downgrade: drops the column, CHECK constraint, and partial index.
 
-Revision ID: 0250_schema_enforcement_telemetry
-Revises: 0249_validation_level
+Revision ID: 0251_schema_enforcement_telemetry
+Revises: 0250_eval_policy_gate
 Create Date: 2026-09-20
 """
 
@@ -26,8 +26,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0250_schema_enforcement_telemetry"
-down_revision = "0249_validation_level"
+revision = "0251_schema_enforcement_telemetry"
+down_revision = "0250_eval_policy_gate"
 branch_labels = None
 depends_on = None
 

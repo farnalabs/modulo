@@ -1,4 +1,4 @@
-"""FAR-902: structural unit tests for migration 0250_schema_enforcement_telemetry.
+"""FAR-902: structural unit tests for migration 0251_schema_enforcement_telemetry.
 
 These run WITHOUT a database. They pin the migration's contract: the column
 shape (schema_enforcement_json on run_node_outputs), the CHECK constraint,
@@ -13,7 +13,7 @@ from pathlib import Path
 from types import ModuleType
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0250_schema_enforcement_telemetry"
+_MIGRATION_NAME = "0251_schema_enforcement_telemetry"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 
@@ -28,10 +28,10 @@ def _load_migration() -> ModuleType:
 
 
 def test_revision_chain_position() -> None:
-    """The migration extends the current head (0249_validation_level)."""
+    """The migration extends the current head (0250_eval_policy_gate)."""
     module = _load_migration()
-    assert module.revision == "0250_schema_enforcement_telemetry"
-    assert module.down_revision == "0249_validation_level"
+    assert module.revision == "0251_schema_enforcement_telemetry"
+    assert module.down_revision == "0250_eval_policy_gate"
     assert module.branch_labels is None
     assert module.depends_on is None
 

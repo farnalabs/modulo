@@ -686,3 +686,455 @@ describe('useUiCommandExecutor command surface', () => {
     expect(results[0].success).toBe(true)
   })
 })
+
+// ---- Branch coverage: unknown action speed fallback ----
+describe('useUiCommandExecutor — unknown action speed', () => {
+  class AutoGrantChannel {
+    name: string
+    listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(type: string, handler: EventListener) { if (type === 'message') this.listeners.push(handler as (e: MessageEvent) => void) }
+    removeEventListener(type: string, handler: EventListener) { if (type === 'message') this.listeners = this.listeners.filter(l => l !== handler) }
+    postMessage(msg: unknown) {
+      const data = msg as { type?: string; msgId?: string }
+      if (data.type === 'lock-request') {
+        for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: data.msgId, granted: true, holder: null } } as MessageEvent)
+      }
+    }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('falls back to 600ms delay for an unknown speed', async () => {
+    setActionSpeed('turbo' as unknown as string)
+    const p = executeCommandBatch([{ id: '1', name: 'get_url', args: {} }])
+    await vi.advanceTimersByTimeAsync(1000)
+    const results = await p
+    expect(results[0].success).toBe(true)
+  })
+})
+
+// ---- Branch coverage: spotlight without target (dismiss) ----
+describe('useUiCommandExecutor — spotlight dismiss', () => {
+  class AutoGrantChannel {
+    name: string; listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners.push(h as (e: MessageEvent) => void) }
+    removeEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners = this.listeners.filter(l => l !== h) }
+    postMessage(msg: unknown) { const d = msg as { type?: string; msgId?: string }; if (d.type === 'lock-request') for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: d.msgId, granted: true, holder: null } } as MessageEvent) }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+    ;(spotlight.dismiss as unknown as Mock).mockClear()
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('dismisses spotlight when no target is provided', async () => {
+    const results = await executeCommandBatch([{ id: '1', name: 'spotlight', args: {} }])
+    expect(results[0].success).toBe(true)
+    expect(spotlight.dismiss).toHaveBeenCalled()
+  })
+})
+
+// ---- Branch coverage: executeWithTimeout already-aborted signal ----
+describe('useUiCommandExecutor — already-aborted signal', () => {
+  class AutoGrantChannel {
+    name: string; listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners.push(h as (e: MessageEvent) => void) }
+    removeEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners = this.listeners.filter(l => l !== h) }
+    postMessage(msg: unknown) { const d = msg as { type?: string; msgId?: string }; if (d.type === 'lock-request') for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: d.msgId, granted: true, holder: null } } as MessageEvent) }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('returns cancelled_by_user when the signal is already aborted', async () => {
+    pauseUiCommands()
+    const p = executeCommandBatch([
+      { id: '1', name: 'get_url', args: {} },
+      { id: '2', name: 'get_url', args: {} },
+    ])
+    await vi.advanceTimersByTimeAsync(100)
+    abortUiCommands()
+    const results = await p
+    expect(results.every(r => r.error === 'cancelled_by_user')).toBe(true)
+  })
+})
+
+// ---- Branch coverage: waitForVisible already visible ----
+describe('useUiCommandExecutor — waitForVisible fast path', () => {
+  class AutoGrantChannel {
+    name: string; listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners.push(h as (e: MessageEvent) => void) }
+    removeEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners = this.listeners.filter(l => l !== h) }
+    postMessage(msg: unknown) { const d = msg as { type?: string; msgId?: string }; if (d.type === 'lock-request') for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: d.msgId, granted: true, holder: null } } as MessageEvent) }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('skips the wait loop when the document is already visible', async () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+    const results = await executeCommandBatch([{ id: '1', name: 'get_url', args: {} }])
+    expect(results[0].success).toBe(true)
+    delete (document as unknown as Record<string, unknown>).visibilityState
+  })
+})
+
+// ---- Branch coverage: waitForResume already not paused ----
+describe('useUiCommandExecutor — waitForResume fast path', () => {
+  class AutoGrantChannel {
+    name: string; listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners.push(h as (e: MessageEvent) => void) }
+    removeEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners = this.listeners.filter(l => l !== h) }
+    postMessage(msg: unknown) { const d = msg as { type?: string; msgId?: string }; if (d.type === 'lock-request') for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: d.msgId, granted: true, holder: null } } as MessageEvent) }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('skips the wait when not paused', async () => {
+    const results = await executeCommandBatch([{ id: '1', name: 'get_url', args: {} }])
+    expect(results[0].success).toBe(true)
+  })
+})
+
+// ---- Branch coverage: executeWithRetry navigate success on first try ----
+describe('useUiCommandExecutor — navigate success no retry', () => {
+  class AutoGrantChannel {
+    name: string; listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners.push(h as (e: MessageEvent) => void) }
+    removeEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners = this.listeners.filter(l => l !== h) }
+    postMessage(msg: unknown) { const d = msg as { type?: string; msgId?: string }; if (d.type === 'lock-request') for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: d.msgId, granted: true, holder: null } } as MessageEvent) }
+  }
+
+  const routerPush = router.push as unknown as Mock
+
+  async function runBatch(
+    commands: Array<{ id: string; name: string; args: Record<string, unknown> }>,
+  ): Promise<Array<{ id: string; name: string; success: boolean; error?: string; result?: Record<string, unknown> }>> {
+    const p = executeCommandBatch(commands)
+    await vi.advanceTimersByTimeAsync(2000)
+    return p
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+    routerPush.mockReset()
+    routerPush.mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('does not retry navigate when the first push succeeds', async () => {
+    const results = await runBatch([{ id: '1', name: 'navigate', args: { path: '/dashboard' } }])
+    expect(routerPush).toHaveBeenCalledTimes(1)
+    expect(results[0].success).toBe(true)
+  })
+})
+
+// ---- Branch coverage: buildSelector with testid and id ----
+describe('useUiCommandExecutor — buildSelector branches', () => {
+  class AutoGrantChannel {
+    name: string; listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners.push(h as (e: MessageEvent) => void) }
+    removeEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners = this.listeners.filter(l => l !== h) }
+    postMessage(msg: unknown) { const d = msg as { type?: string; msgId?: string }; if (d.type === 'lock-request') for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: d.msgId, granted: true, holder: null } } as MessageEvent) }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('builds a selector from an id attribute', async () => {
+    const el = document.createElement('button')
+    el.id = 'my-btn'
+    el.textContent = 'Click'
+    Object.defineProperty(el, 'offsetWidth', { value: 20 })
+    document.body.appendChild(el)
+
+    const results = await executeCommandBatch([{ id: '1', name: 'get_page_interactables', args: {} }])
+    const items = results[0].result?.items as Array<Record<string, unknown>>
+    const btn = items.find(i => i.id === 'my-btn')
+    expect(btn?.selector).toBe('#my-btn')
+  })
+
+  it('returns null for a button with no testid, id, or text', async () => {
+    const el = document.createElement('button')
+    Object.defineProperty(el, 'offsetWidth', { value: 20 })
+    document.body.appendChild(el)
+
+    const results = await executeCommandBatch([{ id: '1', name: 'get_page_interactables', args: {} }])
+    const items = results[0].result?.items as Array<Record<string, unknown>>
+    // Empty buttons are excluded (no text content)
+    expect(items).toHaveLength(0)
+  })
+})
+
+// ---- Branch coverage: fillElement combobox with global input fallback ----
+describe('useUiCommandExecutor — fillElement combobox branches', () => {
+  class AutoGrantChannel {
+    name: string; listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners.push(h as (e: MessageEvent) => void) }
+    removeEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners = this.listeners.filter(l => l !== h) }
+    postMessage(msg: unknown) { const d = msg as { type?: string; msgId?: string }; if (d.type === 'lock-request') for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: d.msgId, granted: true, holder: null } } as MessageEvent) }
+  }
+
+  async function runBatch(
+    commands: Array<{ id: string; name: string; args: Record<string, unknown> }>,
+  ): Promise<Array<{ id: string; name: string; success: boolean; error?: string; result?: Record<string, unknown> }>> {
+    const p = executeCommandBatch(commands)
+    await vi.advanceTimersByTimeAsync(2000)
+    return p
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('fill falls back to global command input when trigger has no child input', async () => {
+    const trigger = document.createElement('div')
+    trigger.setAttribute('role', 'combobox')
+    trigger.dataset.testid = 'cb-fallback'
+    document.body.appendChild(trigger)
+
+    const other = document.createElement('div')
+    other.setAttribute('role', 'combobox')
+    const input = document.createElement('input')
+    other.appendChild(input)
+    document.body.appendChild(other)
+
+    const results = await runBatch([
+      { id: '1', name: 'fill', args: { selector: 'cb-fallback', value: 'test' } },
+    ])
+    expect(results[0].success).toBe(true)
+    expect(input.value).toBe('test')
+  })
+})
+
+// ---- Branch coverage: waitForDomStable scope fallback ----
+describe('useUiCommandExecutor — waitForDomStable scope fallback', () => {
+  class AutoGrantChannel {
+    name: string; listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners.push(h as (e: MessageEvent) => void) }
+    removeEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners = this.listeners.filter(l => l !== h) }
+    postMessage(msg: unknown) { const d = msg as { type?: string; msgId?: string }; if (d.type === 'lock-request') for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: d.msgId, granted: true, holder: null } } as MessageEvent) }
+  }
+
+  async function runBatch(
+    commands: Array<{ id: string; name: string; args: Record<string, unknown> }>,
+  ): Promise<Array<{ id: string; name: string; success: boolean; error?: string; result?: Record<string, unknown> }>> {
+    const p = executeCommandBatch(commands)
+    await vi.advanceTimersByTimeAsync(2000)
+    return p
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('uses document.body as scope when no main or role=main exists', async () => {
+    document.querySelectorAll('main, [role="main"]').forEach(el => el.remove())
+    const results = await runBatch([{ id: '1', name: 'navigate', args: { path: '/test' } }])
+    expect(results[0].success).toBe(true)
+  })
+})
+
+// ---- Branch coverage: getPageInteractables hidden elements ----
+describe('useUiCommandExecutor — getPageInteractables hidden skip', () => {
+  class AutoGrantChannel {
+    name: string; listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners.push(h as (e: MessageEvent) => void) }
+    removeEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners = this.listeners.filter(l => l !== h) }
+    postMessage(msg: unknown) { const d = msg as { type?: string; msgId?: string }; if (d.type === 'lock-request') for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: d.msgId, granted: true, holder: null } } as MessageEvent) }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('skips hidden elements in get_page_interactables', async () => {
+    const hidden = document.createElement('button')
+    hidden.dataset.testid = 'hidden-btn'
+    hidden.textContent = 'Hidden'
+    Object.defineProperty(hidden, 'offsetWidth', { value: 0 })
+    Object.defineProperty(hidden, 'offsetHeight', { value: 0 })
+    Object.defineProperty(hidden, 'offsetParent', { value: null })
+    document.body.appendChild(hidden)
+
+    const visible = document.createElement('button')
+    visible.dataset.testid = 'visible-btn'
+    visible.textContent = 'Visible'
+    Object.defineProperty(visible, 'offsetWidth', { value: 20 })
+    document.body.appendChild(visible)
+
+    const results = await executeCommandBatch([{ id: '1', name: 'get_page_interactables', args: {} }])
+    const items = results[0].result?.items as Array<Record<string, unknown>>
+    expect(items.some(i => i.testid === 'hidden-btn')).toBe(false)
+    expect(items.some(i => i.testid === 'visible-btn')).toBe(true)
+  })
+})
+
+// ---- Branch coverage: select combobox with listbox parent ----
+describe('useUiCommandExecutor — select with listbox parent', () => {
+  class AutoGrantChannel {
+    name: string; listeners: Array<(e: MessageEvent) => void>
+    constructor(name: string) { this.name = name; this.listeners = [] }
+    addEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners.push(h as (e: MessageEvent) => void) }
+    removeEventListener(t: string, h: EventListener) { if (t === 'message') this.listeners = this.listeners.filter(l => l !== h) }
+    postMessage(msg: unknown) { const d = msg as { type?: string; msgId?: string }; if (d.type === 'lock-request') for (const h of [...this.listeners]) h({ data: { type: 'lock-response', msgId: d.msgId, granted: true, holder: null } } as MessageEvent) }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('BroadcastChannel', AutoGrantChannel)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16))
+    abortUiCommands()
+    setActionSpeed('lightning')
+  })
+
+  afterEach(() => {
+    abortUiCommands()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('select resolves option from a listbox parent (non-combobox)', async () => {
+    const trigger = document.createElement('div')
+    trigger.dataset.testid = 'listbox-trigger'
+    const listbox = document.createElement('div')
+    listbox.setAttribute('role', 'listbox')
+    const option = document.createElement('span')
+    option.dataset.value = 'opt-a'
+    listbox.appendChild(option)
+    document.body.appendChild(trigger)
+    document.body.appendChild(listbox)
+
+    const results = await executeCommandBatch([
+      { id: '1', name: 'select', args: { selector: 'listbox-trigger', value: 'opt-a' } },
+    ])
+    expect(results[0].success).toBe(true)
+  })
+})

@@ -11,8 +11,8 @@ per-node enforcement records on ``run_node_outputs``:
 All nullable — runs without schema enforcement have NULLs.  No data backfill
 (existing rows stay NULL).
 
-Revision ID: 0251_runs_enforcement_mode_outcome
-Revises: 0250b_enforcement_daily_facts
+Revision ID: 0253_runs_enforcement_mode_outcome
+Revises: 0252_enforcement_daily_facts
 Create Date: 2026-09-20
 """
 
@@ -20,8 +20,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect
 
-revision = "0251_runs_enforcement_mode_outcome"
-down_revision = "0250b_enforcement_daily_facts"
+revision = "0253_runs_enforcement_mode_outcome"
+down_revision = "0252_enforcement_daily_facts"
 branch_labels = None
 depends_on = None
 

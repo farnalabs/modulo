@@ -392,6 +392,94 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `Content-Disposition: attachment`), the concurrency slot-utilisation series
 > and the advisory-only guardrail scorecard. `_ORPHANED_BDD_FEATURES` stays
 > empty.
+>
+> **Closed this walk (2026-09-20):** closed `feat-lifecycle-maps`'s "No BDD for
+> lifecycle map journey detail view" gap (`pipelines/lifecycle-maps.md`).
+> Registered the new `lifecycle_maps/journeys.feature` into the executing BDD
+> suite (steps in `steps/test_lifecycle_maps.py`), driving the real
+> `/journeys`, `/journeys/{kind}/{ref}` and `/journeys/self-report` routes with
+> only the DB seam functions patched: journey detail returns the current stage +
+> run history shape, unknown journey → 404, keyset-paginated journey list with
+> `next_cursor` + `ref`-filter pass-through, and the advisory self-report
+> accepted/unmatched/rejected counters with the real
+> `validate_and_normalise_reported_refs` (a malformed entry is counted, never a
+> whole-request 422) plus a matched journey advanced with `status="complete"`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-20):** closed `feat-variants`'s "BDD scenarios
+> tagged `@awaiting-implementation`" gap (`improve/variants.md`). The
+> sequential-order scenario now drives the REAL `run_variant_batch` seam (runs
+> created in variant insertion order under one `batch_id`) and the eval-coverage
+> draft was re-anchored to the REAL `get_coverage_gaps` seam; the two per-node
+> eval-score / per-token breakdown comparison drafts were removed — they assert
+> a wire shape the product does not ship (`get_batch_compare`'s per-run
+> `eval_pass_rate` / `eval_count` / `total_tokens` / `total_cost_usd` +
+> frozen-snapshot override-diff contract is already locked by the batch-scope
+> comparison scenarios). No `@awaiting-implementation` scenarios remain.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-20):** closed `feat-model-backends`'s
+> "no standalone model-backend health endpoint exists" `@awaiting-implementation`
+> gap (`configure/model-backends.md`). The four `model_backends/health_check.feature`
+> scenarios now drive the REAL `POST /api/v1/model-backends/{id}/health-check`
+> route (PRD 8.1 re-check: decrypt stored credential, re-ping provider, persist
+> and clear a sticky `last_health_check_error`) with only the DB lookup seam
+> (`get_model_backend`), the secret-decryption seam
+> (`decode_stored_secret_scoped`) and the post-commit persist seam
+> (`_run_health_check_on_save_and_persist`) patched: healthy → `healthy`,
+> invalid API key → `unhealthy` + auth-failure detail, other-org caller →
+> 404 before any check, and the deterministic stub provider → `healthy`.
+> Removed the four scenarios from `PINNED_AWAITING_IMPLEMENTATION`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-21):** closed `feat-sso`'s "OIDC SSO flows
+> (per-org OIDC, per-provider discovery) are covered by unit tests only;
+> equivalent multi-org real-DB (RLS) integration regression not yet written"
+> deferral (`auth/sso-provider-ui.md`). Registered the new
+> `backend/tests/integration/auth/test_oidc_rls_resolution.py` (mirroring
+> `test_saml_rls_resolution.py`), driving the REAL `modulo.auth.sso`
+> `_resolve_oidc_provider` seam and the REAL `GET /oidc/{provider}/login` route
+> through the real `modulo_system` (BYPASSRLS) / `modulo_app` (NOBYPASSRLS)
+> roles — the system leg resolves an OIDC provider owned by a NON-first org,
+> unknown slugs fail closed all-None (never RuntimeError→500), the app fallback
+> resolves first-org-only inside a scoped transaction, an unbound app session
+> sees zero OIDC providers, and a cross-org provider slug 307s to the IdP while
+> an unknown slug is a 400 not a 500. Fixed the latent FAR-1058-class defect the
+> regression exposes: `_resolve_oidc_provider` now opens its own
+> `session.begin()` for the app fallback when the caller has no active
+> transaction (previously it called `_set_default_rls_org` outside any
+> transaction, matching the SAML bug FAR-1058 fixed — a provider read on a
+> transaction-less autobegin=False app session raised `RuntimeError` → 500).
+> Demoted the deferral and added the behaviour lines to
+> `frontend/src/manifest.yaml` `feat-sso`. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-20):** closed `feat-connectors`'s "No BDD for
+> connector CRUD lifecycle (create/update/delete via admin API)" gap
+> (`configure/connectors.md`). Registered the new
+> `connectors/connector_crud.feature` into the executing BDD suite from the new
+> `steps/test_connector_crud.py`, driving the real `/api/v1/connectors`
+> create / get / list / PATCH / delete routes with only the DB CRUD + RLS
+> seams patched (the TestClient + mock-org-session pattern of the
+> `test_connector_endpoint.py` unit suite): 9 scenarios — 201 create with
+> credentials Fernet-encrypted at rest and never echoed, 422 malformed REST
+> credentials / invalid REST `on_unknown` config at the boundary, 200
+> individual + paginated retrieval (redacted), PATCH re-encrypting fresh
+> credentials, 204 DELETE, and the org-isolation 404 on a foreign-org
+> fetch/delete. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-21):** closed `feat-sso`'s "No BDD scenarios
+> for admin provider CRUD" gap (`auth/sso-provider-ui.md`). Registered the new
+> `auth/sso_admin_crud.feature` into the executing BDD suite from the new
+> `steps/test_sso_admin_crud.py`, driving the real `/api/v1/admin/sso`
+> provider CRUD routes with only the DB CRUD, RLS and outbound-network seams
+> patched (the TestClient + mock-org-session pattern of the conftest): 16
+> scenarios — 200 provider list with type badges, 201 OIDC create (client
+> secret never echoed, computed callback URL) and SAML 2.0 create, the FAR-855
+> unrestricted-provisioning 422 while the flag is off, duplicate-name 409,
+> 422 invalid provider type, 200 update / toggle, 400 empty update body,
+> 204 delete, 404 on a missing provider, the OIDC discovery-document and
+> SAML metadata-XML connection tests, group-to-team mapping set/get, and the
+> non-admin 403. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
