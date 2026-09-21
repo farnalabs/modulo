@@ -49,6 +49,7 @@ jobs:
           SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           MODULO_CSRF_ENABLED: "false"
+          INPUT_TARGET_URL: ${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}
         run: |
           uv sync --frozen
           cat > /tmp/gen_openapi.py <<'EOF'
@@ -60,7 +61,7 @@ jobs:
           print("OPENAPI_DUMPED")
           EOF
           uv run --no-build --no-sync python /tmp/gen_openapi.py
-          TARGET="${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}"
+          TARGET="$INPUT_TARGET_URL"
           mkdir -p "$GITHUB_WORKSPACE/zap-report"
           # Ephemeral CI dir mounted read-write into the ZAP container, which runs
           # as a fixed uid (1000). Ownership is interleaved, not world-writable:

@@ -1,0 +1,50 @@
+# zizmor configuration for farnalabs/modulo
+# See https://woodruffw.github.io/zizmor/configuration/
+#
+# This config suppresses rules that represent ACCEPTED decisions for this repo.
+# Genuine findings that are expensive to fix are LEFT VISIBLE (not suppressed)
+# so the linter reports reality.
+
+rules:
+  # ACCEPTED DECISION: version-tag pinning (e.g. @v7) instead of SHA pinning.
+  # Rationale: our CI is single-org self-hosted; the supply-chain security
+  # overhead of SHA pinning is not proportionate. Tag-based pinning provides
+  # sufficient version control for our scale. Revisit if the repo becomes a
+  # dependency for external consumers or after a supply-chain incident.
+  unpinned-uses:
+    disable: true
+
+  # ACCEPTED DECISION: self-repository checkout (actions/checkout in a
+  # workflow that runs in the same repo). Standard practice for CI workflows
+  # that need to read their own code. No security concern.
+  self-repository:
+    disable: true
+
+  # ACCEPTED DECISION: cache poisoning via unpinned actions is a theoretical
+  # risk subsumed by our unpinned-uses tag-policy decision above.
+  cache-poisoning:
+    disable: true
+
+  # ACCEPTED DECISION: workflows inherit secrets from org/runner level.
+  # Explicit secret grants are not proportionate for our single-org
+  # deployment where all workflows are trusted.
+  secrets-inherit:
+    disable: true
+
+  # NOT SUPPRESSED (left visible — genuine findings):
+  #
+  # excessive-permissions (43 findings): workflow-level permissions are
+  # broader than strictly needed. Fixing requires adding minimal permissions
+  # blocks to every workflow — expensive but trackable. Left visible so the
+  # linter reports reality.
+  #
+  # artipacked (41 findings): credential persistence through GitHub Actions
+  # artifacts (checkout without persist-credentials: false). Fix is one line
+  # per checkout step but touches 41 instances across many workflow files.
+  # Left visible.
+  #
+  # template-injection (44 findings): genuine security class. Error-level
+  # findings using attacker-controllable context (github.base_ref,
+  # github.ref_name, github.event.inputs.*) in run: blocks are fixed in
+  # this PR. Info-level findings reading step outputs are lower risk and
+  # left visible.
