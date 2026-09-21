@@ -1082,3 +1082,41 @@ class TestStreamExportFacts:
         )
         with patch.object(svc, "_rate_limited", return_value=False), pytest.raises(asyncio.CancelledError):
             await agen.__anext__()
+
+    async def test_team_scoped_scan_outerjoins_pipeline(self) -> None:
+        """A team-scoped scan must outerjoin Pipeline so the effective owner
+        resolves for NULL-stamped facts (#1795) — the same join the paginated
+        export adds. An empty membership tuple still scopes (fail closed)."""
+        rows = [self._full_row()]
+        session = _ScanSession([rows])
+        with (
+            patch.object(svc, "_rate_limited", return_value=False),
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+        ):
+            agen = svc.stream_export_facts(
+                org_id=_ORG,
+                params=svc.AnalyticsParams(),
+                factory=_factory(session),
+                settings=_settings(),
+                team_ids=(),
+            )
+            out = [item async for item in agen]
+        assert len(out) == 1
+        assert "JOIN" in str(session.executed[-1]).upper(), "a scoped scan must join the pipeline owner"
+
+    async def test_scan_skips_set_config_preamble_on_non_postgres(self) -> None:
+        """The timezone/statement-timeout preamble is Postgres-only — a
+        conformance dialect (SQLite/MariaDB) must go straight to the page read."""
+        rows = [self._full_row()]
+        session = _ScanSession([rows], dialect="sqlite")
+        with (
+            patch.object(svc, "_rate_limited", return_value=False),
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+        ):
+            agen = svc.stream_export_facts(
+                org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
+            )
+            out = [item async for item in agen]
+        assert len(out) == 1
+        non_prelude = [s for s in session.executed if not (isinstance(s, type(text("x"))) and "set_config" in str(s))]
+        assert len(non_prelude) == 1, "only the data page executes on a non-Postgres dialect"
