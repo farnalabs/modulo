@@ -1206,6 +1206,9 @@ class TestOtelMetricsHelpers:
         ):
             ep._ensure_metrics()
 
+            assert ep._eval_result_persist_failures_total is None
+            assert ep._eval_suite_incomplete_total is None
+
     def test_ensure_metrics_creates_both_counters_when_absent(self) -> None:
         from modulo.core.pipeline_engine import eval_persist_order as ep
 
@@ -1260,17 +1263,27 @@ class TestOtelMetricsHelpers:
     def test_record_persist_failure_skips_when_counter_absent(self) -> None:
         from modulo.core.pipeline_engine import eval_persist_order as ep
 
+        logger = MagicMock()
         with (
             patch.object(ep, "_ensure_metrics"),
             patch.object(ep, "_eval_result_persist_failures_total", None),
+            patch.object(ep, "_log", logger),
         ):
             ep._record_persist_failure(failure_behaviour="warn")
+
+        logger.warning.assert_not_called()
 
     def test_record_persist_failure_swallows_metrics_error(self) -> None:
         from modulo.core.pipeline_engine import eval_persist_order as ep
 
-        with patch.object(ep, "_ensure_metrics", side_effect=RuntimeError("metrics down")):
+        logger = MagicMock()
+        with (
+            patch.object(ep, "_ensure_metrics", side_effect=RuntimeError("metrics down")),
+            patch.object(ep, "_log", logger),
+        ):
             ep._record_persist_failure(failure_behaviour="block")
+
+        logger.warning.assert_called_once()
 
     def test_record_suite_incomplete_increments_counter(self) -> None:
         from modulo.core.pipeline_engine import eval_persist_order as ep
@@ -1287,17 +1300,27 @@ class TestOtelMetricsHelpers:
     def test_record_suite_incomplete_skips_when_counter_absent(self) -> None:
         from modulo.core.pipeline_engine import eval_persist_order as ep
 
+        logger = MagicMock()
         with (
             patch.object(ep, "_ensure_metrics"),
             patch.object(ep, "_eval_suite_incomplete_total", None),
+            patch.object(ep, "_log", logger),
         ):
             ep._record_suite_incomplete(reason="incomplete_suite_set")
+
+        logger.warning.assert_not_called()
 
     def test_record_suite_incomplete_swallows_metrics_error(self) -> None:
         from modulo.core.pipeline_engine import eval_persist_order as ep
 
-        with patch.object(ep, "_ensure_metrics", side_effect=RuntimeError("metrics down")):
+        logger = MagicMock()
+        with (
+            patch.object(ep, "_ensure_metrics", side_effect=RuntimeError("metrics down")),
+            patch.object(ep, "_log", logger),
+        ):
             ep._record_suite_incomplete(reason="incomplete_suite_set")
+
+        logger.warning.assert_called_once()
 
     async def test_cancelled_error_propagates_from_persist(self) -> None:
         """A CancelledError during persistence is re-raised, not swallowed."""
