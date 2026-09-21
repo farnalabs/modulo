@@ -614,7 +614,9 @@ jobs:
         # (fail-closed) and blocks the merge. Fetch the base ref explicitly so the
         # comparison target resolves. Works for both pull_request (base_ref set) and
         # workflow_dispatch (falls back to main).
-      run: git fetch origin "${{ github.base_ref || 'main' }}:refs/remotes/origin/${{ github.base_ref || 'main' }}"
+      env:
+        BASE_REF: ${{ github.base_ref || 'main' }}
+      run: git fetch origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
     - name: Download backend coverage report
       uses: actions/download-artifact@v4
       with:
@@ -627,6 +629,8 @@ jobs:
         path: frontend/coverage
     - name: Run changed-lines coverage gate
       working-directory: backend
+      env:
+        BASE_REF: ${{ github.base_ref || 'main' }}
       run: |
         # Provision an isolated venv with ONLY the gate's dependency
         # (diff-cover) using `--no-build`, so no third-party setup scripts
@@ -641,7 +645,7 @@ jobs:
         # next to this interpreter. The script validates its CLI args before
         # any subprocess.
         .venv/bin/python ../scripts/run_coverage_gate.py \
-          --compare-branch "origin/${{ github.base_ref || 'main' }}" \
+          --compare-branch "origin/$BASE_REF" \
           --python-report coverage.xml \
           --js-report ../frontend/coverage/lcov.info
 
@@ -771,9 +775,11 @@ jobs:
       if: github.event_name == 'pull_request'
       working-directory: backend
       shell: bash
+      env:
+        BASE_REF: ${{ github.base_ref }}
       run: |
         MIG_DIR="src/modulo/db/migrations/versions"
-        BASE="origin/${{ github.base_ref }}"
+        BASE="origin/$BASE_REF"
 
         # Migration files changed by this PR vs its merge-base.
         CHANGED=$(git diff --name-only "${BASE}...HEAD" -- "${MIG_DIR}/" || true)

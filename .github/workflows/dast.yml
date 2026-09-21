@@ -39,9 +39,12 @@ jobs:
     - name: Run OWASP ZAP scan
       id: zap
       shell: bash
+      env:
+        INPUT_TARGET_URL: ${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}
+        INPUT_SCAN_TYPE: ${{ github.event.inputs.scan_type || 'baseline' }}
       run: |
-        TARGET="${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}"
-        SCAN_TYPE="${{ github.event.inputs.scan_type || 'baseline' }}"
+        TARGET="$INPUT_TARGET_URL"
+        SCAN_TYPE="$INPUT_SCAN_TYPE"
         mkdir -p zap-report
         # The zaproxy container runs as uid 1000 (the zap user). Grant write
         # access ONLY to that uid (S2612: no world-writable dirs) - ZAP still
