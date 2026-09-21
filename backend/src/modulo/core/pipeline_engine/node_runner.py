@@ -7187,7 +7187,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     #  - none -> the historical E2B default route, unchanged.
     if session_factory is not None:
         from modulo.core.bundled_runner.runner_dispatch import (
-            profile_denies_egress,
             resolve_sandbox_dispatch_route,
             validate_e2b_dispatch_timeout,
         )
@@ -7208,14 +7207,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             )
         if _route.provider_type == "e2b":
             validate_e2b_dispatch_timeout(sandbox_timeout)
-            # FAR-1065: when the node-level egress_policy is unset, consult
-            # the environment profile's network_policy and map "none" → deny_all.
-            # A profile network_policy="none" must mean deny-all regardless of
-            # route — the node-level value always wins when explicitly set. The
-            # profile→egress semantics are single-sourced in
-            # runner_dispatch.profile_denies_egress.
-            if egress_policy is None and _route.profile is not None and profile_denies_egress(_route.profile):
-                egress_policy = "deny_all"
 
     run_context: dict[str, Any] = state.get("run_context") or {}
     raw_input: Any = run_context.get("input", {})
@@ -7709,15 +7700,15 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         if resource_limits:
             _metadata["resource_limits"] = json.dumps(resource_limits)
         # FAR-1085: use canonical egress resolution instead of ad-hoc mapping.
-        # The E2B route uses node-level egress values (the profile's
-        # network_policy is not loaded in this path; the node config is
-        # the authoritative source here).
+        # The E2B route threads the profile's network_policy so the canonical
+        # resolver can apply the node→profile→provider-default precedence chain.
         from modulo.core.pipeline_engine.egress import resolve_egress
 
+        _profile_net_policy = getattr(_route.profile, "network_policy", None) if _route.profile is not None else None
         _egress_resolved = resolve_egress(
             node_egress_policy=egress_policy,
             node_egress_allowlist=egress_allowlist,
-            profile_network_policy=None,  # E2B path: profile not loaded; node config is authoritative
+            profile_network_policy=_profile_net_policy,
             tier="e2b",
         )
         if _egress_resolved.refusal is not None:
