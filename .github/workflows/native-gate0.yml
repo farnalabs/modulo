@@ -89,20 +89,25 @@ jobs:
           echo "paths filter mirror OK"
 
       - name: Warm uv cache (the ONLY networked dependency step)
-        run: |
-          set -euo pipefail
-          cd backend
-          # Deliberately no actions/setup-uv cache restore: a warm cache from
-          # a previous run could mask a no-wheel regression.
-          uv sync --frozen --group dev --quiet  #NOSONAR pytest-bdd is a pinned source-archive dep that requires a build; --frozen locks the exact revision so the build is deterministic and trusted (no untrusted setup scripts execute)
-          echo "cache warmed (uvlock-resolved, wheels only)"
+        working-directory: backend
+        # Deliberately no actions/setup-uv cache restore: a warm cache from
+        # a previous run could mask a no-wheel regression.
+        #
+        # NOSONAR githubactions:S8541: pytest-bdd is a pinned source-archive
+        # dep (no wheel), so `--no-build` hard-fails the sync on a cold uv
+        # cache. `--frozen` locks the exact revision, so the build is
+        # deterministic and trusted (no untrusted setup scripts execute).
+        # Keep this a single-line `run:` with the marker on the command itself:
+        # inside a multi-line block scalar the GitHub Actions analyzer raises
+        # S8541 on the embedded command line and does not honour the marker.
+        run: uv sync --frozen --group dev --quiet  # NOSONAR
 
       - name: Offline resolution proof (uv --offline, zero egress)
-        run: |
-          set -euo pipefail
-          cd backend
-          uv sync --frozen --group dev --offline --quiet  #NOSONAR pytest-bdd is a pinned source-archive dep that requires a build; --frozen locks the exact revision so the build is deterministic and trusted (no untrusted setup scripts execute)
-          echo "offline uv sync OK: the locked dependency set is fully wheel-resolvable"
+        working-directory: backend
+        # NOSONAR githubactions:S8541: same rationale as the warm-cache step
+        # above - pytest-bdd is a source-archive dep whose build `--no-build`
+        # forbids; `--frozen` plus `--offline` pin trusted revisions.
+        run: uv sync --frozen --group dev --offline --quiet  # NOSONAR
 
       - name: Boot-import proof in min-glibc container, --network none
         run: |
