@@ -505,7 +505,7 @@ jobs:
             --arg conflictPrs "$CONFLICTS" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             '{repository: $repo, phase: $phase, conflictPrs: $conflictPrs, runUrl: $run_url}')
-          # Retry with exponential backoff on transient 429/5xx (max 5 attempts).
+          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
           # TIMESTAMP and HMAC are recomputed per attempt: the server enforces a
           # +/-300s replay window on X-Modulo-Timestamp.
           DISPATCHED="false"
@@ -525,18 +525,18 @@ jobs:
               echo "Fixer notified of conflicts in PRs: $CONFLICTS"
               DISPATCHED="true"
               break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
               DELAY=$((2 ** (i - 1) * 5))
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
             else
-              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown")
+              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: ${DETAIL}"
               break
             fi
           done
           if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown")
+            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
             echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-conflict notification was not delivered."
             exit 1
           fi
@@ -644,7 +644,7 @@ jobs:
             --arg collisionPrs "$collision_prs" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             '{repository: $repo, phase: $phase, collisionPrs: $collisionPrs, runUrl: $run_url}')
-          # Retry with exponential backoff on transient 429/5xx (max 5 attempts).
+          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
           DISPATCHED="false"
           LAST_HTTP=""
           for i in 1 2 3 4 5; do
@@ -662,18 +662,18 @@ jobs:
               echo "Fixer notified of migration collisions in PRs: $collision_prs"
               DISPATCHED="true"
               break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
               DELAY=$((2 ** (i - 1) * 5))
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
             else
-              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown")
+              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: ${DETAIL}"
               break
             fi
           done
           if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown")
+            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
             echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — migration-collision notification was not delivered."
             exit 1
           fi
@@ -1476,7 +1476,7 @@ jobs:
             --arg failure_description "$FAILURE_DESC" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             '{repository: $repo, phase: $phase, branchName: $branchName, mergedPrs: $merged_prs, conflictPrs: $conflict_prs, failureDescription: $failure_description, runUrl: $run_url}')
-          # Retry with exponential backoff on transient 429/5xx (max 5 attempts).
+          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
           DISPATCHED="false"
           LAST_HTTP=""
           for i in 1 2 3 4 5; do
@@ -1494,18 +1494,18 @@ jobs:
               echo "Fixer notified of CI failure"
               DISPATCHED="true"
               break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
               DELAY=$((2 ** (i - 1) * 5))
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
             else
-              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown")
+              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: ${DETAIL}"
               break
             fi
           done
           if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown")
+            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
             echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-queue CI-failure notification was not delivered."
             exit 1
           fi

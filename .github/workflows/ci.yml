@@ -913,7 +913,7 @@ jobs:
             '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription}')
           echo "PR #${PR_NUM} on branch '${BRANCH}' -- CI checks failed."
           echo "Sending to Modulo Branch Fixer pipeline..."
-          # Retry with exponential backoff on transient 429/5xx (max 5
+          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5
           # attempts, ~5 min total). TIMESTAMP and HMAC are recomputed per
           # attempt: the server enforces a +/-300s replay window on
           # X-Modulo-Timestamp, so a signature computed once would fall
@@ -943,7 +943,7 @@ jobs:
               fi
               DISPATCHED="true"
               break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
               DELAY=$((2 ** (i - 1) * 5))
               echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
@@ -953,7 +953,7 @@ jobs:
             fi
           done
           if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown")
+            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
             echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — CI failure was not handed to the autonomous fix loop."
             gh pr comment "$PR_NUM" --body "## Branch Fixer Dispatch Failed
 
@@ -1012,7 +1012,7 @@ jobs:
             --arg failureDescription "CI checks failed on main at ${{ github.sha }}. The Branch Fixer should create a fix branch from main, diagnose the failure, fix it, and raise a PR." \
             '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription}')
           echo "CI checks failed on main (${{ github.sha }}) -- dispatching Branch Fixer."
-          # Retry with exponential backoff on transient 429/5xx (max 5
+          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5
           # attempts, ~5 min total). TIMESTAMP and HMAC are recomputed per
           # attempt: the server enforces a +/-300s replay window on
           # X-Modulo-Timestamp, so a signature computed once would fall
@@ -1039,7 +1039,7 @@ jobs:
               fi
               DISPATCHED="true"
               break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
               DELAY=$((2 ** (i - 1) * 5))
               echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
               sleep "$DELAY"
@@ -1049,7 +1049,7 @@ jobs:
             fi
           done
           if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown")
+            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
             echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — main CI failure was not handed to the autonomous fix loop."
             exit 1
           fi
@@ -1117,7 +1117,7 @@ jobs:
             --arg ref "${BRANCH}" \
             '{action: "check_run", repository: {full_name: $repo}, pull_request: {number: $prNumber, head: {sha: $sha, ref: $ref}}}')
 
-          # Retry with exponential backoff on 429/5xx (max 5 attempts, ~5 min total)
+          # Retry with exponential backoff on network failures (curl HTTP 000) and 429/5xx (max 5 attempts, ~5 min total)
           # TIMESTAMP and HMAC are recomputed PER ATTEMPT: the server enforces a
           # +/-300s replay window on X-Modulo-Timestamp, so a signature computed
           # once (before a slow attempt) would fall outside the window after a
@@ -1140,7 +1140,7 @@ jobs:
               echo "PR Reviewer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
               DISPATCHED="true"
               break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
               DELAY=$((2 ** (i - 1) * 5))
               echo "::warning::PR Reviewer returned HTTP $HTTP_CODE (attempt $i/5) retrying in ${DELAY}s"
               sleep "$DELAY"
@@ -1150,7 +1150,7 @@ jobs:
             fi
           done
           if [ "$DISPATCHED" != "true" ]; then
-            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown")
+            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
             echo "::error::PR Reviewer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — PR review was not triggered."
             exit 1
           fi

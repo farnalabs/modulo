@@ -179,7 +179,7 @@ jobs:
               --arg repo "farnalabs/modulo" \
               '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
 
-            # Retry with exponential backoff on 429/5xx (max 5 attempts).
+            # Retry with exponential backoff on network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
             # TIMESTAMP and HMAC are recomputed per attempt: the server
             # enforces a +/-300s replay window on X-Modulo-Timestamp.
             DISPATCH_OK=false
@@ -200,7 +200,7 @@ jobs:
                 DISPATCH_OK=true
                 DISPATCHED=$((DISPATCHED + 1))
                 break
-              elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
                 DELAY=$((2 ** (attempt - 1) * 5))
                 echo "::warning::Branch Fixer returned HTTP $HTTP_CODE for PR #$PR_NUM (attempt $attempt/5) — retrying in ${DELAY}s"
                 sleep "$DELAY"
@@ -211,7 +211,7 @@ jobs:
             done
 
             if [ "$DISPATCH_OK" = "false" ]; then
-              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown")
+              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
               echo "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: ${DETAIL}) after retries."
               FAILED=$((FAILED + 1))
             fi
