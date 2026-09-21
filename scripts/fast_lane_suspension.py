@@ -19,6 +19,7 @@ Usage (pure-logic helpers — no network calls)::
 
 Exit codes:
     0  — success
+    1  — no suspension marker found
     2  — usage / argument error
 """
 
@@ -161,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     severity = parse_suspension_marker(args.comment_body)
     if severity is None:
         print("No suspension marker found.")
-        return 0
+        return 1
 
     expiry = compute_expiry()
     reason = build_reason(args.pr_number, severity) if args.pr_number else ""

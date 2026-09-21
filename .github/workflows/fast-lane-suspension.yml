@@ -85,7 +85,7 @@ jobs:
           # would otherwise break out of the shell/Python quoting — arbitrary
           # command execution in the runner, or a silent SyntaxError that
           # drops the marker.  COMMENT_BODY is already set above.
-          RESULT=$(uv run --no-build --project backend python -c "
+          RESULT=$(uv run --no-build --project backend --no-sync python -c "
           import json, os, sys
           sys.path.insert(0, 'scripts')
           from fast_lane_suspension import parse_suspension_marker, compute_expiry, build_reason
