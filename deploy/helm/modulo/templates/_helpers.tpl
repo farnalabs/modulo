@@ -94,11 +94,16 @@ Otherwise falls back to backend.env.DATABASE_URL.
 
 {{/*
 Construct REDIS_URL from Redis config.
-When redis.host is set, builds the URL from individual fields.
+When redis.embedded is true, points at the chart's own Redis Service
+({{ include "modulo.fullname" . }}-redis on port 6379).
+When redis.host is set (external mode), builds the URL from individual fields.
 Otherwise falls back to backend.env.REDIS_URL.
 */}}
 {{- define "modulo.redisUrl" -}}
-{{- if .Values.redis.host }}
+{{- if .Values.redis.embedded }}
+{{- $db := .Values.redis.db | int }}
+{{- printf "redis://%s-redis:6379/%d" (include "modulo.fullname" .) $db }}
+{{- else if .Values.redis.host }}
 {{- $host := .Values.redis.host }}
 {{- $port := .Values.redis.port | int }}
 {{- $db := .Values.redis.db | int }}
