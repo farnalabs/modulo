@@ -200,6 +200,26 @@ class TriggerBusyError(RuntimeError):
         self.trigger_id = trigger_id
 
 
+class EventNotAcceptedError(RuntimeError):
+    """Raised when the delivery payload does not satisfy the trigger's event acceptance config.
+
+    Covers both the ``accepted_events`` presence check (none of the configured
+    event-type keys found in the payload) and the ``event_filters`` value check
+    (a dotted-path value outside the allowlist). The audit ``TriggerEvent`` is
+    written *before* this is raised so the rejection is always visible in the
+    event log.
+
+    Maps to **HTTP 400 Bad Request** at the webhook and replay route boundaries:
+    the sender's payload does not match what the trigger accepts — a client/shape
+    problem, not a server fault.
+    """
+
+    def __init__(self, trigger_id: uuid.UUID, *, reason: str) -> None:
+        super().__init__(f"Trigger {trigger_id}: {reason}")
+        self.trigger_id = trigger_id
+        self.reason = reason
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -1177,8 +1197,8 @@ class TriggerEngine:
         """Enforce the accepted-events and value-filter gates; reject on mismatch.
 
         Records an ``event_type_not_accepted`` TriggerEvent and raises
-        ``RuntimeError`` when the payload does not satisfy the trigger's event
-        acceptance config. *log_prefix* / *payload_subject* adapt the log and
+        ``EventNotAcceptedError`` when the payload does not satisfy the trigger's
+        event acceptance config. *log_prefix* / *payload_subject* adapt the log and
         error wording between webhook and replay delivery; *use_dot_notation*
         preserves the historical accepted-events lookup (top-level ``.get`` for
         webhooks vs dotted-path ``_extract_field`` for replays).
@@ -1207,9 +1227,12 @@ class TriggerEngine:
                     payload_hash=payload_hash,
                     result="event_type_not_accepted",
                 )
-                raise RuntimeError(
-                    f"Trigger {delivery.trigger.id}: none of the accepted event types {accepted_events} "
-                    f"found in {payload_subject} payload (keys: {list(delivery.raw_payload.keys())})"
+                raise EventNotAcceptedError(
+                    delivery.trigger.id,
+                    reason=(
+                        f"none of the accepted event types {accepted_events} "
+                        f"found in {payload_subject} payload (keys: {list(delivery.raw_payload.keys())})"
+                    ),
                 )
 
         event_filters = cfg.get("event_filters")
@@ -1228,9 +1251,12 @@ class TriggerEngine:
                 payload_hash=payload_hash,
                 result="event_type_not_accepted",
             )
-            raise RuntimeError(
-                f"Trigger {delivery.trigger.id}: event value filters {event_filters} "
-                f"not satisfied by {payload_subject} payload (keys: {list(delivery.raw_payload.keys())})"
+            raise EventNotAcceptedError(
+                delivery.trigger.id,
+                reason=(
+                    f"event value filters {event_filters} "
+                    f"not satisfied by {payload_subject} payload (keys: {list(delivery.raw_payload.keys())})"
+                ),
             )
 
     async def _run_pre_trigger_guardrail(

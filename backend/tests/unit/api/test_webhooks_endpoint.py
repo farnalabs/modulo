@@ -1027,3 +1027,33 @@ def test_receive_webhook_invalid_config_json_returns_400(client: TestClient) -> 
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Trigger configuration is invalid"
+
+
+def test_receive_webhook_event_not_accepted_returns_400(client: TestClient) -> None:
+    """A delivery rejected by accepted_events or event_filters returns 400, not 500.
+
+    The engine writes an ``event_type_not_accepted`` TriggerEvent *before*
+    raising; the transaction rolls it back (documented pre-existing limitation),
+    but the HTTP response must be a typed 4xx so the sender knows the payload
+    doesn't match the trigger's acceptance config — not a generic 500.
+    """
+    from modulo.core.trigger_engine import EventNotAcceptedError
+
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.side_effect = EventNotAcceptedError(
+            _TRIGGER_ID,
+            reason="none of the accepted event types ['pull_request'] found in webhook payload (keys: ['action'])",
+        )
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"action": "opened"},
+            headers={"X-Modulo-Timestamp": "1700000000"},
+        )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert "none of the accepted event types" in body["detail"]
+    assert "pull_request" in body["detail"]

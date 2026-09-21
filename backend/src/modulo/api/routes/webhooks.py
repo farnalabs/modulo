@@ -53,6 +53,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     CiFailureCoalescedError,
     ConcurrentRunLimitError,
     DuplicateWebhookError,
+    EventNotAcceptedError,
     HmacValidationError,
     PipelineBackpressureError,
     PipelineRateLimitError,
@@ -381,6 +382,11 @@ async def receive_webhook(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Duplicate webhook payload",
+        ) from exc
+    except EventNotAcceptedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
         ) from exc
     except ConcurrentRunLimitError as exc:
         raise HTTPException(
@@ -747,6 +753,11 @@ async def replay_webhook(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Duplicate webhook payload",
+        ) from exc
+    except EventNotAcceptedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
         ) from exc
     except ConcurrentRunLimitError as exc:
         raise HTTPException(

@@ -547,3 +547,28 @@ def test_replay_webhook_authenticated_invalid_config_json_returns_400(client: Te
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Trigger configuration is invalid"
+
+
+def test_replay_webhook_event_not_accepted_returns_400(client: TestClient) -> None:
+    """A replayed delivery rejected by accepted_events or event_filters returns
+    400, not 500 — same contract as the webhook receive path."""
+    from modulo.core.trigger_engine import EventNotAcceptedError
+
+    event_id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
+    ):
+        m.side_effect = EventNotAcceptedError(
+            _TRIGGER_ID,
+            reason="event value filters {'review.state': ['approved']} not satisfied by replayed webhook payload",
+        )
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_auth_headers("admin"),
+        )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert "event value filters" in body["detail"]
