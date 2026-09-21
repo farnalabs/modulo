@@ -5049,8 +5049,12 @@ features:
             - "[x] The per-provider login redirect embeds an HMAC-signed RelayState token bound to the provider slug; a replay of the same signed response with a RelayState minted for another org is rejected (401, 'does not match')"
             - "[x] IdP-initiated SSO (no RelayState) is accepted on the per-provider ACS — absence is tolerated, only a PRESENT-and-mismatched RelayState is fatal"
             - "[x] Legacy single-tenant parity: /saml/login and /saml/acs (unsegmented) keep working against the first enabled provider; the legacy RelayState is python3-saml's self-derived SP self URL rather than a signed per-provider token"
+            # OIDC per-org (multi-org) — regression coverage in
+            # backend/tests/integration/auth/test_oidc_rls_resolution.py
+            - "[x] Per-provider OIDC resolution mirrors the SAML two-leg RLS contract (FAR-1001 parity): the system role (BYPASSRLS) resolves an OIDC provider owned by ANY org (a second-created org's slug resolves even though a first-org-bound app session can never see the row); the app fallback (smart NOBYPASSRLS, first-org scoped) resolves only the first org's provider and returns all-None for a sibling org's slug (fail-closed)"
+            - "[x] The OIDC app fallback runs inside a scoped transaction (FAR-1058 parity — set_rls_org requires an active transaction, autobegin=False session factories otherwise raised RuntimeError → 500): a provider read on a transaction-less app session resolves in its own begin() and leaves the caller's session transaction-less; the login/callback routes (always wrapped in session.begin()) read in place"
+            - "[x] An unbound pre-auth app session sees ZERO OIDC providers; an unknown OIDC slug fails closed all-None at the resolver and 400 (not 500) on GET /oidc/{provider}/login; GET /oidc/{provider}/login for a cross-org provider 307-redirects to the IdP authorization endpoint with the resolved provider's client_id + callback redirect_uri"
         deferrals:
-            - OIDC SSO flows (per-org OIDC, per-provider discovery) are covered by unit tests only; equivalent multi-org real-DB (RLS) integration regression not yet written
             - IdP-initiated SSO and ACS paths are exercised with the XML-signature step mocked (xmlsec cannot sign/verify round-trip on this Windows host); a Linux CI job with a real signed response would close the gap
             - SAML single logout (SLO) and SCIM deprovisioning are not implemented yet
     feat-system-config:
