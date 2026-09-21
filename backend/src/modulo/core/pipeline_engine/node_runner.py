@@ -4358,21 +4358,35 @@ async def _run_gate_evals(
     """
     if not eval_definitions:
         return {}
-    # All gate evals are scoped to the same source node — resolve the
-    # eval target once using the first definition's node_id.
-    first_node_id = eval_definitions[0].node_id
-    eval_target = _resolve_gate_eval_target(state, first_node_id, node_type_map)
     _run_id = state.get("_run_id")
-    if _run_id is None:
-        _run_id = uuid.uuid4()
+
+    def _resolve_eval_target_for_gate(eval_def: EvalDefinition) -> Any:
+        """Per-eval target resolution (Defect 4 fix)."""
+        return _resolve_gate_eval_target(state, eval_def.node_id, node_type_map)
+
+    def _on_gate_eval_result(eval_def: EvalDefinition, result: EvalResult) -> None:
+        """Per-eval structured log (Defect 3 fix — restores dropped log)."""
+        _log.info(
+            "hitl_gate.eval_result",
+            extra={
+                "gate_id": gate_id,
+                "eval_name": eval_def.name,
+                "eval_id": str(eval_def.id),
+                "passed": result.passed,
+                "score": result.score,
+                "detail": result.detail,
+            },
+        )
+
     return await run_evals_persist_before_decide(
         eval_defs=eval_definitions,
-        eval_target=eval_target,
-        run_id=_run_id,
+        resolve_eval_target=_resolve_eval_target_for_gate,
+        run_id=_run_id,  # None ⇒ no persistence (Defect 2 fix: no uuid4)
         org_id=org_id,
         session_factory=session_factory,
-        node_id=first_node_id,
+        node_id=gate_id,
         resolve_llm_judge=_resolve_llm_judge_callable,
+        on_eval_result=_on_gate_eval_result,
     )
 
 

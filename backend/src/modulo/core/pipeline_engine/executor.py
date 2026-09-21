@@ -2317,23 +2317,42 @@ class PipelineExecutor:
         eval_defs = eval_definitions_by_node.get(node_id)
         if not eval_defs:
             return
-        if self._session_factory is None or org_id is None:
-            return
         # The captured ``output`` is the envelope ``{"artifacts": [...],
-        # "output": {...}}``. Validate the node's CONTRACT output (what the
+        # "output": {...}}``.  Validate the node's CONTRACT output (what the
         # agent produced — ``artifacts[0].output.output_json`` for a
         # sandbox_agent), NOT the telemetry-style outer ``output`` envelope
         # (FAR-311: the outer output carries status/summary/cost but no
         # pr_url / changed_files).
         eval_target = _resolve_post_node_eval_target(node_id, envelope, node_type_map)
 
+        def _executor_resolve_eval_target(
+            _eval_def: EvalDefDTO,
+        ) -> Any:
+            """Return the already-resolved eval target (Defect 4 fix)."""
+            return eval_target
+
+        def _on_post_node_eval_result(eval_def: EvalDefDTO, result: EngineEvalResult) -> None:
+            """Per-eval structured log (Defect 3 fix — restores dropped log)."""
+            _log.info(
+                "post_node_eval.result",
+                extra={
+                    "node_id": node_id,
+                    "eval_name": eval_def.name,
+                    "eval_id": str(eval_def.id),
+                    "passed": result.passed,
+                    "score": result.score,
+                    "detail": result.detail,
+                },
+            )
+
         await run_evals_persist_before_decide(
             eval_defs=eval_defs,
-            eval_target=eval_target,
+            resolve_eval_target=_executor_resolve_eval_target,
             run_id=run_id,
             org_id=org_id,
             session_factory=self._session_factory,
             node_id=node_id,
+            on_eval_result=_on_post_node_eval_result,
         )
 
     async def _init_model_backend_hub(self, org_id: uuid.UUID) -> ModelBackendHub | None:

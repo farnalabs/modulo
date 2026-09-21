@@ -412,6 +412,7 @@ __all__ = [
     # _persist_gate_eval_results was the per-batch persistence helper for the
     # HITL gate-eval loop.  Chunk 2 replaced it with the shared per-eval helper
     # (eval_persist_order.run_evals_persist_before_decide), so it is no longer
-    # called by any production code.  Kept for reference; removal deferred.
+    # called by any production code.  Tests still reference it (test_node_runner_residual
+    # and test_eval_versioning) — not deleted until tests are migrated.
     "_persist_gate_eval_results",
 ]
