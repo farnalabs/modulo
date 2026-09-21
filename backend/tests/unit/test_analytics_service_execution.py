@@ -952,8 +952,7 @@ class TestStreamExportFacts:
 
     async def test_streams_every_row_across_keyset_pages(self) -> None:
         rows = [
-            self._full_row(run_date=date(2026, 8, 1), created_at=datetime(2026, 8, 1, tzinfo=UTC))
-            for _ in range(5)
+            self._full_row(run_date=date(2026, 8, 1), created_at=datetime(2026, 8, 1, tzinfo=UTC)) for _ in range(5)
         ]
         for i, row in enumerate(rows):
             row.run_date = date(2026, 8, i + 1)
@@ -1008,7 +1007,7 @@ class TestStreamExportFacts:
             pytest.raises(AnalyticsRateLimitedError, match="Rate limit"),
         ):
             await agen.__anext__()
-        assert session.executed == [], "a rate-limited scan must never touch the DB"
+        assert not session.executed, "a rate-limited scan must never touch the DB"
 
     async def test_page_size_zero_is_rejected(self) -> None:
         agen = svc.stream_export_facts(

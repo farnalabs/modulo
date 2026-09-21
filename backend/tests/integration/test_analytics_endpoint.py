@@ -1269,7 +1269,7 @@ class TestScanEndpoint:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-        assert resp.text == "", "an empty org must stream zero NDJSON lines"
+        assert not resp.text, "an empty org must stream zero NDJSON lines"
 
     async def test_scan_require_feature_off_returns_402(
         self,
