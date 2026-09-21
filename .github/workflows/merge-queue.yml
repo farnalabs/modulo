@@ -356,7 +356,7 @@ jobs:
                 # Check fast-lane CI check status on current head SHA
                 HEAD_SHA=$(gh pr view "$NUM" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
                 FL_CHECK=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" \
-                  --jq '[.check_runs[] | select(.name == "fast-lane-classify") | .conclusion] | first // "none"' 2>/dev/null || echo "none")
+                  --jq '[.check_runs[] | select(.name == "fast-lane-eligible") | .conclusion] | first // "none"' 2>/dev/null || echo "none")
                 if [ "$FL_CHECK" = "success" ]; then
                   MERGEABLE=true
                   echo "fast-lane eligible (label + check green)"

@@ -839,22 +839,33 @@ jobs:
     # FAR-1099: Classify PRs for fast-lane eligibility. Runs the classifier
     # script that checks (1) all changed paths are class-A (test-infra only),
     # (2) guardrails pass (cap, no test-weakening, SHA-pinned check). The
-    # result is a GitHub check run on the PR's head SHA that the merge-queue
-    # reads when evaluating fast-lane eligibility.
+    # result is a named check run ("fast-lane-eligible") on the PR's head SHA
+    # that the merge-queue reads when evaluating fast-lane eligibility.
     #
-    # continue-on-error: a class-B PR legitimately exits non-zero, which
-    # means the job concludes "failure" while the workflow run stays
-    # "success" (the standard lane signal). Without this, every class-B PR
-    # would fail the CI: Fast Validation workflow run, making every PR
-    # unmergeable (the merge-queue collect step requires conclusion=success)
-    # and dispatching the Branch Fixer on every healthy PR.
-    continue-on-error: true
+    # Design: the classifier step captures its exit code into a step output
+    # and always exits 0 (following the route-coverage pattern — see
+    # route-coverage step above). This keeps the workflow run "success" for
+    # every PR (class-B included), so the merge-queue collect step and
+    # notify-pr-failure are not broken. A separate step creates the
+    # "fast-lane-eligible" check run via the Check Runs API with the correct
+    # conclusion (success/visible-failure), giving the merge-queue a
+    # SHA-pinned, per-PR eligibility signal.
+    #
+    # `continue-on-error` is BANNED by the Non-Negotiable Enforcement Gates
+    # rule (devtools/guidance/AGENTS.md §Non-Negotiable Enforcement Gates,
+    # rule 1: "continue-on-error: true is FORBIDDEN in all CI workflow files.
+    # Every job must fail CI when it fails. Legitimate uses require a
+    # post-step if: failure() aggregate that reports the collected failure.").
+    # The check-run approach satisfies both constraints: the job stays green
+    # (no continue-on-error), and ineligible PRs get a visible red check run
+    # that blocks merge-queue pickup.
     name: fast-lane-classify
     if: github.event_name == 'pull_request'
     runs-on: ubicloud-standard-2
     permissions:
       contents: read
       pull-requests: read
+      checks: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -872,20 +883,44 @@ jobs:
           if echo '${{ toJSON(github.event.pull_request.labels.*.name) }}' | grep -q 'fast-lane:test-infra'; then
             HAS_LABEL="--has-label"
           fi
+          set +e
           uv run --no-build --project backend --no-sync python scripts/fast_lane_classify.py \
             --pr-number ${{ github.event.pull_request.number }} \
             --head-sha ${{ github.event.pull_request.head.sha }} \
             --repo ${{ github.repository }} \
             --base-ref "origin/${{ github.event.pull_request.base.ref }}" \
             $HAS_LABEL
-      - name: Report fast-lane eligibility
+          rc=$?
+          echo "classify_rc=$rc" >> "$GITHUB_OUTPUT"
+          # Always exit 0: the job stays green (workflow run = success) for
+          # every PR. The eligibility signal is the named check run created
+          # below, not the job conclusion.
+          exit 0
+      - name: Create fast-lane-eligible check run
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ steps.classify.outcome }}" = "success" ]; then
-            echo "PR is fast-lane eligible (class-A, guardrails pass)."
+          RC="${{ steps.classify.outputs.classify_rc }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          if [ "$RC" = "0" ]; then
+            CONCLUSION="success"
+            TITLE="Fast-lane eligible"
+            SUMMARY="PR is fast-lane eligible (class-A, guardrails pass). Merge-queue may skip review for this PR."
           else
-            echo "PR is NOT fast-lane eligible (class-B or guardrail violation). Standard lane."
+            CONCLUSION="failure"
+            TITLE="Fast-lane ineligible"
+            SUMMARY="PR is NOT fast-lane eligible (class-B or guardrail violation). Standard review lane applies."
           fi
+          gh api "repos/${{ github.repository }}/check-runs" \
+            --method POST \
+            -f name="fast-lane-eligible" \
+            -f head_sha="$HEAD_SHA" \
+            -f conclusion="$CONCLUSION" \
+            -f output.title="$TITLE" \
+            -f output.summary="$SUMMARY" \
+            --jq '.id'
+          echo "fast-lane check run created: conclusion=$CONCLUSION on $HEAD_SHA"
 
   notify-pr-failure:
     name: Trigger Branch Fixer
