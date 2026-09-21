@@ -1,7 +1,7 @@
 """Step definitions for swappable connector binding.
 
 Wires ``features/connectors/swappable_binding.feature`` into the executing
-suite (the 2026-09-16 improve-architecture product-map walk) by driving the REAL
+BDD suite by driving the REAL
 binding surfaces the pipeline save path uses:
 
 - ``modulo.core.team_visibility.extract_connector_bindings`` — the pure

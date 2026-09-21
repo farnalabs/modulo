@@ -7,20 +7,67 @@ export interface TestEnv {
   orgSlug: string
   credentials: {
     admin: { email: string; password: string }
+    // Single-org credential form — LoginView's direct branch on /login.
     loginFormEmailSelector: string
     loginFormPasswordSelector: string
-    // Default login path. The actual path is resolved dynamically at runtime
-    // by resolveLoginPath() in login-path.ts, which queries login-context to
-    // determine whether the instance is multi-org. E2E_ORG_SLUG is treated as
-    // an override — used only when the instance actually IS multi-org.
-    // This field is a static fallback; prefer the async resolver.
+    loginFormSubmitSelector: string
+    // Per-org credential form — OrgLoginView, reached after the slug step
+    // navigates to /login/<slug>. Multi-org targets render this form, not
+    // LoginView's, so completeLoginForm() resolves whichever appeared.
+    orgLoginFormEmailSelector: string
+    orgLoginFormPasswordSelector: string
+    orgLoginFormSubmitSelector: string
+    // Multi-org slug-entry step — LoginView's branch when more than one org
+    // is login-active.
+    orgSlugInputSelector: string
+    orgSlugSubmitSelector: string
+    // Static fallback login path (always /login). The runtime path is resolved
+    // by resolveLoginPath() in login-path.ts, which queries login-context and
+    // returns /login/<slug> only when the instance is genuinely multi-org
+    // (E2E_ORG_SLUG is an override, ignored on single-org instances).
+    // completeLoginForm() then handles whichever layout rendered — the slug
+    // step on /login or the credential form directly.
     loginPath: string
   }
 }
 
-const FORM_SELECTORS = {
-  email: 'input[type="text"]',
-  password: 'input[type="password"]',
+const TESTID_SELECTORS = {
+  email: '[data-testid="login-email"]',
+  password: '[data-testid="login-password"]',
+  submit: '[data-testid="login-submit"]',
+  orgEmail: '[data-testid="org-login-email"]',
+  orgPassword: '[data-testid="org-login-password"]',
+  orgSubmit: '[data-testid="org-login-submit"]',
+  orgSlugInput: '[data-testid="login-org-slug"]',
+  orgSlugSubmit: '[data-testid="login-org-entry-submit"]',
+}
+
+// The app's data-testids and the login path are identical across local,
+// staging and app, so the nine credential-form fields are defined once and
+// spread into each target's `credentials` instead of repeated verbatim.
+type CredentialSelectors = Pick<
+  TestEnv['credentials'],
+  | 'loginFormEmailSelector'
+  | 'loginFormPasswordSelector'
+  | 'loginFormSubmitSelector'
+  | 'orgLoginFormEmailSelector'
+  | 'orgLoginFormPasswordSelector'
+  | 'orgLoginFormSubmitSelector'
+  | 'orgSlugInputSelector'
+  | 'orgSlugSubmitSelector'
+  | 'loginPath'
+>
+
+const SHARED_CREDENTIALS: CredentialSelectors = {
+  loginFormEmailSelector: TESTID_SELECTORS.email,
+  loginFormPasswordSelector: TESTID_SELECTORS.password,
+  loginFormSubmitSelector: TESTID_SELECTORS.submit,
+  orgLoginFormEmailSelector: TESTID_SELECTORS.orgEmail,
+  orgLoginFormPasswordSelector: TESTID_SELECTORS.orgPassword,
+  orgLoginFormSubmitSelector: TESTID_SELECTORS.orgSubmit,
+  orgSlugInputSelector: TESTID_SELECTORS.orgSlugInput,
+  orgSlugSubmitSelector: TESTID_SELECTORS.orgSlugSubmit,
+  loginPath: '/login',
 }
 
 function getOrgSlug(): string {
@@ -33,9 +80,7 @@ const ENVS: Record<string, TestEnv> = {
     orgSlug: getOrgSlug(),
     credentials: {
       admin: { email: 'admin@example.com', password: 'password123' },
-      loginFormEmailSelector: FORM_SELECTORS.email,
-      loginFormPasswordSelector: FORM_SELECTORS.password,
-      loginPath: '/login',
+      ...SHARED_CREDENTIALS,
     },
   },
   staging: {
@@ -45,9 +90,7 @@ const ENVS: Record<string, TestEnv> = {
       // Staging uses the real admin account, provided via E2E_ADMIN_EMAIL /
       // E2E_ADMIN_PASSWORD (must match the deployment's MODULO_USERS).
       admin: { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD },
-      loginFormEmailSelector: FORM_SELECTORS.email,
-      loginFormPasswordSelector: FORM_SELECTORS.password,
-      loginPath: '/login',
+      ...SHARED_CREDENTIALS,
     },
   },
   app: {
@@ -55,9 +98,7 @@ const ENVS: Record<string, TestEnv> = {
     orgSlug: getOrgSlug(),
     credentials: {
       admin: { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD || 'admin123' },
-      loginFormEmailSelector: FORM_SELECTORS.email,
-      loginFormPasswordSelector: FORM_SELECTORS.password,
-      loginPath: '/login',
+      ...SHARED_CREDENTIALS,
     },
   },
 }

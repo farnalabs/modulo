@@ -103,6 +103,34 @@ class TestRequirePermissionAnyCredential:
         with pytest.raises(PermissionConfigurationError):
             require_permission_any_credential("nonexistent.permission")
 
+    async def test_org_less_principal_skips_kill_switch_read(self) -> None:
+        """A principal with no organisation (organisation_id=None) must skip
+        the kill-switch read entirely, assert the org role directly, and reset
+        without touching the authz ContextVar."""
+        dep = require_permission_any_credential("run.trigger")
+        org_less = TenantPrincipal(
+            username="anon@example.com",
+            organisation_id=None,
+            account_id=_ACCOUNT,
+            org_role="operator",
+        )
+        result = await dep.dependency(principal=org_less, session=_make_failing_begin_session())
+        assert result.org_role == "operator"
+        assert _authz_enforce_ctx.get() is None
+
+    async def test_org_less_principal_viewer_still_denied(self) -> None:
+        dep = require_permission_any_credential("run.trigger")
+        org_less = TenantPrincipal(
+            username="anon@example.com",
+            organisation_id=None,
+            account_id=_ACCOUNT,
+            org_role="viewer",
+        )
+        with pytest.raises(HTTPException) as excinfo:
+            await dep.dependency(principal=org_less, session=_make_failing_begin_session())
+        assert excinfo.value.status_code == 403
+        assert _authz_enforce_ctx.get() is None
+
     async def test_runner_allowed(self) -> None:
         dep = require_permission_any_credential("run.trigger")
         result = await dep.dependency(principal=_tenant("runner"), session=_make_session())

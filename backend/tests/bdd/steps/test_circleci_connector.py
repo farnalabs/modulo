@@ -1,7 +1,7 @@
 """Step definitions for the CircleCI connector BDD feature.
 
-Wires ``features/connectors/circleci.feature`` into the executing suite (the
-improve-architecture product-map walk) by driving the REAL ``CircleCIConnector``
+Wires ``features/connectors/circleci.feature`` into the executing BDD
+suite by driving the REAL ``CircleCIConnector``
 against a respx-mocked CircleCI REST API v2 — mirroring
 ``backend/tests/unit/connectors/test_circleci.py`` so the executing BDD surface
 locks the same contract the unit suite does: token validation via ``/me``,

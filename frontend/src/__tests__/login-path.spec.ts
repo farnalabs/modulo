@@ -116,6 +116,28 @@ describe('resolveLoginPath', () => {
     expect(path).toBe('/login')
   })
 
+  it('treats an error-shaped 200 body as single-org', async () => {
+    process.env.E2E_ORG_SLUG = 'acme'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ detail: 'Internal Server Error' }),
+    }))
+
+    const path = await resolveLoginPath(BASE_URL)
+    expect(path).toBe('/login')
+  })
+
+  it('ignores a non-boolean multi_org value', async () => {
+    process.env.E2E_ORG_SLUG = 'acme'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ multi_org: 'true' }),
+    }))
+
+    const path = await resolveLoginPath(BASE_URL)
+    expect(path).toBe('/login')
+  })
+
   it('resetCache clears the cache so next call re-fetches', async () => {
     process.env.E2E_ORG_SLUG = 'acme'
     const mockFetch = vi.fn()

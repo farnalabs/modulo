@@ -1,11 +1,14 @@
-"""Regression tests for FAR-1065: profile network_policy on the E2B node route.
+"""Regression tests for FAR-1065 / FAR-1085: profile network_policy on the E2B node route.
 
-When a sandbox_agent node's ``egress_policy`` is unset (None), the environment
-profile's ``network_policy`` must be consulted. A profile with
-``network_policy="none"`` must map to deny-all egress on the E2B route, even
+When a sandbox_agent node's ``egress_policy`` is unset (None), the canonical
+egress resolver (FAR-1085, :func:`resolve_egress`) must consult the
+environment profile's ``network_policy``.  A profile with
+``network_policy="none"`` maps to deny-all egress on the E2B route, even
 though the node-level ``egress_policy`` is absent.
 
-The node-level value must continue to win when explicitly set.
+The node-level value must continue to win when explicitly set.  A profile
+``network_policy="selected"`` without an allowlist is refused (the profile
+model carries no allowlist field).
 """
 
 from __future__ import annotations
@@ -14,6 +17,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
 
@@ -200,19 +205,20 @@ class TestProfileNetworkPolicyEgressResolution:
         create_mock.assert_awaited_once()
         assert create_mock.await_args.kwargs["allow_internet_access"] is True
 
-    async def test_profile_selected_does_not_deny(self):
-        """When egress_policy is unset and profile network_policy='selected', internet is allowed.
+    async def test_profile_selected_without_allowlist_is_refused(self):
+        """When egress_policy is unset and profile network_policy='selected', E2B refuses.
 
-        The profile-level 'selected' is not a node-level concept — only 'none'
-        maps to deny-all on the E2B route.
+        The canonical resolver (FAR-1085) requires a non-empty allowlist for
+        'selected' — the profile model carries no allowlist field, so this is
+        a refusal.
         """
+        from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
+
         node_def = _script_node_def()
         fn = make_sandbox_agent_fn(node_def, session_factory=_SESSION_FACTORY_MOCK)
-        sandbox = _make_sandbox_mock()
         profile = _FakeProfile(network_policy="selected")
 
         with (
-            patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
             patch(
                 "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
                 new=AsyncMock(return_value=_e2b_route(profile)),
@@ -221,8 +227,6 @@ class TestProfileNetworkPolicyEgressResolution:
                 "modulo.core.pipeline_engine.node_runner.get_conformance_ctx",
                 return_value=None,
             ),
+            pytest.raises(SandboxTierRefusedError, match="egress refused"),
         ):
             await fn(_run_state())
-
-        create_mock.assert_awaited_once()
-        assert create_mock.await_args.kwargs["allow_internet_access"] is True

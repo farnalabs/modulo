@@ -18,6 +18,17 @@ interface LoginContextResponse {
   /** Other fields (orgs list, etc.) are ignored. */
 }
 
+/**
+ * Normalise an untrusted login-context payload. Only a literal `true` counts
+ * as multi-org, so an error-shaped 200 body (e.g. `{detail: ...}` or a
+ * missing/renamed field) can never be mistaken for a multi-org instance and
+ * send the suite to /login/<slug>.
+ */
+function parseLoginContext(raw: unknown): LoginContextResponse {
+  const multiOrg = (raw as { multi_org?: unknown } | null | undefined)?.multi_org
+  return { multi_org: multiOrg === true }
+}
+
 let cachedContext: LoginContextResponse | null = null
 let cachedBaseURL: string | null = null
 let fetchFailed = false
@@ -41,7 +52,7 @@ export async function resolveLoginPath(baseURL: string): Promise<string> {
         signal: AbortSignal.timeout(5000),
       })
       if (resp.ok) {
-        cachedContext = await resp.json()
+        cachedContext = parseLoginContext(await resp.json())
         cachedBaseURL = baseURL
       } else {
         fetchFailed = true
