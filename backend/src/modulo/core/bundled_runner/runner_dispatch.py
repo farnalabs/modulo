@@ -242,10 +242,18 @@ def _workspace_spec_for_dispatch(
     # rather than silently granting full outbound — the operator must switch
     # to 'outbound' or 'none', or use a tier that supports host allowlists.
     if egress == "selected":
+        # Lazy import: node_runner imports this module lazily too, so a
+        # module-level import here would close the cycle.
         from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
 
+        profile_label = (
+            getattr(profile, "name", None)
+            or getattr(profile, "id", None)
+            or getattr(profile, "provider_type", None)
+            or "unknown"
+        )
         raise SandboxTierRefusedError(
-            f"Environment profile '{getattr(profile, 'name', profile)}' has "
+            f"Environment profile '{profile_label}' has "
             "network_policy='selected' (egress allowlist), but the Docker / "
             "Bundled Runner tier cannot enforce per-host egress allowlists — "
             "Docker lacks the host-filtering mechanism required. Use "
