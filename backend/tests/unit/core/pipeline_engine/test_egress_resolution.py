@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+import modulo.core.pipeline_engine.egress as egress_mod
 from modulo.core.pipeline_engine.egress import EgressResolution, resolve_egress
 from modulo.core.pipeline_engine.sandbox_mode import (
     SANDBOX_CAPABILITY_EGRESS,
@@ -299,6 +300,46 @@ def test_node_selected_maps_to_selected() -> None:
         tier="e2b",
     )
     assert result.policy == "selected"
+
+
+def test_map_profile_unknown_value_returns_none() -> None:
+    """The profile mapper's defensive fall-through returns None for an
+    unrecognised value.
+
+    ``resolve_egress`` refuses unrecognised values before it reaches the mapper,
+    so this branch is defensive — it must still never map an unknown value to a
+    concrete policy.
+    """
+    assert egress_mod._map_profile_to_canonical("bogus") is None
+
+
+def test_map_node_unknown_value_returns_none() -> None:
+    """The node mapper's defensive fall-through returns None for an unrecognised
+    value (``resolve_egress`` refuses such values before it reaches the mapper)."""
+    assert egress_mod._map_node_to_canonical("bogus") is None
+
+
+def test_cert_sandbox_selected_without_allowlist_is_unknown() -> None:
+    """Node 'selected' with no allowlist resolves to a refusal -> capability
+    unknown (fail-closed), never certified as enforced."""
+    caps = derive_sandbox_capabilities({"node_type": "sandbox_agent", "egress_policy": "selected"})
+    assert caps[SANDBOX_CAPABILITY_EGRESS] is None
+
+
+def test_cert_sandbox_unknown_resolved_policy_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resolved policy outside the canonical vocabulary is unknown (fail-closed).
+
+    ``resolve_egress`` can only return None/deny_all/selected today, so the
+    defensive branch is exercised by stubbing it — an unrecognised policy must
+    never be certified as safe.
+    """
+    monkeypatch.setattr(
+        egress_mod,
+        "resolve_egress",
+        lambda **_kwargs: EgressResolution(policy="mystery", allowlist=None, refusal=None),
+    )
+    caps = derive_sandbox_capabilities({"node_type": "sandbox_agent", "egress_policy": "deny_all"})
+    assert caps[SANDBOX_CAPABILITY_EGRESS] is None
 
 
 # --- Regression cases ---

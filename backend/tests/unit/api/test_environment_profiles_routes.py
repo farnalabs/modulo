@@ -525,6 +525,26 @@ class TestProfileTestEndpoint:
         assert "command_complete" in resp.text
         assert "destroyed" in resp.text
 
+    def test_profile_test_unexpected_provider_error_streams_failed(self, client: TestClient) -> None:
+        """An unexpected provider error mid-stream surfaces the generic failed
+        event (never a 500) and is not mistaken for a tier refusal."""
+        fake = _fake_profile()
+        hub = RuntimeProviderHub()
+        provider = MagicMock()
+        provider.create_workspace = AsyncMock(side_effect=RuntimeError("provider exploded"))
+        provider.close = AsyncMock()
+        hub.register(str(fake.provider_type), provider)
+        with (
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
+            patch(f"{_ROUTES}._get_hub", return_value=hub),
+        ):
+            mock_get.return_value = fake
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
+        assert resp.status_code == 200
+        assert "failed" in resp.text
+        assert "check server logs" in resp.text
+
 
 def test_get_hub_builds_fresh_hub() -> None:
     """_get_hub() returns a live RuntimeProviderHub built from process settings."""
