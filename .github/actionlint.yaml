@@ -1,0 +1,8 @@
+# actionlint configuration — declares custom runner labels used by this repo.
+# See https://github.com/rhysd/actionlint/blob/main/docs/config.md
+
+self-hosted-runner:
+  # Ubicloud hosted runners (our CI runs on these, not GitHub-hosted).
+  # Glob syntax supported via path.Match.
+  labels:
+    - "ubicloud-standard-*"

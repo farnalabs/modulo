@@ -43,6 +43,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
           # Grace window: how long production is allowed to lag behind main
           # HEAD before starvation is declared. Covers the deploy throttle
           # (DEPLOY_INTERVAL_HOURS, default 3h) + pre-deploy CI + staging
@@ -51,9 +53,9 @@ jobs:
           GRACE_HOURS: ${{ vars.STALENESS_GRACE_HOURS || 6 }}
         run: |
           # ---- 1. main HEAD (for comparison + diagnostics) ----
-          MAIN_JSON="$(gh api "repos/${{ github.repository }}/commits/${{ github.ref_name }}" --jq '{sha: .sha, date: .commit.committer.date}' 2>/dev/null || true)"
+          MAIN_JSON="$(gh api "repos/$REPOSITORY/commits/$REF_NAME" --jq '{sha: .sha, date: .commit.committer.date}' 2>/dev/null || true)"
           if [ -z "$MAIN_JSON" ]; then
-            echo "::warning::Deploy staleness check could not read origin/${{ github.ref_name }} HEAD (gh api error) - cannot determine staleness this cycle. Transient failures are warned, not failed; repeated warnings on consecutive runs still deserve investigation."
+            echo "::warning::Deploy staleness check could not read origin/$REF_NAME HEAD (gh api error) - cannot determine staleness this cycle. Transient failures are warned, not failed; repeated warnings on consecutive runs still deserve investigation."
             exit 0
           fi
           MAIN_SHA="$(echo "$MAIN_JSON" | jq -r .sha)"
@@ -70,12 +72,12 @@ jobs:
 
           MAIN_SHORT="${MAIN_SHA:0:7}"
           PROD_SHORT="${PROD_SHA:0:7}"
-          echo "origin/${{ github.ref_name }} HEAD: $MAIN_SHORT ($MAIN_DATE)"
+          echo "origin/$REF_NAME HEAD: $MAIN_SHORT ($MAIN_DATE)"
           echo "app.modulo.run build SHA: $PROD_SHORT (${PROD_BUILD_TS:-unknown})"
 
           # ---- 3. Fast path: prod is current ----
           if [ "$MAIN_SHORT" = "$PROD_SHORT" ]; then
-            echo "::notice::Production is current with origin/${{ github.ref_name }} ($PROD_SHORT)."
+            echo "::notice::Production is current with origin/$REF_NAME ($PROD_SHORT)."
             exit 0
           fi
 
@@ -116,11 +118,11 @@ jobs:
 
           if [ "$AGE_H" -ge "$GRACE_HOURS" ]; then
             echo "stale=true" >> "$GITHUB_OUTPUT"
-            echo "::error::PRODUCTION DEPLOY STARVATION: app.modulo.run is running $PROD_SHORT, built ${AGE_H}h ago (>= ${GRACE_HOURS}h grace), but origin/${{ github.ref_name }} HEAD is $MAIN_SHORT. The deploy pipeline has not released main's HEAD - check the 'Deploy: Staging + Prod' workflow runs and the throttle step. If no deploy is in flight, use workflow_dispatch with force_deploy=true."
+            echo "::error::PRODUCTION DEPLOY STARVATION: app.modulo.run is running $PROD_SHORT, built ${AGE_H}h ago (>= ${GRACE_HOURS}h grace), but origin/$REF_NAME HEAD is $MAIN_SHORT. The deploy pipeline has not released main's HEAD - check the 'Deploy: Staging + Prod' workflow runs and the throttle step. If no deploy is in flight, use workflow_dispatch with force_deploy=true."
             exit 1
           fi
 
-          echo "::notice::Production ($PROD_SHORT, built ${AGE_H}h ago) is behind origin/${{ github.ref_name }} HEAD ($MAIN_SHORT) but within the ${GRACE_HOURS}h grace window - the deploy pipeline may still be in flight (throttle batches up to DEPLOY_INTERVAL_HOURS)."
+          echo "::notice::Production ($PROD_SHORT, built ${AGE_H}h ago) is behind origin/$REF_NAME HEAD ($MAIN_SHORT) but within the ${GRACE_HOURS}h grace window - the deploy pipeline may still be in flight (throttle batches up to DEPLOY_INTERVAL_HOURS)."
 
       - name: Create Linear ticket on starvation
         if: failure()

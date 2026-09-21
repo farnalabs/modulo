@@ -56,8 +56,12 @@ jobs:
           # identity for cross-identity PR comments).
           GH_TOKEN: ${{ github.token }}
           INTERVAL_HOURS: ${{ vars.DEPLOY_INTERVAL_HOURS || 3 }}
+          FORCE_DEPLOY: ${{ github.event.inputs.force_deploy }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          if [ "${{ github.event.inputs.force_deploy }}" = "true" ]; then
+          if [ "$FORCE_DEPLOY" = "true" ]; then
             echo "should_deploy=true" >> "$GITHUB_OUTPUT"
             echo "Force deploy requested — bypassing throttle."
             exit 0
@@ -77,7 +81,7 @@ jobs:
           # recoverable; silent starvation is not — but a red X plus the Branch
           # Fixer/retry loop is the chosen recovery path, and force_deploy=true
           # always bypasses (it exits before this check).
-          if ! IN_PROGRESS="$(gh api "repos/${{ github.repository }}/actions/workflows/deploy.yml/runs?status=in_progress&branch=${{ github.ref_name }}" --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }}) | .id] | .[0] // empty' 2>/dev/null)"; then
+          if ! IN_PROGRESS="$(gh api "repos/$REPOSITORY/actions/workflows/deploy.yml/runs?status=in_progress&branch=$REF_NAME" --jq "[.workflow_runs[] | select(.id != $RUN_ID) | .id] | .[0] // empty" 2>/dev/null)"; then
             echo "::error::Deploy throttle in-progress check FAILED (gh api error) — failing loudly rather than risk a duplicate deploy or a silent skip. Re-run, or use workflow_dispatch force_deploy=true to bypass."
             exit 1
           fi
