@@ -58,6 +58,7 @@ from modulo.core.eval_engine import (
     EvalBlockedError,
     EvalSuiteBlockedError,
     SuiteEvalResult,
+    SuiteOutcome,
     evaluate_suite,
 )
 from modulo.core.eval_engine import (
@@ -92,7 +93,10 @@ from modulo.core.pipeline_engine.error_codes import (
     sanitize_error_text,
 )
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
-from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
+from modulo.core.pipeline_engine.eval_persist_order import (
+    _record_suite_incomplete,
+    run_evals_persist_before_decide,
+)
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.evidence import (
     EvidenceProvider,
@@ -5396,6 +5400,42 @@ class PipelineExecutor:
             result_result = await session.execute(result_stmt)
             eval_results = result_result.scalars().all()
 
+            # ------------------------------------------------------------------
+            # §4.7 completeness guard — set-coverage-based, not count-based.
+            # Every expected eval_id must appear at least once in the persisted
+            # set.  Duplicate rows (known accepted condition from overlapping
+            # post-node + HITL paths) do NOT false-fail.
+            # ------------------------------------------------------------------
+            expected_eval_ids: set[uuid.UUID] = {d.id for d in defs_in_suite}
+            persisted_eval_ids: set[uuid.UUID] = {r.eval_id for r in eval_results}
+            missing_eval_ids = expected_eval_ids - persisted_eval_ids
+
+            if missing_eval_ids:
+                missing_strs = [str(eid) for eid in sorted(missing_eval_ids, key=str)]
+                _log.warning(
+                    "eval_suites.incomplete",
+                    extra={
+                        "suite_id": suite_id,
+                        "expected_eval_ids": ",".join(str(eid) for eid in sorted(expected_eval_ids, key=str)),
+                        "persisted_eval_ids": ",".join(str(eid) for eid in sorted(persisted_eval_ids, key=str)),
+                        "missing_eval_ids": ",".join(missing_strs),
+                        "run_id": str(run_id),
+                    },
+                )
+                _record_suite_incomplete()
+                results.append(
+                    SuiteEvalResult(
+                        suite_id=suite_id,
+                        total_evals=0,
+                        passed_evals=0,
+                        aggregate_score=0.0,
+                        passed=False,
+                        blocking_failures=[],
+                        outcome=SuiteOutcome.INDETERMINATE,
+                    )
+                )
+                continue
+
             threshold_raw = next(
                 (d.pass_threshold for d in defs_in_suite if d.pass_threshold is not None),
                 None,
@@ -5427,6 +5467,7 @@ class PipelineExecutor:
                 aggregate_score=suite_result_raw.aggregate_score,
                 passed=suite_result_raw.passed,
                 blocking_failures=suite_result_raw.blocking_failures,
+                outcome=suite_result_raw.outcome,
             )
             if threshold is not None and not suite_result.passed:
                 raise EvalSuiteBlockedError(suite_id, suite_result.aggregate_score, threshold)

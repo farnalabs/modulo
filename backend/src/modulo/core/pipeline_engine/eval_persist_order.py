@@ -39,9 +39,10 @@ from modulo.db.rls import set_rls_execution_context, set_rls_org
 _log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Metrics — OTel counter for persistence failures
+# Metrics — OTel counters for persistence failures and suite completeness
 # ---------------------------------------------------------------------------
 _eval_result_persist_failures_total: Any = None
+_eval_suite_incomplete_total: Any = None
 
 
 def _get_otel_meter() -> Any:
@@ -58,18 +59,25 @@ def _get_otel_meter() -> Any:
 
 
 def _ensure_metrics() -> None:
-    """Lazily initialise the persistence-failure counter (idempotent)."""
-    global _eval_result_persist_failures_total
-    if _eval_result_persist_failures_total is not None:
+    """Lazily initialise the persistence-failure and suite-incomplete counters (idempotent)."""
+    global _eval_result_persist_failures_total, _eval_suite_incomplete_total
+    if _eval_result_persist_failures_total is not None and _eval_suite_incomplete_total is not None:
         return
     meter = _get_otel_meter()
     if meter is None:
         return
-    _eval_result_persist_failures_total = meter.create_counter(
-        name="modulo_eval_result_persist_failures_total",
-        description="EvalResult persistence failures, by failure_behaviour",
-        unit="1",
-    )
+    if _eval_result_persist_failures_total is None:
+        _eval_result_persist_failures_total = meter.create_counter(
+            name="modulo_eval_result_persist_failures_total",
+            description="EvalResult persistence failures, by failure_behaviour",
+            unit="1",
+        )
+    if _eval_suite_incomplete_total is None:
+        _eval_suite_incomplete_total = meter.create_counter(
+            name="modulo_eval_suite_incomplete_total",
+            description="Eval suite aggregate blocked: expected eval ids missing from persisted set",
+            unit="1",
+        )
 
 
 def _record_persist_failure(*, failure_behaviour: str) -> None:
@@ -78,6 +86,16 @@ def _record_persist_failure(*, failure_behaviour: str) -> None:
         _ensure_metrics()
         if _eval_result_persist_failures_total is not None:
             _eval_result_persist_failures_total.add(1, {"failure_behaviour": failure_behaviour})
+    except Exception:
+        _log.warning("eval_persist_order.metrics_unavailable", exc_info=True)
+
+
+def _record_suite_incomplete() -> None:
+    """Best-effort counter increment when a suite's expected eval id set is not fully persisted."""
+    try:
+        _ensure_metrics()
+        if _eval_suite_incomplete_total is not None:
+            _eval_suite_incomplete_total.add(1)
     except Exception:
         _log.warning("eval_persist_order.metrics_unavailable", exc_info=True)
 

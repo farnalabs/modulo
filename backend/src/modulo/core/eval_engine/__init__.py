@@ -65,6 +65,23 @@ class EvalType(StrEnum):
     HUMAN_SET = "human_set"
 
 
+class SuiteOutcome(StrEnum):
+    """Outcome of a suite-aggregate evaluation (FAR-971 §4.7).
+
+    * ``PASSED`` — all expected eval ids were persisted and the suite ratio
+      meets or exceeds the threshold (or no threshold was set).
+    * ``FAILED`` — all expected eval ids were persisted but the ratio is
+      below the threshold.
+    * ``INDETERMINATE`` — the suite's persisted eval id set does not cover
+      every expected eval id; the ratio is not computed and the suite
+      fails closed.
+    """
+
+    PASSED = "passed"
+    FAILED = "failed"
+    INDETERMINATE = "indeterminate"
+
+
 FailureBehaviour = Literal["warn", "block"]
 
 
@@ -150,6 +167,7 @@ class SuiteEvalResult(BaseModel):
     aggregate_score: float = Field(ge=0.0, le=1.0)  # 0.0-1.0
     passed: bool
     blocking_failures: list[str]
+    outcome: SuiteOutcome = SuiteOutcome.PASSED
 
 
 class LLMJudgeCallable(Protocol):
@@ -724,6 +742,8 @@ def evaluate_suite(
     if pass_threshold is not None:
         suite_passed = aggregate_score >= pass_threshold
 
+    outcome = SuiteOutcome.PASSED if suite_passed else SuiteOutcome.FAILED
+
     return SuiteEvalResult(
         suite_id=suite_id,
         total_evals=total,
@@ -731,6 +751,7 @@ def evaluate_suite(
         aggregate_score=aggregate_score,
         passed=suite_passed,
         blocking_failures=blocking_failures,
+        outcome=outcome,
     )
 
 
@@ -746,6 +767,7 @@ __all__ = [
     "GuardrailMisroutedError",
     "LLMJudgeCallable",
     "SuiteEvalResult",
+    "SuiteOutcome",
     "UnknownEvalTypeError",
     "evaluate_suite",
 ]
