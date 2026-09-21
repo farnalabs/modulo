@@ -206,8 +206,9 @@ class EventNotAcceptedError(RuntimeError):
     Covers both the ``accepted_events`` presence check (none of the configured
     event-type keys found in the payload) and the ``event_filters`` value check
     (a dotted-path value outside the allowlist). The audit ``TriggerEvent`` is
-    written *before* this is raised so the rejection is always visible in the
-    event log.
+    written inside the same session and committed via the in-transaction catch
+    at the route boundary (mirroring ``GuardrailBlockedAtIntakeError``), so the
+    rejection is always visible in the event log.
 
     Maps to **HTTP 400 Bad Request** at the webhook and replay route boundaries:
     the sender's payload does not match what the trigger accepts — a client/shape
@@ -1198,10 +1199,13 @@ class TriggerEngine:
 
         Records an ``event_type_not_accepted`` TriggerEvent and raises
         ``EventNotAcceptedError`` when the payload does not satisfy the trigger's
-        event acceptance config. *log_prefix* / *payload_subject* adapt the log and
-        error wording between webhook and replay delivery; *use_dot_notation*
-        preserves the historical accepted-events lookup (top-level ``.get`` for
-        webhooks vs dotted-path ``_extract_field`` for replays).
+        event acceptance config. The TriggerEvent is written inside the caller's
+        transaction; the in-transaction catch at the route boundary commits it
+        before the HTTP 400 is surfaced. *log_prefix* / *payload_subject* adapt
+        the log and error wording between webhook and replay delivery;
+        *use_dot_notation* preserves the historical accepted-events lookup
+        (top-level ``.get`` for webhooks vs dotted-path ``_extract_field`` for
+        replays).
         """
         cfg = delivery.trigger.config_json or {}
         accepted_events: list[str] | None = cfg.get("accepted_events")

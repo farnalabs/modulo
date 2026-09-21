@@ -211,6 +211,7 @@ async def receive_webhook(
     org_id: uuid.UUID | None = None
     guardrail_block_detail: str | None = None
     ci_failure_coalesced = False
+    event_not_accepted = False
 
     try:
         raw_payload: dict[str, Any] = await request.json()
@@ -355,6 +356,14 @@ async def receive_webhook(
                 # transaction — the delivery is reject-and-retry, NOT
                 # acked-as-accepted, and no run was created.
                 guardrail_block_detail = exc.detail
+            except EventNotAcceptedError:
+                # The engine wrote the ``event_type_not_accepted``
+                # TriggerEvent INSIDE this transaction. Catch here (mirroring
+                # the GuardrailBlockedAtIntakeError pattern) so the
+                # transaction COMMITS and the audit event survives — an
+                # invisible rejection is worse than a typed 400. The 400 is
+                # surfaced AFTER the transaction (reject-and-retry, not ack).
+                event_not_accepted = True
     except TriggerNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
@@ -382,11 +391,6 @@ async def receive_webhook(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Duplicate webhook payload",
-        ) from exc
-    except EventNotAcceptedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
         ) from exc
     except ConcurrentRunLimitError as exc:
         raise HTTPException(
@@ -531,6 +535,16 @@ async def receive_webhook(
         _log.info("webhooks.receive_webhook.ci_failure_coalesced trigger=%s", trigger_id)
         return {"run_id": None, "status": "coalesced", "detail": CI_FAILURE_COALESCED_ACK}
 
+    if event_not_accepted:
+        # The ``event_type_not_accepted`` TriggerEvent was committed with the
+        # transaction above (caught in-transaction, mirroring the guardrail
+        # path). The delivery is reject-and-retry — the sender must adjust the
+        # payload to match the trigger's acceptance config.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Event type not accepted by trigger configuration",
+        )
+
     run_id = run.id
     # FAR-213 webhook ack-after-validate semantics: the delivery is validated
     # (including the ingestion guardrail pass) BEFORE a success ack. A
@@ -606,6 +620,7 @@ async def replay_webhook(
 
     trigger: Trigger | None = None
     org_id: uuid.UUID | None = None
+    event_not_accepted = False
     if system_engine_is_fallback():
         # No modulo_system role provisioned: the BYPASSRLS bootstrap read
         # would silently match zero rows and every delivery would 404. Refuse
@@ -724,6 +739,15 @@ async def replay_webhook(
                 session.add(paused_event)
                 await session.flush()
                 return {"status": "paused"}
+            except EventNotAcceptedError:
+                # The engine wrote the ``event_type_not_accepted``
+                # TriggerEvent INSIDE this transaction. Catch here (mirroring
+                # the GuardrailBlockedAtIntakeError / TriggersPausedError
+                # patterns) so the transaction COMMITS and the audit event
+                # survives — an invisible rejection is worse than a typed 400.
+                # The 400 is surfaced AFTER the transaction (reject-and-retry,
+                # not ack).
+                event_not_accepted = True
     except TimestampExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -753,11 +777,6 @@ async def replay_webhook(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Duplicate webhook payload",
-        ) from exc
-    except EventNotAcceptedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
         ) from exc
     except ConcurrentRunLimitError as exc:
         raise HTTPException(
@@ -840,6 +859,16 @@ async def replay_webhook(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
+
+    if event_not_accepted:
+        # The ``event_type_not_accepted`` TriggerEvent was committed with the
+        # transaction above (caught in-transaction, mirroring the guardrail
+        # path). The delivery is reject-and-retry — the sender must adjust the
+        # payload to match the trigger's acceptance config.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Event type not accepted by trigger configuration",
+        )
 
     run_id = run.id
     # FAR-213 webhook ack-after-validate semantics (see receive_webhook): a
