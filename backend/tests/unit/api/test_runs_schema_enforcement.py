@@ -207,7 +207,7 @@ def test_get_run_schema_enforcement_empty_returns_lenient_no_schema(client: tupl
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["nodes"] == []
+    assert not body["nodes"]
     assert body["schema_validator_mode"] == "lenient"
     assert body["schema_validation_outcome"] == "no_schema"
 
@@ -241,7 +241,7 @@ def test_flip_guard_safe_when_no_lenient_warnings(client: tuple[TestClient, Asyn
     assert body["safe_to_flip"] is True
     assert body["lenient_warning_count"] == 0
     assert body["total_records"] == 1
-    assert body["affected_outcomes"] == []
+    assert not body["affected_outcomes"]
     assert "Safe to flip" in body["advisory"]
 
 
