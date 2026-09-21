@@ -143,6 +143,22 @@ describe('useApi request contracts', () => {
     await expect(api.delete('/api/v1/widgets/1')).resolves.toBeUndefined()
     expect(fetchMock.mock.results[0].value).toBeInstanceOf(Promise)
   })
+
+  it('throws a descriptive error when the response body is not valid JSON', async () => {
+    fetchMock.mockResolvedValue({
+      status: 200,
+      ok: true,
+      statusText: 'OK',
+      json: vi.fn(async () => {
+        throw new SyntaxError('Unexpected token < in JSON')
+      }),
+    } as unknown as Response)
+    const api = useApi()
+
+    await expect(api.get('/api/v1/widgets')).rejects.toThrow(
+      'Invalid JSON response from server (HTTP 200)',
+    )
+  })
 })
 
 describe('useApi 401 refresh flow', () => {
