@@ -135,8 +135,8 @@ BRANCH_COVERAGE_THRESHOLD = 98  # Changed-lines branch coverage minimum (%)
 #
 # Computed over the CI coverage run's instrumented set (pytest --cov=src/modulo,
 # vitest run src), NOT the full SonarCloud scope.
-MIN_PROJECT_LINE_COVERAGE = 88.0
-MIN_PROJECT_BRANCH_COVERAGE = 80.0
+MIN_PROJECT_LINE_COVERAGE = 89.0
+MIN_PROJECT_BRANCH_COVERAGE = 81.0
 
 # Files/patterns excluded from the gate's denominator.  These mirror the
 # ``sonar.coverage.exclusions`` in sonar-project.properties — test paths,
@@ -1574,10 +1574,6 @@ def main() -> int:
         js_report = default_js
     else:
         js_report = None
-
-    # Save the original report path for the project-wide floor check, which
-    # runs AFTER the normalised temp file is cleaned up by the finally block.
-    original_js_report = js_report
 
     # Normalise the LCOV report so diff-cover can match its paths (see
     # _normalize_js_report).  The temp file, if any, is cleaned up below.

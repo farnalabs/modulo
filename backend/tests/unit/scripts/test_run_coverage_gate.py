@@ -1879,14 +1879,30 @@ class TestProjectWideMetrics:
 
 
 class TestProjectWideFloor:
-    def test_project_below_floor_skipped_when_no_production_changes(self, tmp_path):
-        """No production changes -> all languages skip -> floor is not enforced.
+    def test_project_below_floor_skipped_when_no_production_changes(self, tmp_path, capsys):
+        """No production changes -> all languages skip -> but floor IS enforced.
 
-        The project floor is a guard on coverage the PR could have changed.
-        A docs/test-only diff changes no production lines, so the gate skips
-        entirely and the floor (which reflects main's coverage) must not fail
-        the PR.  This is the deliberate all-skipped short-circuit.
+        The project floor is a guard on main's coverage regardless of what the
+        PR changed.  Even when all languages skip (no production changes), a
+        report with line coverage below the floor must still fail the gate.
         """
+        xml = tmp_path / "coverage.xml"
+        lines = "\n".join('<line number="{}" hits="{}"/>'.format(i, "1" if i <= 80 else "0") for i in range(1, 101))
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "BREACH" in out
 
     def test_project_line_below_floor(self, tmp_path):
         """Line coverage 80% < floor 88% → FAIL (exit 1)."""
@@ -2014,8 +2030,13 @@ class TestProjectWideFloor:
             rc = mod.main()
         assert rc == 1
 
-    def test_project_no_branch_data_fails_closed(self, tmp_path):
-        """No branch records at all -> branch floor fails closed (distinct from floor breach)."""
+    def test_project_no_branch_data_fails_closed(self, tmp_path, capsys):
+        """No branch records at all -> branch floor FAILS CLOSED (exit 1).
+
+        FAR-1063: a report with no branch data is indistinguishable from one
+        whose branch data was dropped.  The gate must fail with a distinct
+        reason, not silently pass.
+        """
         xml = tmp_path / "coverage.xml"
         lines = "\n".join(f'<line number="{i}" hits="1"/>' for i in range(1, 101))
         xml.write_text(
@@ -2035,6 +2056,9 @@ class TestProjectWideFloor:
         ):
             rc = mod.main()
         assert rc == 1, "Missing branch data must fail closed, not pass"
+        out = capsys.readouterr().out
+        assert "BREACH" in out
+        assert "branch data missing" in out.lower()
 
     def test_project_both_above_floor(self, tmp_path):
         xml = tmp_path / "coverage.xml"
