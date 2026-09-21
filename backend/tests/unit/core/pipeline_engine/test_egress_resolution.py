@@ -58,8 +58,9 @@ _EGRESS_CASES: list[tuple[str | None, str | None, str, bool, str | None, bool, s
     ("unset", "none", "t3", False, "deny_all", False, "t3: profile none -> deny_all"),
     ("deny_all", "outbound", "t3", False, "deny_all", False, "t3: node deny_all -> deny_all"),
     ("selected", "unset", "t3", True, "selected", False, "t3: node selected with allowlist"),
-    # Local: nothing enforceable
-    ("unset", "unset", "local", False, None, True, "local: refuses everything"),
+    # Local: default posture accepted (host process needs no enforcement),
+    # but deny_all and selected cannot be enforced (no iptables/ns).
+    ("unset", "unset", "local", False, None, False, "local: default posture accepted"),
     ("deny_all", "outbound", "local", False, "deny_all", True, "local: deny_all -> refused"),
     ("selected", "unset", "local", True, "selected", True, "local: selected -> refused"),
 ]
@@ -198,8 +199,8 @@ def test_docker_refuses_selected() -> None:
     assert "docker" in result.refusal.lower()
 
 
-def test_local_refuses_everything() -> None:
-    """Local tier refuses all policies."""
+def test_local_refuses_non_default_postures() -> None:
+    """Local tier refuses deny_all and selected (no enforcement mechanism)."""
     for policy in ("deny_all", "selected"):
         result = resolve_egress(
             node_egress_policy=policy,
@@ -210,16 +211,16 @@ def test_local_refuses_everything() -> None:
         assert result.refusal is not None, f"local should refuse {policy}"
 
 
-def test_local_refuses_provider_default() -> None:
-    """Local tier refuses even provider default (None policy)."""
+def test_local_accepts_default_posture() -> None:
+    """Local tier accepts provider-default posture — host process needs no enforcement."""
     result = resolve_egress(
         node_egress_policy=None,
         node_egress_allowlist=None,
         profile_network_policy=None,
         tier="local",
     )
-    assert result.refusal is not None
-    assert "local" in result.refusal.lower()
+    assert result.refusal is None
+    assert result.policy is None
 
 
 def test_unknown_tier_returns_refusal() -> None:

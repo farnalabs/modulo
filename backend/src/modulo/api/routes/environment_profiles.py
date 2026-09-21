@@ -471,11 +471,14 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
     # profile's provider_type resolves to — map provider_type to the tier
     # name used by resolve_egress.
     _provider_type = (profile.provider_type or "").strip().lower()
+    # Map profile provider_type to the tier name used by resolve_egress.
+    # local_docker is a Docker alias (DockerRuntimeProvider.provider_aliases),
+    # NOT the host-process local tier.
     _tier_map = {
         "e2b": "e2b",
         "runner_docker": "docker",
         "local": "local",
-        "local_docker": "local",
+        "local_docker": "docker",
     }
     _tier = _tier_map.get(_provider_type, "e2b")
     _egress = resolve_egress(
@@ -484,6 +487,16 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
         profile_network_policy=profile.network_policy,
         tier=_tier,
     )
+    if _egress.refusal is not None:
+        from modulo.core.pipeline_engine.sandbox_errors import (  # nosemgrep: inline-import-route-files
+            SandboxTierRefusedError,
+        )
+
+        raise SandboxTierRefusedError(
+            f"Sandbox test refused for profile '{profile.name}' "
+            f"(provider_type={profile.provider_type!r}, tier={_tier!r}): "
+            f"{_egress.refusal}"
+        )
     # Map canonical policy to WorkspaceSpec egress_policy vocabulary.
     _spec_egress = "none" if _egress.policy == "deny_all" else "outbound"
     return WorkspaceSpec(
@@ -542,7 +555,14 @@ async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str
         yield _sse_event("destroyed", "Sandbox destroyed successfully")
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
+        from modulo.core.pipeline_engine.sandbox_errors import (  # nosemgrep: inline-import-route-files
+            SandboxTierRefusedError,
+        )
+
+        if isinstance(exc, SandboxTierRefusedError):
+            yield _sse_event("failed", str(exc))
+            return
         _log.exception("Sandbox test failed for profile %s", profile.id)
         yield _sse_event("failed", "Test failed — check server logs for details")
         if provider_ref and provider is not None:

@@ -37,7 +37,12 @@ _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
     "e2b": {"default": True, "deny_all": True, "selected": True},
     "docker": {"default": True, "deny_all": True, "selected": False},
     "t3": {"default": True, "deny_all": True, "selected": True},
-    "local": {"default": False, "deny_all": False, "selected": False},
+    # Local is a host process: it can provide the unrestricted default
+    # posture (no enforcement needed — there is nothing to enforce), but
+    # it CANNOT enforce deny_all or selected (no iptables, no network
+    # namespace isolation).  Refusing default would make the local fallback
+    # tier impossible to run for zero security gain.
+    "local": {"default": True, "deny_all": False, "selected": False},
 }
 
 

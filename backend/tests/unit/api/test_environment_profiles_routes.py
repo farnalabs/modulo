@@ -477,6 +477,54 @@ class TestProfileTestEndpoint:
         assert expected in resp.text
         assert "provisioning" in resp.text
 
+    def test_profile_test_selected_on_docker_refuses_not_fail_open(self, client: TestClient) -> None:
+        """FAR-1085 regression: profile 'selected' on a Docker-tier profile must
+        refuse (SandboxTierRefusedError) rather than silently granting outbound.
+
+        Before the fix, _build_workspace_spec mapped the refusal to
+        egress_policy='outbound' — a fail-open that gave full internet to a
+        profile that asked for an allowlist.
+        """
+        fake = _fake_profile(network_policy="selected")
+        hub = self._stub_hub("local_docker")
+        with (
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
+            patch(f"{_ROUTES}._get_hub", return_value=hub),
+        ):
+            mock_get.return_value = fake
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "failed" in body
+        assert "refused" in body.lower()
+        # Must NOT have proceeded to provisioning/provisioned — the refusal
+        # fires before the provider is called.
+        assert "provisioned" not in body
+        assert "command_complete" not in body
+
+    def test_profile_test_local_docker_resolves_as_docker_tier(self, client: TestClient) -> None:
+        """FAR-1085 regression: local_docker must map to tier 'docker', not 'local'.
+
+        Before the fix, local_docker mapped to 'local' which accepted the
+        default posture but refused everything else. As a Docker alias it
+        must map to 'docker' — which accepts default+deny_all but refuses
+        'selected' (no host-allowlist mechanism).
+        """
+        # local_docker + outbound (maps to default) should succeed on docker tier
+        fake = _fake_profile(network_policy="outbound")
+        hub = self._stub_hub("local_docker")
+        with (
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
+            patch(f"{_ROUTES}._get_hub", return_value=hub),
+        ):
+            mock_get.return_value = fake
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
+        assert resp.status_code == 200
+        assert "command_complete" in resp.text
+        assert "destroyed" in resp.text
+
 
 def test_get_hub_builds_fresh_hub() -> None:
     """_get_hub() returns a live RuntimeProviderHub built from process settings."""
