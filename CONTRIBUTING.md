@@ -484,6 +484,27 @@ exist in the devtools tooling repo.
 and re-verifies review approval — no direct commits to `main`. All CI checks
 must pass before merge.
 
+Most PRs follow this standard review process. However, a PR whose changed
+files are **entirely** test code, markdown, or non-workflow GitHub
+configuration (e.g. issue templates) may qualify for the "fast lane" and
+be merged without review. These file types cannot alter product behaviour,
+so the risk profile is different.
+
+Changes that always go through the standard reviewed path:
+
+- Product code (backend, frontend, CLI)
+- Database migrations
+- Deployment configuration
+- CI/CD workflow files
+
+Fast-lane merges are capped per 24 hours and are reviewed after the fact.
+If that post-merge review raises a significant finding, the fast lane is
+suspended for 24 hours and the affected change follows the normal reviewed
+path going forward.
+
+If you'd prefer your change to be reviewed before merging regardless, say
+so in the PR description.
+
 ### Branch naming
 
 Use branch names that reflect the work:
