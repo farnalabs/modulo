@@ -1,0 +1,12 @@
+{{- if .Values.resourceQuota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "modulo.fullname" . }}-quota
+  namespace: {{ include "modulo.namespace" . }}
+  labels:
+    {{- include "modulo.labels" . | nindent 4 }}
+spec:
+  hard:
+    {{- toYaml .Values.resourceQuota.hard | nindent 4 }}
+{{- end }}

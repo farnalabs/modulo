@@ -1,0 +1,168 @@
+# ============================================================================
+# Modulo Helm Chart — values.eks.example.yaml
+# ============================================================================
+# Validated EKS example. Uses AWS managed services:
+#   - Amazon RDS (Postgres 16) — set postgres.external.*
+#   - Amazon ElastiCache (Redis 7) — set redis.external.*
+#   - AWS ALB Ingress Controller — set ingress.className=alb
+#
+# Prerequisites:
+#   1. EKS cluster with the AWS Load Balancer Controller installed
+#   2. RDS instance accessible from the cluster (VPC peering or same VPC)
+#   3. ElastiCache Redis accessible from the cluster
+#   4. Secrets stored in AWS Secrets Manager or Kubernetes Secrets
+#
+# Usage:
+#   helm install modulo ./deploy/helm/modulo \
+#     -f deploy/helm/modulo/values.eks.example.yaml \
+#     --set postgres.password=<rds-password> \
+#     --set backend.env.SECRET_KEY=<32-byte-key> \
+#     --set backend.env.FERNET_KEY=<32-byte-key>
+# ============================================================================
+
+# -- Namespace --------------------------------------------------------------
+namespace:
+  create: true
+  name: modulo
+  annotations:
+    app.kubernetes.io/managed-by: helm
+
+# -- ResourceQuota (right-sized for EKS) ------------------------------------
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    pods: "50"
+
+# -- LimitRange (EKS defaults) ----------------------------------------------
+limitRange:
+  enabled: true
+  default:
+    cpu: "1"
+    memory: "1Gi"
+  defaultRequest:
+    cpu: "250m"
+    memory: "256Mi"
+
+# -- External Postgres (Amazon RDS) -----------------------------------------
+postgres:
+  enabled: false
+  host: modulo-db.cluster-xxxxxx.us-east-1.rds.amazonaws.com
+  port: 5432
+  database: modulo
+  username: modulo
+  existingSecret: modulo-secrets
+
+# -- External Redis (Amazon ElastiCache) ------------------------------------
+redis:
+  enabled: true
+  embedded: false
+  host: modulo-redis.xxxxxx.0001.use1.cache.amazonaws.com
+  port: 6379
+  db: 0
+  existingSecret: modulo-secrets
+
+# -- Backend (2 replicas for HA) --------------------------------------------
+backend:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/farnalabs/modulo/backend
+    digest: ""
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  env:
+    MODULO_PUBLIC_URL: "https://modulo.example.com"
+    MODULO_LOG_LEVEL: info
+    MODULO_ENV: production
+    MODULO_MAX_LOCAL_CONCURRENCY: "4"
+    SAQ_WORKER_CONCURRENCY: "20"
+    SAQ_REDIS_POOL_SIZE: "50"
+
+# -- SAQ Runner (2 replicas for HA) ----------------------------------------
+saqRunner:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/farnalabs/modulo/backend
+    digest: ""
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  env:
+    SAQ_WORKER_CONCURRENCY: "20"
+    SAQ_REDIS_POOL_SIZE: "50"
+
+# -- SAQ System (single replica — single scheduler) -------------------------
+saqSystem:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/farnalabs/modulo/backend
+    digest: ""
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# -- Frontend (2 replicas for HA) ------------------------------------------
+frontend:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/farnalabs/modulo/frontend
+    digest: ""
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+# -- Ingress (AWS ALB) ------------------------------------------------------
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz/ready
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+  hosts:
+    - host: modulo.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: modulo-tls
+      hosts:
+        - modulo.example.com
+
+# -- HPA (backend + frontend) -----------------------------------------------
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80
