@@ -7199,6 +7199,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             )
         if _route.provider_type == "e2b":
             validate_e2b_dispatch_timeout(sandbox_timeout)
+            # FAR-1065: when the node-level egress_policy is unset, consult
+            # the environment profile's network_policy and map "none" → deny_all.
+            # A profile network_policy="none" must mean deny-all regardless of
+            # route — the node-level value always wins when explicitly set.
+            if egress_policy is None and _route.profile is not None:
+                _profile_network = (getattr(_route.profile, "network_policy", None) or "outbound").strip().lower()
+                if _profile_network == "none":
+                    egress_policy = "deny_all"
 
     run_context: dict[str, Any] = state.get("run_context") or {}
     raw_input: Any = run_context.get("input", {})
