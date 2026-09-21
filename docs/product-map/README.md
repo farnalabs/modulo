@@ -431,6 +431,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > 404 before any check, and the deterministic stub provider → `healthy`.
 > Removed the four scenarios from `PINNED_AWAITING_IMPLEMENTATION`.
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-20):** closed `feat-connectors`'s "No BDD for
+> connector CRUD lifecycle (create/update/delete via admin API)" gap
+> (`configure/connectors.md`). Registered the new
+> `connectors/connector_crud.feature` into the executing BDD suite from the new
+> `steps/test_connector_crud.py`, driving the real `/api/v1/connectors`
+> create / get / list / PATCH / delete routes with only the DB CRUD + RLS
+> seams patched (the TestClient + mock-org-session pattern of the
+> `test_connector_endpoint.py` unit suite): 9 scenarios — 201 create with
+> credentials Fernet-encrypted at rest and never echoed, 422 malformed REST
+> credentials / invalid REST `on_unknown` config at the boundary, 200
+> individual + paginated retrieval (redacted), PATCH re-encrypting fresh
+> credentials, 204 DELETE, and the org-isolation 404 on a foreign-org
+> fetch/delete. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
