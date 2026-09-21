@@ -8,6 +8,7 @@ feature-gate 402, permission registration, validation (range > 365d, limit >
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -1161,6 +1162,135 @@ class TestExportEndpoint:
                 headers={"Authorization": f"Bearer {token}"},
             )
         assert resp.status_code == 402, f"Expected 402 when analytics_page is off, got {resp.status_code}: {resp.text}"
+
+
+class TestScanEndpoint:
+    """GET /api/v1/analytics/scan — server-side scan export (NDJSON/CSV).
+
+    The deferral companion to the paginated /export: the WHOLE matching set is
+    streamed in one response (no offset/limit), keyset-paginated server-side.
+    """
+
+    async def test_scan_returns_ndjson_rows(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        day = date(2026, 6, 10)
+        rid = uuid.uuid4()
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=rid,
+            run_date=day,
+            status="failed",
+            error_code="executor_stalled",
+            claim_count=2,
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/scan?date_from={day.isoformat()}&date_to={day.isoformat()}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.headers["content-type"].startswith("application/x-ndjson")
+        lines = [line for line in resp.text.splitlines() if line.strip()]
+        assert lines, "a scan with facts must stream at least one NDJSON line"
+        payload = json.loads(lines[0])
+        assert payload["run_id"] == str(rid)
+        assert payload["status"] == "failed"
+        assert payload["error_code"] == "executor_stalled"
+        assert payload["claim_count"] == 2
+
+    async def test_scan_csv_attachment(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        day = date(2026, 6, 11)
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=day,
+            error_code="executor_stalled",
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/scan?format=csv&date_from={day.isoformat()}&date_to={day.isoformat()}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert "attachment" in resp.headers.get("content-disposition", "")
+        body = resp.text
+        assert "run_id" in body, "the scan CSV must carry the fact column headers"
+        assert "executor_stalled" in body, "the scan CSV must carry the fact row values"
+
+    async def test_scan_org_b_never_sees_org_a(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+        user_b: uuid.UUID,
+    ) -> None:
+        """A scan is the same raw-fact surface as /export — org isolation must hold."""
+        day = date(2026, 6, 10)
+        rid_b = uuid.uuid4()
+        await _insert_fact(db_engine, org_id=org_a, run_id=uuid.uuid4(), run_date=day, cost=1.25)
+        await _insert_fact(db_engine, org_id=org_b, run_id=rid_b, run_date=day, cost=9.99)
+
+        token = _token(org_b, user_b, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/scan?date_from={day.isoformat()}&date_to={day.isoformat()}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        payloads = [json.loads(line) for line in resp.text.splitlines() if line.strip()]
+        assert len(payloads) == 1, "org B's scan must contain only its own fact — org A leaked"
+        assert payloads[0]["run_id"] == str(rid_b)
+
+    async def test_scan_empty_org_streams_zero_rows(
+        self,
+        integration_client: AsyncClient,
+        empty_org: uuid.UUID,
+        empty_user: uuid.UUID,
+    ) -> None:
+        token = _token(empty_org, empty_user, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/scan?date_from=2026-07-01&date_to=2026-07-07",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.text == "", "an empty org must stream zero NDJSON lines"
+
+    async def test_scan_require_feature_off_returns_402(
+        self,
+        db_url: str,
+        app_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        """/scan must be gated by the same analytics_page feature as /query and /export."""
+        token = _token(org_a, user_a, "admin")
+        async with _plan_client(db_url, app_engine, _NoFeatures()) as client:
+            resp = await client.get(
+                "/api/v1/analytics/scan",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert resp.status_code == 402, f"Expected 402 when analytics_page is off, got {resp.status_code}: {resp.text}"
+
+    async def test_scan_unauthenticated_returns_401(self, integration_client: AsyncClient) -> None:
+        """A scan with no credentials must be 401, never a 200 stream."""
+        resp = await integration_client.get("/api/v1/analytics/scan")
+        assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
 
 
 class TestBackfillEnrichment:

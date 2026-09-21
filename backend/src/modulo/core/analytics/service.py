@@ -24,6 +24,7 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -73,6 +74,7 @@ __all__ = [
     "export_facts",
     "run_analytics_query",
     "run_concurrency_query",
+    "stream_export_facts",
 ]
 
 # Default statement timeout for analytics queries (ms) — settings-driven via
@@ -99,6 +101,11 @@ _FRESHNESS_STALE_HOURS = 36
 
 # Export pagination bounds (FAR-102, Part D).
 _EXPORT_DEFAULT_LIMIT = 500
+
+# Server-side scan page size — rows fetched per keyset page. The scan keeps the
+# whole org's response in ONE stream, but the DB is read page-by-page so memory
+# stays bounded for any org size instead of materialising every fact row at once.
+_SCAN_PAGE_SIZE = 1000
 
 # Per-org app-level limiter (simple in-memory): 60 requests/minute. Best-effort
 # and bounded: idle orgs are pruned and the number of tracked orgs is capped, so
@@ -865,3 +872,157 @@ async def export_facts(
         "offset": offset,
         "limit": limit,
     }
+
+
+def _keyset_conditions(cursor: tuple[date, datetime, uuid.UUID]) -> Any:
+    """Keyset cursor predicate for the scan's next page (portable row-wise compare).
+
+    The scan order is the same stable ``(run_date, created_at, run_id)`` ordering
+    the paginated export uses. The cursor is the LAST row of the previous page, so
+    the next page reads strictly-after rows WITHOUT OFFSET — offset pagination
+    re-scans already-read rows and degrades to O(n^2) total work on a full-org
+    scan, which is exactly what a scan surface must not do (FAR-102 deferral).
+
+    The three-branch OR is written as explicit scalar comparisons rather than a
+    Postgres row-value tuple compare so it compiles on every conformance dialect
+    (SQLite/MariaDB) as well as the supported Postgres primary. Values are bound
+    as named ``sa.bindparam`` (never interpolated) so each page re-binds fresh
+    values against the same statement.
+    """
+    return sa.or_(
+        RunDailyFact.run_date > sa.bindparam("scan_cur_run_date", type_=sa.Date),
+        sa.and_(
+            RunDailyFact.run_date == sa.bindparam("scan_cur_run_date_eq", type_=sa.Date),
+            RunDailyFact.created_at > sa.bindparam("scan_cur_created_at", type_=sa.DateTime),
+        ),
+        sa.and_(
+            RunDailyFact.run_date == sa.bindparam("scan_cur_run_date_eq2", type_=sa.Date),
+            RunDailyFact.created_at == sa.bindparam("scan_cur_created_at_eq", type_=sa.DateTime),
+            RunDailyFact.run_id > sa.bindparam("scan_cur_run_id", type_=sa.Uuid),
+        ),
+    )
+
+
+def _keyset_bind(cursor: tuple[date, datetime, uuid.UUID]) -> dict[str, Any]:
+    """Bound values for every cursor bindparam in ``_keyset_conditions``."""
+    run_date, created_at, run_id = cursor
+    return {
+        "scan_cur_run_date": run_date,
+        "scan_cur_run_date_eq": run_date,
+        "scan_cur_run_date_eq2": run_date,
+        "scan_cur_created_at": created_at,
+        "scan_cur_created_at_eq": created_at,
+        "scan_cur_run_id": run_id,
+    }
+
+
+async def stream_export_facts(
+    *,
+    org_id: uuid.UUID,
+    params: AnalyticsParams,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    account_id: uuid.UUID | None = None,
+    org_role: str | None = None,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
+    page_size: int = _SCAN_PAGE_SIZE,
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield raw fact rows (no bucketing) for the WHOLE org in one scan.
+
+    Server-side scan export (the FAR-102 deferral companion to ``export_facts``):
+    the caller receives every matching row through a single stream instead of
+    offset/limit pages. Internally the scan keyset-paginates over the stable
+    ``(run_date, created_at, run_id)`` order in fixed ``page_size`` batches, so
+    memory stays bounded for any org size while the client sees one uninterrupted
+    response. ``dimension`` is accepted for surface parity and ignored — like the
+    paginated export, a scan has no bucketing.
+
+    The RLS org + principal context, the Postgres statement-timeout/timezone
+    preamble and the typed ``AnalyticsError`` family mirror ``export_facts``
+    exactly, so both surfaces share one contract. One session/transaction spans
+    the whole scan (the read is stable against concurrent fact writes).
+
+    Raises the same typed errors as the rest of the service:
+    ``AnalyticsRateLimitedError`` (per-org budget hit),
+    ``AnalyticsValidationError`` (inverted/over-wide range, ``page_size < 1``),
+    ``AnalyticsMigrationRequiredError`` (missing facts table),
+    ``AnalyticsQueryTimeoutError`` (statement timeout) and
+    ``AnalyticsDatabaseError`` (unexpected DB failure).
+    """
+    if page_size < 1:
+        raise AnalyticsValidationError("page_size must be >= 1")
+    if _rate_limited(str(org_id)):
+        raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
+    params = replace(params, team_ids=team_ids)
+
+    effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
+    conditions, bind, needs_pipeline_join = _export_filters(
+        org_id=org_id,
+        params=params,
+        effective_from=effective_from,
+        effective_to=effective_to,
+    )
+
+    rows_stmt = sa.select(*_EXPORT_COLUMNS)
+    if needs_pipeline_join:
+        # Team boundary coalesce — same outerjoin the paginated export adds so
+        # the effective owner resolves for NULL-stamped facts (#1795).
+        rows_stmt = rows_stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+    rows_stmt = rows_stmt.where(*conditions).order_by(
+        RunDailyFact.run_date,
+        RunDailyFact.created_at,
+        RunDailyFact.run_id,
+    )
+
+    cursor: tuple[date, datetime, uuid.UUID] | None = None
+    page_stmt = rows_stmt
+    page_bind = dict(bind)
+    try:
+        async with factory() as session:
+            try:
+                async with session.begin():
+                    await set_rls_org(session, org_id)
+                    if account_id is not None:
+                        await set_rls_user_context(session, account_id, org_role or "")
+                    dialect = (await session.connection()).dialect.name
+                    if dialect == "postgresql":
+                        timeout_ms = getattr(
+                            settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
+                        )
+                        await session.execute(text(_SQL_SET_TIMEZONE_UTC))
+                        await session.execute(
+                            text(_SQL_SET_STATEMENT_TIMEOUT),
+                            {"ms": str(int(timeout_ms))},
+                        )
+                    while True:
+                        result = await session.execute(page_stmt, dict(page_bind))
+                        page = list(result.all())
+                        for row in page:
+                            yield _serialize_fact_row(row)
+                        if len(page) < page_size:
+                            break
+                        last = page[-1]
+                        cursor = (last.run_date, last.created_at, last.run_id)
+                        page_bind.update(_keyset_bind(cursor))
+                        page_stmt = rows_stmt.where(_keyset_conditions(cursor))
+            except asyncio.CancelledError:
+                raise
+            except ProgrammingError:
+                _log.exception("analytics.scan.programming_error", extra={"org_id": str(org_id)})
+                raise AnalyticsMigrationRequiredError(
+                    "Feature is not available. Run database migrations to enable it."
+                ) from None
+            except DBAPIError as exc:
+                if _is_query_canceled(exc):
+                    _log.warning("analytics.scan.timeout", extra={"org_id": str(org_id)})
+                    raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+                _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
+                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+            except SQLAlchemyError:
+                _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
+                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+    except (AnalyticsError, asyncio.CancelledError):
+        raise
+    except Exception:
+        _log.exception("analytics.scan.unexpected_error", extra={"org_id": str(org_id)})
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None

@@ -55,6 +55,12 @@ reports resolve against a consistent fact model.
 - [x] Export (`/export`) returns paginated JSON rows (`items`/`total`/`offset`
       /`limit`) and a CSV attachment with a `Content-Disposition: attachment`
       header for `format=csv`
+- [x] Scan export (`/scan`) streams the WHOLE matching fact set in one response
+      (NDJSON by default, or a CSV attachment) with no offset/limit pagination —
+      the server keyset-paginates over the stable `(run_date, created_at,
+      run_id)` order in fixed page-size batches, sharing the typed filters, org +
+      team-boundary scoping, per-org rate limit and bounded statement timeout of
+      `/export` (`backend/tests/unit/test_analytics_service_execution.py`)
 - [x] Concurrency (`/concurrency`) reports the pooled slot-utilisation series
       (`pool_reference` + per-bucket `max_active`/`avg_active`/`max_queued`/
       `avg_queued`), and the guardrail scorecard (`/guardrails`) is labelled
@@ -62,10 +68,26 @@ reports resolve against a consistent fact model.
 
 ## Known Gaps
 
-- No server-side streaming / scan export for the whole org in one response —
-  export is paginated JSON/CSV only.
+- Per-org analytics rate limiting is a best-effort in-memory window (60/min) —
+  not a shared Redis-scaled limiter across a fleet of workers.
 
 ## QA History
+
+- 2026-09-21: **improve-architecture (product-map walk)** — closed the
+  "No server-side streaming / scan export for the whole org in one response"
+  gap. Added `GET /api/v1/analytics/scan` (NDJSON `application/x-ndjson`
+  default, CSV attachment for `format=csv`) with a new
+  `stream_export_facts` service generator that keyset-paginates over
+  `(run_date, created_at, run_id)` in fixed `_SCAN_PAGE_SIZE` batches inside a
+  single RLS-pinned session, sharing the typed filters, team-boundary,
+  per-org rate limit and statement-timeout with the paginated `/export`. The
+  route primes the generator so validation / rate-limit / migration / database
+  errors surface as real HTTP statuses before streaming starts. Unit-covered
+  (`TestStreamExportFacts` / `TestKeysetCursor`, incl. a SQLite conformance
+  smoke of the portable OR-based cursor) and integration-covered
+  (`TestScanEndpoint`: NDJSON content, CSV attachment, empty org, org
+  isolation, feature-gate 402, unauthenticated 401). The manifest `feat-analytics`
+  deferral is demoted to only the Redis-scaled limiter follow-up.
 
 - 2026-09-19: **improve-architecture (product-map walk)** — closed the "No
   dedicated BDD feature files for `/analytics`" gap. Registered
