@@ -150,7 +150,27 @@ jobs:
         shell: bash
         working-directory: .
         run: |
-          docker compose -f deploy/compose/runner-ci.yml --profile runner-ci up -d
+          # Registry-side burst throttling can fail the first `compose up` pull
+          # of the three rig images even though they are digest-pinned (observed
+          # 2026-09-21: "docker-socket-proxy Error toomanyrequests: retry-after:
+          # 1.215696ms, allowed: 44000/minute"). Docker caches successfully
+          # pulled layers, so a bounded retry rides out the transient throttle
+          # instead of flaking the whole harness job (mirrors the Playwright
+          # install retry in bdd.yml).
+          up_ok=0
+          for i in 1 2 3; do
+            if docker compose -f deploy/compose/runner-ci.yml --profile runner-ci up -d; then
+              up_ok=1
+              break
+            fi
+            echo "::warning::compose up attempt $i failed (likely transient registry throttling); retrying in 15s..."
+            sleep 15
+          done
+          if [ "$up_ok" -ne 1 ]; then
+            echo "::error::runner-ci compose rig failed to boot after 3 attempts"
+            docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs || true
+            exit 1
+          fi
           PROXY_PORT="$(docker compose -f deploy/compose/runner-ci.yml --profile runner-ci port docker-socket-proxy 2375 | awk -F: '{print $NF}')"
           DIND_PORT="$(docker compose -f deploy/compose/runner-ci.yml --profile runner-ci port dind 2375 | awk -F: '{print $NF}')"
           echo "PROXY_PORT=${PROXY_PORT}" >> "$GITHUB_ENV"
