@@ -27,6 +27,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 _OIDC_DISCOVERY = {
@@ -178,11 +180,16 @@ def _given_store_accepts_provider(request: Any) -> None:
     ctx["unrestricted"] = False
 
     async def _create(*_args: object, **_kwargs: object) -> MagicMock:
+        # Carry the caller-submitted secret onto the returned row so the
+        # no-echo assertion actually exercises the response masker: a mock that
+        # always returned the already-masked "configured" would make the
+        # assertion a tautology.
         return _make_provider(
             id=_provider_uuid("prov-new"),
             provider_type=str(_kwargs.get("provider_type", "oidc")),
             name=str(_kwargs.get("name", "Google Workspace")),
             provider_id=("google" if _kwargs.get("provider_type") == "oidc" else None),
+            client_secret=str(_kwargs.get("client_secret", "configured")),
             discovery_url=_kwargs.get("discovery_url"),
             metadata_url=_kwargs.get("metadata_url"),
             auto_provision=bool(_kwargs.get("auto_provision", False)),
@@ -258,6 +265,7 @@ def _when_create_oidc(request: Any, name: str, discovery_url: str) -> None:
     }
     if not ctx.get("unrestricted"):
         payload["allowed_domains"] = ["example.com"]
+    ctx["submitted_secret"] = payload["client_secret"]
     patches = [_rls_patch(), patch("modulo.api.routes.admin_sso.create_provider", new=ctx["create_provider"])]
     if "flag_off" in ctx:
         patches.append(
@@ -451,7 +459,10 @@ def _then_created_oidc(request: Any) -> None:
 
 @then("the created provider does not echo the client secret")
 def _then_no_secret_echo(request: Any) -> None:
-    assert "google-client-secret" not in request.node._resp.text
+    submitted = _ctx(request).get("submitted_secret", "google-client-secret")
+    resp = request.node._resp
+    assert submitted not in resp.text, "client secret was echoed in the response body"
+    assert _body(request).get("client_secret") == SENSITIVE_VALUE_MASK
 
 
 @then("the created provider is a SAML provider")
