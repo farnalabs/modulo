@@ -467,6 +467,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > credentials, 204 DELETE, and the org-isolation 404 on a foreign-org
 > fetch/delete. `_ORPHANED_BDD_FEATURES` stays empty.
 >
+> **Closed this walk (2026-09-21):** closed the composite content_json
+> validation gap (`composites/composite_library.feature`, under `feat-library`).
+> The "Composite content_json validation — missing required fields returns
+> error" scenario — the last `@awaiting-implementation` draft in
+> `composite_library.feature` — now drives the REAL `POST /api/v1/libraries`
+> create route: `LibraryPrimitiveCreate` in `api/routes/library.py` gained a
+> `model_validator` that rejects a `composite` primitive whose `content_json`
+> lacks the `nodes`/`edges` graph body with 422 (10 empty/missing-key/pass
+> cases are locked by the composite BDD steps and the
+> `test_library_routes.py` unit suite), instead of falling through to a bogus
+> 409 from the DB IntegrityError mapping. Removed the scenario from
+> `PINNED_AWAITING_IMPLEMENTATION` (the composite entry is now empty).
+> `_ORPHANED_BDD_FEATURES` stays empty.
+
 > **Closed this walk (2026-09-21):** closed `feat-sso`'s "No BDD scenarios
 > for admin provider CRUD" gap (`auth/sso-provider-ui.md`). Registered the new
 > `auth/sso_admin_crud.feature` into the executing BDD suite from the new

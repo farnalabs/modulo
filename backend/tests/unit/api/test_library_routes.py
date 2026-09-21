@@ -244,6 +244,49 @@ def test_create_primitive_invalid_type_rejected(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
+def test_create_composite_with_empty_content_json_rejected(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/libraries",
+        json=_create_payload(primitive_type="composite", content_json={}),
+    )
+    assert resp.status_code == 422
+
+
+def test_create_composite_with_missing_nodes_rejected(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/libraries",
+        json=_create_payload(primitive_type="composite", content_json={"edges": []}),
+    )
+    assert resp.status_code == 422
+
+
+def test_create_composite_with_missing_edges_rejected(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/libraries",
+        json=_create_payload(primitive_type="composite", content_json={"nodes": [{"id": "n1"}]}),
+    )
+    assert resp.status_code == 422
+
+
+def test_create_composite_with_graph_content_json_returns_201(client: TestClient) -> None:
+    prim = _make_listable_primitive(name="New Composite", primitive_type="composite")
+    with (
+        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post(
+            "/api/v1/libraries",
+            json=_create_payload(
+                primitive_type="composite",
+                content_json={"nodes": [{"id": "n1"}], "edges": []},
+            ),
+        )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["primitive_type"] == "composite"
+
+
 def test_update_primitive_returns_200(client: TestClient) -> None:
     prim = _make_listable_primitive(name="Renamed Workflow")
     with (

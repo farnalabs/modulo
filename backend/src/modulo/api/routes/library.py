@@ -270,6 +270,9 @@ class LibraryPrimitiveListResponse(BaseModel):
 _PRIMITIVE_TYPE_PATTERN = f"^({'|'.join(PRIMITIVE_TYPES)})$"
 
 
+_COMPOSITE_CONTENT_KEYS = ("nodes", "edges")
+
+
 class LibraryPrimitiveCreate(TeamVisibilityMixin):
     primitive_type: str = Field(pattern=_PRIMITIVE_TYPE_PATTERN)
     name: str = Field(min_length=1, max_length=255)
@@ -280,6 +283,23 @@ class LibraryPrimitiveCreate(TeamVisibilityMixin):
     owner_team_id: uuid.UUID | None = None
     visibility: str = Field(default="org", pattern=r"^(org|team)$")
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
+
+    @model_validator(mode="after")
+    def _validate_composite_content_json(self) -> Self:
+        """Composite primitives store a graph body; reject a structurally empty one.
+
+        A ``composite`` primitive's ``content_json`` is the sub-pipeline graph
+        (``{"nodes": [...], "edges": [...]}``) that ``_build_pipeline_from_template``
+        and the composite routes consume. Reject a payload missing either key at the
+        boundary (422) instead of persisting a broken primitive.
+        """
+        if self.primitive_type != "composite":
+            return self
+        content = self.content_json or {}
+        for key in _COMPOSITE_CONTENT_KEYS:
+            if key not in content or not isinstance(content[key], list):
+                raise ValueError(f"content_json for primitive_type 'composite' must include a '{key}' list")
+        return self
 
 
 class LibraryPrimitiveUpdate(TeamVisibilityMixin):

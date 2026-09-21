@@ -28,10 +28,12 @@ bdd:
   - backend/tests/bdd/features/library/community_registry.feature
   - backend/tests/bdd/features/library/contribute.feature
   - backend/tests/bdd/features/library/schemas.feature
+  - backend/tests/bdd/features/composites/composite_library.feature
   - backend/tests/bdd/steps/test_library.py
   - backend/tests/bdd/steps/test_community_registry.py
   - backend/tests/bdd/steps/test_library_contributions.py
   - backend/tests/bdd/steps/test_schemas.py
+  - backend/tests/bdd/steps/test_composites.py
 depends-on:
   - feat-pipelines
   - feat-schemas
@@ -73,6 +75,12 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
       listed (`contribute.feature`, `test_library_contributions.py`)
 - [x] Library-schema seeding and dogfood schemas underpin create-pipeline from a template
       (`library/schemas.feature`, `test_schema_seeds.py`)
+- [x] Composite library primitives are saved/browsed/adapted, and the create boundary
+      validates the composite graph body: a `composite` primitive's `content_json` must
+      carry `nodes` and `edges` lists, so an empty or structurally missing payload is
+      rejected 422 at the route layer instead of persisting a broken primitive
+      (`composites/composite_library.feature`, `LibraryPrimitiveCreate` in
+      `api/routes/library.py`, `test_library_routes.py`)
 - [x] Library collections (FAR-760): a `library_collection` primitive can be created as a
       draft (201), its manifest pins updated while draft, and published (200) — invalid
       pins, duplicate pins, an empty manifest and more than `MAX_COLLECTION_PINS` are
@@ -89,6 +97,16 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   authoring and registry browsing are tracked under one feature here but cited separately.
 
 ## QA History
+
+- 2026-09-21: **product-map walk** — closed the composite
+  content_json boundary gap: `composite_library.feature`'s "Composite content_json
+  validation — missing required fields returns error" scenario (previously
+  pinned `@awaiting-implementation`) now drives the REAL `POST /api/v1/libraries`
+  create route. `LibraryPrimitiveCreate` gained a `model_validator` that rejects a
+  composite payload whose `content_json` lacks the `nodes`/`edges` graph body with
+  422 (previously such a payload fell through to a bogus 409 from the DB
+  IntegrityError mapping). Unit coverage added in `test_library_routes.py`, and the
+  scenario was removed from `PINNED_AWAITING_IMPLEMENTATION`.
 
 - 2026-09-13: **product-map review pass** — closed the contribution BDD
   gap: wired `library/contribute.feature` into the executing suite via the new
