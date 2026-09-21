@@ -617,10 +617,17 @@ def test_replay_webhook_event_not_accepted_returns_400(client: TestClient) -> No
     assert body["detail"] == "Event type not accepted by trigger configuration"
     # Audit persistence: the TriggerEvent was written inside the transaction
     # and committed (aexit called with no exception = commit, not rollback).
+    #
+    # Discriminating assertion: the LAST aexit call must be the outer
+    # ``async with session.begin()`` block (the request transaction).  Any
+    # earlier aexit calls are from nested begin() calls on the shared mock
+    # and are irrelevant.  Under the rollback mutation (except moved outside
+    # the begin block), the outer aexit receives the exception and the last
+    # entry is NOT (None, None, None) — proving this assertion catches the
+    # bug.  ``any(...)`` was vacuous because an unrelated clean aexit
+    # satisfied it even under rollback.
     aexit = begin_cm.__aexit__
-    assert aexit.await_count >= 1
-    # At least one aexit was a clean commit (no exception propagating).
-    assert any(call.args == (None, None, None) for call in aexit.await_args_list)
+    assert aexit.await_args_list[-1].args == (None, None, None)
     # The audit event with event_type_not_accepted was added to the session.
     assert any(
         isinstance(c.args[0], TriggerEvent)

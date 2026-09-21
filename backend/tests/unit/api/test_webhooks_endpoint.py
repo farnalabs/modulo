@@ -1096,7 +1096,6 @@ def test_receive_webhook_event_not_accepted_returns_400(client: TestClient) -> N
     # Audit persistence: the TriggerEvent was written inside the transaction
     # and committed (aexit called with no exception = commit, not rollback).
     aexit = begin_cm.__aexit__
-    assert aexit.await_count >= 1
     # At least one aexit was a clean commit (no exception propagating).
     assert any(call.args == (None, None, None) for call in aexit.await_args_list)
     # The audit event with event_type_not_accepted was added to the session.
