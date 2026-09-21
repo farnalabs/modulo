@@ -208,7 +208,12 @@ async def request_org_deletion(
 
     Returns a dict with ``token``, ``token_expires_at``, and ``export`` keys.
     """
-    result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
+    # Opt out of the global soft-delete filter: a repeated deletion request must
+    # find the already-soft-deleted org so it can report "already deleted"
+    # rather than the misleading "not found" (FAR-1025 regression).
+    result = await session.execute(
+        include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
+    )
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError(_ERR_ORG_NOT_FOUND)

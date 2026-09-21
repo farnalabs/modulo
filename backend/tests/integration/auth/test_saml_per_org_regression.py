@@ -133,12 +133,17 @@ async def _create_saml_provider(
 
 
 # Two committed orgs, each owning exactly ONE enabled SAML provider.
-# Org A is created a decade earlier so its provider is reliably the
-# legacy "first enabled" singleton for the legacy-parity tests.
+# Org A's PROVIDER is created a decade earlier so it is reliably the legacy
+# "first enabled" singleton for the legacy-parity tests. The ORGS are created
+# "now": making org A a decade old too would collide with
+# ``test_saml_rls_resolution.two_orgs``, which relies on its own org being the
+# globally oldest (the target of ``_set_default_rls_org``'s first-org fallback)
+# — two decade-old orgs race for that slot and whichever fixture ran first wins
+# (FAR-1007 regression vs FAR-1058 #814).
 @pytest_asyncio.fixture(scope="module")
 async def two_saml_orgs(db_engine: AsyncEngine) -> dict[str, str]:
-    org_a_id, org_a_slug = await _create_org(db_engine, "a", created_at_offset_seconds=315_360_000)
-    org_b_id, org_b_slug = await _create_org(db_engine, "b", created_at_offset_seconds=0)
+    org_a_id, org_a_slug = await _create_org(db_engine, "a")
+    org_b_id, org_b_slug = await _create_org(db_engine, "b")
     saml_a = await _create_saml_provider(db_engine, org_id=org_a_id, created_at_offset_seconds=315_360_000)
     saml_b = await _create_saml_provider(db_engine, org_id=org_b_id, created_at_offset_seconds=0)
     return {
