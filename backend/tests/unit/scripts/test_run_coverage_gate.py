@@ -1305,6 +1305,28 @@ class TestParseCoberturaBranches:
         assert result["src/main.py"][5] == (1, 2)
         assert 10 not in result["src/main.py"]
 
+    def test_parses_condition_coverage_attribute(self, tmp_path):
+        """coverage.py ≥7.x emits condition-coverage attributes without <condition> children.
+
+        This is the REAL format from CI (coverage.py 7.16.1): lines have
+        ``branch="true" condition-coverage="100% (2/2)"`` as self-closing
+        elements with NO child ``<condition>`` elements.
+        """
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="src/main.py"><lines>'
+            '<line number="5" hits="3" branch="true" condition-coverage="50% (1/2)"/>'
+            '<line number="10" hits="1" branch="true" condition-coverage="100% (2/2)"/>'
+            '<line number="15" hits="1" branch="false"/>'
+            "</lines></class></classes></package></packages></coverage>"
+        )
+        result = mod._parse_cobertura_branches(xml)
+        assert "src/main.py" in result
+        assert result["src/main.py"][5] == (1, 2)
+        assert result["src/main.py"][10] == (2, 2)
+        assert 15 not in result["src/main.py"]
+
     def test_empty_report(self, tmp_path):
         xml = tmp_path / "coverage.xml"
         xml.write_text("<coverage/>")
@@ -1314,6 +1336,29 @@ class TestParseCoberturaBranches:
         xml = tmp_path / "coverage.xml"
         xml.write_text("not xml")
         assert not mod._parse_cobertura_branches(xml)
+
+
+class TestParseConditionCoverageAttr:
+    """Unit tests for _parse_condition_coverage_attr (the attribute parser)."""
+
+    def test_full_coverage(self):
+        assert mod._parse_condition_coverage_attr("100% (2/2)") == (2, 2)
+
+    def test_partial_coverage(self):
+        assert mod._parse_condition_coverage_attr("50% (1/2)") == (1, 2)
+
+    def test_zero_coverage(self):
+        assert mod._parse_condition_coverage_attr("0% (0/3)") == (0, 3)
+
+    def test_single_condition(self):
+        assert mod._parse_condition_coverage_attr("100% (1/1)") == (1, 1)
+
+    def test_unparseable_returns_none(self):
+        assert mod._parse_condition_coverage_attr("") is None
+        assert mod._parse_condition_coverage_attr("n/a") is None
+
+    def test_strips_whitespace(self):
+        assert mod._parse_condition_coverage_attr("  50% (1/2)  ") == (1, 2)
 
 
 class TestParseLcovBranches:
@@ -1832,6 +1877,49 @@ class TestProjectWideMetrics:
         assert line_pct == 60.0
         assert branch_pct == 50.0
 
+    def test_cobertura_metrics_root_attributes(self, tmp_path):
+        """coverage.py ≥7.x puts branch totals on the root <coverage> element.
+
+        The parser must read ``branches-covered`` / ``branches-valid`` from
+        the root element when ``<condition>`` children are absent.
+        """
+        xml = tmp_path / "coverage.xml"
+        # Simulate real coverage.py output: 4 lines (3 hit), root attrs for branch.
+        xml.write_text(
+            '<coverage branches-valid="26766" branches-covered="23999" branch-rate="0.8966">'
+            "<packages><package><classes>"
+            '<class filename="a.py"><lines>'
+            '<line number="1" hits="3"/><line number="2" hits="0"/>'
+            '<line number="3" hits="1" branch="true" condition-coverage="100% (2/2)"/>'
+            '<line number="4" hits="0" branch="true" condition-coverage="50% (1/2)"/>'
+            "</lines></class>"
+            '<class filename="b.py"><lines><line number="1" hits="5"/></lines></class>'
+            "</classes></package></packages></coverage>"
+        )
+        line_pct, branch_pct = mod._compute_project_wide_metrics_cobertura(xml)
+        assert line_pct == 60.0
+        # Root attrs: 23999/26766 = 89.66%
+        assert branch_pct is not None
+        assert abs(branch_pct - 89.66) < 0.01
+
+    def test_cobertura_metrics_condition_attr_fallback(self, tmp_path):
+        """When root attrs are absent, branch % is computed from condition-coverage attrs."""
+        xml = tmp_path / "coverage.xml"
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>'
+            '<line number="1" hits="3"/><line number="2" hits="0"/>'
+            '<line number="3" hits="1" branch="true" condition-coverage="100% (2/2)"/>'
+            '<line number="4" hits="0" branch="true" condition-coverage="0% (0/2)"/>'
+            "</lines></class>"
+            '<class filename="b.py"><lines><line number="1" hits="5"/></lines></class>'
+            "</classes></package></packages></coverage>"
+        )
+        line_pct, branch_pct = mod._compute_project_wide_metrics_cobertura(xml)
+        assert line_pct == 60.0
+        # 4 total conditions, 2 covered = 50%
+        assert branch_pct == 50.0
+
     def test_lcov_metrics(self, tmp_path):
         lcov = tmp_path / "lcov.info"
         lcov.write_text(
@@ -1851,6 +1939,7 @@ class TestProjectWideMetrics:
     def test_lcov_empty(self, tmp_path):
         lcov = tmp_path / "lcov.info"
         lcov.write_text("TN:\nend_of_record\n")
+        # No branch records at all -> branch is None (absent), not 0.0.
         assert mod._compute_project_wide_metrics_lcov(lcov) == (0.0, None)
 
     def test_lcov_non_numeric_counts_do_not_crash(self, tmp_path):
@@ -1878,13 +1967,12 @@ class TestProjectWideMetrics:
 
 
 class TestProjectWideFloor:
-    def test_project_below_floor_skipped_when_no_production_changes(self, tmp_path):
-        """No production changes -> all languages skip -> floor is not enforced.
+    def test_project_below_floor_skipped_when_no_production_changes(self, tmp_path, capsys):
+        """No production changes -> all languages skip -> but floor IS enforced.
 
-        The project floor is a guard on coverage the PR could have changed.
-        A docs/test-only diff changes no production lines, so the gate skips
-        entirely and the floor (which reflects main's coverage) must not fail
-        the PR.  This is the deliberate all-skipped short-circuit.
+        The project floor is a guard on main's coverage regardless of what the
+        PR changed.  Even when all languages skip (no production changes), a
+        report with line coverage below the floor must still fail the gate.
         """
         xml = tmp_path / "coverage.xml"
         lines = "\n".join('<line number="{}" hits="{}"/>'.format(i, "1" if i <= 80 else "0") for i in range(1, 101))
@@ -1900,7 +1988,27 @@ class TestProjectWideFloor:
             ),
         ):
             rc = mod.main()
-        assert rc == 0
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "BREACH" in out
+
+    def test_project_line_below_floor(self, tmp_path):
+        """Line coverage 80% < floor 88% → FAIL (exit 1)."""
+        xml = tmp_path / "coverage.xml"
+        lines = "\n".join('<line number="{}" hits="{}"/>'.format(i, "1" if i <= 80 else "0") for i in range(1, 101))
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1
 
     def test_project_line_below_floor_fails(self, tmp_path, capsys):
         """Production changes + project line coverage below floor -> exit 1.
@@ -1932,7 +2040,7 @@ class TestProjectWideFloor:
 
         assert rc == 1
         out = capsys.readouterr().out
-        assert "FAIL: Python line" in out
+        assert "BREACH: Python line" in out
         assert "WARNING" not in out
 
     def test_project_js_floor_enforced_with_relative_lcov_paths(self, tmp_path, capsys):
@@ -1974,7 +2082,7 @@ class TestProjectWideFloor:
 
         assert rc == 1
         out = capsys.readouterr().out
-        assert "FAIL: JavaScript line" in out
+        assert "BREACH: JavaScript line" in out
 
     def test_project_branch_zero_with_data_fails(self, tmp_path):
         """Branch records present but all uncovered (0%) -> floor failure.
@@ -2010,8 +2118,13 @@ class TestProjectWideFloor:
             rc = mod.main()
         assert rc == 1
 
-    def test_project_no_branch_data_does_not_fail(self, tmp_path):
-        """No branch records at all -> branch floor is not enforced."""
+    def test_project_no_branch_data_fails_closed(self, tmp_path, capsys):
+        """No branch records at all -> branch floor FAILS CLOSED (exit 1).
+
+        FAR-1063: a report with no branch data is indistinguishable from one
+        whose branch data was dropped.  The gate must fail with a distinct
+        reason, not silently pass.
+        """
         xml = tmp_path / "coverage.xml"
         lines = "\n".join(f'<line number="{i}" hits="1"/>' for i in range(1, 101))
         xml.write_text(
@@ -2030,7 +2143,10 @@ class TestProjectWideFloor:
             ),
         ):
             rc = mod.main()
-        assert rc == 0
+        assert rc == 1, "Missing branch data must fail closed, not pass"
+        out = capsys.readouterr().out
+        assert "BREACH" in out
+        assert "branch data missing" in out.lower()
 
     def test_project_both_above_floor(self, tmp_path):
         xml = tmp_path / "coverage.xml"
@@ -2131,3 +2247,113 @@ class TestBranchCoverageSummary:
         assert result.tiny_diff is True
         assert result.branch_passed is None
         assert result.branch_actual_pct is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1063: fail-closed branch floor + no "WARNING" in output
+# ---------------------------------------------------------------------------
+class TestFar1063BranchFloorFailClosed:
+    """FAR-1063: branch data missing must fail closed (distinct from floor breach),
+    and floor breaches must not print 'WARNING'."""
+
+    def test_python_branch_below_floor_fails(self, tmp_path):
+        """Branch data present but below floor → FAIL."""
+        xml = tmp_path / "coverage.xml"
+        # 100 lines, all hit (100% line), but only 1 of 4 branches covered (25% branch)
+        lines = "\n".join(
+            f'<line number="{i}" hits="1" branch="true" '
+            'condition-coverage="25% (1/4)">'
+            "<conditions>"
+            '<condition number="0" type="jump" coverage="100%"/>'
+            '<condition number="1" type="jump" coverage="0%"/>'
+            '<condition number="2" type="jump" coverage="0%"/>'
+            '<condition number="3" type="jump" coverage="0%"/>'
+            "</conditions></line>"
+            for i in range(1, 101)
+        )
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1
+
+    def test_python_no_branch_data_fails_closed(self, tmp_path, capsys):
+        """Cobertura report with NO branch data → FAIL (exit 1) with distinct
+        reason — NOT a floor breach, NOT a pass.  This is the FAR-1063 defect:
+        the old code silently passed when pb == 0.0."""
+        xml = tmp_path / "coverage.xml"
+        # 100 lines, all hit, no branch="true" attributes at all
+        lines = "\n".join(f'<line number="{i}" hits="1"/>' for i in range(1, 101))
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1, "Missing branch data must fail closed, not pass"
+        captured = capsys.readouterr()
+        assert "branch data missing" in captured.out.lower(), "Missing branch data must produce its own distinct reason"
+        # Must NOT be reported as a coverage breach of the branch metric
+        assert "branch 0.0% < floor" not in captured.out.lower()
+
+    def test_js_no_branch_data_fails_closed(self, tmp_path, capsys):
+        """LCOV report with NO BRDA records → FAIL (exit 1) with distinct reason."""
+        lcov = tmp_path / "lcov.info"
+        # DA records (line data) but no BRDA records (no branch data)
+        lcov.write_text("TN:\nSF:a.ts\n" + "\n".join(f"DA:{i},1" for i in range(1, 101)) + "\nend_of_record\n")
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--js-report", str(lcov)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1, "Missing branch data must fail closed, not pass"
+        captured = capsys.readouterr()
+        assert "branch data missing" in captured.out.lower(), "Missing branch data must produce its own distinct reason"
+
+    def test_floor_breach_output_no_warning(self, tmp_path, capsys):
+        """A floor breach's output must NOT contain the word 'WARNING'."""
+        xml = tmp_path / "coverage.xml"
+        lines = "\n".join(
+            f'<line number="{i}" hits="1" branch="true" '
+            'condition-coverage="25% (1/4)">'
+            "<conditions>"
+            '<condition number="0" type="jump" coverage="100%"/>'
+            '<condition number="1" type="jump" coverage="0%"/>'
+            '<condition number="2" type="jump" coverage="0%"/>'
+            '<condition number="3" type="jump" coverage="0%"/>'
+            "</conditions></line>"
+            for i in range(1, 101)
+        )
+        xml.write_text(
+            "<coverage><packages><package><classes>"
+            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+        )
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={}),
+            patch(
+                "sys.argv",
+                ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(xml)],
+            ),
+        ):
+            rc = mod.main()
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "WARNING" not in captured.out, "Floor breaches must not print 'WARNING' — they are hard failures"
+        assert "BREACH" in captured.out, "Floor breaches should print 'BREACH'"
