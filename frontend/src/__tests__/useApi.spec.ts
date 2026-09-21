@@ -318,7 +318,7 @@ describe('useApi timeout', () => {
 
     const api = useApi()
     const pending = api.get('/api/v1/widgets')
-    const assertion = expect(pending).rejects.toThrow('The operation was aborted.')
+    const assertion = expect(pending).rejects.toThrow('Request timed out')
 
     await vi.advanceTimersByTimeAsync(30_000)
     await assertion
