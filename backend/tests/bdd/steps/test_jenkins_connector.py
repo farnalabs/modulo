@@ -1,7 +1,7 @@
 """Step definitions for the Jenkins connector BDD feature.
 
-Wires ``features/connectors/jenkins.feature`` into the executing suite (the
-improve-architecture product-map walk) by driving the REAL ``JenkinsConnector``
+Wires ``features/connectors/jenkins.feature`` into the executing BDD
+suite by driving the REAL ``JenkinsConnector``
 against a respx-mocked Jenkins REST API — mirroring
 ``backend/tests/unit/connectors/test_jenkins.py`` so the executing BDD surface
 locks the same contract the unit suite does: token validation via ``/api/json``,

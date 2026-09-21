@@ -1,7 +1,7 @@
 """Step definitions for the Microsoft Teams connector BDD feature.
 
-Wires ``features/connectors/microsoft_teams.feature`` into the executing suite
-(the improve-architecture product-map walk) by driving the REAL
+Wires ``features/connectors/microsoft_teams.feature`` into the executing BDD
+suite by driving the REAL
 ``MicrosoftTeamsConnector`` against a respx-mocked Microsoft Graph API v1.0 —
 mirroring ``backend/tests/unit/connectors/test_microsoft_teams.py`` so the
 executing BDD surface locks the same contract the unit suite does: token

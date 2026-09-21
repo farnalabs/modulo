@@ -1041,7 +1041,7 @@ class TestNodelessRedispatchBudget:
 
 
 class TestNodelessRedispatchThrottle:
-    """FAR-509 (qa-iterate): the nodeless re-dispatch is THROTTLED to at most
+    """FAR-509 (review finding): the nodeless re-dispatch is THROTTLED to at most
     one enqueue per ``SAQ_CLAIMED_NODELESS_MINUTES`` window per run — without
     the throttle, a budget-eligible zombie was re-enqueued on every 60s tick
     (the fresh key_suffix defeats SAQ dedupe). Three-way outcome at the repair
@@ -1130,7 +1130,7 @@ class TestNodelessRedispatchThrottle:
 
 
 class TestNodelessRedispatchPerTickCap:
-    """FAR-509 (qa-iterate): the nodeless re-dispatch is fleet-capped at
+    """FAR-509 (review finding): the nodeless re-dispatch is fleet-capped at
     ``NODELESS_REDISPATCH_MAX_PER_TICK`` enqueues per tick — after a fleet-wide
     worker wedge every aged nodeless zombie becomes throttle-eligible in the
     SAME tick, and the fresh key_suffix defeats SAQ dedupe, so without the cap

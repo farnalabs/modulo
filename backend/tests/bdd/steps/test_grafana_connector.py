@@ -1,7 +1,7 @@
 """Step definitions for the Grafana connector BDD feature.
 
-Wires ``features/connectors/grafana.feature`` into the executing suite (the
-2026-09-14 improve-architecture product-map walk) by driving the REAL
+Wires ``features/connectors/grafana.feature`` into the executing BDD
+suite by driving the REAL
 ``GrafanaConnector`` against a respx-mocked Grafana API — mirroring
 ``backend/tests/unit/connectors/test_grafana.py`` so the executing BDD surface
 locks the same contract the unit suite does: token validation via ``/api/health``,

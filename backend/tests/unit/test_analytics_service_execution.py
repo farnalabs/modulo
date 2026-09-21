@@ -33,6 +33,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import sqlalchemy as sa_
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
 
 import modulo.core.analytics.service as svc
@@ -136,6 +137,39 @@ class _ScalarSession(_FakeSession):
             raise self._exc
         result = MagicMock()
         result.scalar_one_or_none.return_value = self._scalar
+        return result
+
+
+class _ScanSession(_FakeSession):
+    """Fake whose data SELECT executes hand back one page per read.
+
+    The Postgres set_config preamble executes are passed through untracked (they
+    return no rows); every other execute consumes the next page from the queue
+    and records the bound ``params`` so the scan's keyset-cursor contract can be
+    asserted (the cursor must advance page-over-page, never interpolate).
+    """
+
+    def __init__(
+        self,
+        pages: list[list[Any]],
+        *,
+        dialect: str = "postgresql",
+        exc: Exception | None = None,
+    ) -> None:
+        super().__init__(dialect=dialect, exc=exc)
+        self._pages = iter(pages)
+        self.executed_params: list[dict[str, Any] | None] = []
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        self.executed.append(stmt)
+        self.executed_params.append(params)
+        if self._exc is not None:
+            raise self._exc
+        if isinstance(stmt, type(text("x"))) and "set_config" in str(stmt):
+            return MagicMock()
+        page = next(self._pages)
+        result = MagicMock()
+        result.all.return_value = page
         return result
 
 
@@ -828,3 +862,261 @@ class TestFactsFreshness:
         assert stale is False
         mock_rls.assert_awaited_once()
         mock_user.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Scan export: _keyset_conditions / _keyset_bind / stream_export_facts
+# ---------------------------------------------------------------------------
+
+
+class TestKeysetCursor:
+    """The scan cursor is a bound, portable row-wise-after predicate — never
+    OFFSET (which re-scans already-read rows) and never an interpolated value."""
+
+    def _cursor(self) -> tuple:
+        return (date(2026, 8, 2), datetime(2026, 8, 2, 12, 0, tzinfo=UTC), uuid.uuid4())
+
+    def test_bind_carries_cursor_values(self) -> None:
+        cursor = self._cursor()
+        bind = svc._keyset_bind(cursor)
+        assert bind["scan_cur_run_date"] == date(2026, 8, 2)
+        assert bind["scan_cur_created_at"] == datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+        assert bind["scan_cur_run_id"] == cursor[2]
+        ops = ("scan_cur_run_date", "scan_cur_run_date_eq", "scan_cur_run_date_eq2", "scan_cur_created_at")
+        assert len(set(bind.keys())) == 6, "every bindparam in the predicate must be supplied"
+        for key in ops:
+            assert key in bind
+
+    def test_compiles_without_offset_and_binds_never_interpolates(self) -> None:
+        cursor = self._cursor()
+        compiled = str(sa_.select(sa_.text("1")).where(svc._keyset_conditions(cursor)).compile())
+        assert "OFFSET" not in compiled.upper(), "a scan page must be keyset-driven, never OFFSET-based"
+        assert str(cursor[1]) not in compiled, "cursor datetimes must be bound, never interpolated"
+        assert str(cursor[2]) not in compiled, "cursor run ids must be bound, never interpolated"
+
+
+class TestStreamExportFacts:
+    def _full_row(self, **overrides: Any) -> SimpleNamespace:
+        defaults: dict[str, Any] = {
+            "run_id": uuid.uuid4(),
+            "run_date": date(2026, 8, 6),
+            "team_id": uuid.uuid4(),
+            "team_name": "core",
+            "pipeline_id": uuid.uuid4(),
+            "pipeline_name": "nightly",
+            "folder_id": None,
+            "trigger_type": "manual",
+            "status": "complete",
+            "total_cost_usd": Decimal("1.50"),
+            "total_tokens": 10,
+            "duration_ms": 5000,
+            "error_code": None,
+            "claim_count": 0,
+            "queue_wait_ms": 10,
+            "final_idle_ms": 5,
+            "cancellation_requested": False,
+            "dispatcher": "manual",
+            "node_count": 3,
+            "sandbox_agent_node_count": 2,
+            "max_node_timeout_seconds": 3600,
+            "parent_run_id": None,
+            "snapshot_id": None,
+            "run_number": 1,
+            "output_bytes": 1024,
+            "rate_limited": False,
+            "created_at": datetime(2026, 8, 6, 12, 0, 0, tzinfo=UTC),
+        }
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    async def _scan(self, session: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        with (
+            patch.object(svc, "_rate_limited", return_value=False) as mock_rate,
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock) as mock_rls,
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock) as mock_user,
+        ):
+            out: list[dict[str, Any]] = []
+            agen = svc.stream_export_facts(
+                org_id=_ORG,
+                params=svc.AnalyticsParams(),
+                factory=_factory(session),
+                settings=_settings(),
+                account_id=_ACCOUNT,
+                org_role="admin",
+                page_size=kwargs.pop("page_size", 2),
+                **kwargs,
+            )
+            async for item in agen:
+                out.append(item)
+        return out, mock_rate, mock_rls, mock_user
+
+    async def test_streams_every_row_across_keyset_pages(self) -> None:
+        rows = [
+            self._full_row(run_date=date(2026, 8, 1), created_at=datetime(2026, 8, 1, tzinfo=UTC)) for _ in range(5)
+        ]
+        for i, row in enumerate(rows):
+            row.run_date = date(2026, 8, i + 1)
+            row.created_at = datetime(2026, 8, i + 1, tzinfo=UTC)
+        session = _ScanSession([rows[0:2], rows[2:4], rows[4:5]])
+        out, mock_rate, mock_rls, mock_user = await self._scan(session, page_size=2)
+
+        assert [o["run_id"] for o in out] == [str(r.run_id) for r in rows], "every row must arrive exactly once"
+        mock_rate.assert_called_once_with(str(_ORG))
+        mock_rls.assert_awaited_once()
+        mock_user.assert_awaited_once()
+
+        # Executes: 2 set_config preamble + 3 data pages. The first data page has
+        # NO cursor; pages 2 and 3 must carry the previous page's last-row cursor.
+        non_prelude = [
+            i for i, s in enumerate(session.executed) if not (isinstance(s, type(text("x"))) and "set_config" in str(s))
+        ]
+        assert len(non_prelude) == 3, "5 rows at page_size=2 must be fetched in exactly 3 pages"
+        page1_params = session.executed_params[non_prelude[0]]
+        assert "scan_cur_run_id" not in page1_params, "the first page has no cursor"
+        page2_params = session.executed_params[non_prelude[1]]
+        assert page2_params["scan_cur_run_date"] == date(2026, 8, 2)
+        assert page2_params["scan_cur_run_id"] == rows[1].run_id, "cursor advances from the previous page's LAST row"
+        page3_params = session.executed_params[non_prelude[2]]
+        assert page3_params["scan_cur_run_id"] == rows[3].run_id
+        assert page3_params["scan_cur_created_at"] == datetime(2026, 8, 4, tzinfo=UTC)
+
+    async def test_full_page_probes_once_more_and_terminates_on_short_page(self) -> None:
+        rows = [self._full_row(run_date=date(2026, 8, i + 1)) for i in range(4)]
+        # 2 + 2 = an exactly-full final page, so the scan must probe one more
+        # page (empty) before concluding — never skip a zero-row short probe.
+        session = _ScanSession([rows[0:2], rows[2:4], []])
+        out, *_ = await self._scan(session, page_size=2)
+        assert len(out) == 4
+        non_prelude = [
+            i for i, s in enumerate(session.executed) if not (isinstance(s, type(text("x"))) and "set_config" in str(s))
+        ]
+        assert len(non_prelude) == 3, "an exactly-full final page issues a confirming short probe"
+
+    async def test_empty_org_streams_nothing(self) -> None:
+        session = _ScanSession([[]])
+        out, *_ = await self._scan(session)
+        assert out == []
+
+    async def test_rate_limited_raises_before_any_query(self) -> None:
+        session = _ScanSession([[]])
+        agen = svc.stream_export_facts(
+            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
+        )
+        with (
+            patch.object(svc, "_rate_limited", return_value=True),
+            pytest.raises(AnalyticsRateLimitedError, match="Rate limit"),
+        ):
+            await agen.__anext__()
+        assert not session.executed, "a rate-limited scan must never touch the DB"
+
+    async def test_page_size_zero_is_rejected(self) -> None:
+        agen = svc.stream_export_facts(
+            org_id=_ORG,
+            params=svc.AnalyticsParams(),
+            factory=MagicMock(),
+            settings=_settings(),
+            page_size=0,
+        )
+        with pytest.raises(AnalyticsValidationError, match="page_size"):
+            await agen.__anext__()
+
+    async def test_programming_error_maps_to_migration_required(self) -> None:
+        session = _FakeSession(exc=ProgrammingError("stmt", {}, "missing"))
+        agen = svc.stream_export_facts(
+            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
+        )
+        with (
+            patch.object(svc, "_rate_limited", return_value=False),
+            pytest.raises(AnalyticsMigrationRequiredError, match="migrations"),
+        ):
+            await agen.__anext__()
+
+    async def test_canceled_dbapi_error_maps_to_query_timeout(self) -> None:
+        session = _FakeSession(exc=DBAPIError("stmt", {}, _QueryCanceledError("canceled")))
+        agen = svc.stream_export_facts(
+            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
+        )
+        with (
+            patch.object(svc, "_rate_limited", return_value=False),
+            pytest.raises(AnalyticsQueryTimeoutError, match="timeout"),
+        ):
+            await agen.__anext__()
+
+    async def test_dbapi_error_maps_to_database_error(self) -> None:
+        session = _FakeSession(exc=DBAPIError("stmt", {}, ConnectionError("down")))
+        agen = svc.stream_export_facts(
+            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
+        )
+        with (
+            patch.object(svc, "_rate_limited", return_value=False),
+            pytest.raises(AnalyticsDatabaseError, match="Database temporarily"),
+        ):
+            await agen.__anext__()
+
+    async def test_sqlalchemy_error_maps_to_database_error(self) -> None:
+        session = _FakeSession(exc=SQLAlchemyError("boom"))
+        agen = svc.stream_export_facts(
+            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
+        )
+        with (
+            patch.object(svc, "_rate_limited", return_value=False),
+            pytest.raises(AnalyticsDatabaseError, match="Database temporarily"),
+        ):
+            await agen.__anext__()
+
+    async def test_unexpected_error_maps_to_database_error(self) -> None:
+        session = _FakeSession(exc=RuntimeError("kaboom"))
+        agen = svc.stream_export_facts(
+            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
+        )
+        with (
+            patch.object(svc, "_rate_limited", return_value=False),
+            pytest.raises(AnalyticsDatabaseError, match="Database temporarily"),
+        ):
+            await agen.__anext__()
+
+    async def test_cancelled_error_propagates_untouched(self) -> None:
+        session = _FakeSession(exc=asyncio.CancelledError())
+        agen = svc.stream_export_facts(
+            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
+        )
+        with patch.object(svc, "_rate_limited", return_value=False), pytest.raises(asyncio.CancelledError):
+            await agen.__anext__()
+
+    async def test_team_scoped_scan_outerjoins_pipeline(self) -> None:
+        """A team-scoped scan must outerjoin Pipeline so the effective owner
+        resolves for NULL-stamped facts (#1795) — the same join the paginated
+        export adds. An empty membership tuple still scopes (fail closed)."""
+        rows = [self._full_row()]
+        session = _ScanSession([rows])
+        with (
+            patch.object(svc, "_rate_limited", return_value=False),
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+        ):
+            agen = svc.stream_export_facts(
+                org_id=_ORG,
+                params=svc.AnalyticsParams(),
+                factory=_factory(session),
+                settings=_settings(),
+                team_ids=(),
+            )
+            out = [item async for item in agen]
+        assert len(out) == 1
+        assert "JOIN" in str(session.executed[-1]).upper(), "a scoped scan must join the pipeline owner"
+
+    async def test_scan_skips_set_config_preamble_on_non_postgres(self) -> None:
+        """The timezone/statement-timeout preamble is Postgres-only — a
+        conformance dialect (SQLite/MariaDB) must go straight to the page read."""
+        rows = [self._full_row()]
+        session = _ScanSession([rows], dialect="sqlite")
+        with (
+            patch.object(svc, "_rate_limited", return_value=False),
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+        ):
+            agen = svc.stream_export_facts(
+                org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
+            )
+            out = [item async for item in agen]
+        assert len(out) == 1
+        non_prelude = [s for s in session.executed if not (isinstance(s, type(text("x"))) and "set_config" in str(s))]
+        assert len(non_prelude) == 1, "only the data page executes on a non-Postgres dialect"

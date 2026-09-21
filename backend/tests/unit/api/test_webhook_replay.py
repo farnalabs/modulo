@@ -21,6 +21,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_access_token
+from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import Settings, get_settings
 from tests.unit.api.conftest import make_system_session_mock
 
@@ -547,3 +548,89 @@ def test_replay_webhook_authenticated_invalid_config_json_returns_400(client: Te
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Trigger configuration is invalid"
+
+
+def test_replay_webhook_event_not_accepted_returns_400(client: TestClient) -> None:
+    """A replayed delivery rejected by accepted_events or event_filters returns
+    400, not 500 — same contract as the webhook receive path.
+
+    The engine writes an ``event_type_not_accepted`` TriggerEvent *before*
+    raising; the route catches ``EventNotAcceptedError`` inside the transaction
+    (mirroring the ``GuardrailBlockedAtIntakeError`` pattern) so the audit
+    event is committed — the 400 is reject-and-retry, not an invisible
+    rollback. The fixed detail string does NOT leak the trigger UUID or config.
+    """
+    from modulo.core.trigger_engine import EventNotAcceptedError
+
+    event_id = uuid.uuid4()
+    session = _make_mock_session()
+    begin_cm = session.begin.return_value
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
+        ):
+            # Simulate the real engine: write the audit event BEFORE raising,
+            # just as _enforce_event_acceptance does. The in-transaction catch
+            # commits this write; the old outer catch rolled it back.
+
+            async def _engine_side_effect(
+                _session: AsyncMock,
+                *,
+                event_id: uuid.UUID,
+                org_id: uuid.UUID,
+                **_kwargs: object,
+            ) -> None:
+                _session.add(
+                    TriggerEvent(
+                        organisation_id=org_id,
+                        trigger_id=_TRIGGER_ID,
+                        trigger_type="webhook",
+                        raw_payload_hash="abc123",
+                        validation_result="event_type_not_accepted",
+                    )
+                )
+                raise EventNotAcceptedError(
+                    _TRIGGER_ID,
+                    reason=(
+                        "event value filters {'review.state': ['approved']} not satisfied by replayed webhook payload"
+                    ),
+                )
+
+            m.side_effect = _engine_side_effect
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+                headers=_auth_headers("admin"),
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 400
+    body = resp.json()
+    # Fixed detail string — no trigger UUID or config leaked.
+    assert body["detail"] == "Event type not accepted by trigger configuration"
+    # Audit persistence: the TriggerEvent was written inside the transaction
+    # and committed (aexit called with no exception = commit, not rollback).
+    #
+    # Discriminating assertion: the LAST aexit call must be the outer
+    # ``async with session.begin()`` block (the request transaction).  Any
+    # earlier aexit calls are from nested begin() calls on the shared mock
+    # and are irrelevant.  Under the rollback mutation (except moved outside
+    # the begin block), the outer aexit receives the exception and the last
+    # entry is NOT (None, None, None) — proving this assertion catches the
+    # bug.  ``any(...)`` was vacuous because an unrelated clean aexit
+    # satisfied it even under rollback.
+    aexit = begin_cm.__aexit__
+    assert aexit.await_args_list[-1].args == (None, None, None)
+    # The audit event with event_type_not_accepted was added to the session.
+    assert any(
+        isinstance(c.args[0], TriggerEvent)
+        and getattr(c.args[0], "validation_result", None) == "event_type_not_accepted"
+        for c in session.add.call_args_list
+    )

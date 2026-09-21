@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
@@ -30,6 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette import status as http_status
+from starlette.responses import StreamingResponse
 
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.dependencies import get_or_create_engine, require_feature, require_permission
@@ -52,6 +55,7 @@ from modulo.core.analytics.service import (
     export_facts,
     run_analytics_query,
     run_concurrency_query,
+    stream_export_facts,
 )
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.rls import set_rls_org
@@ -67,6 +71,9 @@ router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 # Export pagination bounds (FAR-102, Part D).
 _EXPORT_DEFAULT_LIMIT = 500
 _EXPORT_MAX_LIMIT = 5000
+
+# Scan export media types — the whole matching set is streamed in ONE response.
+_SCAN_NDJSON_MEDIA_TYPE = "application/x-ndjson"
 
 
 class AnalyticsBucket(BaseModel):
@@ -341,6 +348,36 @@ def _analytics_export_filters(
         date_from=date_from,
         date_to=date_to,
         limit=limit,
+    )
+
+
+def _analytics_scan_filters(
+    dimension: AnalyticsDimension | None = Query(None),
+    trigger_type: AnalyticsTriggerType | None = Query(None),
+    status: AnalyticsStatus | None = Query(None),
+    pipeline_id: list[uuid.UUID] | None = Query(None),
+    error_code: str | None = Query(None),
+    folder_id: uuid.UUID | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+) -> AnalyticsParams:
+    """Scan filters — the same typed surface as export, minus the pagination knob.
+
+    A scan streams the WHOLE matching set, so there is deliberately no
+    ``offset``/``limit``; the server keyset-paginates internally.
+    """
+    return _build_params(
+        group_by=AnalyticsGroupBy.DAY,
+        auto_granularity=False,
+        dimension=dimension,
+        trigger_type=trigger_type,
+        status=status,
+        pipeline_ids=tuple(pipeline_id or ()),
+        error_code=error_code,
+        folder_id=folder_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=0,
     )
 
 
@@ -623,3 +660,92 @@ def _csv_response(result: dict[str, Any]) -> Response:
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
+
+
+def _csv_stream_line(*, header: bool, item: dict[str, Any] | None = None) -> str:
+    """One properly-quoted CSV line for the scan stream (header xor row)."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    if header:
+        writer.writerow(list(EXPORT_COLUMN_NAMES))
+    elif item is not None:
+        writer.writerow([item.get(name, "") for name in EXPORT_COLUMN_NAMES])
+    return buffer.getvalue()
+
+
+async def _scan_body(
+    stream: AsyncIterator[dict[str, Any]],
+    *,
+    first: dict[str, Any] | None,
+    format: str,
+) -> AsyncIterator[str]:
+    """Chunk the primed scan generator into the wire format (NDJSON or CSV).
+
+    ``first`` is the row already fetched by the route to surface pre-stream
+    errors (validation/rate-limit/migration/database) as a proper HTTP status;
+    it is re-emitted here so no row is lost.
+    """
+    if format == "csv":
+        yield _csv_stream_line(header=True)
+        if first is not None:
+            yield _csv_stream_line(header=False, item=first)
+        async for item in stream:
+            yield _csv_stream_line(header=False, item=item)
+        return
+    if first is not None:
+        yield json.dumps(first) + "\n"
+    async for item in stream:
+        yield json.dumps(item) + "\n"
+
+
+@router.get("/scan")
+async def analytics_scan(
+    format: str = Query("json", pattern="^(json|csv)$"),
+    params: AnalyticsParams = Depends(_analytics_scan_filters),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
+    _: object = require_feature("analytics_page"),
+) -> Response:
+    """Server-side scan export: stream the WHOLE matching set in ONE response.
+
+    The deferral companion to ``/export``: the same raw fact rows, typed filters,
+    org + team-boundary scoping, rate limit and statement timeout — but no
+    ``offset``/``limit`` pagination. The server keyset-paginates internally over
+    the stable ``(run_date, created_at, run_id)`` order, so memory stays bounded
+    for any org size while the client receives the entire result as a single
+    streaming body: ``format=json`` (default) is NDJSON (one JSON object per
+    line), ``format=csv`` is a Content-Disposition CSV attachment. ``dimension``
+    is accepted for surface parity but ignored (a scan has no bucketing).
+    """
+    org_id = _require_org(principal)
+    try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
+        stream = stream_export_facts(
+            org_id=org_id,
+            params=params,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+            team_ids=team_ids,
+        )
+        # Prime the generator so validation / rate-limit / migration / database
+        # errors surface as a proper HTTP status BEFORE the stream starts.
+        first = await stream.__anext__()
+    except StopAsyncIteration:
+        first = None
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _map_service_error(exc) from None
+
+    body = _scan_body(stream, first=first, format=format)
+    if format == "csv":
+        return StreamingResponse(
+            body,
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="analytics-scan.csv"'},
+        )
+    return StreamingResponse(body, media_type=_SCAN_NDJSON_MEDIA_TYPE)
