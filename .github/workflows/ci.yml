@@ -898,9 +898,16 @@ jobs:
         id: classify
         env:
           GH_TOKEN: ${{ github.token }}
+          # The label list is passed through an env var rather than
+          # interpolated into the shell script text: a label name containing a
+          # single quote would otherwise break out of the quoted string and
+          # inject shell commands running with github.token.
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           HAS_LABEL=""
-          if echo '${{ toJSON(github.event.pull_request.labels.*.name) }}' | grep -q 'fast-lane:test-infra'; then
+          # Exact array membership (not a substring grep): this avoids matching
+          # labels such as "fast-lane:test-infra2".
+          if printf '%s' "$PR_LABELS" | jq -e 'index("fast-lane:test-infra") != null' >/dev/null 2>&1; then
             HAS_LABEL="--has-label"
           fi
           set +e
