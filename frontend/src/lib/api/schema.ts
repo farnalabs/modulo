@@ -1826,6 +1826,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analytics Scan
+         * @description Server-side scan export: stream the WHOLE matching set in ONE response.
+         *
+         *     The deferral companion to ``/export``: the same raw fact rows, typed filters,
+         *     org + team-boundary scoping, rate limit and statement timeout — but no
+         *     ``offset``/``limit`` pagination. The server keyset-paginates internally over
+         *     the stable ``(run_date, created_at, run_id)`` order, so memory stays bounded
+         *     for any org size while the client receives the entire result as a single
+         *     streaming body: ``format=json`` (default) is NDJSON (one JSON object per
+         *     line), ``format=csv`` is a Content-Disposition CSV attachment. ``dimension``
+         *     is accepted for surface parity but ignored (a scan has no bucketing).
+         */
+        get: operations["analytics_scan_api_v1_analytics_scan_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dashboard/summary": {
         parameters: {
             query?: never;
@@ -22943,6 +22972,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyticsExportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analytics_scan_api_v1_analytics_scan_get: {
+        parameters: {
+            query?: {
+                format?: string;
+                dimension?: components["schemas"]["AnalyticsDimension"] | null;
+                trigger_type?: components["schemas"]["AnalyticsTriggerType"] | null;
+                status?: components["schemas"]["AnalyticsStatus"] | null;
+                pipeline_id?: string[] | null;
+                error_code?: string | null;
+                folder_id?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
