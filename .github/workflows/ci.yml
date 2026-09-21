@@ -143,8 +143,8 @@ jobs:
       - name: Run email settings BDD scenarios
         # The admin email-settings BDD feature file is self-contained (no
         # browser/live app), so it runs here rather than only in the unit
-        # suite. Without this, the "8/8 email BDD scenarios pass" claim in
-        # Repos/devtools/dogfood/improve-history/architecture-tracker.md was never verified by CI.
+        # suite. Without this step, CI never exercises the email-settings
+        # BDD scenarios.
         shell: bash
         run: >
           uv run --no-build --no-sync pytest tests/bdd/steps/test_email_settings.py
@@ -486,8 +486,8 @@ jobs:
         # as working directory, but the script reads the repo tree, so run it
         # from the repo root (it locates the tree relative to itself).
         #
-        # `continue-on-error` (banned by the Non-Negotiable Enforcement
-        # Gates rule, see AGENTS.md, and silently masks failures) was removed.
+        # `continue-on-error` (not used in this workflow, and silently masks
+        # failures) was removed.
         # Instead the script's exit code is captured into the
         # `route_coverage_rc` output; the reporting step exits 0 so the
         # required check stays green (uncovered routes are non-enforcing), and
@@ -851,13 +851,12 @@ jobs:
     # conclusion (success/visible-failure), giving the merge-queue a
     # SHA-pinned, per-PR eligibility signal.
     #
-    # `continue-on-error` is BANNED by the Non-Negotiable Enforcement Gates
-    # rule (devtools/guidance/AGENTS.md §Non-Negotiable Enforcement Gates,
-    # rule 1: "continue-on-error: true is FORBIDDEN in all CI workflow files.
-    # Every job must fail CI when it fails. Legitimate uses require a
-    # post-step if: failure() aggregate that reports the collected failure.").
-    # The check-run approach satisfies both constraints: the job stays green
-    # (no continue-on-error), and ineligible PRs get a visible red check run
+    # `continue-on-error` is not used in this workflow: every job must fail
+    # CI when it fails, so a non-zero classifier exit cannot be masked. Where
+    # a non-fatal outcome is genuinely needed, it is reported explicitly (see
+    # the route-coverage steps above) rather than suppressed. The check-run
+    # approach satisfies both constraints: the job stays green (no
+    # continue-on-error), and ineligible PRs get a visible red check run
     # that blocks merge-queue pickup.
     name: fast-lane-classify
     if: github.event_name == 'pull_request'

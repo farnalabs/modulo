@@ -144,12 +144,14 @@ from fast_lane_classify import main as classify_main  # noqa: E402
 
 
 class TestMainExitCode:
-    """Verify the exit-code contract that CI's continue-on-error depends on.
+    """Verify the exit-code contract that the CI step captures.
 
-    The fast-lane-classify CI job uses ``continue-on-error: true`` so the
-    workflow stays "success" for every PR.  The merge-queue reads the
-    *job-level* check conclusion, which is "failure" when the script exits
-    non-zero (class-B) and "success" when it exits 0 (class-A eligible).
+    The classifier step captures its exit code into a step output and always
+    exits 0 (so the workflow stays "success" for every PR).  A separate step
+    creates a named ``fast-lane-eligible`` check run: conclusion ``success``
+    means class-A eligible, ``failure`` means ineligible.  The merge-queue
+    reads that check run.  The script's non-zero exit for class-B is the
+    signal the CI step captures — this test verifies that signal.
     """
 
     @patch("fast_lane_classify.subprocess.run")
