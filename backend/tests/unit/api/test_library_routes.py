@@ -309,6 +309,71 @@ def test_update_primitive_missing_returns_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_update_composite_with_empty_content_json_rejected(client: TestClient) -> None:
+    prim = _make_listable_primitive(name="Existing Composite", primitive_type="composite")
+    prim.content_json = {"nodes": [], "edges": []}
+    with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.patch(f"/api/v1/libraries/{prim.id}", json={"content_json": {}})
+    assert resp.status_code == 422
+
+
+def test_update_composite_with_missing_nodes_rejected(client: TestClient) -> None:
+    prim = _make_listable_primitive(name="Existing Composite", primitive_type="composite")
+    with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.patch(f"/api/v1/libraries/{prim.id}", json={"content_json": {"edges": []}})
+    assert resp.status_code == 422
+
+
+def test_update_composite_with_graph_content_json_returns_200(client: TestClient) -> None:
+    prim = _make_listable_primitive(name="Existing Composite", primitive_type="composite")
+    prim.content_json = {"nodes": [{"id": "n1"}], "edges": []}
+    with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.patch(
+            f"/api/v1/libraries/{prim.id}",
+            json={"content_json": {"nodes": [{"id": "n1"}], "edges": []}},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["primitive_type"] == "composite"
+
+
+def test_update_non_composite_content_json_skips_graph_validation(client: TestClient) -> None:
+    prim = _make_listable_primitive(name="Some Workflow")
+    with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.patch(f"/api/v1/libraries/{prim.id}", json={"content_json": {"agents": []}})
+    assert resp.status_code == 200, resp.text
+
+
+def test_update_content_json_missing_primitive_returns_404(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.patch(f"/api/v1/libraries/{uuid.uuid4()}", json={"content_json": {}})
+    assert resp.status_code == 404
+
+
 def test_delete_primitive_returns_200(client: TestClient) -> None:
     prim = _make_listable_primitive()
     with (

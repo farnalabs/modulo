@@ -29,6 +29,10 @@ Feature: Composite Library
     When the user creates a library primitive with primitive_type "composite" and empty content_json
     Then the response status is 422
 
+  Scenario: Composite content_json validation on update — missing required fields returns error
+    When the user updates a composite library primitive with empty content_json
+    Then the response status is 422
+
   Scenario: Save composite from pipeline via save-as-composite
     Given org "acme" has pipeline "my-pipeline" with agent "critic" using {{parameter.tone}}
     When the user saves the pipeline as composite with name "critic-composite" and selected node "critic"

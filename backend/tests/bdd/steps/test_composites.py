@@ -837,6 +837,39 @@ def when_create_primitive_empty(
     _store_response(request, resp)
 
 
+@when("the user updates a composite library primitive with empty content_json")
+def when_update_composite_empty_content_json(
+    client,
+    request: pytest.FixtureRequest,
+    patches: list[Any],
+) -> None:
+    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_org")
+    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_user_context")
+
+    mock_primitive = _make_mock_primitive(
+        primitive_type="composite",
+        name="review-composite",
+        content_json={"nodes": [], "edges": []},
+    )
+    patcher_get = patch(
+        "modulo.api.routes.library.get_library_primitive",
+        new_callable=AsyncMock,
+        return_value=mock_primitive,
+    )
+    patcher_get.start()
+    patches.append(patcher_get)
+    patcher_update = patch(
+        "modulo.api.routes.library.update_library_primitive",
+        new_callable=AsyncMock,
+        return_value=mock_primitive,
+    )
+    patcher_update.start()
+    patches.append(patcher_update)
+
+    resp = client.patch(f"/api/v1/libraries/{mock_primitive.id}", json={"content_json": {}})
+    _store_response(request, resp)
+
+
 @when(
     parsers.parse(
         'the user saves the pipeline as composite with name "{composite_name}" and selected node "{node_label}"'

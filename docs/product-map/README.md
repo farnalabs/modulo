@@ -480,6 +480,14 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > 409 from the DB IntegrityError mapping. Removed the scenario from
 > `PINNED_AWAITING_IMPLEMENTATION` (the composite entry is now empty).
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Review follow-up (2026-09-21):** extended the same composite graph
+> validation to the update boundary — `PATCH /api/v1/libraries/{id}` now rejects
+> (422) a composite whose patched `content_json` lacks the `nodes`/`edges` lists,
+> so an existing composite can no longer be mutated into a structurally broken
+> graph. The shared `_assert_composite_content_json` helper backs both the create
+> `model_validator` and the update route; unit coverage added in
+> `test_library_routes.py`. (PR #862 review feedback.)
 
 > **Closed this walk (2026-09-21):** closed `feat-sso`'s "No BDD scenarios
 > for admin provider CRUD" gap (`auth/sso-provider-ui.md`). Registered the new
