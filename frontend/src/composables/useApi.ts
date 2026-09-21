@@ -18,12 +18,8 @@ const REQUEST_TIMEOUT_MS = 30000
 async function requestWorker(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
-  // A caller-supplied signal (e.g. a drag-save abort) must also cancel the
-  // request, not just the local timeout controller.
   const onCallerAbort = () => controller.abort()
   if (options?.signal) {
-    // A signal already aborted before the request starts never fires its
-    // listener, so abort up-front to avoid a hung request.
     if (options.signal.aborted) controller.abort()
     else options.signal.addEventListener('abort', onCallerAbort)
   }
@@ -41,6 +37,11 @@ async function requestWorker(method: string, path: string, body?: unknown, optio
       credentials: 'include',
     })
     return res
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Request timed out')
+    }
+    throw err
   } finally {
     if (options?.signal) options.signal.removeEventListener('abort', onCallerAbort)
     clearTimeout(timer)
@@ -68,7 +69,11 @@ async function request<T>(method: string, path: string, body?: unknown, options?
     throw new Error(formatApiError(detail) || `Request failed: ${res.status}`)
   }
   if (res.status === 204) return undefined as T
-  return res.json()
+  try {
+    return await res.json()
+  } catch {
+    throw new Error(`Invalid JSON response from server (HTTP ${res.status})`)
+  }
 }
 
 export function useApi() {
