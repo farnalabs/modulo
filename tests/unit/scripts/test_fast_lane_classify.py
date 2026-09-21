@@ -7,8 +7,10 @@ Run from the repo root:
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -17,7 +19,15 @@ _SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from fast_lane_classify import classify_path, classify_paths  # noqa: E402
+from fast_lane_classify import (  # noqa: E402
+    _safe_arg,
+    _safe_pr,
+    _safe_repo,
+    check_no_test_weakening,
+    classify_path,
+    classify_paths,
+)
+from fast_lane_classify import main as classify_main  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # classify_path
@@ -135,12 +145,62 @@ class TestClassifyPaths:
 
 
 # ---------------------------------------------------------------------------
-# Exit-code contract: class-B exits non-zero, class-A exits 0
+# S8705 taint barriers: operator-supplied argv values are regex-bounded
 # ---------------------------------------------------------------------------
 
-from unittest.mock import MagicMock, patch  # noqa: E402
 
-from fast_lane_classify import main as classify_main  # noqa: E402
+class TestSafeArgGuards:
+    """Bound --repo / --pr-number / diff-range before they reach subprocess."""
+
+    @pytest.mark.parametrize(
+        "repo",
+        ["farnalabs/modulo", "farnalabs/modulo-new", "a/b"],
+    )
+    def test_safe_repo_accepts_valid(self, repo: str) -> None:
+        assert _safe_repo(repo) == repo
+
+    @pytest.mark.parametrize(
+        "repo",
+        [
+            "",
+            "no-slash",
+            "--upload-pack=evil",
+            "owner/repo; rm -rf /",
+            "owner/repo --body-file /etc/passwd",
+        ],
+    )
+    def test_safe_repo_rejects_injection(self, repo: str) -> None:
+        assert _safe_repo(repo) is None
+
+    @pytest.mark.parametrize("pr", [42, "42", "0"])
+    def test_safe_pr_accepts_digits(self, pr: int | str) -> None:
+        assert _safe_pr(pr) == str(pr)
+
+    @pytest.mark.parametrize("pr", ["-1", "abc", "42; rm -rf /", ""])
+    def test_safe_pr_rejects_non_digits(self, pr: str) -> None:
+        assert _safe_pr(pr) is None
+
+    def test_safe_arg_rejects_leading_dash(self) -> None:
+        # A value that could be parsed as a CLI flag must never pass through.
+        pattern = re.compile(r"[A-Za-z0-9./-]+")
+        assert _safe_arg("-r/--upload-pack=evil", pattern) is None
+        assert _safe_arg("origin/main", pattern) == "origin/main"
+
+
+class TestNoTestWeakeningFailOpen:
+    """An invalid diff range must fail open without touching subprocess."""
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_invalid_ref_fails_open(self, mock_run: MagicMock) -> None:
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main; rm -rf /", "HEAD")
+        assert eligible is True
+        assert violations == []
+        mock_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Exit-code contract: class-B exits non-zero, class-A exits 0
+# ---------------------------------------------------------------------------
 
 
 class TestMainExitCode:

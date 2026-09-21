@@ -94,6 +94,43 @@ def classify_paths(paths: Sequence[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# S8705 taint barriers for operator-supplied argv values
+# ---------------------------------------------------------------------------
+
+# The classifier forwards operator-supplied values (--repo, --base-ref,
+# --pr-number) into ``subprocess`` command lines. Bound each to its legitimate
+# character set with ``re.fullmatch`` and pass only the fresh match result to
+# the child process, so a crafted value can never be parsed as a CLI flag or
+# carry an argument-injection payload (pythonsecurity:S8705). Mirrors the
+# established pattern in scripts/run_coverage_gate.py and
+# scripts/run_frontend_npm.py.
+_REPO_ARG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
+_REF_RANGE_ARG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\.\.\.[A-Za-z0-9][A-Za-z0-9._/-]*")
+_PR_ARG_RE = re.compile(r"[0-9]+")
+
+
+def _safe_arg(value: str, pattern: re.Pattern[str]) -> str | None:
+    """Return *value* only when it fully matches *pattern*.
+
+    The returned string is the regex match (a fresh object), which drops the
+    taint SonarCloud tracks from ``argv``/env into ``subprocess``. Returns
+    ``None`` when the value is empty or contains disallowed characters.
+    """
+    matched = pattern.fullmatch(value or "")
+    return matched.group(0) if matched else None
+
+
+def _safe_repo(repo: str) -> str | None:
+    """Bound a ``owner/repo`` slug to safe subprocess-argument characters."""
+    return _safe_arg(repo, _REPO_ARG_RE)
+
+
+def _safe_pr(pr_number: int | str) -> str | None:
+    """Bound a PR number to digits before it reaches a subprocess argv."""
+    return _safe_arg(str(pr_number), _PR_ARG_RE)
+
+
+# ---------------------------------------------------------------------------
 # Guardrail: cap check (max fast-lane merges in rolling 24h)
 # ---------------------------------------------------------------------------
 
@@ -112,6 +149,11 @@ def check_cap(
     if gh_token:
         env["GH_TOKEN"] = gh_token
 
+    # S8705: bound the operator-supplied repo slug before it reaches argv.
+    safe_repo = _safe_repo(repo)
+    if safe_repo is None:
+        return True, f"cap check skipped (fail-open): invalid repo {repo!r}"
+
     since = int(time.time()) - (window_hours * 3600)
     # Find merged PRs in the window that carry fast-lane:test-infra and the
     # [auto-merge: test-infra] marker in the squash title.
@@ -120,7 +162,7 @@ def check_cap(
         "pr",
         "list",
         "--repo",
-        repo,
+        safe_repo,
         "--state",
         "merged",
         "--limit",
@@ -189,12 +231,18 @@ def check_no_test_weakening(
     """
     violations: list[str] = []
 
+    # S8705: bound the composed diff range before it reaches argv. An invalid
+    # range fails open, matching the existing infra-error behaviour.
+    safe_range = _safe_arg(f"{base_ref}...{head_ref}", _REF_RANGE_ARG_RE)
+    if safe_range is None:
+        return True, []
+
     # Get diff for changed test files
     cmd = [
         "git",
         "diff",
         "--name-status",
-        f"{base_ref}...{head_ref}",
+        safe_range,
         "--",
         "backend/tests/",
         "frontend/tests/",
@@ -232,7 +280,7 @@ def check_no_test_weakening(
     diff_cmd = [
         "git",
         "diff",
-        f"{base_ref}...{head_ref}",
+        safe_range,
         "--",
         "backend/tests/",
         "frontend/tests/",
@@ -334,13 +382,19 @@ def check_sha_pinning(
     if gh_token:
         env["GH_TOKEN"] = gh_token
 
+    # S8705: bound the operator-supplied repo slug and PR number before argv.
+    safe_repo = _safe_repo(repo)
+    safe_pr = _safe_pr(pr_number)
+    if safe_repo is None or safe_pr is None:
+        return True, "SHA-pinning check skipped (fail-open): invalid repo/PR number"
+
     cmd = [
         "gh",
         "pr",
         "view",
-        str(pr_number),
+        safe_pr,
         "--repo",
-        repo,
+        safe_repo,
         "--json",
         "headRefOid",
         "--jq",
@@ -425,14 +479,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     gh_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
 
+    # S8705: bound the operator-supplied repo slug and PR number before argv.
+    safe_repo = _safe_repo(args.repo)
+    safe_pr = _safe_pr(args.pr_number)
+    if safe_repo is None or safe_pr is None:
+        print(
+            f"::error::fast-lane: invalid --repo {args.repo!r} / --pr-number {args.pr_number!r}",
+            file=sys.stderr,
+        )
+        return 2
+
     # --- Step 1: classify changed paths ---
     cmd = [
         "gh",
         "pr",
         "diff",
-        str(args.pr_number),
+        safe_pr,
         "--repo",
-        args.repo,
+        safe_repo,
         "--name-only",
     ]
     try:
@@ -470,7 +534,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"PR #{args.pr_number}: running fast-lane guardrails...")
 
     # 2a. Cap check
-    cap_ok, cap_detail = check_cap(args.repo, args.cap, args.window_hours, gh_token)
+    cap_ok, cap_detail = check_cap(safe_repo, args.cap, args.window_hours, gh_token)
     print(f"  cap: {cap_detail}")
     if not cap_ok:
         print(f"::error::fast-lane: {cap_detail}")
@@ -492,8 +556,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # 2c. SHA-pinning
     pin_ok, pin_detail = check_sha_pinning(
-        args.repo,
-        args.pr_number,
+        safe_repo,
+        int(safe_pr),
         args.head_sha,
         gh_token,
     )
