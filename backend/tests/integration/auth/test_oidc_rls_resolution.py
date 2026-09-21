@@ -44,6 +44,7 @@ XML-signature step.
 """
 
 import os
+import urllib.parse
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
@@ -352,7 +353,8 @@ async def test_per_provider_oidc_login_resolves_cross_org_and_redirects_to_idp(
     location = resp.headers["location"]
     assert "idp.example.com/oauth/authorize" in location
     assert f"client_id=client-{two_orgs['oidc_b']}" in location
-    assert f"redirect_uri=https://staging.example.com/api/v1/auth/oidc/{two_orgs['oidc_b']}/callback" in location
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)
+    assert query["redirect_uri"] == [f"https://staging.example.com/api/v1/auth/oidc/{two_orgs['oidc_b']}/callback"]
 
 
 @pytest.mark.asyncio
