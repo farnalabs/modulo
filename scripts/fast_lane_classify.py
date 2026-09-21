@@ -652,6 +652,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="origin/main",
         help="Git ref for the base of the diff (default: origin/main)",
     )
+    # Accepted and ignored for backward compatibility (FAR-1132): the label is
+    # now read live from the GitHub API by check_label_live(), so passing this
+    # flag has no effect on the verdict. It is retained so existing callers do
+    # not break on an unknown argument, and hidden from --help (help=SUPPRESS)
+    # because it is not functional.
     parser.add_argument(
         "--has-label",
         action="store_true",
