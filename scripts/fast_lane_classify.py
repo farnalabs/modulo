@@ -152,7 +152,7 @@ def check_cap(
     # S8705: bound the operator-supplied repo slug before it reaches argv.
     safe_repo = _safe_repo(repo)
     if safe_repo is None:
-        return True, f"cap check skipped (fail-open): invalid repo {repo!r}"
+        return False, f"cap check denied (fail-closed): invalid repo {repo!r}"
 
     since = int(time.time()) - (window_hours * 3600)
     # Find merged PRs in the window that carry fast-lane:test-infra and the
@@ -180,10 +180,10 @@ def check_cap(
             env=env,
         )
         if result.returncode != 0:
-            return True, f"cap check API error (fail-open): {result.stderr.strip()}"
+            return False, f"cap check denied (fail-closed): API error: {result.stderr.strip()}"
         prs = json.loads(result.stdout)
     except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-        return True, f"cap check failed (fail-open): {exc}"
+        return False, f"cap check denied (fail-closed): {exc}"
 
     count = 0
     for pr in prs:
@@ -235,7 +235,7 @@ def check_no_test_weakening(
     # range fails open, matching the existing infra-error behaviour.
     safe_range = _safe_arg(f"{base_ref}...{head_ref}", _REF_RANGE_ARG_RE)
     if safe_range is None:
-        return True, []
+        return False, ["test-weakening check denied (fail-closed): invalid diff range"]
 
     # Get diff for changed test files
     cmd = [
@@ -259,7 +259,7 @@ def check_no_test_weakening(
         )
         changed_files = result.stdout.strip().splitlines()
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return True, []  # fail-open on infra errors
+        return False, ["test-weakening check denied (fail-closed): could not fetch diff"]
 
     deleted_test_files = []
     for line in changed_files:
@@ -297,7 +297,7 @@ def check_no_test_weakening(
         )
         diff_text = diff_result.stdout
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return True, []
+        return False, ["test-weakening check denied (fail-closed): could not fetch diff content"]
 
     # 1. Test-function count must not decrease
     # Count added vs removed def test_* lines
@@ -386,7 +386,7 @@ def check_sha_pinning(
     safe_repo = _safe_repo(repo)
     safe_pr = _safe_pr(pr_number)
     if safe_repo is None or safe_pr is None:
-        return True, "SHA-pinning check skipped (fail-open): invalid repo/PR number"
+        return False, "SHA-pinning check denied (fail-closed): invalid repo/PR number"
 
     cmd = [
         "gh",
@@ -411,10 +411,10 @@ def check_sha_pinning(
         )
         actual_sha = result.stdout.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return True, "SHA-pinning check failed (fail-open): could not fetch PR head"
+        return False, "SHA-pinning check denied (fail-closed): could not fetch PR head"
 
     if not actual_sha:
-        return True, "SHA-pinning check failed (fail-open): empty head SHA"
+        return False, "SHA-pinning check denied (fail-closed): empty head SHA"
 
     if actual_sha.lower() == expected_sha.lower():
         return True, f"SHA-pinned: check matches head {actual_sha[:12]}"

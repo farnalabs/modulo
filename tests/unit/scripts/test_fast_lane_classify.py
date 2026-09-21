@@ -23,7 +23,9 @@ from fast_lane_classify import (  # noqa: E402
     _safe_arg,
     _safe_pr,
     _safe_repo,
+    check_cap,
     check_no_test_weakening,
+    check_sha_pinning,
     classify_path,
     classify_paths,
 )
@@ -187,14 +189,15 @@ class TestSafeArgGuards:
         assert _safe_arg("origin/main", pattern) == "origin/main"
 
 
-class TestNoTestWeakeningFailOpen:
-    """An invalid diff range must fail open without touching subprocess."""
+class TestNoTestWeakeningFailClosed:
+    """An invalid diff range must fail closed — deny eligibility."""
 
     @patch("fast_lane_classify.subprocess.run")
-    def test_invalid_ref_fails_open(self, mock_run: MagicMock) -> None:
+    def test_invalid_ref_fails_closed(self, mock_run: MagicMock) -> None:
         eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main; rm -rf /", "HEAD")
-        assert eligible is True
-        assert violations == []
+        assert eligible is False
+        assert len(violations) == 1
+        assert "fail-closed" in violations[0]
         mock_run.assert_not_called()
 
 
@@ -292,3 +295,82 @@ class TestMainExitCode:
             ]
         )
         assert rc == 1, "class-A without label must exit 1 (standard lane)"
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed guardrails: unresolvable checks deny eligibility (rc=1)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckCapFailClosed:
+    """check_cap must deny eligibility when it cannot resolve."""
+
+    def test_invalid_repo_denies(self) -> None:
+        eligible, detail = check_cap("invalid repo!; rm -rf /", 5, 24)
+        assert eligible is False
+        assert "fail-closed" in detail
+        assert "invalid repo" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_api_error_denies(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=1, stderr="not found", stdout="")
+        eligible, detail = check_cap("farnalabs/modulo", 5, 24)
+        assert eligible is False
+        assert "fail-closed" in detail
+        assert "API error" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_timeout_denies(self, mock_run: MagicMock) -> None:
+        import subprocess as _sp
+
+        mock_run.side_effect = _sp.TimeoutExpired(cmd="gh", timeout=30)
+        eligible, detail = check_cap("farnalabs/modulo", 5, 24)
+        assert eligible is False
+        assert "fail-closed" in detail
+
+
+class TestCheckShaPinningFailClosed:
+    """check_sha_pinning must deny eligibility when it cannot resolve."""
+
+    def test_invalid_repo_denies(self) -> None:
+        eligible, detail = check_sha_pinning("invalid repo!", 42, "abc123def456")
+        assert eligible is False
+        assert "fail-closed" in detail
+        assert "invalid repo" in detail
+
+    def test_invalid_pr_denies(self) -> None:
+        eligible, detail = check_sha_pinning("farnalabs/modulo", -1, "abc123def456")
+        assert eligible is False
+        assert "fail-closed" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_subprocess_failure_denies(self, mock_run: MagicMock) -> None:
+        import subprocess as _sp
+
+        mock_run.side_effect = _sp.TimeoutExpired(cmd="gh", timeout=15)
+        eligible, detail = check_sha_pinning("farnalabs/modulo", 42, "abc123def456")
+        assert eligible is False
+        assert "fail-closed" in detail
+        assert "could not fetch PR head" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_empty_sha_denies(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        eligible, detail = check_sha_pinning("farnalabs/modulo", 42, "abc123def456")
+        assert eligible is False
+        assert "fail-closed" in detail
+        assert "empty head SHA" in detail
+
+
+class TestCheckNoTestWeakeningGitFailure:
+    """check_no_test_weakening must deny when git diff fails."""
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_git_diff_timeout_denies(self, mock_run: MagicMock) -> None:
+        import subprocess as _sp
+
+        mock_run.side_effect = _sp.TimeoutExpired(cmd="git", timeout=30)
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is False
+        assert len(violations) == 1
+        assert "fail-closed" in violations[0]
