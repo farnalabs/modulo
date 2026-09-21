@@ -18,6 +18,7 @@ bdd:
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
   - backend/tests/bdd/features/pipelines/run_sequential.feature
   - backend/tests/bdd/features/users/runner_role.feature
+  - backend/tests/bdd/features/observability/active_run_observability.feature
   - backend/tests/bdd/steps/test_pipelines.py
   - backend/tests/bdd/steps/test_alpha_users.py
 depends-on:
@@ -99,6 +100,15 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
   is not unified in one tracker.
 
 ## QA History
+
+- 2026-09-21: **product-map walk** — closed the active-run observability BDD gap
+  (tracked under `feat-observability`): `active_run_observability.feature` is no
+  longer `@awaiting-implementation`. The two scenarios now drive the REAL
+  `GET /api/v1/runs/{id}` / `GET /api/v1/runs/{id}/events` routes with only the
+  `_do_*` DB-fetch seams patched, asserting the detail contract
+  (`trigger_actor` / `heartbeat_at` / `capacity` / `work_item_refs` /
+  `child_runs`) and the node lifecycle events end to end (real `RunEventBroker`
+  replay + filter). Cited here and in `observability.md`.
 
 - 2026-09-12: **product-map review pass** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids

@@ -2,10 +2,15 @@
 
 import contextlib
 import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
+
+from modulo.core.pipeline_engine.event_broker import get_registry
 
 # ---------------------------------------------------------------------------
 # Active features
@@ -397,44 +402,101 @@ def log_entries_delivered(ctx):
 # ============================================================================
 # active_run_observability.feature — Run detail / events contract round-trip
 #
-# Gated @awaiting-implementation: the steps round-trip the REAL payload shape
-# through the REAL endpoint (no hand-crafted frontend mock), but the run
-# detail/events routes drive an async_sessionmaker via _run_with_retry while the
-# mock BDD client overrides _get_session_factory with a bare MagicMock, so the
-# scenarios TypeError until that harness gap is closed (see feature note).
+# Closed 2026-09-21: the scenarios drive the REAL GET /api/v1/runs/{run_id} and
+# GET /api/v1/runs/{run_id}/events routes with only the DB-fetch seams patched
+# (the _do_* helpers in routes/runs.py), so the route handler, the
+# require_permission_any_credential authz dependency, and the RunResponse /
+# RunEventsResponse serialization all run for real. The event-stream scenario
+# also drives the REAL per-run RunEventBroker in the shared registry, so
+# replay_since and the node-lifecycle filter are asserted end to end.
 # ============================================================================
+
+
+def _make_active_run_fake(run_id: uuid.UUID, **kwargs: Any) -> MagicMock:
+    """Build a run-shaped fake with the REAL scalar values the serializer needs.
+
+    ``_build_run_response`` / ``RunResponse`` validate their inputs, so every
+    field they touch must carry a real value (or ``None``) — a MagicMock child
+    would raise a pydantic ValidationError and 500 the route.
+    """
+    run = MagicMock()
+    run.id = run_id
+    run.status = kwargs.get("status", "running")
+    run.pipeline_id = kwargs.get("pipeline_id", uuid.uuid4())
+    run.pipeline = kwargs.get("pipeline")
+    run.run_number = kwargs.get("run_number", 1)
+    run.langgraph_thread_id = str(uuid.uuid4())
+    run.snapshot_id = None
+    run.error_detail = None
+    run.error_code = None
+    run.total_cost_usd = None
+    run.total_tokens = 0
+    run.node_token_usage = None
+    run.cost_breakdown = None
+    run.run_classification = None
+    run.blocked_partial_summary = None
+    run.created_at = datetime.now(UTC)
+    run.started_at = datetime.now(UTC)
+    run.completed_at = None
+    run.heartbeat_at = kwargs.get("heartbeat_at") or datetime.now(UTC)
+    run.trigger_type = "manual"
+    run.trigger_id = None
+    run.work_item_refs = kwargs.get("work_item_refs")
+    run.input_payload = None
+    return run
 
 
 @given("an active run with heartbeat, capacity, work item refs, and child runs")
 def active_run_with_observability(ctx, request):
-    ctx["run_id"] = uuid.uuid4()
-    ctx["expected_observability"] = {
-        "trigger_actor": "tester@modulo.run",
-        "heartbeat_at": "2026-08-18T12:00:00Z",
-        "capacity": {"active_runs": 2, "concurrency_limit": 4, "waiting": True},
-        "work_item_refs": [{"kind": "pr", "ref": "farnalabs/modulo#1234", "source": "github", "status": "open"}],
-        "child_runs": [
-            {"run_id": str(uuid.uuid4()), "run_number": 2, "status": "running", "pipeline_name": "deploy-service"},
-        ],
-    }
-    request.node._run_id = ctx["run_id"]
+    run_id = uuid.uuid4()
+    capacity = {"active_runs": 2, "concurrency_limit": 4, "waiting": True}
+    child_runs = [
+        {"run_id": str(uuid.uuid4()), "run_number": 2, "status": "running", "pipeline_name": "deploy-service"}
+    ]
+    work_item_refs = [{"kind": "pr", "ref": "farnalabs/modulo#1234", "source": "github", "status": "open"}]
+    ctx["run_id"] = run_id
+    ctx["run"] = _make_active_run_fake(run_id, work_item_refs=work_item_refs)
+    ctx["trigger_actor"] = "tester@modulo.run"
+    ctx["capacity"] = capacity
+    ctx["child_runs"] = child_runs
+    request.node._run_id = run_id
+    request.node._run = ctx["run"]
 
 
 @given("an active run with node lifecycle events")
 def active_run_with_node_events(ctx, request):
-    ctx["run_id"] = uuid.uuid4()
-    ctx["lifecycle_events"] = {
-        "node_started": [{"node_id": "analyze", "ts": "2026-08-18T12:00:01Z"}],
-        "node_completed": [{"node_id": "analyze", "ts": "2026-08-18T12:00:05Z"}],
-        "node_failed": [{"node_id": "summarize", "ts": "2026-08-18T12:00:09Z"}],
-    }
-    request.node._run_id = ctx["run_id"]
+    run_id = uuid.uuid4()
+    broker = get_registry().get_or_create(run_id)
+    broker.publish("node_started", {"node_id": "analyze"})
+    broker.publish("node_completed", {"node_id": "analyze"})
+    broker.publish("node_failed", {"node_id": "summarize"})
+    request.addfinalizer(lambda: get_registry().close(run_id))
+    ctx["run_id"] = run_id
+    ctx["run"] = _make_active_run_fake(run_id)
+    request.node._run_id = run_id
+    request.node._run = ctx["run"]
 
 
 @when("I fetch the run detail via the API")
-def fetch_run_detail_via_api(client, request):
+def fetch_run_detail_via_api(client, request, ctx):
     run_id = request.node._run_id
-    resp = client.get(f"/api/v1/runs/{run_id}")
+    run = request.node._run
+    with (
+        patch("modulo.api.routes.runs._do_get_run_with_gate", new_callable=AsyncMock, return_value=(run, False)),
+        patch(
+            "modulo.api.routes.runs._do_get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value=(Decimal("0.000000"), 0),
+        ),
+        patch("modulo.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
+        patch(
+            "modulo.api.routes.runs._do_get_run_observability",
+            new_callable=AsyncMock,
+            return_value=(ctx["trigger_actor"], ctx["capacity"], ctx["child_runs"]),
+        ),
+        patch("modulo.api.routes.runs._do_get_workspace_inputs", new_callable=AsyncMock, return_value=None),
+    ):
+        resp = client.get(f"/api/v1/runs/{run_id}")
     request.node._resp = resp
     assert resp.status_code == 200, resp.text
 
@@ -442,7 +504,8 @@ def fetch_run_detail_via_api(client, request):
 @when("I fetch the run event stream via the API")
 def fetch_run_event_stream_via_api(client, request):
     run_id = request.node._run_id
-    resp = client.get(f"/api/v1/runs/{run_id}/events")
+    with patch("modulo.api.routes.runs._do_get_run", new_callable=AsyncMock, return_value=request.node._run):
+        resp = client.get(f"/api/v1/runs/{run_id}/events")
     request.node._resp = resp
     assert resp.status_code == 200, resp.text
 

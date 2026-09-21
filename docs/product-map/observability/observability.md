@@ -36,6 +36,7 @@ bdd:
   - backend/tests/bdd/features/observability/error_forwarders.feature
   - backend/tests/bdd/features/observability/monitor_config.feature
   - backend/tests/bdd/features/observability/otel_traces.feature
+  - backend/tests/bdd/features/observability/active_run_observability.feature
   - backend/tests/bdd/features/errors/failed_state.feature
   - backend/tests/bdd/features/errors/retry.feature
   - backend/tests/bdd/features/error_tracking/error_dashboard.feature
@@ -82,14 +83,14 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
 - [x] Frontend views behind the shipped routes render the settings and the admin
       error dashboard/detail surfaces (`SettingsObservabilityView.vue`,
       `AdminErrorsView.vue`, `AdminErrorDetailView.vue`)
+- [x] Active-run observability contract: run detail exposes `trigger_actor`,
+      `heartbeat_at`, `capacity`, `work_item_refs` and `child_runs`, and the run
+      event stream exposes `node_started` / `node_completed` / `node_failed`
+      lifecycle events (`active_run_observability.feature`, `routes/runs.py` on
+      `GET /api/v1/runs/{id}` / `GET /api/v1/runs/{id}/events`)
 
 ## Known Gaps
 
-- **`active_run_observability.feature` is deselected from CI** — the
-  active-run observability contract (node-progress strip, queue banner, trigger
-  actor, heartbeat, work items, child runs) is gated because the mock BDD client
-  cannot drive the real run-detail/events routes; the shapes are unit-verified
-  only.
 - **No BDD for OTel *trace* span capture** — `otel_traces.feature` scenarios
   describe chain-span capture but run behind the OTel-exporter harness; the
   active metric/OTLP-config contracts are the BDD-locked surface.
@@ -100,6 +101,17 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   unit/BDD-verified at the API layer only.
 
 ## QA History
+- 2026-09-21: **product-map walk** — closed the "`active_run_observability.feature`
+  is deselected from CI" gap. Un-gated the two scenarios and re-anchored them so
+  they drive the REAL `GET /api/v1/runs/{id}` and `GET /api/v1/runs/{id}/events`
+  routes with only the `_do_*` DB-fetch seams patched (the route handler, the
+  `require_permission_any_credential` authz dependency, and `RunResponse` /
+  `RunEventsResponse` serialization run for real). The event-stream scenario
+  additionally drives the REAL per-run `RunEventBroker` in the shared registry,
+  so `replay_since` and the node-lifecycle filter are asserted end to end.
+  Removed the two scenarios from
+  `PINNED_AWAITING_IMPLEMENTATION`; the feature is now executing BDD coverage.
+
 - 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/errors`, `/admin/errors/:id`, `/settings/error-forwarders`,

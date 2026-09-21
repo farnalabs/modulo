@@ -503,6 +503,22 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > SAML metadata-XML connection tests, group-to-team mapping set/get, and the
 > non-admin 403. `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-21):** closed `feat-observability`'s
+> "`active_run_observability.feature` is deselected from CI" gap
+> (`observability/observability.md`). Un-gated the two scenarios in
+> `observability/active_run_observability.feature` and re-anchored them so they
+> drive the REAL `GET /api/v1/runs/{id}` and `GET /api/v1/runs/{id}/events`
+> routes with only the `_do_*` DB-fetch seams patched — the route handler, the
+> `require_permission_any_credential` authz dependency, and the `RunResponse` /
+> `RunEventsResponse` serialization all run for real. The event-stream scenario
+> additionally drives the REAL per-run `RunEventBroker` from the shared registry
+> (`replay_since` + the node-lifecycle filter asserted end to end), and the
+> detail scenario locks `trigger_actor` / `heartbeat_at` / `capacity` /
+> `work_item_refs` / `child_runs` on the wire. Removed the two scenarios from
+> `PINNED_AWAITING_IMPLEMENTATION`; the feature is now executing BDD coverage,
+> cited from both `feat-runs` (`build/runs.md`) and `feat-observability`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
