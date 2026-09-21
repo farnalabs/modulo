@@ -191,7 +191,7 @@ def _build_email(
             briefing_raw.append(("Condition", f"{expression} = {value}"))
 
         artifacts = briefing.get("artifacts")
-        if artifacts and isinstance(artifacts, list) and len(artifacts) > 0:
+        if isinstance(artifacts, list) and artifacts:
             first = artifacts[0]
             summary = first.get("summary", "")
             if summary:
