@@ -25,6 +25,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -324,6 +325,36 @@ async def _facts_freshness(
 # ---------------------------------------------------------------------------
 
 
+@asynccontextmanager
+async def _guarded_session(
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    org_role: str | None,
+) -> AsyncIterator[AsyncSession]:
+    """Open a transaction with the RLS context and bounded statement timeout set.
+
+    Every analytics read surface needs the same ``set_rls_org`` (defense-in-depth)
+    plus principal context and the Postgres statement-timeout/timezone preamble, so
+    the setup lives here once rather than being copied per surface.
+    """
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        if account_id is not None:
+            await set_rls_user_context(session, account_id, org_role or "")
+        dialect = (await session.connection()).dialect.name
+        if dialect == "postgresql":
+            timeout_ms = getattr(settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS)
+            await session.execute(text(_SQL_SET_TIMEZONE_UTC))
+            await session.execute(
+                text(_SQL_SET_STATEMENT_TIMEOUT),
+                {"ms": str(int(timeout_ms))},
+            )
+        yield session
+
+
 async def _execute_with_guards(
     factory: async_sessionmaker[AsyncSession],
     settings: Settings,
@@ -340,40 +371,28 @@ async def _execute_with_guards(
     the REST route and the MCP tool surface identical semantics.
     """
     try:
-        async with factory() as session:
-            try:
-                async with session.begin():
-                    await set_rls_org(session, org_id)
-                    if account_id is not None:
-                        await set_rls_user_context(session, account_id, org_role or "")
-                    dialect = (await session.connection()).dialect.name
-                    if dialect == "postgresql":
-                        timeout_ms = getattr(
-                            settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
-                        )
-                        await session.execute(text(_SQL_SET_TIMEZONE_UTC))
-                        await session.execute(
-                            text(_SQL_SET_STATEMENT_TIMEOUT),
-                            {"ms": str(int(timeout_ms))},
-                        )
-                    result = await session.execute(stmt, params)
-                    return list(result.all())
-            except asyncio.CancelledError:
-                raise
-            except ProgrammingError:
-                _log.exception("analytics.query.programming_error", extra={"org_id": str(org_id)})
-                raise AnalyticsMigrationRequiredError(
-                    "Feature is not available. Run database migrations to enable it."
-                ) from None
-            except DBAPIError as exc:
-                if _is_query_canceled(exc):
-                    _log.warning("analytics.query.timeout", extra={"org_id": str(org_id)})
-                    raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
-                _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
-            except SQLAlchemyError:
-                _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+        try:
+            async with _guarded_session(
+                factory, settings, org_id=org_id, account_id=account_id, org_role=org_role
+            ) as session:
+                result = await session.execute(stmt, params)
+                return list(result.all())
+        except asyncio.CancelledError:
+            raise
+        except ProgrammingError:
+            _log.exception("analytics.query.programming_error", extra={"org_id": str(org_id)})
+            raise AnalyticsMigrationRequiredError(
+                "Feature is not available. Run database migrations to enable it."
+            ) from None
+        except DBAPIError as exc:
+            if _is_query_canceled(exc):
+                _log.warning("analytics.query.timeout", extra={"org_id": str(org_id)})
+                raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+            _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
+            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+        except SQLAlchemyError:
+            _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
+            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
     except (AnalyticsError, asyncio.CancelledError):
         raise
     except Exception:
@@ -825,41 +844,29 @@ async def export_facts(
     total = 0
     rows: list[Any] = []
     try:
-        async with factory() as session:
-            try:
-                async with session.begin():
-                    await set_rls_org(session, org_id)
-                    if account_id is not None:
-                        await set_rls_user_context(session, account_id, org_role or "")
-                    dialect = (await session.connection()).dialect.name
-                    if dialect == "postgresql":
-                        timeout_ms = getattr(
-                            settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
-                        )
-                        await session.execute(text(_SQL_SET_TIMEZONE_UTC))
-                        await session.execute(
-                            text(_SQL_SET_STATEMENT_TIMEOUT),
-                            {"ms": str(int(timeout_ms))},
-                        )
-                    total = int((await session.execute(count_stmt, bind)).scalar_one())
-                    result = await session.execute(rows_stmt, bind)
-                    rows = list(result.all())
-            except asyncio.CancelledError:
-                raise
-            except ProgrammingError:
-                _log.exception("analytics.export.programming_error", extra={"org_id": str(org_id)})
-                raise AnalyticsMigrationRequiredError(
-                    "Feature is not available. Run database migrations to enable it."
-                ) from None
-            except DBAPIError as exc:
-                if _is_query_canceled(exc):
-                    _log.warning("analytics.export.timeout", extra={"org_id": str(org_id)})
-                    raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
-                _log.exception("analytics.export.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
-            except SQLAlchemyError:
-                _log.exception("analytics.export.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+        try:
+            async with _guarded_session(
+                factory, settings, org_id=org_id, account_id=account_id, org_role=org_role
+            ) as session:
+                total = int((await session.execute(count_stmt, bind)).scalar_one())
+                result = await session.execute(rows_stmt, bind)
+                rows = list(result.all())
+        except asyncio.CancelledError:
+            raise
+        except ProgrammingError:
+            _log.exception("analytics.export.programming_error", extra={"org_id": str(org_id)})
+            raise AnalyticsMigrationRequiredError(
+                "Feature is not available. Run database migrations to enable it."
+            ) from None
+        except DBAPIError as exc:
+            if _is_query_canceled(exc):
+                _log.warning("analytics.export.timeout", extra={"org_id": str(org_id)})
+                raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+            _log.exception("analytics.export.db_error", extra={"org_id": str(org_id)})
+            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+        except SQLAlchemyError:
+            _log.exception("analytics.export.db_error", extra={"org_id": str(org_id)})
+            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
     except (AnalyticsError, asyncio.CancelledError):
         raise
     except Exception:
@@ -978,49 +985,37 @@ async def stream_export_facts(
     page_stmt = rows_stmt
     page_bind = dict(bind)
     try:
-        async with factory() as session:
-            try:
-                async with session.begin():
-                    await set_rls_org(session, org_id)
-                    if account_id is not None:
-                        await set_rls_user_context(session, account_id, org_role or "")
-                    dialect = (await session.connection()).dialect.name
-                    if dialect == "postgresql":
-                        timeout_ms = getattr(
-                            settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
-                        )
-                        await session.execute(text(_SQL_SET_TIMEZONE_UTC))
-                        await session.execute(
-                            text(_SQL_SET_STATEMENT_TIMEOUT),
-                            {"ms": str(int(timeout_ms))},
-                        )
-                    while True:
-                        result = await session.execute(page_stmt, dict(page_bind))
-                        page = list(result.all())
-                        for row in page:
-                            yield _serialize_fact_row(row)
-                        if len(page) < page_size:
-                            break
-                        last = page[-1]
-                        cursor = (last.run_date, last.created_at, last.run_id)
-                        page_bind.update(_keyset_bind(cursor))
-                        page_stmt = rows_stmt.where(_keyset_conditions(cursor))
-            except asyncio.CancelledError:
-                raise
-            except ProgrammingError:
-                _log.exception("analytics.scan.programming_error", extra={"org_id": str(org_id)})
-                raise AnalyticsMigrationRequiredError(
-                    "Feature is not available. Run database migrations to enable it."
-                ) from None
-            except DBAPIError as exc:
-                if _is_query_canceled(exc):
-                    _log.warning("analytics.scan.timeout", extra={"org_id": str(org_id)})
-                    raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
-                _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
-            except SQLAlchemyError:
-                _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+        try:
+            async with _guarded_session(
+                factory, settings, org_id=org_id, account_id=account_id, org_role=org_role
+            ) as session:
+                while True:
+                    result = await session.execute(page_stmt, dict(page_bind))
+                    page = list(result.all())
+                    for row in page:
+                        yield _serialize_fact_row(row)
+                    if len(page) < page_size:
+                        break
+                    last = page[-1]
+                    cursor = (last.run_date, last.created_at, last.run_id)
+                    page_bind.update(_keyset_bind(cursor))
+                    page_stmt = rows_stmt.where(_keyset_conditions(cursor))
+        except asyncio.CancelledError:
+            raise
+        except ProgrammingError:
+            _log.exception("analytics.scan.programming_error", extra={"org_id": str(org_id)})
+            raise AnalyticsMigrationRequiredError(
+                "Feature is not available. Run database migrations to enable it."
+            ) from None
+        except DBAPIError as exc:
+            if _is_query_canceled(exc):
+                _log.warning("analytics.scan.timeout", extra={"org_id": str(org_id)})
+                raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+            _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
+            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+        except SQLAlchemyError:
+            _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
+            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
     except (AnalyticsError, asyncio.CancelledError):
         raise
     except Exception:
