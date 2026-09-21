@@ -431,6 +431,27 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > 404 before any check, and the deterministic stub provider → `healthy`.
 > Removed the four scenarios from `PINNED_AWAITING_IMPLEMENTATION`.
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-21):** closed `feat-sso`'s "OIDC SSO flows
+> (per-org OIDC, per-provider discovery) are covered by unit tests only;
+> equivalent multi-org real-DB (RLS) integration regression not yet written"
+> deferral (`auth/sso-provider-ui.md`). Registered the new
+> `backend/tests/integration/auth/test_oidc_rls_resolution.py` (mirroring
+> `test_saml_rls_resolution.py`), driving the REAL `modulo.auth.sso`
+> `_resolve_oidc_provider` seam and the REAL `GET /oidc/{provider}/login` route
+> through the real `modulo_system` (BYPASSRLS) / `modulo_app` (NOBYPASSRLS)
+> roles — the system leg resolves an OIDC provider owned by a NON-first org,
+> unknown slugs fail closed all-None (never RuntimeError→500), the app fallback
+> resolves first-org-only inside a scoped transaction, an unbound app session
+> sees zero OIDC providers, and a cross-org provider slug 307s to the IdP while
+> an unknown slug is a 400 not a 500. Fixed the latent FAR-1058-class defect the
+> regression exposes: `_resolve_oidc_provider` now opens its own
+> `session.begin()` for the app fallback when the caller has no active
+> transaction (previously it called `_set_default_rls_org` outside any
+> transaction, matching the SAML bug FAR-1058 fixed — a provider read on a
+> transaction-less autobegin=False app session raised `RuntimeError` → 500).
+> Demoted the deferral and added the behaviour lines to
+> `frontend/src/manifest.yaml` `feat-sso`. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

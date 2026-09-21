@@ -77,6 +77,18 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   states only "This action cannot be undone".
 
 ## QA History
+- 2026-09-21: **improve-architecture (product-map walk)** — closed the OIDC
+  multi-org real-DB (RLS) integration gap (manifest `feat-sso` deferral). New
+  `backend/tests/integration/auth/test_oidc_rls_resolution.py` mirrors the SAML
+  RLS regression for the per-provider OIDC surface: the system role resolves an
+  OIDC provider owned by a NON-first org, unknown slugs fail closed all-None
+  (never RuntimeError→500), the app fallback resolves first-org-only inside a
+  scoped transaction (FAR-1058 parity — `_resolve_oidc_provider` now opens its
+  own `session.begin()` when the caller has none, matching
+  `_resolve_saml_for_route`), an unbound app session sees zero OIDC providers,
+  and `GET /oidc/{provider}/login` 307s cross-org with the resolved provider's
+  client_id while an unknown slug is a 400 not a 500. Demoted the OIDC deferral
+  and added the behaviour lines to `frontend/src/manifest.yaml`.
 - 2026-09-17: **improve-architecture (product-map walk)** — registered the
   `SsoProviderForm.vue` provider-form surface in the manifest `elements:`
   inventory for `/settings/sso`: the form ships the tenant-domain input
