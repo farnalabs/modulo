@@ -1,3 +1,5 @@
+import copy
+import logging
 from collections.abc import AsyncIterator
 from typing import Any, ClassVar
 
@@ -13,6 +15,8 @@ from modulo.model_backends.base import (
     openai_compatible_health_check,
     serialize_structured_output,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAICompatibleBackend(ModelBackendBase):
@@ -106,12 +110,33 @@ class OpenAICompatibleBackend(ModelBackendBase):
                 # nested inside {"name": ..., "schema": ...}, which the raw
                 # bind(response_format={"type": "json_schema", "json_schema": ...})
                 # does not provide and 400s on.
-                structured = self._model.with_structured_output(
-                    schema=output_schema,
-                    method="json_schema",
-                )
-                result = await structured.ainvoke(messages, **kwargs)
-                return serialize_structured_output(result)
+                #
+                # FAR-1118: langchain_openai requires a top-level "title" key in
+                # dict schemas to derive the function name.  Without it,
+                # with_structured_output raises ValueError which was not caught,
+                # crashing the run.  Deep-copy the schema and inject a stable
+                # title when absent (never mutate the caller's dict).
+                schema_for_provider = copy.deepcopy(output_schema)
+                if "title" not in schema_for_provider:
+                    schema_for_provider["title"] = "StructuredOutput"
+                try:
+                    structured = self._model.with_structured_output(
+                        schema=schema_for_provider,
+                        method="json_schema",
+                    )
+                except ValueError:
+                    # Construction/validation failure — fall back to the plain
+                    # ainvoke path where FAR-899 post-hoc schema validation
+                    # still applies.  Gateway errors (APIStatusError etc.) from
+                    # with_structured_output are NOT ValueError and will be
+                    # caught by the outer except handler below.
+                    logger.warning(
+                        "structured_output_construction_failed",
+                        exc_info=True,
+                    )
+                else:
+                    result = await structured.ainvoke(messages, **kwargs)
+                    return serialize_structured_output(result)
             return await self._model.ainvoke(messages, **kwargs)
         except (APIStatusError, APIConnectionError) as exc:
             classified = self._classify_gateway_error(exc)

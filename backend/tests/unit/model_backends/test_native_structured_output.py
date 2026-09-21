@@ -266,7 +266,11 @@ class TestOpenAIStructuredOutputMechanism:
     not a raw bind(response_format=...), which 400s on the wrong schema shape."""
 
     async def test_invoke_uses_with_structured_output(self) -> None:
-        """OpenAICompatibleBackend.invoke() calls with_structured_output(method='json_schema')."""
+        """OpenAICompatibleBackend.invoke() calls with_structured_output(method='json_schema').
+
+        FAR-1118: schema is deep-copied and a 'title' is injected when absent,
+        so the assertion checks the provider-facing schema (with title).
+        """
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from langchain_core.messages import HumanMessage
@@ -288,9 +292,11 @@ class TestOpenAIStructuredOutputMechanism:
                 output_schema=schema,
             )
 
-        # Assert with_structured_output was called with correct parameters
+        # Assert with_structured_output was called with correct parameters.
+        # FAR-1118: title-less schemas get a 'title' injected before passing.
+        expected_schema = {**schema, "title": "StructuredOutput"}
         mock_chat.with_structured_output.assert_called_once_with(
-            schema=schema,
+            schema=expected_schema,
             method="json_schema",
         )
         # Assert result is an AIMessage with JSON content
@@ -565,3 +571,329 @@ class TestSerializeStructuredOutput:
 
         message = serialize_structured_output(42)
         assert json.loads(message.content) == "42"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1118: title-less dict schemas must not crash the run
+# ---------------------------------------------------------------------------
+
+# A bare dict JSON Schema with NO top-level "title" — the exact shape Modulo
+# produces from output_schema_json.  This is the schema that crashed production.
+_TITLELESS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "name": {"type": "string"},
+        "age": {"type": "integer"},
+    },
+}
+
+
+class TestOpenAICompatibleTitleInjection:
+    """FAR-1118: OpenAICompatibleBackend must inject 'title' into title-less
+    dict schemas before calling with_structured_output, and fall back to
+    plain ainvoke on construction failure."""
+
+    async def test_title_injected_for_titleless_schema(self) -> None:
+        """with_structured_output receives a schema WITH top-level title.
+
+        FAILS WITHOUT FIX: ValueError('Unsupported function ... must have a
+        top-level title key') propagates uncaught.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import HumanMessage
+
+        from modulo.model_backends.module import OpenAICompatibleBackend
+
+        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_structured = AsyncMock()
+            mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice", "age": 30})
+            mock_chat.with_structured_output = MagicMock(return_value=mock_structured)
+            mock_chat_cls.return_value = mock_chat
+
+            backend = OpenAICompatibleBackend(api_key="sk-test", model_id="gpt-4o")
+            await backend.invoke(
+                [HumanMessage(content="hi")],
+                output_schema=_TITLELESS_SCHEMA,
+            )
+
+        # The schema passed to with_structured_output must have a title
+        call_kwargs = mock_chat.with_structured_output.call_args
+        passed_schema = call_kwargs.kwargs.get("schema") or call_kwargs[1].get("schema")
+        assert "title" in passed_schema, "Schema must have top-level 'title' injected"
+        assert passed_schema["title"] == "StructuredOutput"
+        # Original properties preserved
+        assert "name" in passed_schema["properties"]
+
+    async def test_caller_schema_not_mutated(self) -> None:
+        """The caller's original dict must NOT have 'title' added in place.
+
+        FAILS WITHOUT FIX: copy.deepcopy is not used, so the original dict
+        gets mutated.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import HumanMessage
+
+        from modulo.model_backends.module import OpenAICompatibleBackend
+
+        original_schema = dict(_TITLELESS_SCHEMA)  # shallow copy for safety
+        original_schema["properties"] = dict(_TITLELESS_SCHEMA["properties"])
+        schema_copy = json.loads(json.dumps(original_schema))
+
+        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_structured = AsyncMock()
+            mock_structured.ainvoke = AsyncMock(return_value={"name": "Bob"})
+            mock_chat.with_structured_output = MagicMock(return_value=mock_structured)
+            mock_chat_cls.return_value = mock_chat
+
+            backend = OpenAICompatibleBackend(api_key="sk-test", model_id="gpt-4o")
+            await backend.invoke(
+                [HumanMessage(content="hi")],
+                output_schema=original_schema,
+            )
+
+        # Original schema must be unchanged
+        assert json.loads(json.dumps(original_schema)) == schema_copy
+        assert "title" not in original_schema, "Original schema must not be mutated"
+
+    async def test_invoke_returns_result_with_titleless_schema(self) -> None:
+        """invoke() completes successfully with a title-less schema.
+
+        FAILS WITHOUT FIX: ValueError propagates, crashing the run.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import HumanMessage
+
+        from modulo.model_backends.module import OpenAICompatibleBackend
+
+        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_structured = AsyncMock()
+            mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice"})
+            mock_chat.with_structured_output = MagicMock(return_value=mock_structured)
+            mock_chat_cls.return_value = mock_chat
+
+            backend = OpenAICompatibleBackend(api_key="sk-test", model_id="gpt-4o")
+            result = await backend.invoke(
+                [HumanMessage(content="hi")],
+                output_schema=_TITLELESS_SCHEMA,
+            )
+
+        assert hasattr(result, "content")
+        parsed = json.loads(result.content)
+        assert parsed == {"name": "Alice"}
+
+    async def test_construction_failure_falls_back_to_plain_invoke(self) -> None:
+        """When with_structured_output raises ValueError, invoke() falls back.
+
+        FAILS WITHOUT FIX: ValueError is not caught, so the run crashes
+        instead of falling back to plain ainvoke.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from modulo.model_backends.module import OpenAICompatibleBackend
+
+        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+            mock_chat = MagicMock()
+            # with_structured_output raises ValueError (simulating the bug)
+            mock_chat.with_structured_output = MagicMock(side_effect=ValueError("Unsupported function"))
+            # plain ainvoke returns a normal result
+            mock_chat.ainvoke = AsyncMock(return_value=AIMessage(content="fallback result"))
+            mock_chat_cls.return_value = mock_chat
+
+            backend = OpenAICompatibleBackend(api_key="sk-test", model_id="gpt-4o")
+            result = await backend.invoke(
+                [HumanMessage(content="hi")],
+                output_schema=_TITLELESS_SCHEMA,
+            )
+
+        # Must have fallen back to plain ainvoke
+        mock_chat.ainvoke.assert_awaited_once()
+        assert result.content == "fallback result"
+
+    async def test_existing_title_preserved(self) -> None:
+        """A schema that already has a title is NOT overridden.
+
+        FAILS WITHOUT FIX: N/A — this is a guard against over-injection.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import HumanMessage
+
+        from modulo.model_backends.module import OpenAICompatibleBackend
+
+        schema_with_title = {**_TITLELESS_SCHEMA, "title": "MyCustomTitle"}
+
+        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_structured = AsyncMock()
+            mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice"})
+            mock_chat.with_structured_output = MagicMock(return_value=mock_structured)
+            mock_chat_cls.return_value = mock_chat
+
+            backend = OpenAICompatibleBackend(api_key="sk-test", model_id="gpt-4o")
+            await backend.invoke(
+                [HumanMessage(content="hi")],
+                output_schema=schema_with_title,
+            )
+
+        call_kwargs = mock_chat.with_structured_output.call_args
+        passed_schema = call_kwargs.kwargs.get("schema") or call_kwargs[1].get("schema")
+        assert passed_schema["title"] == "MyCustomTitle"
+
+    async def test_api_status_error_still_classified(self) -> None:
+        """APIStatusError from structured ainvoke is still caught and classified.
+
+        FAILS WITHOUT FIX: N/A — regression guard ensuring the outer except
+        handler still sees provider errors.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import httpx2
+        from langchain_core.messages import HumanMessage
+        from openai import APIStatusError
+
+        from modulo.model_backends.base import ProviderUnavailableError
+        from modulo.model_backends.module import OpenAICompatibleBackend
+
+        request = httpx2.Request("POST", "https://api.openai.com/v1/chat/completions")
+        server_error = APIStatusError(
+            message="Internal Server Error",
+            response=httpx2.Response(500, request=request),
+            body={"error": {"message": "boom"}},
+        )
+
+        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_structured = AsyncMock()
+            mock_structured.ainvoke = AsyncMock(side_effect=server_error)
+            mock_chat.with_structured_output = MagicMock(return_value=mock_structured)
+            mock_chat_cls.return_value = mock_chat
+
+            backend = OpenAICompatibleBackend(api_key="sk-test", model_id="gpt-4o")
+            with pytest.raises(ProviderUnavailableError) as exc_info:
+                await backend.invoke(
+                    [HumanMessage(content="hi")],
+                    output_schema=_TITLELESS_SCHEMA,
+                )
+            assert "HTTP 500" in str(exc_info.value)
+
+
+class TestAnthropicTitleInjection:
+    """FAR-1118: AnthropicBackend must also inject 'title' and fail open."""
+
+    async def test_invoke_returns_result_with_titleless_schema(self) -> None:
+        """invoke() completes successfully with a title-less schema.
+
+        FAILS WITHOUT FIX: ValueError propagates from with_structured_output.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import HumanMessage
+
+        from modulo.model_backends.anthropic import AnthropicBackend
+
+        with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_structured = AsyncMock()
+            mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice"})
+            mock_chat.with_structured_output = MagicMock(return_value=mock_structured)
+            mock_chat_cls.return_value = mock_chat
+
+            backend = AnthropicBackend(api_key="sk-ant-test", model_id="claude-haiku-4-5")
+            result = await backend.invoke(
+                [HumanMessage(content="hi")],
+                output_schema=_TITLELESS_SCHEMA,
+            )
+
+        assert hasattr(result, "content")
+        parsed = json.loads(result.content)
+        assert parsed == {"name": "Alice"}
+
+    async def test_caller_schema_not_mutated(self) -> None:
+        """The caller's original dict is not mutated by title injection."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import HumanMessage
+
+        from modulo.model_backends.anthropic import AnthropicBackend
+
+        original_schema = json.loads(json.dumps(_TITLELESS_SCHEMA))
+
+        with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_structured = AsyncMock()
+            mock_structured.ainvoke = AsyncMock(return_value={"name": "Bob"})
+            mock_chat.with_structured_output = MagicMock(return_value=mock_structured)
+            mock_chat_cls.return_value = mock_chat
+
+            backend = AnthropicBackend(api_key="sk-ant-test", model_id="claude-haiku-4-5")
+            await backend.invoke(
+                [HumanMessage(content="hi")],
+                output_schema=original_schema,
+            )
+
+        assert "title" not in original_schema
+
+    async def test_construction_failure_falls_back(self) -> None:
+        """When with_structured_output raises ValueError, invoke() falls back."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from modulo.model_backends.anthropic import AnthropicBackend
+
+        with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_chat.with_structured_output = MagicMock(side_effect=ValueError("Unsupported function"))
+            mock_chat.ainvoke = AsyncMock(return_value=AIMessage(content="fallback"))
+            mock_chat_cls.return_value = mock_chat
+
+            backend = AnthropicBackend(api_key="sk-ant-test", model_id="claude-haiku-4-5")
+            result = await backend.invoke(
+                [HumanMessage(content="hi")],
+                output_schema=_TITLELESS_SCHEMA,
+            )
+
+        mock_chat.ainvoke.assert_awaited_once()
+        assert result.content == "fallback"
+
+    async def test_api_status_error_still_classified(self) -> None:
+        """AnthropicStatusError from structured ainvoke is still classified."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import httpx2
+        from anthropic import APIStatusError as AnthropicAPIStatusError
+        from langchain_core.messages import HumanMessage
+
+        from modulo.model_backends.anthropic import AnthropicBackend
+        from modulo.model_backends.base import ProviderUnavailableError
+
+        request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+        server_error = AnthropicAPIStatusError(
+            message="Internal Server Error",
+            response=httpx2.Response(503, request=request),
+            body={"error": {"message": "boom"}},
+        )
+
+        with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
+            mock_chat = MagicMock()
+            mock_structured = AsyncMock()
+            mock_structured.ainvoke = AsyncMock(side_effect=server_error)
+            mock_chat.with_structured_output = MagicMock(return_value=mock_structured)
+            mock_chat_cls.return_value = mock_chat
+
+            backend = AnthropicBackend(api_key="sk-ant-test", model_id="claude-haiku-4-5")
+            with pytest.raises(ProviderUnavailableError) as exc_info:
+                await backend.invoke(
+                    [HumanMessage(content="hi")],
+                    output_schema=_TITLELESS_SCHEMA,
+                )
+            assert "HTTP 503" in str(exc_info.value)

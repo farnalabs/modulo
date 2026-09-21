@@ -1,3 +1,5 @@
+import copy
+import logging
 from collections.abc import AsyncIterator
 from typing import Any, ClassVar
 
@@ -10,6 +12,8 @@ from modulo.model_backends.base import (
     openai_compatible_health_check,
     serialize_structured_output,
 )
+
+logger = logging.getLogger(__name__)
 
 try:
     from anthropic import APIConnectionError as AnthropicConnectionError
@@ -55,12 +59,29 @@ class AnthropicBackend(ModelBackendBase):
     ) -> BaseMessage:
         try:
             if output_schema is not None:
-                structured = self._model.with_structured_output(schema=output_schema)
-                result = await structured.ainvoke(messages, **kwargs)
-                # FIX 5 + FIX 7 (FAR-898): wrap structured output in the same
-                # error classification the normal path uses, and serialise via
-                # the shared helper so both backends return the same shape.
-                return serialize_structured_output(result)
+                # FAR-1118: langchain_anthropic's with_structured_output can
+                # raise ValueError for malformed schemas (e.g. missing title).
+                # Deep-copy and inject a stable title when absent so the
+                # provider receives a valid shape, and fall back to plain
+                # ainvoke on construction failure.
+                schema_for_provider = copy.deepcopy(output_schema)
+                if "title" not in schema_for_provider:
+                    schema_for_provider["title"] = "StructuredOutput"
+                try:
+                    structured = self._model.with_structured_output(
+                        schema=schema_for_provider,
+                    )
+                except ValueError:
+                    logger.warning(
+                        "structured_output_construction_failed",
+                        exc_info=True,
+                    )
+                else:
+                    result = await structured.ainvoke(messages, **kwargs)
+                    # FIX 5 + FIX 7 (FAR-898): wrap structured output in the same
+                    # error classification the normal path uses, and serialise via
+                    # the shared helper so both backends return the same shape.
+                    return serialize_structured_output(result)
             return await self._model.ainvoke(messages, **kwargs)
         except (AnthropicStatusError, AnthropicConnectionError) as exc:
             classified = self._classify_gateway_error(exc)
