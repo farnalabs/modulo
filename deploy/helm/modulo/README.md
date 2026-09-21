@@ -86,6 +86,26 @@ backend:
 
 **Trade-off:** Digest pinning ensures exact image reproducibility but requires manual updates when new images are published. Tag-based references are simpler but may pull different images over time.
 
+### Image Pull Secrets (Private GHCR Images)
+
+The GHCR images (`ghcr.io/farnalabs/modulo/backend`, `.../frontend`) are private.
+Set `imagePullSecrets` to pull them:
+
+```yaml
+# 1. Create the secret
+kubectl create secret docker-registry ghcr-secret \
+  --docker-server=ghcr.io \
+  --docker-username=<github-username> \
+  --docker-password=<github-pat>
+
+# 2. Reference it in values
+imagePullSecrets:
+  - name: ghcr-secret
+```
+
+The secret is rendered into both the ServiceAccount and every pod spec.
+Public images would remove the need for this.
+
 ## EKS Deployment
 
 See `values.eks.example.yaml` for a validated EKS configuration using AWS managed services (RDS, ElastiCache, ALB).
@@ -149,7 +169,7 @@ kubectl delete namespace modulo  # If namespace.create=true
 - **Pod Security Admission:** `restricted` enforcement at namespace level
 - **Security Context:** `runAsNonRoot`, `allowPrivilegeEscalation: false`, `capabilities.drop: ALL`
 - **seccompProfile:** `RuntimeDefault` on all pods
-- **readOnlyRootFilesystem:** Enabled where the process allows (frontend nginx); `emptyDir` mounts for writable paths
+- **readOnlyRootFilesystem:** Enabled on all containers. Frontend nginx uses `command: ["nginx", "-g", "daemon off;"]` to skip the docker-entrypoint (which writes into `/etc/nginx/conf.d/`); the nginx config is provided via a ConfigMap mount. Backend/SAQ runners use writable `/tmp` emptyDir mounts.
 
 ### Resource Management
 
