@@ -4,7 +4,8 @@
 Classifies a PR's changed paths into class-A (test-infra only) or class-B
 (everything else). When a PR carries the ``fast-lane:test-infra`` label, the
 classifier additionally enforces guardrails before granting fast-lane
-eligibility.
+eligibility.  The label is read live from the GitHub API (not from the
+event payload) so label additions/removals are reflected immediately.
 
 Usage (CI):
     python scripts/fast_lane_classify.py \\
@@ -491,6 +492,67 @@ def check_no_test_weakening(
 
 
 # ---------------------------------------------------------------------------
+# Label check: read the PR's labels from the GitHub API (live)
+# ---------------------------------------------------------------------------
+
+_LABEL_NAME = "fast-lane:test-infra"
+
+
+def check_label_live(
+    repo: str,
+    pr_number: int,
+    gh_token: str | None = None,
+) -> tuple[bool, str]:
+    """Read the PR's labels from the GitHub API and check for the fast-lane label.
+
+    Returns ``(has_label, detail)``.
+
+    Fail-closed: if the labels cannot be read, deny — an unreadable label
+    state must never be treated as "label present".
+    """
+    env = os.environ.copy()
+    if gh_token:
+        env["GH_TOKEN"] = gh_token
+
+    safe_repo = _safe_repo(repo)
+    safe_pr = _safe_pr(pr_number)
+    if safe_repo is None or safe_pr is None:
+        return False, "label check denied (fail-closed): invalid repo/PR number"
+
+    cmd = [
+        "gh",
+        "pr",
+        "view",
+        safe_pr,
+        "--repo",
+        safe_repo,
+        "--json",
+        "labels",
+        "--jq",
+        ".labels[].name",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            env=env,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        return False, f"label check denied (fail-closed): {exc}"
+
+    if result.returncode != 0:
+        return False, f"label check denied (fail-closed): API error: {result.stderr.strip()}"
+
+    labels = [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
+    if _LABEL_NAME in labels:
+        return True, f"label present: {_LABEL_NAME}"
+    return False, f"label absent: {_LABEL_NAME} not in {labels}"
+
+
+# ---------------------------------------------------------------------------
 # Guardrail: SHA-pinning
 # ---------------------------------------------------------------------------
 
@@ -590,11 +652,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="origin/main",
         help="Git ref for the base of the diff (default: origin/main)",
     )
+    # Accepted and ignored for backward compatibility (FAR-1132): the label is
+    # now read live from the GitHub API by check_label_live(), so passing this
+    # flag has no effect on the verdict. It is retained so existing callers do
+    # not break on an unknown argument, and hidden from --help (help=SUPPRESS)
+    # because it is not functional.
     parser.add_argument(
         "--has-label",
         action="store_true",
         default=False,
-        help="Whether the PR carries the fast-lane:test-infra label",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--check-name",
@@ -653,7 +720,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"PR #{args.pr_number} is class-B — not fast-lane eligible")
         return 1
 
-    if not args.has_label:
+    # Read the label live from the GitHub API instead of relying on the
+    # caller-supplied --has-label (which is frozen at event time and cannot
+    # reflect label changes — FAR-1132).
+    label_ok, label_detail = check_label_live(safe_repo, args.pr_number, gh_token)
+    print(f"  label: {label_detail}")
+    if not label_ok:
         print(f"PR #{args.pr_number} is class-A but lacks fast-lane:test-infra label — standard lane")
         return 1
 
