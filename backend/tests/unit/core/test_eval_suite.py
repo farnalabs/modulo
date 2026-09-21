@@ -310,26 +310,38 @@ class TestCheckEvalSuites:
         def_b = _make_eval_row(name="b", suite_id=suite, pass_threshold=0.5, pipeline_id=pipeline_id)
 
         result_rows = []
-        for i in range(2):
-            row = MagicMock()
-            row.id = uuid4()
-            row.run_id = run_id
-            row.node_id = uuid4()
-            row.eval_id = def_a.id
-            row.passed = i == 0
-            row.score = 0.9 if i == 0 else 0.6
-            row.detail = "ok" if i == 0 else "below 0.8"
-            row.evaluated_at = datetime.now(UTC)
-            result_rows.append(row)
+        # One passing result for def_a
+        row_a_pass = MagicMock()
+        row_a_pass.id = uuid4()
+        row_a_pass.run_id = run_id
+        row_a_pass.node_id = uuid4()
+        row_a_pass.eval_id = def_a.id
+        row_a_pass.passed = True
+        row_a_pass.score = 0.9
+        row_a_pass.detail = "ok"
+        row_a_pass.evaluated_at = datetime.now(UTC)
+        result_rows.append(row_a_pass)
+
+        # One failing result for def_b
+        row_b_fail = MagicMock()
+        row_b_fail.id = uuid4()
+        row_b_fail.run_id = run_id
+        row_b_fail.node_id = uuid4()
+        row_b_fail.eval_id = def_b.id
+        row_b_fail.passed = False
+        row_b_fail.score = 0.6
+        row_b_fail.detail = "below 0.8"
+        row_b_fail.evaluated_at = datetime.now(UTC)
+        result_rows.append(row_b_fail)
 
         executor = PipelineExecutor(MagicMock())
         session = self._session_with_rows([[def_a, def_b], [def_a, def_b], result_rows])
         with pytest.raises(EvalSuiteBlockedError) as exc_info:
             await executor._check_eval_suites(session, run_id, pipeline_id)
 
-        # 0.6 score < 0.8 threshold → blocked on the FIRST threshold, not 0.5.
+        # 0.5 score < 0.8 threshold → blocked on the FIRST threshold, not 0.5.
         assert exc_info.value.suite_id == suite
-        assert exc_info.value.score == pytest.approx(0.5)  # aggregate 1/2 passed
+        assert exc_info.value.score == pytest.approx(0.5)  # 1/2 passed
         assert exc_info.value.threshold == pytest.approx(0.8)
 
     async def test_no_threshold_defs_means_no_blocking(self) -> None:

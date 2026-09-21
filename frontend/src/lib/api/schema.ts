@@ -6875,6 +6875,10 @@ export interface paths {
          *     Returns a paginated list of eval results with the eval definition name
          *     included for convenience. Requires the run to belong to the caller's
          *     organisation.
+         *
+         *     Optional query parameters ``node_id`` and ``eval_id`` filter results
+         *     by the evaluation's target node or eval definition respectively. When
+         *     omitted the response is identical to the unfiltered call.
          */
         get: operations["list_run_evals_api_v1_runs__run_id__evals_get"];
         put?: never;
@@ -34742,6 +34746,8 @@ export interface operations {
             query?: {
                 page?: number;
                 page_size?: number;
+                node_id?: string | null;
+                eval_id?: string | null;
                 _fresh?: boolean;
             };
             header?: never;

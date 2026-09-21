@@ -56,9 +56,9 @@ from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
     EvalBlockedError,
-    EvalEngine,
     EvalSuiteBlockedError,
     SuiteEvalResult,
+    SuiteOutcome,
     evaluate_suite,
 )
 from modulo.core.eval_engine import (
@@ -93,6 +93,10 @@ from modulo.core.pipeline_engine.error_codes import (
     sanitize_error_text,
 )
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
+from modulo.core.pipeline_engine.eval_persist_order import (
+    _record_suite_incomplete,
+    run_evals_persist_before_decide,
+)
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.evidence import (
     EvidenceProvider,
@@ -2303,16 +2307,12 @@ class PipelineExecutor:
         org_id: uuid.UUID | None,
         node_type_map: dict[str, str] | None = None,
     ) -> None:
-        """FAR-305: run node-scoped evals for a completed node (standalone path).
+        """FAR-305/FAR-971: run node-scoped evals for a completed node (standalone path).
 
-        This is the non-HITL counterpart to ``make_hitl_gate_fn``'s
-        eval-before-interrupt: it evaluates each of the node's eval definitions
-        against the node's CONTRACT output — the agent's actual return (what
-        users see as the node return; for a sandbox_agent that is
-        ``artifacts[0].output.output_json``), matching what the HITL gate
-        evaluates against state after FAR-311 — and persists the results to the
-        ``eval_results`` table so post-run suite-level threshold checks can
-        read them.
+        Per-eval compute→persist→decide (persist-before-decide, FAR-971 chunk 2).
+        Each ``EvalResult`` is committed in its own transaction *before* the
+        block/warn decision is taken, so a ``block`` eval's result is always
+        durable when ``EvalBlockedError`` propagates.
 
         If a ``block`` eval fails, ``EvalBlockedError`` propagates to
         ``_stream_graph``'s existing handler, transitioning the run to
@@ -2322,56 +2322,42 @@ class PipelineExecutor:
         if not eval_defs:
             return
         # The captured ``output`` is the envelope ``{"artifacts": [...],
-        # "output": {...}}``. Validate the node's CONTRACT output (what the
+        # "output": {...}}``.  Validate the node's CONTRACT output (what the
         # agent produced — ``artifacts[0].output.output_json`` for a
         # sandbox_agent), NOT the telemetry-style outer ``output`` envelope
         # (FAR-311: the outer output carries status/summary/cost but no
         # pr_url / changed_files).
         eval_target = _resolve_post_node_eval_target(node_id, envelope, node_type_map)
 
-        engine = EvalEngine()
-        results: dict[str, EngineEvalResult] = {}
-        for eval_def in eval_defs:
-            eval_result = engine.evaluate(eval_target, eval_def, run_id=run_id)
-            results[eval_def.name] = eval_result
+        def _executor_resolve_eval_target(
+            _eval_def: EvalDefDTO,
+        ) -> Any:
+            """Return the already-resolved eval target (Defect 4 fix)."""
+            return eval_target
+
+        def _on_post_node_eval_result(eval_def: EvalDefDTO, result: EngineEvalResult) -> None:
+            """Per-eval structured log (Defect 3 fix — restores dropped log)."""
             _log.info(
                 "post_node_eval.result",
                 extra={
                     "node_id": node_id,
                     "eval_name": eval_def.name,
                     "eval_id": str(eval_def.id),
-                    "passed": eval_result.passed,
-                    "score": eval_result.score,
-                    "detail": eval_result.detail,
+                    "passed": result.passed,
+                    "score": result.score,
+                    "detail": result.detail,
                 },
             )
 
-        # Persist eval results to the eval_results table so post-run
-        # suite-level threshold checks can read them.
-        if self._session_factory is not None and org_id is not None:
-            try:
-                async with self._session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    await set_rls_execution_context(session)
-                    for eval_def in eval_defs:
-                        eval_result = results[eval_def.name]
-                        node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
-                        session.add(
-                            EvalResult(
-                                organisation_id=org_id,
-                                run_id=run_id,
-                                node_id=node_uuid,
-                                eval_id=eval_def.id,
-                                eval_definition_version=eval_def.version,
-                                passed=eval_result.passed,
-                                score=eval_result.score,
-                                detail=eval_result.detail,
-                            )
-                        )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("post_node_eval.persist_failed", extra={"node_id": node_id})
+        await run_evals_persist_before_decide(
+            eval_defs=eval_defs,
+            resolve_eval_target=_executor_resolve_eval_target,
+            run_id=run_id,
+            org_id=org_id,
+            session_factory=self._session_factory,
+            node_id=node_id,
+            on_eval_result=_on_post_node_eval_result,
+        )
 
     async def _init_model_backend_hub(self, org_id: uuid.UUID) -> ModelBackendHub | None:
         """Load active model backends for the org and initialise ModelBackendHub.
@@ -5414,6 +5400,42 @@ class PipelineExecutor:
             result_result = await session.execute(result_stmt)
             eval_results = result_result.scalars().all()
 
+            # ------------------------------------------------------------------
+            # §4.7 completeness guard — set-coverage-based, not count-based.
+            # Every expected eval_id must appear at least once in the persisted
+            # set.  Duplicate rows (known accepted condition from overlapping
+            # post-node + HITL paths) do NOT false-fail.
+            # ------------------------------------------------------------------
+            expected_eval_ids: set[uuid.UUID] = {d.id for d in defs_in_suite}
+            persisted_eval_ids: set[uuid.UUID] = {r.eval_id for r in eval_results}
+            missing_eval_ids = expected_eval_ids - persisted_eval_ids
+
+            if missing_eval_ids:
+                missing_strs = [str(eid) for eid in sorted(missing_eval_ids, key=str)]
+                _log.warning(
+                    "eval_suites.incomplete",
+                    extra={
+                        "suite_id": suite_id,
+                        "expected_eval_ids": ",".join(str(eid) for eid in sorted(expected_eval_ids, key=str)),
+                        "persisted_eval_ids": ",".join(str(eid) for eid in sorted(persisted_eval_ids, key=str)),
+                        "missing_eval_ids": ",".join(missing_strs),
+                        "run_id": str(run_id),
+                    },
+                )
+                _record_suite_incomplete(reason="incomplete_suite_set")
+                results.append(
+                    SuiteEvalResult(
+                        suite_id=suite_id,
+                        total_evals=0,
+                        passed_evals=0,
+                        aggregate_score=0.0,
+                        passed=False,
+                        blocking_failures=[],
+                        outcome=SuiteOutcome.INDETERMINATE,
+                    )
+                )
+                continue
+
             threshold_raw = next(
                 (d.pass_threshold for d in defs_in_suite if d.pass_threshold is not None),
                 None,
@@ -5445,6 +5467,7 @@ class PipelineExecutor:
                 aggregate_score=suite_result_raw.aggregate_score,
                 passed=suite_result_raw.passed,
                 blocking_failures=suite_result_raw.blocking_failures,
+                outcome=suite_result_raw.outcome,
             )
             if threshold is not None and not suite_result.passed:
                 raise EvalSuiteBlockedError(suite_id, suite_result.aggregate_score, threshold)

@@ -84,6 +84,10 @@ def _make_executor(
         executor._session_factory = _fake_factory
         monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_org", AsyncMock())
         monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
+        # The post-node eval path delegates persistence to eval_persist_order,
+        # which imports the RLS helpers into its own module namespace.
+        monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
+        monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
     return executor, session
 
 
