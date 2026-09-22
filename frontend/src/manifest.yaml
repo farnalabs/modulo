@@ -4986,6 +4986,10 @@ features:
             - Dead-letter retry is operator-initiated (per-delivery /retry, per-endpoint /deliveries/replay, org-wide /retry-all-failed) — there is no automatic time-based dead-letter replay and no background worker that re-drives retained payloads
     feat-observability:
         description: Error dashboard, monitoring, and observability exports
+        status: covered
+        behaviours:
+            # OTel trace span capture (FAR-198 instrumentation)
+            - "[x] OTel *trace* span capture is BDD-exercised against the REAL LangGraphOtelBridge seams (otel_traces.feature, network-free and DB-free): chain spans stamp the set_run_context organisation_id / pipeline_id attributes per node execution, a tool callback becomes a child span under its parent node span (child parent.span_id == parent context.span_id), connector callbacks carry no credential fields in span attributes, and a telemetry-disabled provider (no span processor) exports no spans"
     feat-onboarding:
         description: First-run onboarding wizard for new users and organizations
     feat-org:
