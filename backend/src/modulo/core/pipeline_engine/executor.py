@@ -62,9 +62,6 @@ from modulo.core.eval_engine import (
     evaluate_suite,
 )
 from modulo.core.eval_engine import (
-    EvalDefinition as EvalDefDTO,
-)
-from modulo.core.eval_engine import (
     EvalResult as EngineEvalResult,
 )
 from modulo.core.graph_validator import GraphValidator
@@ -94,6 +91,7 @@ from modulo.core.pipeline_engine.error_codes import (
 )
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.eval_persist_order import (
+    EvalDefDTO,
     _record_suite_incomplete,
     run_evals_persist_before_decide,
 )
@@ -142,12 +140,14 @@ from modulo.db.crud.run import (
     update_run_status,
 )
 from modulo.db.crud.run_node_outputs import read_run_blobs, read_run_markers
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
@@ -2261,41 +2261,84 @@ class PipelineExecutor:
         self,
         session: AsyncSession,
         pipeline_id: uuid.UUID,
-    ) -> list[EvalDefinition]:
-        """Load eval definitions for a pipeline that are scoped to a node."""
-        eval_stmt = select(EvalDefinition).where(
-            EvalDefinition.pipeline_id == pipeline_id,
-            EvalDefinition.node_id.isnot(None),
-            EvalDefinition.deleted_at.is_(None),
+    ) -> list[tuple[Eval, PolicyGate | None]]:
+        """Load eval definitions for a pipeline that are scoped to a node.
+
+        Reads from ``evals`` + ``policy_gates`` (FAR-1100 cutover).  Returns
+        ``(Eval, PolicyGate | None)`` tuples — the PolicyGate is ``None``
+        for guardrail-typed Evals and any eval whose binding was rejected
+        during backfill.
+        """
+        eval_stmt = (
+            select(Eval, PolicyGate)
+            .outerjoin(
+                PolicyGate,
+                (PolicyGate.eval_id == Eval.id)
+                & (PolicyGate.organisation_id == Eval.organisation_id)
+                & (PolicyGate.deleted_at.is_(None)),
+            )
+            .where(
+                Eval.pipeline_id == pipeline_id,
+                Eval.node_id.isnot(None),
+                Eval.deleted_at.is_(None),
+            )
         )
-        return list((await session.execute(eval_stmt)).scalars().all())
+        return list((await session.execute(eval_stmt)).all())  # type: ignore[arg-type]  # Row[tuple[Eval, PolicyGate|None]] from LEFT OUTER JOIN
 
     @staticmethod
     def _build_eval_defs_by_node(
-        eval_rows: list[EvalDefinition],
+        eval_rows: list[tuple[Eval, PolicyGate | None]],
         org_id: uuid.UUID,
         _pipeline_id: uuid.UUID,
     ) -> dict[str, list[EvalDefDTO]]:
-        """Convert eval definition ORM rows to a dict keyed by node id."""
+        """Convert (Eval, PolicyGate) rows to a dict keyed by node id.
+
+        ``failure_behaviour`` is populated from ``PolicyGate.action`` when
+        a gate exists; defaulting to ``"warn"`` when no gate is present
+        (guardrail-typed Evals keep warn semantics, and any eval whose
+        binding was rejected during backfill also defaults to warn).
+
+        Anomaly guard: if a node-scoped Eval has NO gate AND is NOT
+        guardrail-typed, log a WARNING naming the eval id — this would be
+        a silent block→warn downgrade from a rejected backfill binding.
+        """
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
-        for e in eval_rows:
-            node_key = str(e.node_id) if e.node_id else ""
-            if node_key:
-                eval_defs_by_node.setdefault(node_key, []).append(
-                    EvalDefDTO(
-                        id=e.id,
-                        org_id=org_id,
-                        pipeline_id=e.pipeline_id,
-                        node_id=node_key,
-                        name=e.name,
-                        eval_type=e.eval_type,
-                        config=e.config_json,
-                        failure_behaviour=e.failure_behaviour,
-                        pass_threshold=e.pass_threshold,
-                        suite_id=e.suite_id,
-                        version=e.version,
-                    )
+        for eval_row, policy_gate in eval_rows:
+            node_key = str(eval_row.node_id) if eval_row.node_id else ""
+            if not node_key:
+                continue
+            if policy_gate is not None:
+                failure_behaviour = policy_gate.action
+            elif eval_row.eval_type == "guardrail":
+                failure_behaviour = "warn"
+            else:
+                # Anomaly: node-scoped non-guardrail Eval without a gate.
+                # This means its PolicyGate binding was rejected during
+                # backfill — log a warning but do not crash.
+                _log.warning(
+                    "eval_defs.node_without_gate",
+                    extra={
+                        "eval_id": str(eval_row.id),
+                        "eval_type": eval_row.eval_type,
+                        "pipeline_id": str(eval_row.pipeline_id),
+                    },
                 )
+                failure_behaviour = "warn"
+            eval_defs_by_node.setdefault(node_key, []).append(
+                EvalDefDTO(
+                    id=eval_row.id,
+                    org_id=org_id,
+                    pipeline_id=eval_row.pipeline_id,
+                    node_id=node_key,
+                    name=eval_row.name or "",
+                    eval_type=eval_row.eval_type,
+                    config=eval_row.config_json,
+                    failure_behaviour=failure_behaviour,
+                    pass_threshold=eval_row.pass_threshold,
+                    suite_id=eval_row.suite_id,
+                    version=eval_row.version,
+                )
+            )
         return eval_defs_by_node
 
     async def _run_post_node_evals(
@@ -3270,7 +3313,7 @@ class PipelineExecutor:
             snapshot_id,
             lambda: build_graph_from_json(
                 graph_json,
-                eval_definitions_by_node=eval_defs_by_node,
+                eval_definitions_by_node=eval_defs_by_node,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
                 session_factory=self._session_factory,
                 org_id=org_id,
                 pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
@@ -3285,7 +3328,7 @@ class PipelineExecutor:
             # graph as the execute path — matching _prepare_and_stream below.
             graph_struct_hash=struct_hash_with_eval_defs(
                 compute_retry_aware_topology_hash(graph_json, pipeline_retry_policy),
-                eval_defs_by_node,
+                eval_defs_by_node,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
             ),
         )
 
@@ -4510,7 +4553,7 @@ class PipelineExecutor:
             scope.snapshot_id,
             lambda: build_graph_from_json(
                 graph_json,
-                eval_definitions_by_node=eval_defs_by_node,
+                eval_definitions_by_node=eval_defs_by_node,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
                 session_factory=self._session_factory,
                 org_id=scope.org_id,
                 pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
@@ -4521,7 +4564,7 @@ class PipelineExecutor:
             pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
             graph_struct_hash=struct_hash_with_eval_defs(
                 compute_retry_aware_topology_hash(graph_json, pipeline_retry_policy),
-                eval_defs_by_node,
+                eval_defs_by_node,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
             ),
         )
 

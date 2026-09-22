@@ -158,7 +158,7 @@ async def _bypass_capacity(mock_self, **kwargs):
 
 
 def _eval_row(config: dict[str, Any], eval_id: uuid.UUID | None = None) -> SimpleNamespace:
-    """ORM-shaped eval-definition row (what ``_load_eval_defs_for_pipeline`` returns)."""
+    """ORM-shaped eval row (what ``_load_eval_defs_for_pipeline`` now returns as part of a tuple)."""
     return SimpleNamespace(
         id=eval_id or uuid.uuid4(),
         node_id="A",
@@ -166,16 +166,29 @@ def _eval_row(config: dict[str, Any], eval_id: uuid.UUID | None = None) -> Simpl
         name="gate-eval",
         eval_type=EvalType.REGEX,
         config_json=config,
-        failure_behaviour="warn",
         pass_threshold=None,
         suite_id=None,
         version=1,
     )
 
 
+def _eval_row_with_gate(config: dict[str, Any], eval_id: uuid.UUID | None = None) -> tuple[SimpleNamespace, SimpleNamespace]:
+    """Return (Eval, PolicyGate) tuple — what the new _load_eval_defs_for_pipeline returns."""
+    row = _eval_row(config, eval_id)
+    gate = SimpleNamespace(action="warn", deleted_at=None)
+    return (row, gate)
+
+
 def _canonical(defs: dict[str, list[Any]]) -> dict[str, list[dict[str, Any]]]:
     """created_at is stamped per DTO construction — compare without it."""
-    return {node: [d.model_dump(mode="json", exclude={"created_at"}) for d in lst] for node, lst in defs.items()}
+    result: dict[str, list[dict[str, Any]]] = {}
+    for node, lst in defs.items():
+        result[node] = []
+        for d in lst:
+            # EvalDefDTO is a dataclass; use asdict-like extraction.
+            d_dict = {k: v for k, v in vars(d).items() if k != "created_at"}
+            result[node].append(d_dict)
+    return result
 
 
 def _assert_fresh_eval_defs_reach_compile(
@@ -203,8 +216,8 @@ async def test_execute_replay_recompiles_with_fresh_eval_defs():
     factory = _make_session_factory(session)
 
     org_id = uuid.uuid4()
-    row1 = _eval_row({"pattern": "v1"})
-    row2 = _eval_row({"pattern": "v2"})
+    row1 = _eval_row_with_gate({"pattern": "v1"})
+    row2 = _eval_row_with_gate({"pattern": "v2"})
     # Expected compiled-in defs = what the real builder produces from the rows.
     defs_e1 = PipelineExecutor._build_eval_defs_by_node([row1], org_id, run.pipeline_id)
     defs_e2 = PipelineExecutor._build_eval_defs_by_node([row2], org_id, run.pipeline_id)
@@ -257,8 +270,8 @@ async def test_resume_recompiles_with_fresh_eval_defs():
     factory = _make_session_factory(session)
 
     org_id = uuid.uuid4()
-    row1 = _eval_row({"pattern": "v1"})
-    row2 = _eval_row({"pattern": "v2"})
+    row1 = _eval_row_with_gate({"pattern": "v1"})
+    row2 = _eval_row_with_gate({"pattern": "v2"})
     defs_e1 = PipelineExecutor._build_eval_defs_by_node([row1], org_id, run.pipeline_id)
     defs_e2 = PipelineExecutor._build_eval_defs_by_node([row2], org_id, run.pipeline_id)
 
@@ -343,15 +356,12 @@ async def test_load_eval_defs_excludes_soft_deleted():
     pipeline_id = uuid.uuid4()
     active_row = _eval_row_with_delete({"pattern": "active"})
 
-    # The mock session returns both rows; the SQL filter in the real method
-    # should exclude the deleted one. Since we mock session.execute we
-    # simulate the DB-side filter by having the mock return only the
-    # active row — proving the method's WHERE clause is correct when the
-    # real DB enforces it.
-    scalars_mock = MagicMock()
-    scalars_mock.all.return_value = [active_row]
+    # After the cutover, _load_eval_defs_for_pipeline returns
+    # list((await session.execute(stmt)).all()) — not .scalars().all().
+    # The mock must return tuples of (Eval, PolicyGate | None).
+    active_gate = SimpleNamespace(action="warn", deleted_at=None)
     execute_result = MagicMock()
-    execute_result.scalars.return_value = scalars_mock
+    execute_result.all.return_value = [(active_row, active_gate)]
 
     session = AsyncMock(spec=AsyncSession)
     session.execute = AsyncMock(return_value=execute_result)
@@ -360,7 +370,8 @@ async def test_load_eval_defs_excludes_soft_deleted():
     result = await executor._load_eval_defs_for_pipeline(session, pipeline_id)
 
     assert len(result) == 1
-    assert result[0].config_json == {"pattern": "active"}
+    eval_row, policy_gate = result[0]
+    assert eval_row.config_json == {"pattern": "active"}
 
     # Verify the WHERE clause includes deleted_at IS NULL
     call_args = session.execute.call_args
