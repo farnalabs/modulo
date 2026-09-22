@@ -544,6 +544,54 @@ class TestCheckSuspensionNotSet:
         assert "not set" in detail.lower()
 
 
+class TestCheckSuspensionPermissionError:
+    """A token that cannot read variables is a config fault, not an unknown state.
+
+    The Actions integration token returns HTTP 403 "Resource not accessible by
+    integration" for the variables API, which fail-closed every fast-lane
+    candidate (observed on PR #907/#904).  The denial must stay fail-closed but
+    name the actual cause so the missing token permission is diagnosable.
+    """
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_integration_token_403_denies_with_config_cause(self, mock_run: MagicMock) -> None:
+        """The real CI shape: gh exit 1, 403 Resource not accessible by integration."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="gh: Resource not accessible by integration (HTTP 403)",
+        )
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is False
+        assert "fail-closed" in detail
+        assert "token cannot read repository variables" in detail
+        assert "MODULO_REVIEWBOT_TOKEN" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_forbidden_403_denies_with_config_cause(self, mock_run: MagicMock) -> None:
+        """A generic 403 Forbidden is likewise surfaced as a variables-read fault."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="gh: Forbidden (HTTP 403)",
+        )
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is False
+        assert "fail-closed" in detail
+        assert "token cannot read repository variables" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_permission_error_not_misread_as_missing_variable(self, mock_run: MagicMock) -> None:
+        """A 403 must NOT be treated as "variable absent" (which would allow)."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="gh: Resource not accessible by integration (HTTP 403)",
+        )
+        eligible, _detail = check_suspension("farnalabs/modulo")
+        assert eligible is False
+
+
 class TestCheckSuspensionNaiveTimestamp:
     """A tz-naive stored timestamp must not crash the comparison.
 
