@@ -682,9 +682,14 @@ async def record_ongoing_deactivation_lifecycle(
     from types import SimpleNamespace
 
     from modulo.core.audit_logger import append_audit_event
+    from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
 
     ch = _ch()
     streak = int(streak or 0)
+    if deactivated_by == STREAK_DEACTIVATED_BY_STREAK:
+        detail = f"auto-deactivated after {streak} consecutive no-delivery runs (threshold {int(threshold or 0)})"
+    else:
+        detail = f"auto-deactivated after {streak} consecutive failures (config-failure guard)"
     await append_audit_event(
         session,
         org_id=org_id,
@@ -693,6 +698,8 @@ async def record_ongoing_deactivation_lifecycle(
         resource_type="trigger",
         resource_id=trigger_id,
         payload_json={
+            "actor": SYSTEM_ACTOR,
+            "summary": f"Ongoing trigger {short_id(trigger_id) or 'unknown'} {detail}",
             "trigger_id": str(trigger_id),
             "pipeline_id": str(pipeline_id) if pipeline_id else "",
             "streak": streak,
@@ -702,10 +709,6 @@ async def record_ongoing_deactivation_lifecycle(
             "deactivated_by": deactivated_by,
         },
     )
-    if deactivated_by == STREAK_DEACTIVATED_BY_STREAK:
-        detail = f"auto-deactivated after {streak} consecutive no-delivery runs (threshold {int(threshold or 0)})"
-    else:
-        detail = f"auto-deactivated after {streak} consecutive failures (config-failure guard)"
     await ch._log_ongoing_event(
         session,
         trigger=SimpleNamespace(id=trigger_id),
@@ -968,6 +971,7 @@ async def _record_streak_notify_failed(
     ch = _ch()
     try:
         from modulo.core.audit_logger import append_audit_event
+        from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
 
         async with ch._open_factory()() as session, session.begin():
             await ch._set_rls_org(session, org_id)
@@ -979,6 +983,12 @@ async def _record_streak_notify_failed(
                 resource_type="trigger",
                 resource_id=data["id"],
                 payload_json={
+                    "actor": SYSTEM_ACTOR,
+                    "summary": (
+                        f"Deactivation notifier failed on first attempt for trigger "
+                        f"{short_id(data['id']) or 'unknown'} "
+                        f"(streak {int(data.get('streak') or 0)})"
+                    ),
                     "trigger_id": str(data["id"]),
                     "pipeline_id": str(data.get("pipeline_id") or ""),
                     "streak": int(data.get("streak") or 0),
@@ -1415,6 +1425,7 @@ async def _record_streak_mass_cascade(org_id: uuid.UUID, count: int) -> None:
     ch = _ch()
     try:
         from modulo.core.audit_logger import append_audit_event
+        from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
 
         async with ch._open_factory()() as session, session.begin():
             await ch._set_rls_org(session, org_id)
@@ -1426,6 +1437,12 @@ async def _record_streak_mass_cascade(org_id: uuid.UUID, count: int) -> None:
                 resource_type="organisation",
                 resource_id=org_id,
                 payload_json={
+                    "actor": SYSTEM_ACTOR,
+                    "summary": (
+                        f"Mass cascade: {int(count)} ongoing triggers auto-deactivated "
+                        f"within {ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS}h "
+                        f"(org {short_id(org_id) or 'unknown'})"
+                    ),
                     "deactivated_count": int(count),
                     "window_hours": ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS,
                     "threshold": ONGOING_STREAK_MASS_CASCADE_ALERT_THRESHOLD,

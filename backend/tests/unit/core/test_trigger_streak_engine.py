@@ -469,6 +469,62 @@ class TestDeactivateHelper:
         assert out is None
 
 
+class TestDeactivationAuditLabels:
+    """FAR-736: the three ongoing-trigger audit emit sites carry the system
+    actor label + a human-readable summary inside ``payload_json``."""
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_audit_carries_system_actor_and_summary(self) -> None:
+        session = _RoutedSession()
+        with (
+            patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+        ):
+            await ts.record_ongoing_deactivation_lifecycle(
+                session,
+                org_id=ORG,
+                trigger_id=TRIGGER_ID,
+                streak=5,
+                threshold=5,
+                reason="no_delivery",
+            )
+        assert append.await_count == 1
+        payload = append.await_args.kwargs["payload_json"]
+        assert payload["actor"] == "system"
+        assert str(TRIGGER_ID)[:8] in payload["summary"] or "unknown" in payload["summary"]
+        assert "auto-deactivated after 5 consecutive no-delivery runs" in payload["summary"]
+
+    @pytest.mark.asyncio
+    async def test_notify_failed_audit_carries_system_actor_and_summary(self) -> None:
+        factory = MagicMock(return_value=_RoutedSession())
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+        ):
+            await ts._record_streak_notify_failed(ORG, data=_deactivated_data(), threshold=5, reason="no_delivery")
+        assert append.await_count == 1
+        payload = append.await_args.kwargs["payload_json"]
+        assert payload["actor"] == "system"
+        assert "notifier failed" in payload["summary"].lower()
+        assert str(TRIGGER_ID)[:8] in payload["summary"]
+
+    @pytest.mark.asyncio
+    async def test_mass_cascade_audit_carries_system_actor_and_summary(self) -> None:
+        factory = MagicMock(return_value=_RoutedSession())
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+        ):
+            await ts._record_streak_mass_cascade(ORG, count=12)
+        assert append.await_count == 1
+        payload = append.await_args.kwargs["payload_json"]
+        assert payload["actor"] == "system"
+        assert "mass cascade" in payload["summary"].lower()
+        assert "12" in payload["summary"]
+
+
 # ---------------------------------------------------------------------------
 # enforce_no_delivery_streaks — sweep isolation, cap, flag-off, notify retry
 # ---------------------------------------------------------------------------

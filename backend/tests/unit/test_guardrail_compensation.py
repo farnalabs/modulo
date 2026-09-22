@@ -325,6 +325,81 @@ async def test_compensate_blocked_run_compensates_connector_node(audit_patch: An
 
 
 @pytest.mark.asyncio
+async def test_audit_events_carry_semantic_actor_and_summary(audit_patch: Any) -> None:
+    """FAR-736: every compensation audit payload carries the system actor label
+    and a human-readable summary (append-only labels ride in payload_json)."""
+    graph = {
+        "nodes": [
+            {
+                "id": "node_pr",
+                "connector_binding": {"instance_id": str(_CONNECTOR), "resource": "pr", "data": {"repo": "a/b"}},
+            },
+        ]
+    }
+    session = _FakeSession(graph=graph)
+    run = _FakeRun()
+    connector = _StubConnector(result=CompensationResult(outcome=CompensationOutcome.COMPENSATED, detail="closed"))
+
+    summary = await compensate_blocked_run(
+        session,
+        run,
+        guardrail_block="blocked",
+        connector_hub=_FakeHub(connector),
+        executed_nodes={"node_pr": {"artifacts": [], "output": {"number": 7}}},
+    )
+    assert summary["nodes"][0]["publish_status"] == "compensated"
+
+    calls = [call.kwargs for call in audit_patch.await_args_list]
+    assert len(calls) == 2
+    assert {call["event_type"] for call in calls} == {
+        comp.EVENT_COMPENSATION_ATTEMPTED,
+        comp.EVENT_BLOCKED_PARTIAL_WRITTEN,
+    }
+    for call in calls:
+        assert call["payload_json"]["actor"] == "system"
+        assert isinstance(call["payload_json"]["summary"], str)
+        assert call["payload_json"]["summary"]
+    attempt = next(call for call in calls if call["event_type"] == comp.EVENT_COMPENSATION_ATTEMPTED)
+    assert "node_pr" in attempt["payload_json"]["summary"]
+    assert "compensated" in attempt["payload_json"]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_compensation_failed_audit_carries_system_actor_and_summary(audit_patch: Any) -> None:
+    """FAR-736: the guardrail.compensation_failed sub-event also carries the
+    system actor + human-readable summary."""
+    graph = {
+        "nodes": [
+            {
+                "id": "node_pr",
+                "connector_binding": {"instance_id": str(_CONNECTOR), "resource": "pr", "data": {"repo": "a/b"}},
+            },
+        ]
+    }
+    session = _FakeSession(graph=graph)
+    run = _FakeRun()
+    connector = _StubConnector(result=CompensationResult(outcome=CompensationOutcome.FAILED, detail="boom"))
+
+    await compensate_blocked_run(
+        session,
+        run,
+        guardrail_block="blocked",
+        connector_hub=_FakeHub(connector),
+        executed_nodes={"node_pr": {"artifacts": [], "output": {"number": 7}}},
+    )
+
+    failed = [
+        call.kwargs
+        for call in audit_patch.await_args_list
+        if call.kwargs["event_type"] == comp.EVENT_COMPENSATION_FAILED
+    ]
+    assert failed, "a failed compensation must emit guardrail.compensation_failed"
+    assert failed[0]["payload_json"]["actor"] == "system"
+    assert "failed" in failed[0]["payload_json"]["summary"]
+    assert "node_pr" in failed[0]["payload_json"]["summary"]
+
+
+@pytest.mark.asyncio
 async def test_compensate_blocked_run_failure_isolation(audit_patch: Any):
     """A raising node must not prevent the sibling node's compensation."""
     graph = {
