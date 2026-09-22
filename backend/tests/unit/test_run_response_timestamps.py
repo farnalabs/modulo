@@ -155,4 +155,4 @@ def test_run_response_known_fixes_empty_when_serialisation_fails() -> None:
     with patch.object(runs_module, "match_known_fixes", _boom):
         resp = _build_run_response(_make_run(status="failed", error_code="node.cancelled", error_detail="anything"))
 
-    assert resp.known_fixes == []
+    assert not resp.known_fixes
