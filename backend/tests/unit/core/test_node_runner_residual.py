@@ -2874,3 +2874,73 @@ async def test_sandbox_script_schema_violation_raises_script_invalid_output(monk
         pytest.raises(ScriptInvalidOutputError, match="schema"),
     ):
         await fn(_run_state())
+
+
+# ---------------------------------------------------------------------------
+# FAR-902: sandbox-path enforcement-record persistence
+# ---------------------------------------------------------------------------
+
+_SANDBOX_SCHEMA_STATE = {**_run_state(), "_run_id": _RUN_UUID_STR}
+
+
+async def test_sandbox_schema_enforcement_record_persisted(monkeypatch: pytest.MonkeyPatch):
+    """A validated sandbox output persists the enforcement record via the factory.
+
+    Covers the ``_sandbox_enforcement is not None and attempt_key and
+    session_factory`` success arm — the record is written before the node
+    returns completed.
+    """
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "k")
+    fn = make_sandbox_agent_fn(
+        _script_node_def(output_schema_json={"required": ["result"]}),
+        session_factory=lambda: _FakeSession(),
+    )
+    sandbox = _make_sandbox_mock(output_json='{"result": "ok"}')
+    persist = AsyncMock()
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "set_rls_org", AsyncMock()),
+        patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
+    ):
+        result = await fn(_SANDBOX_SCHEMA_STATE)
+    assert result["output"]["status"] == "completed"
+    persist.assert_awaited_once()
+
+
+async def test_sandbox_schema_enforcement_persist_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch):
+    """A persistence failure never fails the sandbox node (best-effort)."""
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "k")
+    fn = make_sandbox_agent_fn(
+        _script_node_def(output_schema_json={"required": ["result"]}),
+        session_factory=lambda: _FakeSession(),
+    )
+    sandbox = _make_sandbox_mock(output_json='{"result": "ok"}')
+    persist = AsyncMock(side_effect=RuntimeError("db down"))
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "set_rls_org", AsyncMock()),
+        patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
+    ):
+        result = await fn(_SANDBOX_SCHEMA_STATE)
+    assert result["output"]["status"] == "completed"
+    persist.assert_awaited_once()
+
+
+async def test_sandbox_schema_enforcement_persist_cancellation_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A CancelledError during persistence propagates — never swallowed."""
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "k")
+    fn = make_sandbox_agent_fn(
+        _script_node_def(output_schema_json={"required": ["result"]}),
+        session_factory=lambda: _FakeSession(),
+    )
+    sandbox = _make_sandbox_mock(output_json='{"result": "ok"}')
+    persist = AsyncMock(side_effect=asyncio.CancelledError())
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "set_rls_org", AsyncMock()),
+        patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_SANDBOX_SCHEMA_STATE)

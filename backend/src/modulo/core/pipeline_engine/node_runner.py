@@ -3505,8 +3505,10 @@ def _finalize_node_result(
             wasted_attempts=_repair_info.get("wasted_attempts", 0),
             validation_errors=errors,
         )
-        if _enforcement_payload is not None:
-            _result_enforcement = _enforcement_payload
+        # ``build_enforcement_record`` returns None only for NO_SCHEMA, which
+        # cannot occur here (the block is guarded by a non-empty schema), but
+        # assigning directly is equivalent and keeps the None-safe contract.
+        _result_enforcement = _enforcement_payload
         # Log outcome for observability
         if errors:
             _log.info(

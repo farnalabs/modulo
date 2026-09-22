@@ -328,3 +328,57 @@ class TestEnforcementWriteOrdering:
         recorder.calls = ["terminal_update", "enforcement_insert"]
         with pytest.raises(AssertionError, match="must precede"):
             recorder.assert_enforcement_before_terminal()
+
+
+class TestPersistSchemaEnforcementRecordCrud:
+    """FAR-902: the CRUD UPSERT writes ``schema_enforcement_json`` on a real session."""
+
+    @pytest.mark.asyncio
+    async def test_upsert_inserts_then_updates_on_conflict(self) -> None:
+        """The targeted UPSERT inserts a row, then updates it on a repeat call.
+
+        Exercises ``resolve_dialect`` / ``dialect_insert`` / the
+        ``on_conflict_do_update`` path against in-memory SQLite.
+        """
+        from sqlalchemy import select
+
+        from modulo.db.crud.run_node_outputs import persist_schema_enforcement_record
+        from modulo.db.models.run_node_outputs import RunNodeOutput
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as conn:
+            await conn.run_sync(RunNodeOutput.__table__.create)
+        sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        run_id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        async with sf() as session, session.begin():
+            await persist_schema_enforcement_record(
+                session,
+                run_id=run_id,
+                organisation_id=org_id,
+                node_id="n1",
+                attempt_key="attempt-0",
+                enforcement_record={"outcome": "native_decoded_and_validated"},
+            )
+
+        async with sf() as session:
+            row = (await session.execute(select(RunNodeOutput).where(RunNodeOutput.node_id == "n1"))).scalar_one()
+            assert row.schema_enforcement_json["outcome"] == "native_decoded_and_validated"
+
+        # A second call for the same (run_id, node_id, attempt_key) updates in place.
+        async with sf() as session, session.begin():
+            await persist_schema_enforcement_record(
+                session,
+                run_id=run_id,
+                organisation_id=org_id,
+                node_id="n1",
+                attempt_key="attempt-0",
+                enforcement_record={"outcome": "verbatim_passed"},
+            )
+
+        async with sf() as session:
+            rows = (await session.execute(select(RunNodeOutput))).scalars().all()
+            assert len(rows) == 1
+            assert rows[0].schema_enforcement_json["outcome"] == "verbatim_passed"
+        await engine.dispose()

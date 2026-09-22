@@ -85,6 +85,44 @@ class TestBuildEnforcementRecord:
         serialised = json.dumps(result, default=str, ensure_ascii=True)
         assert len(serialised.encode("utf-8")) <= MAX_ENFORCEMENT_PAYLOAD_BYTES
 
+    def test_payload_trimming_loop_drops_errors_until_it_fits(self) -> None:
+        """Errors are dropped in chunks when the serialised payload exceeds 64 KB.
+
+        The whole error list must be large enough that the cap is breached
+        *after* the ``_MAX_VALIDATION_ERRORS`` truncation, forcing the
+        progressive-drop loop to run.
+        """
+        huge_errors = [{"pointer": f"/field_{i}", "constraint": "pattern", "message": "x" * 2000} for i in range(500)]
+        result = build_enforcement_record(
+            outcome=SchemaValidationOutcome.REPAIR_EXHAUSTED.value,
+            validation_errors=huge_errors,
+        )
+        assert result is not None
+        serialised = json.dumps(result, default=str, ensure_ascii=True)
+        assert len(serialised.encode("utf-8")) <= MAX_ENFORCEMENT_PAYLOAD_BYTES
+        # The loop ran and trimmed the kept error list below the 50-error cap.
+        assert result["truncated"] is True
+        assert len(result["validation_errors"]) < 50
+
+    def test_payload_oversized_without_errors_logs_best_effort(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A payload still over the cap with zero errors logs and returns best-effort.
+
+        When a non-error field alone (here ``resolved_profile``) exceeds the
+        64 KB cap, the progressive-drop loop cannot help: the ``while ... else``
+        fall-through logs ``schema_enforcement.payload_exceeds_cap`` and returns
+        the oversized payload rather than raising.
+        """
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            result = build_enforcement_record(
+                outcome=SchemaValidationOutcome.VERBATIM_PASSED.value,
+                resolved_profile="p" * (MAX_ENFORCEMENT_PAYLOAD_BYTES + 1024),
+                validation_errors=[],
+            )
+        assert result is not None
+        assert any("schema_enforcement.payload_exceeds_cap" in rec.message for rec in caplog.records)
+
 
 class TestAggregateRunEnforcement:
     """D4: pure function that aggregates per-attempt records into run-level counters."""
@@ -425,6 +463,131 @@ class TestEnforcementPayloadPopulated:
         )
         assert repair_info["repair_attempts"] == 1  # first attempt triggered the exception
         assert repair_info["wasted_attempts"] == 0  # invoke failure ≠ schema rejection
+
+    def test_run_repair_loop_no_repair_info_on_no_budget_valid(self) -> None:
+        """Without _repair_info, the no-budget valid path returns without mutating.
+
+        Covers the ``_repair_info is None`` false arm of the no-budget branch.
+        """
+        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+
+        outcome, _errors, data = run_repair_loop(
+            {"name": "OK"},
+            self._simple_schema(),
+            budget=0,
+            repair_invoke_fn=None,
+        )
+        assert outcome == SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value
+        assert data == {"name": "OK"}
+
+    def test_run_repair_loop_repair_info_on_no_budget_valid(self) -> None:
+        """With no budget/invoke fn but already-valid data, _repair_info is zeroed.
+
+        Covers the ``budget <= 0 or repair_invoke_fn is None`` + valid branch.
+        """
+        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+
+        repair_info: dict = {}
+        outcome, _errors, data = run_repair_loop(
+            {"name": "OK"},
+            self._simple_schema(),
+            budget=0,
+            repair_invoke_fn=None,
+            _repair_info=repair_info,
+        )
+        assert outcome == SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value
+        assert data == {"name": "OK"}
+        assert repair_info == {"repair_attempts": 0, "wasted_attempts": 0}
+
+    def test_run_repair_loop_repair_info_on_spend_limit(self) -> None:
+        """The daily-spend-limit short-circuit populates _repair_info."""
+        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+
+        repair_info: dict = {}
+        outcome, _errors, _data = run_repair_loop(
+            {"name": 123},
+            self._simple_schema(),
+            budget=1,
+            daily_spend_limit=1.0,
+            current_spend=2.0,
+            repair_invoke_fn=lambda _p: "{}",
+            _repair_info=repair_info,
+        )
+        assert outcome == SchemaValidationOutcome.REPAIR_EXHAUSTED.value
+        assert repair_info == {"repair_attempts": 0, "wasted_attempts": 0}
+
+    def test_run_repair_loop_no_repair_info_on_initial_valid(self) -> None:
+        """Without _repair_info, an already-valid payload returns cleanly.
+
+        Covers the ``_repair_info is None`` false arm of the initial-valid
+        branch (budget/invoke present, data valid).
+        """
+        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+
+        outcome, _errors, data = run_repair_loop(
+            {"name": "OK"},
+            self._simple_schema(),
+            budget=1,
+            repair_invoke_fn=lambda _p: "{}",
+        )
+        assert outcome == SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value
+        assert data == {"name": "OK"}
+
+    def test_run_repair_loop_repair_info_on_initial_valid(self) -> None:
+        """Data that is already valid with a budget/invoke fn zeroes _repair_info."""
+        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+
+        repair_info: dict = {}
+        outcome, _errors, data = run_repair_loop(
+            {"name": "OK"},
+            self._simple_schema(),
+            budget=1,
+            repair_invoke_fn=lambda _p: "{}",
+            _repair_info=repair_info,
+        )
+        assert outcome == SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value
+        assert data == {"name": "OK"}
+        assert repair_info == {"repair_attempts": 0, "wasted_attempts": 0}
+
+    def test_run_repair_loop_repair_info_on_budget_exhaustion(self) -> None:
+        """Loop exit by budget exhaustion (not untranslatable break) populates stats.
+
+        With budget=1 the loop exits via ``is_exhausted`` (no second
+        ``record_attempt`` to trigger untranslatable detection), exercising the
+        budget-exhaustion return arm with ``_repair_info`` present.
+        """
+        from unittest.mock import MagicMock
+
+        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+
+        repair_info: dict = {}
+        mock_invoke = MagicMock(return_value=json.dumps({"name": 123}))
+
+        outcome, _errors, _data = run_repair_loop(
+            {"name": 123},
+            self._simple_schema(),
+            budget=1,
+            repair_invoke_fn=mock_invoke,
+            _repair_info=repair_info,
+        )
+        assert outcome == SchemaValidationOutcome.REPAIR_EXHAUSTED.value
+        assert repair_info["repair_attempts"] == 1
+        assert repair_info["wasted_attempts"] == 1
+
+    def test_run_repair_loop_repair_info_on_bad_json(self) -> None:
+        """A non-JSON repair response populates _repair_info on the terminal arm."""
+        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+
+        repair_info: dict = {}
+        outcome, _errors, _data = run_repair_loop(
+            {"name": 123},
+            self._simple_schema(),
+            budget=1,
+            repair_invoke_fn=lambda _p: "not json",
+            _repair_info=repair_info,
+        )
+        assert outcome == SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON.value
+        assert repair_info["repair_attempts"] == 1
 
 
 # ---------------------------------------------------------------------------

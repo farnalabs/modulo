@@ -320,3 +320,81 @@ class TestSweepSchemaEnforcementFacts:
         # Must be logged at ERROR level (exception), not WARNING.
         assert "analytics.enforcement_sweep_failed" in caplog.text
         assert any(record.levelno >= 40 for record in caplog.records)
+
+    @pytest.mark.anyio
+    async def test_run_with_only_non_dict_payloads_is_skipped(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """A scanned run whose records are all non-dicts is skipped, not corrected.
+
+        Covers the ``if not payloads: continue`` arm — a run with a
+        non-object ``schema_enforcement_json`` (e.g. a legacy list) is counted
+        as scanned but contributes no aggregate and is not corrected.
+        """
+        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+
+        run_id = uuid.uuid4()
+        async with factory() as session:
+            session.add(_make_run(run_id=run_id))
+            session.add(_make_fact_row(run_id=run_id))
+            session.add(
+                RunNodeOutput(
+                    organisation_id=_ORG,
+                    run_id=run_id,
+                    node_id="agent-1",
+                    attempt_key="attempt-0",
+                    outputs_json={"result": "ok"},
+                    schema_enforcement_json=["not", "a", "dict"],
+                )
+            )
+            await session.commit()
+
+        result = await sweep_schema_enforcement_facts(factory)
+        assert result["scanned"] == 1
+        assert result["corrected"] == 0
+
+        # The fact row must still be NULL — the run was skipped.
+        async with factory() as session:
+            fact = (await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == run_id))).scalar_one()
+            assert fact.enforcement_native_count is None
+
+    @pytest.mark.anyio
+    async def test_cancellation_propagates(self) -> None:
+        """A CancelledError is re-raised, never swallowed as a generic failure."""
+        import asyncio
+
+        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+
+        def _cancelled_factory() -> None:
+            raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await sweep_schema_enforcement_facts(_cancelled_factory)
+
+    @pytest.mark.anyio
+    async def test_zero_row_update_is_not_counted_as_corrected(self) -> None:
+        """A scanned run whose UPDATE affects zero rows is not counted corrected.
+
+        Covers the ``result.rowcount`` false arm: a concurrent writer can make
+        the guarded UPDATE match nothing, so the sweep must not inflate
+        ``corrected``.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+
+        run_id = uuid.uuid4()
+        scan_result = MagicMock()
+        scan_result.fetchall.return_value = [(run_id,)]
+        records_result = MagicMock()
+        records_result.scalars.return_value.all.return_value = [{"outcome": "verbatim_passed"}]
+        update_result = MagicMock()
+        update_result.rowcount = 0
+
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=session)
+        session.execute = AsyncMock(side_effect=[scan_result, records_result, update_result])
+
+        factory = MagicMock(return_value=session)
+        result = await sweep_schema_enforcement_facts(factory)
+        assert result == {"scanned": 1, "corrected": 0}

@@ -534,11 +534,13 @@ def run_repair_loop(
             _repair_info["wasted_attempts"] = wasted_count
         return SchemaValidationOutcome.REPAIR_EXHAUSTED.value, current_errors, data
 
-    # Should not reach here, but defensive
-    if _repair_info is not None:
+    # Should not reach here, but defensive: the loop can only exit via a break
+    # (handled at the terminal-outcome check above) or because ``is_exhausted``
+    # became True (handled immediately above), so this tail is unreachable.
+    if _repair_info is not None:  # pragma: no cover - unreachable defensive fall-through
         _repair_info["repair_attempts"] = repair.attempts_used
         _repair_info["wasted_attempts"] = wasted_count
-    return last_outcome.value, current_errors, data
+    return last_outcome.value, current_errors, data  # pragma: no cover - unreachable defensive fall-through
 
 
 # ---------------------------------------------------------------------------

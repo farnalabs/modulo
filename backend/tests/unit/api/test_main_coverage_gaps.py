@@ -768,6 +768,46 @@ def test_alembic_head_guard_old_code_would_raise_attribute_error() -> None:
         heads.split(",")  # type: ignore[attr-defined]
 
 
+@pytest.mark.anyio
+async def test_alembic_head_guard_get_heads_returns_string(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A legacy string return from ``get_heads()`` is split, not iterated.
+
+    Covers the ``isinstance(heads, str)`` compatibility arm: an older/broken
+    ScriptDirectory returning ``"a,b"`` must be split into two heads and warn.
+    """
+    script_dir = MagicMock()
+    script_dir.get_heads = MagicMock(return_value="head_a,head_b")
+    monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(return_value=script_dir))
+    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("alembic.config.Config", MagicMock())
+
+    with caplog.at_level(logging.WARNING, logger="modulo.api.main"):
+        await main._assert_single_alembic_head(_make_settings())
+
+    assert any("startup.multiple_alembic_heads" in rec.message for rec in caplog.records)
+    assert not any("startup.alembic_head_check_failed" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_alembic_head_guard_reraises_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CancelledError during the guard propagates — it is never swallowed.
+
+    Covers the ``except asyncio.CancelledError: raise`` arm; a shutdown must not
+    be converted into the benign "guard could not run" error log.
+    """
+    monkeypatch.setattr(
+        "alembic.script.ScriptDirectory.from_config",
+        MagicMock(side_effect=asyncio.CancelledError()),
+    )
+    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("alembic.config.Config", MagicMock())
+
+    with pytest.raises(asyncio.CancelledError):
+        await main._assert_single_alembic_head(_make_settings())
+
+
 # ── _migration_advisory_lock / _run_migrations ──
 
 
