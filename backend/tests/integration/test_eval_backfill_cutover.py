@@ -1,6 +1,6 @@
 """Chunk-3 backfill + cutover acceptance tests (FAR-1100, spec §8 criteria 1-10, 19, 20).
 
-Runs the real Alembic ``upgrade`` of revision ``0251_eval_backfill_cutover``
+Runs the real Alembic ``upgrade`` of revision ``0254_eval_backfill_cutover``
 against a *fresh, isolated* live Postgres (a private database cloned from
 ``template0`` so the shared session schema is never touched — mirrors
 ``test_migration_0191_bundled_runner_seed_backfill.py``), with a seeded
@@ -39,8 +39,8 @@ from sqlalchemy.pool import NullPool
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0251_eval_backfill_cutover"
-PREV_REV = "0250_eval_policy_gate"
+MIGRATION_REV = "0254_eval_backfill_cutover"
+PREV_REV = "0253_runs_enforcement_mode_outcome"
 
 _NOW = "now()"
 
@@ -73,7 +73,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
     ``DATABASE_URL`` / ``DATABASE_ADMIN_URL``, so both are pinned.
     """
     admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
-    db_name = f"m0251_iso_{uuid.uuid4().hex[:10]}"
+    db_name = f"m0254_iso_{uuid.uuid4().hex[:10]}"
     async with admin_engine.connect() as conn:
         await conn.execute(text(f'CREATE DATABASE "{db_name}" WITH TEMPLATE template0'))
     await admin_engine.dispose()
@@ -118,14 +118,14 @@ async def _seed_org_and_pipeline(
         await conn.execute(
             text(
                 "INSERT INTO organisations (id, name, slug, settings_json, created_by) "
-                "VALUES (:o, 'm0251-org', 'm0251-org', '{}'::json, :a)"
+                "VALUES (:o, 'm0254-org', 'm0254-org', '{}'::json, :a)"
             ),
             {"o": str(org_id), "a": str(account_id)},
         )
         await conn.execute(
             text(
                 "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:a, 'm0251@example.com', 'm0251', 'hash', 'local', true)"
+                "VALUES (:a, 'm0254@example.com', 'm0254', 'hash', 'local', true)"
             ),
             {"a": str(account_id)},
         )
@@ -138,7 +138,7 @@ async def _seed_org_and_pipeline(
                 "INSERT INTO pipelines (id, organisation_id, name, account_id, "
                 "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
                 "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
-                "VALUES (:id, :oid, 'Pipe0251', :uid, 10, 30, 300, "
+                "VALUES (:id, :oid, 'Pipe0254', :uid, 10, 30, 300, "
                 "'{}'::json, '[]'::json, 'manual_approval', 'org')"
             ),
             {"id": str(pipeline_id), "oid": str(org_id), "uid": str(account_id)},
@@ -246,7 +246,7 @@ async def _seed_run(
 ) -> uuid.UUID:
     """Minimal runs row (mirrors test_eval_cutover_e2e seeding).
 
-    Uses the TERMINAL ``complete`` status: migration 0251's Step 0 drain
+    Uses the TERMINAL ``complete`` status: migration 0254's Step 0 drain
     check treats pending/running runs as in-flight and would poll for the
     full drain timeout — a pre-migration eval result belongs to a finished
     run, so a terminal status is both realistic and drain-safe.
@@ -440,7 +440,7 @@ async def test_upgrade_is_idempotent_on_existing_backfill(isolated_db_url: str) 
     database produces identical state — zero new rows, same ids, same gates.
 
     The re-execution is forced by rewinding ``alembic_version`` to PREV_REV so
-    alembic genuinely executes 0251's ``upgrade()`` a second time (a plain
+    alembic genuinely executes 0254's ``upgrade()`` a second time (a plain
     ``command.upgrade`` at head would be a version-table no-op).
     """
     db_url = isolated_db_url
@@ -455,7 +455,7 @@ async def test_upgrade_is_idempotent_on_existing_backfill(isolated_db_url: str) 
             gates_before = (await conn.execute(text("SELECT id FROM policy_gates ORDER BY id"))).fetchall()
             violations_before = (await conn.execute(text("SELECT COUNT(*) FROM eval_backfill_violations"))).scalar()
 
-        # Force a genuine second execution of 0251's upgrade().
+        # Force a genuine second execution of 0254's upgrade().
         config = _alembic_config(db_url)
         async with engine.begin() as conn:
             await conn.execute(text("UPDATE alembic_version SET version_num = :rev"), {"rev": PREV_REV})

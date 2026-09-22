@@ -133,6 +133,7 @@ from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
 from modulo.core.logging_config import configure_logging
+from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 from modulo.core.seed_data.catalog import FLAGS, TIERS
 from modulo.db.capacity import StorageExhaustedError
 from modulo.db.health_checks import db_is_at_migration_head
@@ -392,6 +393,58 @@ async def _run_migrations(settings: Settings) -> None:
     )
     fatal_error = RuntimeError("FATAL: database migrations failed after retries")
     raise fatal_error from last_error
+
+
+async def _assert_single_alembic_head(settings: Settings) -> None:
+    """Refuse to start when multiple Alembic heads exist (FAR-902).
+
+    Multiple heads mean two migrations chain off the same parent — a branch
+    conflict that must be resolved before the app can safely run.  The check
+    runs AFTER ``alembic upgrade heads`` (which applies all heads), so any
+    remaining multiple-head state is a genuine unresolved conflict.
+
+    Non-fatal: logs a loud warning instead of crashing, because the already-
+    applied migrations are valid — the conflict is a maintenance debt, not a
+    runtime hazard.  The warning is visible in deploy logs and /healthz.
+    """
+    from alembic.config import Config
+
+    from modulo.db.migrations.env import _to_sync_url
+
+    alembic_ini = _resolve_alembic_ini()
+    try:
+        config = Config(str(alembic_ini))
+        config.set_main_option(
+            "script_location",
+            str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
+        )
+        config.config_file_name = None
+        config.set_main_option("sqlalchemy.url", _to_sync_url(settings.database_url))
+
+        def _get_heads() -> list[str]:
+            from alembic.script import ScriptDirectory
+
+            script = ScriptDirectory.from_config(config)
+            heads = script.get_heads()
+            # get_heads() already returns list[str] — no string splitting needed.
+            if isinstance(heads, str):
+                return heads.split(",") if heads else []
+            return list(heads) if heads else []
+
+        heads = await asyncio.to_thread(_get_heads)
+        if len(heads) > 1:
+            logger.warning(
+                "startup.multiple_alembic_heads",
+                extra={"heads": heads, "count": len(heads)},
+            )
+        else:
+            logger.info("startup.single_alembic_head", extra={"head": heads[0] if heads else "none"})
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "startup.alembic_head_check_failed — guard could not run; multiple-head detection is NOT enforced"
+        )
 
 
 async def _assert_no_owner_rows(settings: Settings) -> None:
@@ -762,7 +815,7 @@ def _configure_license_and_otel(settings: Settings) -> None:
         )
     setup_otel(
         service_name=settings.modulo_otel_service_name,
-        telemetry_enabled=settings.modulo_telemetry_enabled,
+        telemetry_enabled=is_telemetry_enabled(),
     )
 
 
@@ -791,6 +844,11 @@ async def _run_boot_guards_and_seeds(settings: Settings) -> None:
 
     # Run Alembic migrations to bring the schema up to date.
     await _run_migrations(settings)
+
+    # FAR-902: refuse to start on multiple Alembic heads — a branch conflict
+    # means two migrations chain off the same parent; running with both heads
+    # applied masks the conflict and makes future upgrades ambiguous.
+    await _assert_single_alembic_head(settings)
 
     # Break-glass watchdog (deliverable B): the allow-list/role-posture
     # assertion is a non-fatal WARNING inside _run_bootstrap (superuser legacy

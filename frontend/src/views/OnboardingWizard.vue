@@ -291,8 +291,85 @@
         </div>
       </div>
 
-      <!-- Step 6: Done -->
-      <div v-if="currentStep === 6" class="space-y-6 py-4 text-center">
+      <!-- Step 6: Telemetry Opt-In (FAR-1131) -->
+      <div v-if="currentStep === 6" class="space-y-4">
+        <div v-if="telemetryLoading" class="space-y-3 py-4" aria-hidden="true">
+          <div class="h-16 animate-pulse rounded-lg bg-muted" />
+        </div>
+        <div v-else>
+          <div class="rounded-lg border border-dashed p-6 text-center">
+            <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+              <ChartLine class="h-6 w-6 text-primary" :stroke-width="1.5" aria-hidden="true" />
+            </div>
+            <h3 class="text-lg font-semibold">{{ $t('views.OnboardingWizard.telemetry_heading') }}</h3>
+            <p class="mt-2 text-sm text-muted-foreground">
+              {{ $t('views.OnboardingWizard.telemetry_description') }}
+            </p>
+            <p class="mt-2 text-sm text-muted-foreground">
+              {{ $t('views.OnboardingWizard.telemetry_what_sent') }}
+            </p>
+            <ul class="mx-auto mt-3 max-w-md space-y-1 text-left text-sm text-muted-foreground">
+              <li class="flex items-start gap-2">
+                <span class="mt-0.5 text-primary" aria-hidden="true">&#8226;</span>
+                {{ $t('views.OnboardingWizard.telemetry_item_pipeline_runs') }}
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="mt-0.5 text-primary" aria-hidden="true">&#8226;</span>
+                {{ $t('views.OnboardingWizard.telemetry_item_error_rates') }}
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="mt-0.5 text-primary" aria-hidden="true">&#8226;</span>
+                {{ $t('views.OnboardingWizard.telemetry_item_feature_usage') }}
+              </li>
+            </ul>
+            <p class="mt-3 text-xs text-muted-foreground">
+              {{ $t('views.OnboardingWizard.telemetry_no_pii') }}
+            </p>
+            <p v-if="telemetryForbidden" data-testid="onboarding-wizard-telemetry-forbidden" class="mt-3 text-xs text-muted-foreground">
+              {{ $t('views.OnboardingWizard.telemetry_admin_only') }}
+            </p>
+            <p v-else-if="telemetryEnabled !== null" data-testid="onboarding-wizard-telemetry-status" class="mt-3 text-xs text-muted-foreground">
+              {{ telemetryEnabled ? $t('views.OnboardingWizard.telemetry_current_on') : $t('views.OnboardingWizard.telemetry_current_off') }}
+            </p>
+            <ErrorAlert
+              v-if="telemetryError"
+              class="mt-3"
+              :message="telemetryError"
+              :on-retry="telemetryRetry"
+              role="alert"
+              aria-live="assertive"
+            />
+            <div v-if="telemetrySaved" data-testid="onboarding-wizard-telemetry-saved" class="mt-3 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success" role="status">
+              {{ $t('views.OnboardingWizard.telemetry_enabled_success') }}
+            </div>
+            <div class="mt-6 flex items-center justify-center gap-3">
+              <Button
+                v-if="!telemetryForbidden"
+                :disabled="telemetrySaving"
+                data-testid="onboarding-wizard-telemetry-enable"
+                @click="saveTelemetry(true)"
+              >
+                {{ $t('views.OnboardingWizard.telemetry_enable') }}
+              </Button>
+              <button
+                type="button"
+                :disabled="telemetrySaving"
+                data-testid="onboarding-wizard-telemetry-skip"
+                class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                @click="nextStep"
+              >
+                {{ $t('views.OnboardingWizard.telemetry_skip') }}
+              </button>
+            </div>
+            <p class="mt-3 text-xs text-muted-foreground">
+              {{ $t('views.OnboardingWizard.telemetry_can_change_later') }}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 7: Done -->
+      <div v-if="currentStep === 7" class="space-y-6 py-4 text-center">
         <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
           <Check class="h-8 w-8 text-success" aria-hidden="true" />
         </div>
@@ -346,7 +423,7 @@
       </div>
     </div>
 
-    <div v-if="currentStep < 6" class="flex items-center justify-between">
+    <div v-if="currentStep < 7" class="flex items-center justify-between">
       <div>
         <button type="button"
           v-if="currentStep > 0"
@@ -359,7 +436,7 @@
       </div>
       <div class="flex items-center gap-3">
         <button type="button"
-          v-if="currentStep > 0 && currentStep < 5"
+          v-if="currentStep > 0 && currentStep < 6"
           data-testid="onboarding-wizard-skip-to-end"
           class="text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @click="skipToEnd"
@@ -367,7 +444,7 @@
           {{ $t('views.OnboardingWizard.skip_to_end') }}
         </button>
         <Button :disabled="!canProceed" data-testid="onboarding-wizard-next" @click="nextStep">
-          {{ currentStep === 5 ? $t('views.OnboardingWizard.finish') : $t('views.OnboardingWizard.next') }}
+          {{ currentStep === 6 ? $t('views.OnboardingWizard.finish') : $t('views.OnboardingWizard.next') }}
         </Button>
       </div>
     </div>
@@ -377,10 +454,11 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Check, Layers } from '@lucide/vue'
+import { Check, ChartLine, Layers } from '@lucide/vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
@@ -402,6 +480,7 @@ const steps = computed(() => [
   { title: t('views.OnboardingWizard.review_schemas'), subtitle: t('views.OnboardingWizard.review_edit_and_confirm_the_inferred_schema') },
   { title: t('views.OnboardingWizard.browse_library'), subtitle: t('views.OnboardingWizard.find_compatible_agents_and_blueprints') },
   { title: t('views.OnboardingWizard.wire_pipeline'), subtitle: t('views.OnboardingWizard.name_describe_and_create_your_pipeline') },
+  { title: t('views.OnboardingWizard.telemetry_title'), subtitle: t('views.OnboardingWizard.telemetry_subtitle') },
   { title: t('views.OnboardingWizard.done'), subtitle: t('views.OnboardingWizard.your_pipeline_is_ready_to_run') },
 ])
 
@@ -457,6 +536,15 @@ const runResult = ref<string | null>(null)
 const confirmEmptyRun = ref(false)
 const emptyRunWarning = ref<string | null>(null)
 
+// Telemetry opt-in state (FAR-1131)
+const telemetryLoading = ref(false)
+const telemetrySaving = ref(false)
+const telemetryError = ref<string | null>(null)
+const telemetryRetry = ref<(() => void) | undefined>(undefined)
+const telemetryEnabled = ref<boolean | null>(null)
+const telemetrySaved = ref(false)
+const telemetryForbidden = ref(false)
+
 const canProceed = computed(() => {
   switch (currentStep.value) {
     case 0: return true
@@ -465,6 +553,7 @@ const canProceed = computed(() => {
     case 3: return !!wizardState.publishedSchemaId
     case 4: return true
     case 5: return !!wizardState.createdPipelineId
+    case 6: return true // telemetry step — always proceed
     default: return false
   }
 })
@@ -696,6 +785,60 @@ function skipToEnd() {
   currentStep.value = steps.value.length - 1
 }
 
+// Telemetry opt-in functions (FAR-1131)
+
+async function loadTelemetryStatus() {
+  telemetryLoading.value = true
+  telemetryError.value = null
+  telemetryRetry.value = undefined
+  telemetryForbidden.value = false
+  try {
+    const { data, error: err, response } = await api.GET('/api/v1/admin/telemetry')
+    if (response?.status === 403) {
+      // Non-system-admins cannot read the deployment-wide toggle; surface a
+      // softer note and hide the action instead of a raw 403 alert.
+      telemetryForbidden.value = true
+    } else if (err) {
+      telemetryError.value = formatApiError(err)
+      telemetryRetry.value = loadTelemetryStatus
+    } else if (data && typeof data.enabled === 'boolean') {
+      telemetryEnabled.value = data.enabled
+    }
+  } catch (e: unknown) {
+    telemetryError.value = formatApiError(e)
+    telemetryRetry.value = loadTelemetryStatus
+  } finally {
+    telemetryLoading.value = false
+  }
+}
+
+async function saveTelemetry(enabled: boolean) {
+  if (telemetrySaving.value) return
+  telemetrySaving.value = true
+  telemetryError.value = null
+  telemetryRetry.value = undefined
+  telemetrySaved.value = false
+  try {
+    const { data, error: err, response } = await api.PUT('/api/v1/admin/telemetry', {
+      body: { enabled },
+    })
+    if (response?.status === 403) {
+      telemetryForbidden.value = true
+    } else if (err) {
+      telemetryError.value = formatApiError(err)
+      telemetryRetry.value = () => saveTelemetry(enabled)
+    } else {
+      telemetryEnabled.value = data?.enabled ?? enabled
+      telemetrySaved.value = true
+    }
+  } catch (e: unknown) {
+    telemetryError.value = formatApiError(e)
+    telemetryRetry.value = () => saveTelemetry(enabled)
+  } finally {
+    telemetrySaving.value = false
+  }
+}
+
 watch(() => wizardState.pipelineDescription, () => {
   if (confirmEmptyRun.value) {
     confirmEmptyRun.value = false
@@ -709,6 +852,9 @@ watch(currentStep, (step) => {
   }
   if (step === 4 && libraryItems.value.length === 0 && !loadingLibrary.value) {
     loadLibrary()
+  }
+  if (step === 6 && !telemetryLoading.value) {
+    loadTelemetryStatus()
   }
 })
 

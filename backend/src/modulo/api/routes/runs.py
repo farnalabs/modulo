@@ -3536,3 +3536,162 @@ def _build_diff_lines(text_a: str, text_b: str) -> tuple[list[NodeOutputDiffLine
         for kind, content, line_a, line_b in iter_line_diffs(lines_a, lines_b)
     ]
     return diff_lines, any(d.type != "unchanged" for d in diff_lines)
+
+
+# ---------------------------------------------------------------------------
+# FAR-902: Run-detail enforcement surface + flip guard endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{run_id}/schema-enforcement",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Run not found"},
+        500: {"description": "Internal Server Error"},
+    },
+)
+async def get_run_schema_enforcement(
+    run_id: uuid.UUID,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+) -> dict[str, Any]:
+    """D3: Operator-readable run-detail enforcement surface.
+
+    Returns per-node enforcement records so lenient-mode warnings are
+    READABLE.  Response shape: per node/attempt, the outcome, resolved
+    profile, native-vs-verbatim, repair/wasted counts, and the validation
+    errors (respecting the 64KB bound + truncation flag applied at write
+    time).  Includes run-level aggregate counts.
+
+    GET /api/v1/runs/{run_id}/schema-enforcement
+    """
+    try:
+        run = await _do_get_run(session_factory, current_user, run_id)
+    except RunNotFoundError:
+        raise HTTPException(status_code=404, detail=_MSG_RUN_NOT_FOUND) from None
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        # Query enforcement records from run_node_outputs (non-final, non-meta)
+        stmt = (
+            select(
+                RunNodeOutput.node_id,
+                RunNodeOutput.attempt_key,
+                RunNodeOutput.schema_enforcement_json,
+            )
+            .where(
+                RunNodeOutput.run_id == run_id,
+                RunNodeOutput.schema_enforcement_json.isnot(None),
+                RunNodeOutput.node_id != "__run_meta__",
+                RunNodeOutput.attempt_key != "__final__",
+            )
+            .order_by(RunNodeOutput.node_id, RunNodeOutput.attempt_key)
+        )
+        rows = (await session.execute(stmt)).all()
+
+    # Build per-node enforcement records
+    node_records: dict[str, list[dict[str, Any]]] = {}
+    all_records: list[dict[str, Any]] = []
+    for node_id, attempt_key, enforcement_json in rows:
+        if not isinstance(enforcement_json, dict):
+            continue
+        record = dict(enforcement_json)
+        record["node_id"] = node_id
+        record["attempt_key"] = attempt_key
+        node_records.setdefault(node_id, []).append(record)
+        all_records.append(enforcement_json)
+
+    # Aggregate counts
+    from modulo.core.pipeline_engine.schema_enforcement import aggregate_run_enforcement
+
+    agg = aggregate_run_enforcement(all_records)
+
+    # Derive mode and outcome from enforcement records
+    from modulo.core.pipeline_engine.schema_enforcement import (
+        derive_mode_from_records,
+        derive_outcome_from_records,
+    )
+
+    mode = derive_mode_from_records(all_records)
+    outcome = derive_outcome_from_records(all_records)
+
+    # Build per-node list
+    nodes_list = []
+    for node_id, records in node_records.items():
+        node_agg = aggregate_run_enforcement(records)
+        nodes_list.append(
+            {
+                "node_id": node_id,
+                "records": records,
+                "aggregate": {
+                    "native_count": node_agg.native_count,
+                    "verbatim_count": node_agg.verbatim_count,
+                    "repair_count": node_agg.repair_count,
+                    "wasted_count": node_agg.wasted_count,
+                    "total_attempts": node_agg.total_attempts,
+                },
+            }
+        )
+
+    return {
+        "run_id": str(run_id),
+        "schema_validator_mode": run.schema_validator_mode or mode,
+        "schema_validation_outcome": run.schema_validation_outcome or outcome,
+        "nodes": nodes_list,
+        "aggregate": {
+            "native_count": agg.native_count,
+            "verbatim_count": agg.verbatim_count,
+            "repair_count": agg.repair_count,
+            "wasted_count": agg.wasted_count,
+            "total_attempts": agg.total_attempts,
+            "enforcement_record_count": agg.enforcement_record_count,
+        },
+    }
+
+
+@router.get(
+    "/schema-enforcement/flip-guard",
+    status_code=status.HTTP_200_OK,
+    responses={
+        500: {"description": "Internal Server Error"},
+    },
+)
+async def get_schema_enforcement_flip_guard(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+) -> dict[str, Any]:
+    """D2: Read-only flip guard — advises whether lenient-to-strict is safe.
+
+    Examines ALL enforcement records for the caller's organisation and
+    returns the guard's verdict + supporting counts.
+
+    **This endpoint NEVER mutates the mode.**  Changing the mode remains
+    a separate, explicit, already-authorised operator action.
+
+    GET /api/v1/runs/schema-enforcement/flip-guard
+    """
+    from modulo.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        # Query ALL enforcement records for this org
+        stmt = select(RunNodeOutput.schema_enforcement_json).where(
+            RunNodeOutput.organisation_id == current_user.organisation_id,
+            RunNodeOutput.schema_enforcement_json.isnot(None),
+            RunNodeOutput.node_id != "__run_meta__",
+            RunNodeOutput.attempt_key != "__final__",
+        )
+        rows = (await session.execute(stmt)).all()
+
+    all_records = [row[0] for row in rows if isinstance(row[0], dict)]
+
+    verdict = compute_flip_guard_verdict(all_records)
+
+    return {
+        "safe_to_flip": verdict.safe_to_flip,
+        "lenient_warning_count": verdict.lenient_warning_count,
+        "total_records": verdict.total_records,
+        "affected_outcomes": list(verdict.affected_outcomes),
+        "advisory": verdict.advisory,
+    }

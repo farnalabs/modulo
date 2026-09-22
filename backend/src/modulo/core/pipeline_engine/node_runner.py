@@ -484,7 +484,29 @@ class OutputSchemaValidationError(ValueError):
     agent-node output. The executor maps this to the domain-specific
     ``schema_validation_failure`` error code (§8.9 error table — "The output
     did not match the expected format.") instead of a raw ``ValueError``.
+
+    FAR-902 (D3): the terminal-failure paths (strict repair exhausted / native
+    decode failure, and the lenient required-field violation) must still
+    produce an enforcement record BEFORE the node is terminalized.  The
+    terminal ``outcome`` and the failing ``validation_errors`` are carried on
+    the exception so a caller's ``except`` arm can build and persist that
+    record without changing the ``ValueError`` contract.
     """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        outcome: str | None = None,
+        validation_errors: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.outcome = outcome
+        self.validation_errors = validation_errors or []
+        # Populated by the caller (``_finalize_node_result``) when it builds the
+        # FAR-902 enforcement record for this terminal failure; the persist site
+        # extracts it, writes it, then re-raises this exception unchanged.
+        self.enforcement_record: dict[str, Any] | None = None
 
 
 # Single source of truth for JMESPath guard truthiness — `bool(result)`.
@@ -3362,6 +3384,7 @@ async def _invoke_node_model(
     node_id: str,
     output_schema_json: dict[str, Any] | None = None,
     schema_profile: SchemaProfile | None = None,
+    _native_output_flag: list[bool] | None = None,
 ) -> Any:
     """Invoke the configured model backend and return its parsed output.
 
@@ -3437,8 +3460,12 @@ async def _invoke_node_model(
         rendered_ok, rendered_reason = _is_safe_schema(schema_to_check)
         if rendered_ok:
             invoke_kwargs["output_schema"] = schema_to_check
+            if _native_output_flag is not None:
+                _native_output_flag[0] = True
         elif raw_ok:
             invoke_kwargs["output_schema"] = output_schema_json
+            if _native_output_flag is not None:
+                _native_output_flag[0] = True
         else:
             _log.warning(
                 "node_model.schema_bounds_rejected",
@@ -3454,6 +3481,81 @@ async def _invoke_node_model(
     return output_data
 
 
+def _build_error_enforcement_record(
+    exc: BaseException,
+    *,
+    resolved_profile: str | None,
+    native_output: bool,
+    repair_info: dict[str, int] | None = None,
+) -> dict[str, Any] | None:
+    """FAR-902 (D3): build the enforcement record for a terminal validation error.
+
+    ``_validate_against_schema`` raises ``OutputSchemaValidationError`` on the
+    strict-terminal (repair exhausted / native decode failure) and lenient
+    required-field-violation paths.  The raised exception carries the terminal
+    ``outcome`` and the failing ``validation_errors`` so the record can still
+    be built and persisted BEFORE the node is terminalized.
+
+    Returns ``None`` when *exc* carries no outcome (e.g. an unrelated
+    ``ValueError``), so callers can persist unconditionally.
+    """
+    outcome = getattr(exc, "outcome", None)
+    if outcome is None:
+        return None
+    from modulo.core.pipeline_engine.schema_enforcement import build_enforcement_record
+
+    _info = repair_info or {}
+    return build_enforcement_record(
+        outcome=outcome,
+        resolved_profile=resolved_profile,
+        native_output=native_output,
+        repair_attempts=_info.get("repair_attempts", 0),
+        wasted_attempts=_info.get("wasted_attempts", 0),
+        validation_errors=getattr(exc, "validation_errors", None),
+    )
+
+
+async def _persist_enforcement_record_best_effort(
+    enforcement_record: dict[str, Any] | None,
+    *,
+    session_factory: Any,
+    run_id: Any,
+    org_id: Any,
+    node_id: str,
+    attempt_key: str | None,
+) -> None:
+    """FAR-902 (D3): persist a schema enforcement record, never failing the node.
+
+    Shared by the standard agent path and the sandbox path, on BOTH the
+    success and the terminal-validation-failure arms, so the record is written
+    before terminalization regardless of outcome.  Persistence is best-effort:
+    any error is logged and swallowed (``CancelledError`` is re-raised so
+    cancellation semantics are preserved).
+    """
+    if enforcement_record is None or not attempt_key or session_factory is None or run_id is None or org_id is None:
+        return
+    try:
+        from modulo.db.crud.run_node_outputs import persist_schema_enforcement_record
+
+        async with session_factory() as _ef_session, _ef_session.begin():
+            await set_rls_org(_ef_session, uuid.UUID(str(org_id)))
+            await persist_schema_enforcement_record(
+                _ef_session,
+                run_id=uuid.UUID(str(run_id)),
+                organisation_id=uuid.UUID(str(org_id)),
+                node_id=node_id,
+                attempt_key=attempt_key,
+                enforcement_record=enforcement_record,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "schema_enforcement.persist_failed",
+            extra={"node_id": node_id},
+        )
+
+
 def _finalize_node_result(
     node_id: str,
     output_data: Any,
@@ -3464,23 +3566,62 @@ def _finalize_node_result(
     schema_id: str = "unknown",
     schema_version: int = 0,
     _repair_invoke_fn: Any | None = None,
+    resolved_profile: str | None = None,
+    native_output: bool = False,
 ) -> dict[str, Any]:
     """Validate schema, build the node artifact result, and surface a routed hop."""
+    # FAR-902: accumulated enforcement payload for the caller to persist.
+    _result_enforcement: dict[str, Any] | None = None
     if isinstance(output_schema_json, dict) and output_schema_json:
-        outcome, errors, effective_output = _validate_against_schema(
-            output_data,
-            output_schema_json,
-            mode=mode,
-            schema_id=schema_id,
-            schema_version=schema_version,
-            _repair_invoke_fn=_repair_invoke_fn,
-        )
+        # FAR-902: collect repair stats for the enforcement record.
+        _repair_info: dict[str, int] = {}
+        try:
+            outcome, errors, effective_output = _validate_against_schema(
+                output_data,
+                output_schema_json,
+                mode=mode,
+                schema_id=schema_id,
+                schema_version=schema_version,
+                _repair_invoke_fn=_repair_invoke_fn,
+                _repair_info=_repair_info,
+            )
+        except OutputSchemaValidationError as _schema_exc:
+            # FAR-902 (D3): a terminal validation failure must STILL produce an
+            # enforcement record — the most severe outcomes (repair_exhausted /
+            # native_decode_failed / native_decode_not_json / lenient required
+            # violation) would otherwise never reach schema_enforcement_json.
+            # The record rides on the exception for the caller to persist
+            # before terminalization; the exception is re-raised unchanged.
+            _schema_exc.enforcement_record = _build_error_enforcement_record(
+                _schema_exc,
+                resolved_profile=resolved_profile,
+                native_output=native_output,
+                repair_info=_repair_info,
+            )
+            raise
         # A successful strict-mode repair replaces the schema-invalid payload;
         # otherwise effective_output IS output_data. Never emit a payload that
         # failed the declared contract after repair reported success.
         output_data = effective_output
+        # FAR-902: build the enforcement record for the caller to persist.
+        # The record is attached to the result dict under a reserved key so
+        # the caller (``_node``) can extract and persist it to
+        # ``run_node_outputs`` BEFORE terminalization (D3 ordering).
+        from modulo.core.pipeline_engine.schema_enforcement import build_enforcement_record
+
+        _enforcement_payload = build_enforcement_record(
+            outcome=outcome,
+            resolved_profile=resolved_profile,
+            native_output=native_output,
+            repair_attempts=_repair_info.get("repair_attempts", 0),
+            wasted_attempts=_repair_info.get("wasted_attempts", 0),
+            validation_errors=errors,
+        )
+        # ``build_enforcement_record`` returns None only for NO_SCHEMA, which
+        # cannot occur here (the block is guarded by a non-empty schema), but
+        # assigning directly is equivalent and keeps the None-safe contract.
+        _result_enforcement = _enforcement_payload
         # Log outcome for observability
-        # TODO(FAR-902): persist the outcome
         if errors:
             _log.info(
                 "schema_validation.outcome",
@@ -3491,6 +3632,10 @@ def _finalize_node_result(
         "artifacts": [{"node_id": node_id, "status": "completed", "output": output_data}],
         "output": output_data,
     }
+
+    # FAR-902: carry the enforcement record for the caller to persist.
+    if _result_enforcement is not None:
+        result["_schema_enforcement_record"] = _result_enforcement
 
     # Extract _next_node from LLM routing output for the router.
     if routing_mode == "llm" and isinstance(output_data, dict):
@@ -3651,12 +3796,15 @@ def make_node_fn(
 
         # FAR-900: resolve the schema_profile for rendering before dispatch.
         _node_schema_profile = _resolve_schema_profile(node_def)
+        # FAR-902: track whether the provider actually used native structured output.
+        _native_output_flag: list[bool] = [False]
         output_data = await _invoke_node_model(
             rendered_prompt,
             model_backend_id_str,
             node_id,
             output_schema_json=output_schema_json,
             schema_profile=_node_schema_profile,
+            _native_output_flag=_native_output_flag,
         )
 
         # FAR-899: schema validator mode — resolved from the effective-setting
@@ -3705,16 +3853,57 @@ def make_node_fn(
             # validation failures are terminal (the documented hard-fail path).
             _repair_fn = None
 
-        return _finalize_node_result(
-            node_id,
-            output_data,
-            output_schema_json,
-            routing_mode,
-            mode=_schema_validator_mode,
-            schema_id=node_def.get("output_schema_id", "unknown"),
-            schema_version=node_def.get("output_schema_version", 0),
-            _repair_invoke_fn=_repair_fn,
-        )
+        try:
+            _node_result = _finalize_node_result(
+                node_id,
+                output_data,
+                output_schema_json,
+                routing_mode,
+                mode=_schema_validator_mode,
+                schema_id=node_def.get("output_schema_id", "unknown"),
+                schema_version=node_def.get("output_schema_version", 0),
+                _repair_invoke_fn=_repair_fn,
+                resolved_profile=_node_schema_profile or "verbatim",
+                native_output=_native_output_flag[0],
+            )
+        except OutputSchemaValidationError as _schema_exc:
+            # FAR-902 (D3): persist the terminal-failure enforcement record
+            # BEFORE the node is terminalized, then re-raise unchanged.
+            _ef_ctx = get_conformance_ctx()
+            _ef_sf = _ef_ctx[0] if _ef_ctx is not None else None
+            _ef_org = _ef_ctx[1] if _ef_ctx is not None else None
+            _ef_run_id = state.get("_run_id")
+            await _persist_enforcement_record_best_effort(
+                getattr(_schema_exc, "enforcement_record", None),
+                session_factory=_ef_sf,
+                run_id=_ef_run_id,
+                org_id=_ef_org,
+                node_id=node_id,
+                attempt_key=(f"run:{_ef_run_id}:node:{node_id}:agent" if _ef_run_id is not None else None),
+            )
+            raise
+
+        # FAR-902: persist the enforcement record BEFORE terminalization.
+        # The record was built by _finalize_node_result and carried on the
+        # result dict under ``_schema_enforcement_record``.  Persist it via
+        # the conformance-context session_factory and remove it from the
+        # result so it never leaks into node telemetry (D3 ordering).
+        _enforcement_rec = _node_result.pop("_schema_enforcement_record", None)
+        if _enforcement_rec is not None:
+            _ef_ctx = get_conformance_ctx()
+            _ef_sf = _ef_ctx[0] if _ef_ctx is not None else None
+            _ef_org = _ef_ctx[1] if _ef_ctx is not None else None
+            _ef_run_id = state.get("_run_id")
+            await _persist_enforcement_record_best_effort(
+                _enforcement_rec,
+                session_factory=_ef_sf,
+                run_id=_ef_run_id,
+                org_id=_ef_org,
+                node_id=node_id,
+                attempt_key=(f"run:{_ef_run_id}:node:{node_id}:agent" if _ef_run_id is not None else None),
+            )
+
+        return _node_result
 
     _node.__name__ = f"node_{node_id}"
     return _node
@@ -8784,8 +8973,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # auto-repair — documented hard-fail for this path.
             _sandbox_repair_invoke_fn = None
 
+            from modulo.core.pipeline_engine.schema_enforcement import build_enforcement_record
+
+            # FAR-902: repair stats for the enforcement record.  Initialised
+            # BEFORE the try so the terminal-failure arm can still read it.
+            _sandbox_repair_info: dict[str, int] = {}
             try:
                 # FAR-899: use real JSON Schema validation with mode support
+                # FAR-901: pass schema_dir + node_id so the validator reads
+                # the on-disk contract version.
+                # FAR-902: collect repair stats for the enforcement record.
                 _val_outcome, _val_errors, _ = _validate_against_schema(
                     output_json,
                     output_schema_json,
@@ -8793,18 +8990,51 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     schema_id=schema_id,
                     schema_version=schema_version,
                     _repair_invoke_fn=_sandbox_repair_invoke_fn,
+                    schema_dir=_contract_local_tmp,
+                    node_id=node_id,
+                    _repair_info=_sandbox_repair_info,
                 )
                 # FIX H: log the validation outcome for observability
-                # TODO(FAR-902): persist the outcome
-                if _val_errors:
-                    _log.info(
-                        "schema_validation.outcome",
-                        extra={"node_id": node_id, "outcome": _val_outcome, "error_count": len(_val_errors)},
-                    )
+                # FAR-902: persist the enforcement record BEFORE terminalization.
+                # Best-effort: a persistence failure must NEVER fail the node.
+                # FAR-902: native_output is False for the sandbox path — the
+                # sandbox runs a CLI (opencode) that returns raw text; Modulo
+                # validates post-hoc, never via the provider's native channel.
+                await _persist_enforcement_record_best_effort(
+                    build_enforcement_record(
+                        outcome=_val_outcome,
+                        resolved_profile=_node_schema_profile if isinstance(_node_schema_profile, str) else None,
+                        native_output=False,
+                        repair_attempts=_sandbox_repair_info.get("repair_attempts", 0),
+                        wasted_attempts=_sandbox_repair_info.get("wasted_attempts", 0),
+                        validation_errors=_val_errors,
+                    ),
+                    session_factory=session_factory,
+                    run_id=run_id,
+                    org_id=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                )
             except ValueError as _schema_exc:
                 _log.exception(
                     "sandbox_agent.schema_validation_failed",
                     extra={"node_id": node_id},
+                )
+                # FAR-902 (D3): persist the terminal-failure enforcement record
+                # BEFORE the node is terminalized (the raw-output marker,
+                # artifact finalization, and the terminal raise below).
+                await _persist_enforcement_record_best_effort(
+                    _build_error_enforcement_record(
+                        _schema_exc,
+                        resolved_profile=_node_schema_profile if isinstance(_node_schema_profile, str) else None,
+                        native_output=False,
+                        repair_info=_sandbox_repair_info,
+                    ),
+                    session_factory=session_factory,
+                    run_id=run_id,
+                    org_id=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
                 )
                 if _is_script_post_claim_fault(sandbox_mode, _script_lease_claimed):
                     # FAR-296 Phase 2 stage-split (2): the script PROCESS
@@ -9784,6 +10014,9 @@ def _validate_against_schema(
     schema_version: int = 0,
     repair_budget_config: Any = None,
     _repair_invoke_fn: Any | None = None,
+    schema_dir: "Path | None" = None,
+    node_id: str | None = None,
+    _repair_info: dict[str, int] | None = None,
 ) -> tuple[str, list[dict[str, Any]], Any]:
     """Validate *data* against *schema* using Draft202012Validator.
 
@@ -9798,6 +10031,10 @@ def _validate_against_schema(
         repair succeeds (PASSED_AFTER_REPAIR) and the ORIGINAL *data*
         otherwise — so a caller never emits a schema-invalid payload after a
         successful repair.
+
+    When *_repair_info* is provided (a mutable dict), it is populated with
+    ``"repair_attempts"`` and ``"wasted_attempts"`` from the repair loop so
+    the caller can thread them into the FAR-902 enforcement record.
 
     Raises:
         OutputSchemaValidationError: In strict mode when validation fails
@@ -9840,7 +10077,12 @@ def _validate_against_schema(
             raise OutputSchemaValidationError(
                 f"Schema validation failed (required fields missing): "
                 f"(schema={schema_id} v{schema_version}): "
-                f"{format_error_summary(required_errors)}"
+                f"{format_error_summary(required_errors)}",
+                # FAR-902 (D3): a required-field violation is a hard failure
+                # even under lenient mode; record it as a post-hoc validation
+                # failure so the terminal arm is observable (severity 1).
+                outcome=SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED.value,
+                validation_errors=required_errors,
             )
         # New-constraint violations (non-required) are warn-only under lenient.
         _log.warning(
@@ -9862,6 +10104,7 @@ def _validate_against_schema(
         schema_id=schema_id,
         schema_version=schema_version,
         repair_invoke_fn=_repair_invoke_fn,
+        _repair_info=_repair_info,
     )
 
     # Terminal failure → raise
@@ -9873,7 +10116,11 @@ def _validate_against_schema(
         raise OutputSchemaValidationError(
             f"Strict schema validation failed ({outcome_val}): "
             f"(schema={schema_id} v{schema_version}): "
-            f"{format_error_summary(final_errors)}"
+            f"{format_error_summary(final_errors)}",
+            # FAR-902 (D3): carry the terminal outcome + errors so the caller
+            # persists the enforcement record before terminalizing the node.
+            outcome=outcome_val,
+            validation_errors=final_errors,
         )
 
     # PASSED_AFTER_REPAIR or other success

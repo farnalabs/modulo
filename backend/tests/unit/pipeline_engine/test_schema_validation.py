@@ -840,3 +840,59 @@ class TestNonUuidBackendId:
             result = await fn(state)
         # The early-return path fires before the repair code is reached
         assert result["artifacts"][0]["status"] == "executed"
+
+
+class TestMakeNodeFnTerminalSchemaFailure:
+    """FAR-902 (D3): the standard agent path persists on a terminal failure."""
+
+    async def test_node_terminal_schema_failure_persists_enforcement_record(self) -> None:
+        """A required-field violation persists the enforcement record, then raises.
+
+        Drives the ``_node`` except arm: ``_finalize_node_result`` raises
+        ``OutputSchemaValidationError``, and the record built from the raised
+        outcome must be handed to the persist helper BEFORE the exception
+        propagates.  Before this fix the record was never built at all.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        node_def = {
+            "id": "test-terminal-schema",
+            "model_backend_id": "stub-backend",
+            "prompt_template": "hello",
+            "output_schema_json": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        }
+        fn = nr.make_node_fn(node_def)
+        state = {
+            "run_context": {"cancelled": False, "input": {}},
+            "artifacts": [],
+        }
+        persist = AsyncMock()
+        with (
+            patch(
+                "modulo.core.pipeline_engine.node_runner._run_conformance_gate",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner._invoke_node_model",
+                new=AsyncMock(return_value={"other": 1}),  # missing required 'name'
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner._render_agent_prompt",
+                new=lambda **kw: ("ok", None),
+            ),
+            patch(
+                "modulo.core.pipeline_engine.node_runner._persist_enforcement_record_best_effort",
+                new=persist,
+            ),
+            pytest.raises(nr.OutputSchemaValidationError),
+        ):
+            await fn(state)
+
+        persist.assert_awaited_once()
+        recorded = persist.await_args.args[0]
+        assert recorded is not None
+        assert recorded["outcome"] == "posthoc_validation_failed"

@@ -678,6 +678,136 @@ async def test_db_is_at_migration_head_false_when_scriptdir_raises(monkeypatch: 
     assert await main._db_is_at_migration_head(_make_settings()) is False
 
 
+# ── _assert_single_alembic_head (FAR-902) ──
+
+
+@pytest.mark.anyio
+async def test_alembic_head_guard_single_head_logs_info(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Single head → info log, no warning, no error."""
+    script_dir = MagicMock()
+    script_dir.get_heads = MagicMock(return_value=["abc123"])
+    monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(return_value=script_dir))
+    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("alembic.config.Config", MagicMock())
+
+    with caplog.at_level(logging.INFO, logger="modulo.api.main"):
+        await main._assert_single_alembic_head(_make_settings())
+
+    assert any("startup.single_alembic_head" in rec.message for rec in caplog.records)
+    assert not any("startup.multiple_alembic_heads" in rec.message for rec in caplog.records)
+    assert not any("startup.alembic_head_check_failed" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_alembic_head_guard_multiple_heads_logs_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Multiple heads → loud WARNING (non-fatal, not a crash)."""
+    script_dir = MagicMock()
+    script_dir.get_heads = MagicMock(return_value=["head_a", "head_b"])
+    monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(return_value=script_dir))
+    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("alembic.config.Config", MagicMock())
+
+    with caplog.at_level(logging.WARNING, logger="modulo.api.main"):
+        await main._assert_single_alembic_head(_make_settings())
+
+    assert any("startup.multiple_alembic_heads" in rec.message for rec in caplog.records)
+    assert not any("startup.alembic_head_check_failed" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_alembic_head_guard_get_heads_returns_list_not_string(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """get_heads() returning list[str] must NOT raise AttributeError.
+
+    Before the fix, _get_heads called .split(",") on the list, which raised
+    AttributeError — caught by the outer except Exception and silently swallowed.
+    This test verifies the guard actually executes with a real list return.
+    """
+    script_dir = MagicMock()
+    script_dir.get_heads = MagicMock(return_value=["head_a", "head_b", "head_c"])
+    monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(return_value=script_dir))
+    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("alembic.config.Config", MagicMock())
+
+    with caplog.at_level(logging.WARNING, logger="modulo.api.main"):
+        await main._assert_single_alembic_head(_make_settings())
+
+    assert any("startup.multiple_alembic_heads" in rec.message for rec in caplog.records)
+    assert not any("startup.alembic_head_check_failed" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_alembic_head_guard_exception_logs_error_not_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When the guard itself fails, the error must be observable at ERROR level."""
+    monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(side_effect=RuntimeError("broken")))
+    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("alembic.config.Config", MagicMock())
+
+    with caplog.at_level(logging.ERROR, logger="modulo.api.main"):
+        await main._assert_single_alembic_head(_make_settings())
+
+    assert any("startup.alembic_head_check_failed" in rec.message for rec in caplog.records)
+
+
+def test_alembic_head_guard_old_code_would_raise_attribute_error() -> None:
+    """Proof that the OLD code (list.split(',')) raised AttributeError.
+
+    The old _get_heads returned ``heads.split(",") if heads else []`` where
+    heads is list[str]. Calling .split(",") on a list raises AttributeError.
+    This test reproduces that failure directly.
+    """
+    heads: list[str] = ["head_a", "head_b"]
+    with pytest.raises(AttributeError, match="split"):
+        heads.split(",")  # type: ignore[attr-defined]
+
+
+@pytest.mark.anyio
+async def test_alembic_head_guard_get_heads_returns_string(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A legacy string return from ``get_heads()`` is split, not iterated.
+
+    Covers the ``isinstance(heads, str)`` compatibility arm: an older/broken
+    ScriptDirectory returning ``"a,b"`` must be split into two heads and warn.
+    """
+    script_dir = MagicMock()
+    script_dir.get_heads = MagicMock(return_value="head_a,head_b")
+    monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(return_value=script_dir))
+    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("alembic.config.Config", MagicMock())
+
+    with caplog.at_level(logging.WARNING, logger="modulo.api.main"):
+        await main._assert_single_alembic_head(_make_settings())
+
+    assert any("startup.multiple_alembic_heads" in rec.message for rec in caplog.records)
+    assert not any("startup.alembic_head_check_failed" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_alembic_head_guard_reraises_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CancelledError during the guard propagates — it is never swallowed.
+
+    Covers the ``except asyncio.CancelledError: raise`` arm; a shutdown must not
+    be converted into the benign "guard could not run" error log.
+    """
+    monkeypatch.setattr(
+        "alembic.script.ScriptDirectory.from_config",
+        MagicMock(side_effect=asyncio.CancelledError()),
+    )
+    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("alembic.config.Config", MagicMock())
+
+    with pytest.raises(asyncio.CancelledError):
+        await main._assert_single_alembic_head(_make_settings())
+
+
 # ── _migration_advisory_lock / _run_migrations ──
 
 

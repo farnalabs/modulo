@@ -650,7 +650,7 @@ before marking a production deployment as complete.
 - [ ] Security alerts configured (rate limit threshold, failed login spike, audit chain failure)
 - [ ] Log retention set to at least 30 days for application logs; audit log is append-only (no automated purge)
 - [ ] OTel exporter (if enabled) is correctly scoped – no secrets in spans
-- [ ] OTel telemetry is disabled if data residency prohibits egress
+- [ ] OTel telemetry is disabled if data residency prohibits egress (default: off; enable via `MODULO_TELEMETRY_ENABLED=true` in Settings > Runtime Configuration)
 
 ### Upgrade
 

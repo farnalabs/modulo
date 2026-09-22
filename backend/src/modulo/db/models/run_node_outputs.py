@@ -117,6 +117,13 @@ class RunNodeOutput(Base, TimestampMixin):
             "node_id <> '__run_meta__' OR outputs_json IS NOT NULL",
             name="ck_run_node_outputs_meta_present",
         ),
+        # FAR-902: '__final__' rows carry schema_enforcement_json only on
+        # non-final attempts — the __final__ row is the terminal node output
+        # and has no enforcement record.  Portable CHECK (no jsonb_typeof).
+        CheckConstraint(
+            "attempt_key <> '__final__' OR schema_enforcement_json IS NULL",
+            name="ck_run_node_outputs_final_no_enforcement",
+        ),
     )
 
     # Tenant anchor — the RLS policy subject. Indexed; FK CASCADE with the
@@ -139,3 +146,11 @@ class RunNodeOutput(Base, TimestampMixin):
     # Stores ``list[pointer]`` — zero or more artifact pointer dicts
     # (stdout/stderr side-car files) for the node attempt.
     artifacts_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    # FAR-902: per-attempt schema enforcement telemetry.  Stores the
+    # SchemaEnforcementRecord payload (outcome, profile, native flag, repair/
+    # wasted-attempt counts, validation errors) — bound to 64 KB at write time.
+    # Written BEFORE update_run_status (D3 ordering guarantee).  On the ORM
+    # it is JSON (repo parity); the migration promotes to JSONB on Postgres.
+    # NEVER written into outputs_json / node_telemetry_json (Agent Return
+    # Contract columns).
+    schema_enforcement_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

@@ -1,10 +1,12 @@
 """Tests for pipeline execution core logic."""
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Self
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
@@ -436,3 +438,101 @@ class TestAgentRepairWiring:
         # Initial invoke + exactly one repair invoke through the async backend.
         assert len(adapter.prompts) == 2
         assert "Schema validation failed" in adapter.prompts[1]
+
+
+class _FakeBeginCtx:
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+
+class _FakeSessionCtx:
+    """Minimal async-session stand-in for the conformance-context factory."""
+
+    def begin(self) -> _FakeBeginCtx:
+        return _FakeBeginCtx()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+
+class TestNodeEnforcementPersistence:
+    """FAR-902: the agent-path node persists the enforcement record before returning.
+
+    Drives ``make_node_fn`` end-to-end with a conformance context bound, proving
+    the ``_schema_enforcement_record`` built by ``_finalize_node_result`` is
+    persisted through the context session factory and then stripped from the
+    node telemetry (D3 ordering).
+    """
+
+    async def _run_node(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        persist_side_effect: Exception | None = None,
+    ) -> tuple[dict[str, Any], AsyncMock]:
+        import modulo.core.pipeline_engine.node_runner as nr
+
+        node_id = str(uuid.uuid4())
+        backend_id = uuid.uuid4()
+        node_def = {
+            "id": node_id,
+            "prompt_template": "produce output",
+            "model_backend_id": str(backend_id),
+            "output_schema_json": {"required": ["name"]},
+            "output_schema_id": "demo",
+            "output_schema_version": 1,
+        }
+        node_fn = make_node_fn(node_def, role="agent")
+        adapter = _SequenceAdapter([json.dumps({"name": "Alice"})])
+        hub = ModelBackendHub()
+        await hub.__aenter__()
+        hub.register(backend_id, adapter)
+        set_model_backend_hub(hub)
+
+        monkeypatch.setattr(nr, "_run_conformance_gate", AsyncMock(return_value=None))
+        monkeypatch.setattr(nr, "_resolve_schema_validator_mode", AsyncMock(return_value="lenient"))
+        monkeypatch.setattr(
+            nr,
+            "get_conformance_ctx",
+            lambda: (lambda: _FakeSessionCtx(), str(uuid.uuid4()), None, None),
+        )
+        monkeypatch.setattr(nr, "set_rls_org", AsyncMock())
+        persist = AsyncMock(side_effect=persist_side_effect)
+        monkeypatch.setattr(
+            "modulo.db.crud.run_node_outputs.persist_schema_enforcement_record",
+            persist,
+        )
+
+        state: dict[str, Any] = {
+            "run_context": {"input": {}},
+            "artifacts": [],
+            "_run_id": str(uuid.uuid4()),
+        }
+        try:
+            result = await node_fn(state)
+        finally:
+            set_model_backend_hub(None)
+            await hub.__aexit__(None, None, None)
+        return result, persist
+
+    async def test_enforcement_record_persisted_and_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result, persist = await self._run_node(monkeypatch)
+        assert result["artifacts"][0]["status"] == "completed"
+        persist.assert_awaited_once()
+        # The internal record key never leaks into node telemetry.
+        assert "_schema_enforcement_record" not in result["artifacts"][0]
+
+    async def test_persist_failure_is_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result, persist = await self._run_node(monkeypatch, persist_side_effect=RuntimeError("db down"))
+        assert result["artifacts"][0]["status"] == "completed"
+        persist.assert_awaited_once()
+
+    async def test_persist_cancellation_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        with pytest.raises(asyncio.CancelledError):
+            await self._run_node(monkeypatch, persist_side_effect=asyncio.CancelledError())

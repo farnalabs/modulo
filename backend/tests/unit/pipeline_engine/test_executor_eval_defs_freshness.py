@@ -172,7 +172,10 @@ def _eval_row(config: dict[str, Any], eval_id: uuid.UUID | None = None) -> Simpl
     )
 
 
-def _eval_row_with_gate(config: dict[str, Any], eval_id: uuid.UUID | None = None) -> tuple[SimpleNamespace, SimpleNamespace]:
+def _eval_row_with_gate(
+    config: dict[str, Any],
+    eval_id: uuid.UUID | None = None,
+) -> tuple[SimpleNamespace, SimpleNamespace]:
     """Return (Eval, PolicyGate) tuple — what the new _load_eval_defs_for_pipeline returns."""
     row = _eval_row(config, eval_id)
     gate = SimpleNamespace(action="warn", deleted_at=None)
@@ -370,7 +373,7 @@ async def test_load_eval_defs_excludes_soft_deleted():
     result = await executor._load_eval_defs_for_pipeline(session, pipeline_id)
 
     assert len(result) == 1
-    eval_row, policy_gate = result[0]
+    eval_row, _policy_gate = result[0]
     assert eval_row.config_json == {"pattern": "active"}
 
     # Verify the WHERE clause includes deleted_at IS NULL

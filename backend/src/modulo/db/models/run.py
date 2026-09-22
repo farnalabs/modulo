@@ -382,6 +382,13 @@ class Run(OrgScoped):
     # The compare view reads this, never the live snapshot, so later edits to
     # the variant group cannot rewrite history.
     variant_config_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    # FAR-902: schema enforcement metadata — populated at finalization from
+    # per-node enforcement records.  ``schema_validator_mode`` is the mode
+    # the run actually executed under (resolved from enforcement records);
+    # ``schema_validation_outcome`` is the run-level aggregate outcome
+    # (derived from per-attempt outcomes).  Both NULL for pre-902 runs.
+    schema_validator_mode: Mapped[str | None] = mapped_column(String(30))
+    schema_validation_outcome: Mapped[str | None] = mapped_column(String(40))
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
     snapshot: Mapped["PipelineSnapshot"] = relationship()

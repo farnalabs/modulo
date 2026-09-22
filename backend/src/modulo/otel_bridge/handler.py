@@ -9,6 +9,7 @@ Import contract (enforced by import-linter):
 """
 
 import asyncio
+import hashlib
 import logging
 import secrets
 import threading
@@ -25,6 +26,25 @@ from opentelemetry.trace import NonRecordingSpan, Span, SpanContext, Status, Sta
 from modulo.otel_bridge.trace_id import trace_id_int_for_thread
 
 _log = logging.getLogger(__name__)
+
+
+def _anonymise_id(raw: str | None) -> str | None:
+    """Truncated SHA-256 so ids are correlate-able within one export but not linkable to an instance."""
+    if raw is None:
+        return None
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _error_category_for_export(error: BaseException) -> str:
+    """Return the error category exported on an OTel error span.
+
+    Only the exception CLASS NAME (the error category) is exported — never the
+    exception message or a stack trace.  This matches the opt-in consent copy
+    ("Error category frequencies (no error messages or stack traces)") and
+    ``docs/operations/network-egress.md`` ("sanitised error categories").  The
+    full detail stays in local-only log sinks.
+    """
+    return type(error).__name__ or "Exception"
 
 
 class LangGraphOtelBridge(BaseCallbackHandler):
@@ -199,12 +219,20 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         org_id: str | None,
         pipeline_id: str | None,
     ) -> dict[str, str | int | float | bool]:
-        """Merge the caller's attributes with the org/pipeline identity stamps."""
+        """Merge the caller's attributes with anonymised identity stamps.
+
+        Organisation and pipeline ids are truncated SHA-256 hashes so that
+        spans are correlate-able within a single export batch but cannot be
+        linked back to a specific instance — matching the consent copy
+        ("cannot be linked to your instance").
+        """
         attrs = dict(attributes or {})
-        if org_id is not None:
-            attrs["organisation_id"] = org_id
-        if pipeline_id is not None:
-            attrs["pipeline_id"] = pipeline_id
+        anon_org = _anonymise_id(org_id)
+        if anon_org is not None:
+            attrs["organisation_id"] = anon_org
+        anon_pipeline = _anonymise_id(pipeline_id)
+        if anon_pipeline is not None:
+            attrs["pipeline_id"] = anon_pipeline
         return attrs
 
     def _start_span(
@@ -238,8 +266,11 @@ class LangGraphOtelBridge(BaseCallbackHandler):
             return
         try:
             if error is not None:
-                span.set_status(Status(StatusCode.ERROR, str(error)))
-                span.record_exception(error)
+                # Export only the error category (exception class name) — never
+                # raw exception text or stack traces (consent copy: "Error
+                # category frequencies (no error messages or stack traces)").
+                # The full detail stays in local-only log sinks.
+                span.set_status(Status(StatusCode.ERROR, _error_category_for_export(error)))
             else:
                 span.set_status(Status(StatusCode.OK))
         except asyncio.CancelledError:
