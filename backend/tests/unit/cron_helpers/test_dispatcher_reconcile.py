@@ -2797,21 +2797,10 @@ class TestDispatcherReconcileFactsBatchCap:
         facts_org = uuid.uuid4()
 
         async def _five_terminalized(
-            _factory: Any,
-            _q: Any,
-            _rc: Any,
+            *,
             org_id: uuid.UUID,
-            _pred: Any,
-            _nw: Any,
-            _mam: Any,
-            _cc: Any,
-            _sw: Any,
-            _crs: Any,
-            _efr: Any,
-            _summary: Any,
             terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
-            _grace: Any,
-            **_kw: Any,
+            **kwargs: Any,
         ) -> int:
             terminalized_run_ids.extend((uuid.uuid4(), org_id) for _ in range(5))
             return 0
@@ -2858,21 +2847,10 @@ class TestDispatcherReconcileFactsBatchCap:
         facts_org = uuid.uuid4()
 
         async def _two_terminalized(
-            _factory: Any,
-            _q: Any,
-            _rc: Any,
+            *,
             org_id: uuid.UUID,
-            _pred: Any,
-            _nw: Any,
-            _mam: Any,
-            _cc: Any,
-            _sw: Any,
-            _crs: Any,
-            _efr: Any,
-            _summary: Any,
             terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
-            _grace: Any,
-            **_kw: Any,
+            **kwargs: Any,
         ) -> int:
             terminalized_run_ids.extend((uuid.uuid4(), org_id) for _ in range(2))
             return 0

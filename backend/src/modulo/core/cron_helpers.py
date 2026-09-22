@@ -31,9 +31,10 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
@@ -303,21 +304,8 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "skipped": 0,
     "redis_errors": 0,
     "deduped": 0,
-    "nodeless_failed": 0,
     "nodeless_redispatched": 0,
     "nodeless_capped": 0,
-    # FAR-714: runs the zombie repair TERMINAL-FAILED because SAQ claimed them
-    # but no node was ever dispatched — the exact population behind the
-    # ~30/week "Claimed by SAQ but dispatched no node" executor_stalled
-    # failures. Distinct from nodeless_failed so ops can alert on this class
-    # (an error event is ingested per repair; see _fail_nodeless_run).
-    "claimed_but_never_dispatched": 0,
-    "claim_cap_terminalized": 0,
-    "mid_graph_wedge_terminalized": 0,
-    "age_terminalized": 0,
-    "hitl_gate_expired_terminalized": 0,
-    "dispatch_failed_terminalized": 0,
-    "enqueue_failed_ttl_terminalized": 0,
     "enqueue_failed_redispatched": 0,
     "enqueue_failed_capped": 0,
     "streak_scanned": 0,
@@ -350,17 +338,16 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["skipped"] = stats.get("skipped", 0)
     _dispatcher_reconcile_stats["redis_errors"] = stats.get("redis_errors", 0)
     _dispatcher_reconcile_stats["deduped"] = stats.get("deduped", 0)
-    _dispatcher_reconcile_stats["nodeless_failed"] = stats.get("nodeless_failed", 0)
     _dispatcher_reconcile_stats["nodeless_redispatched"] = stats.get("nodeless_redispatched", 0)
     _dispatcher_reconcile_stats["nodeless_capped"] = stats.get("nodeless_capped", 0)
-    _dispatcher_reconcile_stats["claimed_but_never_dispatched"] = stats.get("claimed_but_never_dispatched", 0)
     _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
-    _dispatcher_reconcile_stats["claim_cap_terminalized"] = stats.get("claim_cap_terminalized", 0)
-    _dispatcher_reconcile_stats["mid_graph_wedge_terminalized"] = stats.get("mid_graph_wedge_terminalized", 0)
-    _dispatcher_reconcile_stats["age_terminalized"] = stats.get("age_terminalized", 0)
-    _dispatcher_reconcile_stats["hitl_gate_expired_terminalized"] = stats.get("hitl_gate_expired_terminalized", 0)
-    _dispatcher_reconcile_stats["dispatch_failed_terminalized"] = stats.get("dispatch_failed_terminalized", 0)
-    _dispatcher_reconcile_stats["enqueue_failed_ttl_terminalized"] = stats.get("enqueue_failed_ttl_terminalized", 0)
+    # Terminalizer counters (and their healthz aliases) derive from the
+    # registry (FAR-720): a new terminalizer registers once below and is
+    # carried through here, the module dict, the summary and the telemetry
+    # mapping without parallel hand-edits.
+    for spec in _TERMINALIZERS:
+        for key in spec.blob_keys:
+            _dispatcher_reconcile_stats[key] = stats.get(key, 0)
     _dispatcher_reconcile_stats["enqueue_failed_redispatched"] = stats.get("enqueue_failed_redispatched", 0)
     _dispatcher_reconcile_stats["enqueue_failed_capped"] = stats.get("enqueue_failed_capped", 0)
     _dispatcher_reconcile_stats["streak_scanned"] = stats.get("streak_scanned", 0)
@@ -4851,6 +4838,25 @@ _RECONCILE_FACTS_DEFAULT_MAX = 25
 _RECONCILE_MAX_ROWS_DEFAULT = 500
 
 
+@dataclass(frozen=True)
+class ReconcileTuning:
+    """Frozen tuning knobs threaded from dispatcher_reconcile into the per-org reap.
+
+    FAR-720: collapses the bare same-typed ``int`` tuning params that used to
+    travel positionally through ``dispatcher_reconcile`` ->
+    ``_dispatcher_reconcile_body`` -> ``_reconcile_org`` into a single immutable
+    object, so the internal boundary is keyword-only and the knobs read as one
+    named unit (a new knob is a field here plus one ``reconcile`` call site).
+    """
+
+    nodeless_window: int
+    max_age_minutes: int
+    claim_cap: int
+    stale_window: int
+    capacity_redispatch_seconds: int
+    hitl_gate_cancel_grace_seconds: int
+
+
 def _int_setting(value: Any, default: int) -> int:
     """Coerce a settings knob to int with the coded fallback (FAR-746).
 
@@ -5081,6 +5087,117 @@ async def _fail_run_dispatch_failed(session: AsyncSession, run_id: uuid.UUID, or
     )
 
 
+@dataclass(frozen=True)
+class ReconcileTerminalizer:
+    """Declarative descriptor for one dispatcher_reconcile terminalizer class.
+
+    FAR-720: every terminalizer-driven site — the stats-blob defaults, the
+    /healthz setter, the OTel stall-reason mapping and the per-org batch
+    loop — derives from this registry instead of parallel hand-edits, so a
+    new terminalizer is one definition here, plus (for a per-org SQL batch) a
+    ``_BATCH_TERMINALIZER_SPECS`` entry when its execution order matters.
+
+    ``blob_keys`` is the full set of healthz-blob counters this terminalizer
+    contributes (``stats_key`` first, then any semantic alias such as
+    ``enqueue_failed_ttl_terminalized`` for the enqueue-failed-TTL backstop);
+    the summary, the module dict and the setter all carry every key.
+    ``alias_key`` marks the summary counter the batch loop synchronises to the
+    primary counter (the mid-graph wedge's ``age_terminalized``), while
+    ``tuning_kwargs`` maps each coroutine keyword to the ``ReconcileTuning``
+    attribute that feeds it.
+    """
+
+    key: str
+    stats_key: str
+    blob_keys: tuple[str, ...]
+    stall_reason: str
+    coroutine_name: str | None = None
+    alias_key: str | None = None
+    tuning_kwargs: dict[str, str] = field(default_factory=dict)
+
+
+def _resolve_terminalizer(spec: ReconcileTerminalizer) -> Callable[..., Awaitable[list[uuid.UUID]]]:
+    """Resolve a batch terminalizer by module-attribute name.
+
+    Name-based (not bound at import time) so unittest patching of the module
+    attribute (``patch.object(ch, "_terminalize_...", fake)``) is intercepted
+    exactly as before the registry existed.  Uses explicit ``if`` guards (not
+    ``assert``) so a mis-registered terminalizer fails loudly even under
+    ``python -O``.
+    """
+    if spec.coroutine_name is None:
+        raise TypeError(f"terminalizer {spec.key!r} has no coroutine registered")
+    coroutine = globals().get(spec.coroutine_name)
+    if coroutine is None:
+        raise AttributeError(f"terminalizer coroutine {spec.coroutine_name!r} not found in module")
+    return cast(Callable[..., Awaitable[list[uuid.UUID]]], coroutine)
+
+
+_TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
+    # Telemetry emission order keeps the OTel stall-reason sequence unchanged
+    # (see _update_reconcile_telemetry).
+    ReconcileTerminalizer(
+        key="nodeless",
+        stats_key="nodeless_failed",
+        blob_keys=("nodeless_failed", "claimed_but_never_dispatched"),
+        stall_reason="executor_stalled",
+    ),
+    ReconcileTerminalizer(
+        key="claim_cap",
+        stats_key="claim_cap_terminalized",
+        blob_keys=("claim_cap_terminalized",),
+        stall_reason="claim_cap_exhausted",
+        coroutine_name="_terminalize_claim_cap_exhausted",
+        tuning_kwargs={"claim_cap": "claim_cap", "stale_seconds": "stale_window"},
+    ),
+    ReconcileTerminalizer(
+        key="mid_graph",
+        stats_key="mid_graph_wedge_terminalized",
+        blob_keys=("mid_graph_wedge_terminalized", "age_terminalized"),
+        stall_reason="executor_superseded",
+        coroutine_name="_terminalize_mid_graph_wedges",
+        alias_key="age_terminalized",
+        tuning_kwargs={"max_age_minutes": "max_age_minutes"},
+    ),
+    ReconcileTerminalizer(
+        key="dispatch_failed",
+        stats_key="dispatch_failed_terminalized",
+        blob_keys=("dispatch_failed_terminalized", "enqueue_failed_ttl_terminalized"),
+        stall_reason="dispatch_failed",
+    ),
+    ReconcileTerminalizer(
+        key="hitl_gate",
+        stats_key="hitl_gate_expired_terminalized",
+        blob_keys=("hitl_gate_expired_terminalized",),
+        stall_reason="hitl_gate_expired",
+        coroutine_name="_terminalize_expired_hitl_gates",
+        tuning_kwargs={"grace_seconds": "hitl_gate_cancel_grace_seconds"},
+    ),
+)
+
+_TERMINALIZERS_BY_KEY: dict[str, ReconcileTerminalizer] = {spec.key: spec for spec in _TERMINALIZERS}
+
+# The per-org SQL terminalizers in EXECUTION order inside each org transaction
+# (the mid-graph wedge runs first so wedged rows leave the row select before
+# the claim-cap / HITL scans; see _reconcile_org).
+_BATCH_TERMINALIZER_SPECS: tuple[ReconcileTerminalizer, ...] = (
+    _TERMINALIZERS_BY_KEY["mid_graph"],
+    _TERMINALIZERS_BY_KEY["claim_cap"],
+    _TERMINALIZERS_BY_KEY["hitl_gate"],
+)
+
+
+def _terminalizer_stats_defaults() -> dict[str, Any]:
+    """Default healthz-blob counters contributed by the terminalizer registry."""
+
+    return {key: 0 for spec in _TERMINALIZERS for key in spec.blob_keys}
+
+
+# The registry-defined terminalizer counters join the module dict AFTER the
+# terminalizers are declared above (the /healthz blob keeps its full key set).
+_dispatcher_reconcile_stats.update(_terminalizer_stats_defaults())
+
+
 async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID) -> None:
     """Best-effort daily-fact write for a run terminalised by dispatcher_reconcile (P6').
 
@@ -5306,6 +5423,15 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
     claim_cap = _saq_run_claim_cap()
     hitl_gate_cancel_grace = int(settings.hitl_gate_cancel_grace_seconds)
+    # FAR-720: the tick's tuning knobs travel as one frozen unit.
+    tuning = ReconcileTuning(
+        nodeless_window=nodeless_window,
+        max_age_minutes=max_age_minutes,
+        claim_cap=claim_cap,
+        stale_window=stale_window,
+        capacity_redispatch_seconds=capacity_redispatch_seconds,
+        hitl_gate_cancel_grace_seconds=hitl_gate_cancel_grace,
+    )
     budget_seconds = _int_setting(
         getattr(settings, "dispatcher_reconcile_budget_seconds", None), _RECONCILE_BUDGET_DEFAULT_SECONDS
     )
@@ -5357,12 +5483,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     factory=factory,
                     queue_name=queue_name,
                     reenqueue_window=reenqueue_window,
-                    stale_window=stale_window,
-                    nodeless_window=nodeless_window,
-                    capacity_redispatch_seconds=capacity_redispatch_seconds,
-                    max_age_minutes=max_age_minutes,
-                    claim_cap=claim_cap,
-                    hitl_gate_cancel_grace=hitl_gate_cancel_grace,
+                    tuning=tuning,
                     terminalize_max=terminalize_max,
                     facts_max=facts_max,
                     max_rows=max_rows,
@@ -5415,12 +5536,7 @@ async def _dispatcher_reconcile_body(
     factory: async_sessionmaker[AsyncSession],
     queue_name: str,
     reenqueue_window: int,
-    stale_window: int,
-    nodeless_window: int,
-    capacity_redispatch_seconds: int,
-    max_age_minutes: int,
-    claim_cap: int,
-    hitl_gate_cancel_grace: int,
+    tuning: ReconcileTuning,
     terminalize_max: int,
     facts_max: int,
     max_rows: int,
@@ -5460,9 +5576,9 @@ async def _dispatcher_reconcile_body(
     # marker sweep's recoverability check.
     re_dispatch_predicate = reconciler_recovery_predicate(
         reenqueue_window=reenqueue_window,
-        stale_window=stale_window,
-        capacity_redispatch_seconds=capacity_redispatch_seconds,
-        nodeless_window=nodeless_window,
+        stale_window=tuning.stale_window,
+        capacity_redispatch_seconds=tuning.capacity_redispatch_seconds,
+        nodeless_window=tuning.nodeless_window,
         enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
         early_detect_minutes=early_detect_minutes,
     )
@@ -5480,20 +5596,15 @@ async def _dispatcher_reconcile_body(
             break
         rows_before = summary["scanned"]
         enqueue_failed_redispatched = await _reconcile_org(
-            factory,
-            q,
-            redis_client,
-            org_id,
-            re_dispatch_predicate,
-            nodeless_window,
-            max_age_minutes,
-            claim_cap,
-            stale_window,
-            capacity_redispatch_seconds,
-            enqueue_failed_redispatched,
-            summary,
-            terminalized_run_ids,
-            hitl_gate_cancel_grace,
+            factory=factory,
+            q=q,
+            redis_client=redis_client,
+            org_id=org_id,
+            re_dispatch_predicate=re_dispatch_predicate,
+            tuning=tuning,
+            enqueue_failed_redispatched=enqueue_failed_redispatched,
+            summary=summary,
+            terminalized_run_ids=terminalized_run_ids,
             terminalize_max=terminalize_max,
             early_detect_minutes=early_detect_minutes,
         )
@@ -5525,7 +5636,7 @@ async def _dispatcher_reconcile_body(
             "dispatcher_reconcile.claimed_but_never_dispatched_summary: %d run(s) claimed by SAQ but never "
             "dispatched a node were repaired this tick (nodeless_window=%dm) — investigate worker/sandbox health",
             summary["claimed_but_never_dispatched"],
-            nodeless_window,
+            tuning.nodeless_window,
         )
     if stage is not None:
         stage["op"] = "compensating_sweeps"
@@ -5546,20 +5657,12 @@ def _dispatcher_summary() -> dict[str, Any]:
         "skipped": 0,
         "redis_errors": 0,
         "deduped": 0,
-        "nodeless_failed": 0,
         "nodeless_redispatched": 0,
         "nodeless_capped": 0,
-        "claimed_but_never_dispatched": 0,
-        "claim_cap_terminalized": 0,
-        "mid_graph_wedge_terminalized": 0,
-        "age_terminalized": 0,
-        "hitl_gate_expired_terminalized": 0,
         "runner_markers_scanned": 0,
         "runner_markers_cleared": 0,
         "runner_markers_transitioned": 0,
         "runner_capacity_violations": 0,
-        "dispatch_failed_terminalized": 0,
-        "enqueue_failed_ttl_terminalized": 0,
         "enqueue_failed_redispatched": 0,
         "enqueue_failed_capped": 0,
         "capacity_deferred": 0,
@@ -5578,25 +5681,24 @@ def _dispatcher_summary() -> dict[str, Any]:
         "terminalize_capped": 0,
         "facts_deferred": 0,
     }
+    # Terminalizer counters (and their healthz aliases) derive from the
+    # registry (FAR-720) — a new terminalizer registers once below without a
+    # parallel edit here.
+    summary.update(_terminalizer_stats_defaults())
     return summary
 
 
 async def _reconcile_org(
+    *,
     factory: async_sessionmaker[AsyncSession],
     q: RedisQueue,
     redis_client: AsyncRedis,
     org_id: uuid.UUID,
     re_dispatch_predicate: Any,
-    nodeless_window: int,
-    max_age_minutes: int,
-    claim_cap: int,
-    stale_window: int,
-    capacity_redispatch_seconds: int,
+    tuning: ReconcileTuning,
     enqueue_failed_redispatched: int,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
-    hitl_gate_cancel_grace_seconds: int,
-    *,
     terminalize_max: int = _TERMINALIZE_UNLIMITED_ROWS,
     early_detect_minutes: int | None = None,
 ) -> int:
@@ -5607,49 +5709,26 @@ async def _reconcile_org(
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
         try:
-            # B4: age-bound mid-graph wedge terminalizer (DB-only, org-scoped).
-            # Runs stuck 'running' past the max plausible duration are wedged —
-            # fail them BEFORE the row select so they are excluded from
-            # re-dispatch.  FAR-746 batch cap: max_rows bounds the UPDATE so
-            # a huge wedge backlog drains gradually across 60s ticks.
-            wedged = await _terminalize_mid_graph_wedges(
-                session, org_id, max_age_minutes=max_age_minutes, max_rows=terminalize_max
-            )
-            summary["mid_graph_wedge_terminalized"] += len(wedged)
-            summary["age_terminalized"] = summary["mid_graph_wedge_terminalized"]
-            if len(wedged) >= terminalize_max:
-                summary["terminalize_capped"] += 1
-            terminalized_run_ids.extend((run_id, org_id) for run_id in wedged)
-            # B5: claim-cap terminalizer — INDEPENDENT of the reconcile
-            # predicates, stale-heartbeat gated (a LIVE run on its final claim
-            # is never killed; a capped run whose heartbeat froze is still
-            # caught).
-            capped = await _terminalize_claim_cap_exhausted(
-                session,
-                org_id,
-                claim_cap=claim_cap,
-                stale_seconds=stale_window,
-                max_rows=terminalize_max,
-            )
-            summary["claim_cap_terminalized"] += len(capped)
-            if len(capped) >= terminalize_max:
-                summary["terminalize_capped"] += 1
-            terminalized_run_ids.extend((run_id, org_id) for run_id in capped)
-            # FAR-648: expired-HITL-gate terminalizer — an awaiting_human run
-            # whose every undecided gate is unclaimed and past
-            # expires_at + grace is a zombie holding an org slot; terminalize
-            # it cancelled BEFORE the row select so it is excluded from the
-            # re-dispatch scan.
-            expired_gates = await _terminalize_expired_hitl_gates(
-                session,
-                org_id,
-                grace_seconds=hitl_gate_cancel_grace_seconds,
-                max_rows=terminalize_max,
-            )
-            summary["hitl_gate_expired_terminalized"] += len(expired_gates)
-            if len(expired_gates) >= terminalize_max:
-                summary["terminalize_capped"] += 1
-            terminalized_run_ids.extend((run_id, org_id) for run_id in expired_gates)
+            # DB-only org-scoped batch terminalizers (B4 age-bound mid-graph
+            # wedge, B5 claim-cap, FAR-648 expired-HITL-gate), run BEFORE the
+            # row select so terminalised rows are excluded from re-dispatch.
+            # FAR-746 batch cap: terminalize_max bounds each UPDATE so a big
+            # backlog drains gradually across 60s ticks.  Driven by the
+            # registry (FAR-720): a new batch terminalizer registers below.
+            for spec in _BATCH_TERMINALIZER_SPECS:
+                coroutine = _resolve_terminalizer(spec)
+                terminalized = await coroutine(
+                    session,
+                    org_id,
+                    **{kwarg: getattr(tuning, attr) for kwarg, attr in spec.tuning_kwargs.items()},
+                    max_rows=terminalize_max,
+                )
+                summary[spec.stats_key] += len(terminalized)
+                if spec.alias_key:
+                    summary[spec.alias_key] = summary[spec.stats_key]
+                if len(terminalized) >= terminalize_max:
+                    summary["terminalize_capped"] += 1
+                terminalized_run_ids.extend((run_id, org_id) for run_id in terminalized)
             rows = (
                 await session.execute(
                     select(
@@ -5682,7 +5761,7 @@ async def _reconcile_org(
                         # match rows this outer WHERE let through.
                         Run.status.in_(("pending", "running", "awaiting_human", "claimed", "hitl_parked")),
                         re_dispatch_predicate,
-                        _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds),
+                        _reconcile_capacity_marker_exclusion(tuning.capacity_redispatch_seconds),
                     )
                 )
             ).all()
@@ -5700,7 +5779,7 @@ async def _reconcile_org(
                 redis_client,
                 org_id,
                 row,
-                nodeless_window,
+                tuning.nodeless_window,
                 enqueue_failed_redispatched,
                 summary,
                 terminalized_run_ids,
@@ -5984,16 +6063,14 @@ async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
 
         await sample_run_runtime_metrics(_open_system_factory())
         await sample_error_group_metrics(_open_system_factory())
-        if summary["nodeless_failed"]:
-            record_stall_reason("executor_stalled", summary["nodeless_failed"])
-        if summary["claim_cap_terminalized"]:
-            record_stall_reason("claim_cap_exhausted", summary["claim_cap_terminalized"])
-        if summary["mid_graph_wedge_terminalized"]:
-            record_stall_reason("executor_superseded", summary["mid_graph_wedge_terminalized"])
-        if summary["dispatch_failed_terminalized"]:
-            record_stall_reason("dispatch_failed", summary["dispatch_failed_terminalized"])
-        if summary["hitl_gate_expired_terminalized"]:
-            record_stall_reason("hitl_gate_expired", summary["hitl_gate_expired_terminalized"])
+        # Stall-reason emission derives from the registry (FAR-720) in its
+        # defined telemetry order.  Direct indexing (not .get) preserves the
+        # pre-refactor behaviour when a caller passes a summary lacking a
+        # counter: the missing key raises KeyError and aborts the block,
+        # swallowed exactly as before.
+        for spec in _TERMINALIZERS:
+            if summary[spec.stats_key]:
+                record_stall_reason(spec.stall_reason, summary[spec.stats_key])
     except asyncio.CancelledError:
         raise
     except Exception:
