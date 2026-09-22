@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "modulo.fullname" . }}-frontend
+  namespace: {{ include "modulo.namespace" . }}
+  labels:
+    {{- include "modulo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "modulo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "modulo.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+      {{- with .Values.frontend.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default "latest" }}"
+          {{- if .Values.frontend.image.digest }}
+          image: "{{ .Values.frontend.image.repository }}@{{ .Values.frontend.image.digest }}"
+          {{- end }}
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          # Skip the nginx docker-entrypoint.sh which writes into /etc/nginx/conf.d/
+          # (incompatible with readOnlyRootFilesystem). Our ConfigMap provides the
+          # full nginx config, so the entrypoint's template processing is unnecessary.
+          command: ["nginx", "-g", "daemon off;"]
+          ports:
+            - name: http-frontend
+              containerPort: 8080
+              protocol: TCP
+          {{- with .Values.frontend.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.frontend.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          securityContext:
+            # readOnlyRootFilesystem is safe for the nginx frontend: the entrypoint
+            # is skipped (command override), /var/cache/nginx and /var/run are
+            # writable emptyDirs, and the nginx config comes from a ConfigMap mount.
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              # NET_BIND_SERVICE is required because the nginx binary in the
+              # upstream image carries a file capability (cap_net_bind_service=ep).
+              # Under no_new_privs (set by allowPrivilegeEscalation: false), the
+              # kernel refuses to exec a binary whose file capability is not a
+              # subset of the process's permitted set, yielding EPERM. Granting
+              # the capability here makes the exec check pass. The frontend still
+              # listens on 8080 (unprivileged) — this cap is not for port binding.
+              add:
+                - NET_BIND_SERVICE
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: nginx-config
+          configMap:
+            name: {{ include "modulo.fullname" . }}-frontend-nginx
+      {{- with .Values.frontend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
