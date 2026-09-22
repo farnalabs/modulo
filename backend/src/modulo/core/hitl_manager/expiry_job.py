@@ -31,6 +31,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
@@ -151,6 +152,12 @@ async def expire_stale_claims(
                             resource_type="hitl_claim",
                             resource_id=entry["claim_id"],
                             payload_json={
+                                "actor": SYSTEM_ACTOR,
+                                "summary": (
+                                    f"HITL claim {short_id(entry['claim_id']) or 'unknown'} expired "
+                                    f"(run {short_id(entry['run_id']) or 'unknown'}, "
+                                    f"gate {entry['gate_id']})"
+                                ),
                                 "pipeline_run_id": str(entry["run_id"]),
                                 "node_id": entry["gate_id"],
                                 "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,

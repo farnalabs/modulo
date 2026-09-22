@@ -38,7 +38,7 @@ def _script() -> ScriptDirectory:
 class TestGuardrailTrustMigration:
     def test_head_is_single_chain(self) -> None:
         heads = _script().get_heads()
-        assert heads == ["0253_runs_enforcement_mode_outcome"], f"expected a single head, got {heads}"
+        assert heads == ["0254_eval_backfill_cutover"], f"expected a single head, got {heads}"
 
     def test_0116_down_revision_is_0115_notification_preferences(self) -> None:
         source = _source()

@@ -1100,12 +1100,12 @@ async def test_reject_correction_best_effort_ignores_non_reject_or_missing_conte
 
 
 # ---------------------------------------------------------------------------
-# _persist_gate_eval_results — cancellation / failure boundaries
+# run_evals_persist_before_decide — cancellation / failure boundaries
 # ---------------------------------------------------------------------------
 
 
-def _gate_eval_fixtures(node_id: str | None):
-    from modulo.core.eval_engine import EvalDefinition, EvalResult, EvalType
+def _gate_eval_fixtures(node_id: str | None, failure_behaviour: str = "warn"):
+    from modulo.core.eval_engine import EvalDefinition, EvalType
 
     eval_def = EvalDefinition(
         id=uuid.uuid4(),
@@ -1114,34 +1114,104 @@ def _gate_eval_fixtures(node_id: str | None):
         name="gate-eval",
         eval_type=EvalType.REGEX,
         config={},
+        failure_behaviour=failure_behaviour,  # type: ignore[arg-type]
     )
-    eval_result = EvalResult(run_id=uuid.uuid4(), node_id="n1", eval_id=eval_def.id, passed=True, score=1.0, detail="")
-    return [eval_def], {eval_def.name: eval_result}
+    return [eval_def]
 
 
-async def test_persist_gate_eval_results_reraises_cancellation():
+async def test_run_evals_persist_before_decide_reraises_cancellation():
+    from modulo.core.pipeline_engine import eval_persist_order
+
     session = _FakeSession()
     session.add = lambda obj: (_ for _ in ()).throw(asyncio.CancelledError())
-    eval_defs, results = _gate_eval_fixtures(str(uuid.uuid4()))
+    eval_defs = _gate_eval_fixtures(str(uuid.uuid4()))
 
-    with pytest.raises(asyncio.CancelledError):
-        await nr._persist_gate_eval_results({"_run_id": _RUN_ID}, eval_defs, results, lambda: session, _ORG_UUID)
+    with (
+        patch.object(eval_persist_order, "set_rls_org", AsyncMock()),
+        patch.object(eval_persist_order, "set_rls_execution_context", AsyncMock()),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await eval_persist_order.run_evals_persist_before_decide(
+            eval_defs=eval_defs,
+            resolve_eval_target=lambda ed: {"text": "pass"},
+            run_id=uuid.uuid4(),
+            org_id=_ORG_UUID,
+            session_factory=lambda: session,
+        )
 
 
-async def test_persist_gate_eval_results_swallows_db_error():
+async def test_run_evals_persist_before_decide_persistence_failure_boundaries():
+    from modulo.core.eval_engine import EvalBlockedError
+    from modulo.core.pipeline_engine import eval_persist_order
+
+    # (a) warn eval: raising session add → helper returns without raising,
+    # and nothing is persisted.
     session = _FakeSession()
     session.add = lambda obj: (_ for _ in ()).throw(RuntimeError("db down"))
-    eval_defs, results = _gate_eval_fixtures(None)
+    eval_defs = _gate_eval_fixtures(None, failure_behaviour="warn")
 
-    await nr._persist_gate_eval_results({"_run_id": _RUN_ID}, eval_defs, results, lambda: session, _ORG_UUID)
+    with (
+        patch.object(eval_persist_order, "set_rls_org", AsyncMock()),
+        patch.object(eval_persist_order, "set_rls_execution_context", AsyncMock()),
+    ):
+        results = await eval_persist_order.run_evals_persist_before_decide(
+            eval_defs=eval_defs,
+            resolve_eval_target=lambda ed: {"text": "pass"},
+            run_id=uuid.uuid4(),
+            org_id=_ORG_UUID,
+            session_factory=lambda: session,
+        )
     assert not session.added
+    assert eval_defs[0].name in results
+
+    # (b) block eval: raising session add → EvalBlockedError whose detail
+    # carries the machine-parseable persistence-failure marker.
+    block_session = _FakeSession()
+    block_session.add = lambda obj: (_ for _ in ()).throw(RuntimeError("db down"))
+    block_defs = _gate_eval_fixtures(None, failure_behaviour="block")
+
+    with (
+        patch.object(eval_persist_order, "set_rls_org", AsyncMock()),
+        patch.object(eval_persist_order, "set_rls_execution_context", AsyncMock()),
+        pytest.raises(EvalBlockedError) as exc_info,
+    ):
+        await eval_persist_order.run_evals_persist_before_decide(
+            eval_defs=block_defs,
+            resolve_eval_target=lambda ed: {"text": "pass"},
+            run_id=uuid.uuid4(),
+            org_id=_ORG_UUID,
+            session_factory=lambda: block_session,
+        )
+    marker = json.loads(exc_info.value.detail)
+    assert marker["persistence_failure"] is True
+    assert marker["failure_behaviour"] == "block"
+    assert not block_session.added
 
 
-async def test_persist_gate_eval_results_skips_without_run_id():
+async def test_run_evals_persist_before_decide_skips_without_run_id():
+    from modulo.core.pipeline_engine import eval_persist_order
+
     session = _FakeSession()
-    eval_defs, results = _gate_eval_fixtures("n1")
-    await nr._persist_gate_eval_results({}, eval_defs, results, lambda: session, _ORG_UUID)
+    add_calls: list[object] = []
+    original_add = session.add
+
+    def _spy_add(obj: object) -> None:
+        add_calls.append(obj)
+        original_add(obj)
+
+    session.add = _spy_add
+    eval_defs = _gate_eval_fixtures("n1")
+
+    results = await eval_persist_order.run_evals_persist_before_decide(
+        eval_defs=eval_defs,
+        resolve_eval_target=lambda ed: {"text": "pass"},
+        run_id=None,
+        org_id=_ORG_UUID,
+        session_factory=lambda: session,
+    )
+    assert not add_calls
     assert not session.added
+    assert eval_defs[0].name in results
 
 
 # ---------------------------------------------------------------------------

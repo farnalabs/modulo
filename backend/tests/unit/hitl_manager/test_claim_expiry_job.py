@@ -168,6 +168,9 @@ async def test_expire_once_resets_stale_claims() -> None:
     assert audit_call_1.kwargs["event_type"] == "hitl.claim_expired"
     assert audit_call_1.kwargs["resource_id"] == _CLAIM_ID_1
     assert audit_call_1.kwargs["org_id"] == _ORG
+    assert audit_call_1.kwargs["payload_json"]["actor"] == "system"
+    assert "claim" in audit_call_1.kwargs["payload_json"]["summary"]
+    assert str(_CLAIM_ID_1)[:8] in audit_call_1.kwargs["payload_json"]["summary"]
 
     audit_call_2 = mock_audit.call_args_list[1]
     assert audit_call_2.kwargs["resource_id"] == _CLAIM_ID_2

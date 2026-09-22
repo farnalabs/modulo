@@ -19,6 +19,7 @@ from modulo.core.runtime_config.store import (
     RuntimeConfigStore,
     get_runtime_config_store,
 )
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 # WARNING: system.config.manage is currently ONLY assignable to is_system_admin
 # users. There is NO in-product path to grant is_system_admin. Self-hosted
@@ -169,7 +170,7 @@ def set_runtime_config_overrides(
                 except Exception:
                     # The override itself is committed; a hook failure must
                     # not roll the response into a 500 (commit-then-error).
-                    _log.exception("Runtime config apply hook failed for %s", key)
+                    _log.exception("Runtime config apply hook failed for %s", _sanitise_log_value(key))
 
         return _build_response(store)
     except HTTPException:
