@@ -358,9 +358,11 @@ class TestMigrationBackfillGrace:
         # (FAR-902) chains on top of 0250_eval_policy_gate, and
         # 0252_enforcement_daily_facts (FAR-902) chains on top of
         # 0251_schema_enforcement_telemetry, and 0253_runs_enforcement_mode_outcome
-        # (FAR-902) chains on top of 0252_enforcement_daily_facts, so it is now the
-        # single linear head of the chain.
-        assert heads == ["0253_runs_enforcement_mode_outcome"], f"expected a single head, got {heads}"
+        # (FAR-902) chains on top of 0252_enforcement_daily_facts, and
+        # 0254_trigger_event_value_filter_label (FAR-1144) chains on top of
+        # 0253_runs_enforcement_mode_outcome, so it is now the single linear
+        # head of the chain.
+        assert heads == ["0254_trigger_event_value_filter_label"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

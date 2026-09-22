@@ -80,8 +80,16 @@ _MAX_PREVIEW_COUNT = 50
 # 400 — the key would be silently ignored at delivery time, which is worse
 # than failing loudly.  When the engine gains a new key, add it here AND to
 # the engine's cfg.get() call site in the same change.
+#
+# This is the union of every trigger-engine ``config.get(...)`` read site
+# plus the per-trigger-type fire paths in ``cron_helpers``.  The union is
+# accepted regardless of ``trigger_type`` so a key a *different* trigger
+# surface legitimately reads is never rejected on the wrong trigger type.
+# Keep in sync with ``_RECOGNISED_TRIGGER_CONFIG_KEYS`` in
+# ``modulo.core.trigger_engine``.
 _RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
     {
+        # Webhook / HMAC / event filtering (trigger_engine, slack_app_mention)
         "hmac_secret",
         "signing_secret",
         "ci_failure_coalesce_window_seconds",
@@ -90,6 +98,29 @@ _RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
         "event_filters",
         "rate_limit",
         "work_item_ref_paths",
+        # Rate-limit keying (TriggerEngine._compute_rate_limit_key)
+        "key_fields",
+        "match_mode",
+        # Cron / ongoing schedule + run input (cron_helpers)
+        "input_template",
+        "snapshot_id",
+        "scan_interval_seconds",
+        # Polling configuration (trigger_engine, cron_helpers)
+        "poll_interval_seconds",
+        "poll_query",
+        "condition_expression",
+        "connector_instance_id",
+        # Agent-signal source matching (agent_signal)
+        "source_pipeline_id",
+        "source_node_id",
+        # Suite-run execution context (cron_helpers._resolve_suite_run_config)
+        "dataset_id",
+        "model_backend_id",
+        "scenario_inputs",
+        "cost_per_llm_case",
+        "suite_ceiling",
+        "entity_thresholds",
+        "eval_definition_version",
     }
 )
 
