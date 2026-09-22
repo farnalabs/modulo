@@ -37,6 +37,8 @@ Data model
       "resource_type": "run",
       "resource_id": "<run_id>",
       "payload_json": {
+        "actor": "system",
+        "summary": "<human-readable one-line description>",
         "gate_id": "<gate_id>",
         "autonomy_level": "manual_approval | notify_on_complete | fully_autonomous",
         "gate_outcome": "skipped | auto_approved | fired",
@@ -106,6 +108,7 @@ async def emit_autonomy_telemetry(
         return
     try:
         from modulo.core.audit_logger import append_audit_event
+        from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
         from modulo.db.rls import set_rls_execution_context, set_rls_org
 
         async with session_factory() as session, session.begin():
@@ -125,6 +128,11 @@ async def emit_autonomy_telemetry(
                 resource_type="run",
                 resource_id=uuid.UUID(str(run_id)) if run_id else None,
                 payload_json={
+                    "actor": SYSTEM_ACTOR,
+                    "summary": (
+                        f'Autonomy level "{autonomy_level}" applied to run '
+                        f"{short_id(run_id) or 'unknown'} (gate {gate_id}, {gate_outcome})"
+                    ),
                     "gate_id": gate_id,
                     "autonomy_level": autonomy_level,
                     "gate_outcome": gate_outcome,

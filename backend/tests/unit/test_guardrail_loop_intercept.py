@@ -205,6 +205,9 @@ async def test_warn_records_and_proceeds():
     assert outcome.action == "warn"
     assert outcome.blocked is False
     assert audit[0].event_type == "guardrail.loop_warned"
+    assert audit[0].payload["actor"] == "system"
+    assert audit[0].payload["summary"].startswith("Loop warned")
+    assert "warn-token" in audit[0].payload["summary"]
 
 
 async def test_redact_masks_args_before_execution():
@@ -227,6 +230,8 @@ async def test_block_mode_redaction_policy_blocks_before():
     assert outcome.action == "block"
     assert outcome.blocked is True
     assert audit[0].event_type == "guardrail.loop_blocked"
+    assert audit[0].payload["actor"] == "system"
+    assert "redact-block" in audit[0].payload["summary"]
 
 
 async def test_non_intercepted_tool_passes_without_evaluation():
@@ -294,6 +299,8 @@ async def test_detection_mechanism_error_fails_open(monkeypatch):
     assert outcome.reason
     assert audit
     assert audit[0].event_type == "guardrail.loop_bridge_timeout"
+    assert audit[0].payload["actor"] == "system"
+    assert "timed out" in audit[0].payload["summary"]
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +319,9 @@ async def test_audit_payloads_never_carry_raw_values():
         assert record.payload["tool"] == "git push"
         assert record.payload["guardrail"] == "block-token"
         assert record.payload["direction"] == "before"
+        assert record.payload["actor"] == "system"
+        assert "blocked" in record.payload["summary"]
+        assert "block-token" in record.payload["summary"]
 
 
 async def test_redact_audit_payload_summary_only():
@@ -321,6 +331,9 @@ async def test_redact_audit_payload_summary_only():
     _, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
     serialized = json.dumps(audit[0].payload)
     assert _SECRET not in serialized
+    assert audit[0].payload["actor"] == "system"
+    assert "redact-url" in audit[0].payload["summary"]
+    assert audit[0].payload["summary"].startswith("Loop redacted")
 
 
 # ---------------------------------------------------------------------------
