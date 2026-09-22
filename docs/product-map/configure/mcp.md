@@ -1,7 +1,7 @@
 ---
 id: feat-mcp
 prd: N/A
-adr: [Repos/devtools/adr/017-centralized-authorization.md]
+adr: [ADR 017 (centralized-authorization)]
 code:
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/api/mcp_tool_registry.py

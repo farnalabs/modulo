@@ -12,8 +12,8 @@
 #   # called by ci.yml's path-filtered runner-ci-harness job and the weekly
 #   # runner-ci-backstop.yml drift backstop)
 #
-# Everything here is phase-0-spike-verified (Repos/devtools/adr/plans/
-# d9-phase0-spike.md); deviations from the spike are listed at the bottom.
+# Everything here is phase-0-spike-verified; deviations from the spike are
+# listed at the bottom.
 #
 # Suite shape (FAR-773 harness, backend/tests/docker/
 # test_bundled_runner_harness.py): 4 rig-backed tests (allow/deny matrix +
