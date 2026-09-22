@@ -937,28 +937,67 @@ jobs:
             '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription}')
           echo "PR #${PR_NUM} on branch '${BRANCH}' -- CI checks failed."
           echo "Sending to Modulo Branch Fixer pipeline..."
-          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
-            -H "Content-Type: application/json" \
-            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-            -d "${BODY}")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-          if [ "$HTTP_CODE" = "202" ]; then
-            RESP_STATUS=$(echo $BODY_RESP | jq -r '.status // "accepted"')
-            if [ "$RESP_STATUS" = "coalesced" ]; then
-              # FAR-1034 handled no-op: duplicate CI-failure for the same
-              # PR + head SHA within the coalesce window — intentionally no
-              # new run. Not an error, not retried.
-              echo "::notice::Modulo Branch Fixer coalesced (duplicate CI-failure for same PR + head SHA — suppressed)"
+          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5
+          # attempts, ~5 min total). TIMESTAMP and HMAC are recomputed per
+          # attempt: the server enforces a +/-300s replay window on
+          # X-Modulo-Timestamp, so a signature computed once would fall
+          # outside the window after backoff sleep.
+          DISPATCHED="false"
+          LAST_HTTP=""
+          for i in 1 2 3 4 5; do
+            TIMESTAMP=$(date +%s)
+            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
+            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            LAST_HTTP="$HTTP_CODE"
+            if [ "$HTTP_CODE" = "202" ]; then
+              RESP_STATUS=$(echo $BODY_RESP | jq -r '.status // "accepted"')
+              if [ "$RESP_STATUS" = "coalesced" ]; then
+                # FAR-1034 handled no-op: duplicate CI-failure for the same
+                # PR + head SHA within the coalesce window — intentionally no
+                # new run. Not an error, not retried.
+                echo "::notice::Modulo Branch Fixer coalesced (duplicate CI-failure for same PR + head SHA — suppressed)"
+              else
+                echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              fi
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
+              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
+              # engine's byte-level idempotency guard (DuplicateWebhookError) —
+              # the identical delivery was already ACCEPTED within the ~5-min
+              # dedup window (a concurrent run or a workflow re-run). It is a
+              # handled no-op, NOT a dispatch failure; retrying would only
+              # re-hit the same window.
+              echo "::notice::Modulo Branch Fixer duplicate delivery suppressed (identical payload already accepted within the dedup window)"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
+              sleep "$DELAY"
             else
-              echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              break
             fi
-          elif [ "$HTTP_CODE" = "429" ]; then
-            echo "::warning::Modulo Branch Fixer rate-limited -- $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
-          else
-            echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+          done
+          if [ "$DISPATCHED" != "true" ]; then
+            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
+            echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — CI failure was not handed to the autonomous fix loop."
+            gh pr comment "$PR_NUM" --body "## Branch Fixer Dispatch Failed
+
+            The CI failure notification could not be delivered to the Branch Fixer pipeline after multiple retries.
+
+            **HTTP status:** \`${LAST_HTTP}\`
+            **Detail:** ${DETAIL}
+
+            The automated fix loop is **not active** for this PR. Manual investigation may be needed." || echo "::warning::Failed to post dispatch-failure comment on PR #${PR_NUM}"
+            exit 1
           fi
 
       - name: Report Branch Fixer check status
@@ -1007,25 +1046,55 @@ jobs:
             --arg failureDescription "CI checks failed on main at ${{ github.sha }}. The Branch Fixer should create a fix branch from main, diagnose the failure, fix it, and raise a PR." \
             '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription}')
           echo "CI checks failed on main (${{ github.sha }}) -- dispatching Branch Fixer."
-          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
-            -H "Content-Type: application/json" \
-            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-            -d "${BODY}")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY_RESP=$(echo "$RESPONSE" | sed '$d')
-          if [ "$HTTP_CODE" = "202" ]; then
-            RESP_STATUS=$(echo $BODY_RESP | jq -r '.status // "accepted"')
-            if [ "$RESP_STATUS" = "coalesced" ]; then
-              echo "::notice::Branch Fixer coalesced (duplicate CI-failure for same sha — suppressed)"
+          # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5
+          # attempts, ~5 min total). TIMESTAMP and HMAC are recomputed per
+          # attempt: the server enforces a +/-300s replay window on
+          # X-Modulo-Timestamp, so a signature computed once would fall
+          # outside the window after backoff sleep.
+          DISPATCHED="false"
+          LAST_HTTP=""
+          for i in 1 2 3 4 5; do
+            TIMESTAMP=$(date +%s)
+            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
+            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            LAST_HTTP="$HTTP_CODE"
+            if [ "$HTTP_CODE" = "202" ]; then
+              RESP_STATUS=$(echo $BODY_RESP | jq -r '.status // "accepted"')
+              if [ "$RESP_STATUS" = "coalesced" ]; then
+                echo "::notice::Branch Fixer coalesced (duplicate CI-failure for same sha — suppressed)"
+              else
+                echo "Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              fi
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
+              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
+              # engine's byte-level idempotency guard (DuplicateWebhookError) —
+              # the identical delivery was already ACCEPTED within the ~5-min
+              # dedup window (a concurrent run or a workflow re-run). It is a
+              # handled no-op, NOT a dispatch failure.
+              echo "::notice::Branch Fixer duplicate delivery suppressed (identical payload already accepted within the dedup window)"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
+              sleep "$DELAY"
             else
-              echo "Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              break
             fi
-          elif [ "$HTTP_CODE" = "429" ]; then
-            echo "::warning::Branch Fixer rate-limited -- $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
-          else
-            echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+          done
+          if [ "$DISPATCHED" != "true" ]; then
+            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
+            echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — main CI failure was not handed to the autonomous fix loop."
+            exit 1
           fi
 
   notify-pr-review:
@@ -1093,26 +1162,40 @@ jobs:
             --arg ref "${BRANCH}" \
             '{action: "check_run", repository: {full_name: $repo}, pull_request: {number: $prNumber, head: {sha: $sha, ref: $ref}}}')
 
-          # Retry with exponential backoff on 429/5xx (max 5 attempts, ~5 min total)
+          # Retry with exponential backoff on network failures (curl HTTP 000) and 429/5xx (max 5 attempts, ~5 min total)
           # TIMESTAMP and HMAC are recomputed PER ATTEMPT: the server enforces a
           # +/-300s replay window on X-Modulo-Timestamp, so a signature computed
           # once (before a slow attempt) would fall outside the window after a
           # 429/5xx retry and be rejected as a replay — silently losing the
           # review. Recomputing each iteration keeps every signature fresh.
+          DISPATCHED="false"
+          LAST_HTTP=""
           for i in 1 2 3 4 5; do
             TIMESTAMP=$(date +%s)
             HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${MODULO_WEBHOOK_URL}" \
               -H "Content-Type: application/json" \
               -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
               -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
               -d "${BODY}")
             HTTP_CODE=$(echo "$RESPONSE" | tail -1)
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            LAST_HTTP="$HTTP_CODE"
             if [ "$HTTP_CODE" = "202" ]; then
               echo "PR Reviewer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              DISPATCHED="true"
               break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+            elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
+              # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
+              # engine's byte-level idempotency guard (DuplicateWebhookError) —
+              # the identical delivery was already ACCEPTED within the ~5-min
+              # dedup window (e.g. two concurrent CI runs both dispatching the
+              # same PR+SHA check_run). It is a handled no-op, NOT a dispatch
+              # failure; retrying would only re-hit the same window.
+              echo "::notice::PR Reviewer duplicate delivery suppressed (identical payload already accepted within the dedup window)"
+              DISPATCHED="true"
+              break
+            elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
               DELAY=$((2 ** (i - 1) * 5))
               echo "::warning::PR Reviewer returned HTTP $HTTP_CODE (attempt $i/5) retrying in ${DELAY}s"
               sleep "$DELAY"
@@ -1121,6 +1204,11 @@ jobs:
               break
             fi
           done
+          if [ "$DISPATCHED" != "true" ]; then
+            DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
+            echo "::error::PR Reviewer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — PR review was not triggered."
+            exit 1
+          fi
           echo "PR Reviewer notified"
 
       - name: Report PR Reviewer check status
