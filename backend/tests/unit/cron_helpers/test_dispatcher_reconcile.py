@@ -66,7 +66,15 @@ class _MockSession:
         return self._get_bind()
 
     async def get(self, model: Any, pk: Any) -> SimpleNamespace:
-        return SimpleNamespace(max_concurrent_runs=5, status="running")
+        return SimpleNamespace(
+            max_concurrent_runs=5,
+            status="running",
+            pipeline_id=uuid.uuid4(),
+            trigger_id=uuid.uuid4(),
+            claim_count=1,
+            started_at=datetime.now(UTC) - timedelta(minutes=60),
+            dispatched_at=datetime.now(UTC) - timedelta(minutes=65),
+        )
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
         self.executed.append((stmt, params))
@@ -126,6 +134,7 @@ def _run_row(
     enqueue_failed_at: Any = None,
     claim_count: int = 1,
     retry_policy: Any = None,
+    trigger_id: uuid.UUID | None = None,
 ) -> SimpleNamespace:
     heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
     if dispatched_minutes_ago is not None:
@@ -135,6 +144,7 @@ def _run_row(
     return SimpleNamespace(
         id=run_id,
         pipeline_id=uuid.uuid4(),
+        trigger_id=trigger_id,
         status=status,
         dispatched_at=dispatched_at,
         heartbeat_at=heartbeat,
@@ -1407,6 +1417,52 @@ class TestClaimedButNeverDispatchedCounter:
             await ch._fail_nodeless_run(_NoRunSession(), uuid.uuid4(), ORG, summary2)
         assert summary2["claimed_but_never_dispatched"] == 0
         ingest2.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fail_nodeless_run_error_detail_includes_pipeline_trigger_claim_count(self) -> None:
+        """FAR-1088: the error_detail written to the run includes pipeline_id,
+        trigger_id, and claim_count so the terminal-failed run is diagnosable
+        from the error alone — no TriggerEvent or pipeline-config cross-reference needed."""
+        run_id = uuid.uuid4()
+        pipeline_id = uuid.uuid4()
+        trigger_id = uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        run = SimpleNamespace(
+            status="running",
+            pipeline_id=pipeline_id,
+            trigger_id=trigger_id,
+            claim_count=5,
+            started_at=datetime.now(UTC) - timedelta(minutes=40),
+            dispatched_at=datetime.now(UTC) - timedelta(minutes=45),
+        )
+
+        class _SessionWithRun:
+            begin_cm = _MockBegin()
+
+            def begin(self) -> _MockBegin:
+                return self.begin_cm
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            async def get(self, model: Any, pk: Any) -> Any:
+                return run
+
+        ingest = AsyncMock()
+        with (
+            patch.object(ch, "_ingest_saq_error", ingest),
+            patch.object(ch, "get_settings", return_value=_settings()),
+        ):
+            await ch._fail_nodeless_run(_SessionWithRun(), run_id, ORG, summary)
+        assert summary["claimed_but_never_dispatched"] == 1
+        ingest.assert_awaited_once()
+        ctx = ingest.await_args.kwargs["context"]
+        assert ctx["pipeline_id"] == str(pipeline_id)
+        assert ctx["trigger_id"] == str(trigger_id)
+        assert ctx["claim_count"] == 5
 
 
 class _NoRunSession:

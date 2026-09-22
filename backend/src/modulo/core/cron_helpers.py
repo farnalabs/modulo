@@ -4270,6 +4270,12 @@ async def _fail_nodeless_run(
     visible/groupable in the Error Dashboard instead of only discoverable by
     grepping run error_details after the fact. Best-effort: the alert must
     never break the repair.
+
+    FAR-1088: the error_detail now includes ``pipeline_id``, ``trigger_id``,
+    and ``claim_count`` so the terminal-failed run is diagnosable from the
+    error alone — no cross-referencing TriggerEvent or pipeline config
+    needed. The context_json sent to the Error Dashboard also carries these
+    fields for the same reason.
     """
     from modulo.db.models.run import Run
 
@@ -4290,10 +4296,23 @@ async def _fail_nodeless_run(
     saq_queue_wait_seconds: float | None = None
     if dispatched_at is not None and started_at is not None:
         saq_queue_wait_seconds = max((started_at - dispatched_at).total_seconds(), 0.0)
+    claim_count = getattr(run, "claim_count", None)
+    pipeline_id = getattr(run, "pipeline_id", None)
+    trigger_id = getattr(run, "trigger_id", None)
     run.status = "failed"
     run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
+    # FAR-1088: include pipeline_id, trigger_id, and claim_count in the
+    # error_detail so the terminal-failed run is diagnosable from the error
+    # alone — a future regression on a specific pipeline/trigger is
+    # attributable in seconds instead of requiring TriggerEvent forensics.
     run.error_detail = (
-        "Claimed by SAQ but dispatched no node within the nodeless window (dispatcher_reconcile zombie repair)"
+        "Claimed by SAQ but dispatched no node within the nodeless window "
+        "(dispatcher_reconcile zombie repair; pipeline={pipeline}, trigger={trigger}, "
+        "claim_count={claims})".format(
+            pipeline=str(pipeline_id) if pipeline_id is not None else "unknown",
+            trigger=str(trigger_id) if trigger_id is not None else "unknown",
+            claims=claim_count if claim_count is not None else "unknown",
+        )
     )
     run.completed_at = datetime.now(UTC)
     summary["claimed_but_never_dispatched"] += 1
@@ -4304,11 +4323,14 @@ async def _fail_nodeless_run(
     queue_wait_text = f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown"
     _log.error(
         "dispatcher_reconcile.claimed_but_never_dispatched run=%s org=%s claim_count=%s "
-        "zombie_age_minutes=%s saq_queue_wait_seconds=%s dispatched_at=%s started_at=%s — "
+        "pipeline=%s trigger=%s zombie_age_minutes=%s saq_queue_wait_seconds=%s "
+        "dispatched_at=%s started_at=%s — "
         "terminal-failed; SAQ claimed this run but no node was ever dispatched",
         run_id,
         org_id,
-        getattr(run, "claim_count", None),
+        claim_count,
+        pipeline_id,
+        trigger_id,
         age_text,
         queue_wait_text,
         dispatched_at.isoformat() if dispatched_at is not None else "None",
@@ -4326,7 +4348,9 @@ async def _fail_nodeless_run(
         ),
         context={
             "run_id": str(run_id),
-            "claim_count": getattr(run, "claim_count", None),
+            "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+            "trigger_id": str(trigger_id) if trigger_id is not None else None,
+            "claim_count": claim_count,
             "zombie_age_minutes": zombie_age_minutes,
             "saq_queue_wait_seconds": saq_queue_wait_seconds,
             "dispatched_at": dispatched_at.isoformat() if dispatched_at is not None else None,
@@ -6350,9 +6374,12 @@ async def _redispatch_nodeless(
     if outcome == "enqueued":
         summary["nodeless_redispatched"] += 1
         _log.info(
-            "dispatcher_reconcile.nodeless_redispatched run=%s org=%s",
+            "dispatcher_reconcile.nodeless_redispatched run=%s org=%s pipeline=%s trigger=%s claim_count=%s",
             row.id,
             org_id,
+            getattr(row, "pipeline_id", None),
+            getattr(row, "trigger_id", None),
+            getattr(row, "claim_count", None),
         )
     else:
         # deferred / deduped / enqueue_failed -> not an error, not a
