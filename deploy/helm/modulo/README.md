@@ -71,18 +71,30 @@ redis:
   embedded: true  # Deploy Redis in-cluster
 ```
 
+### Required Values
+
+The chart **fails at `helm install`** if these values are not supplied (Helm's `required` function enforces this):
+
+| Value | Purpose | Format |
+|---|---|---|
+| `backend.env.SECRET_KEY` | JWT signing key — all API tokens are signed with this | Any string >= 32 bytes. Generate with: `openssl rand -base64 32` |
+| `backend.env.FERNET_KEY` | Connector credential encryption — stored secrets are encrypted at rest with this | URL-safe base64 Fernet key, >= 32 bytes. Generate with: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+
+Both are validated at runtime by Pydantic (`_MIN_KEY_LEN = 32` in `settings.py`). The chart renders them into the Kubernetes Secret and all workloads (`backend`, `saq-runner`, `saq-system`) consume them from there.
+
+**Optional but recommended:**
+
+| Value | Purpose |
+|---|---|
+| `backend.env.MODULO_USERS` | Admin user credentials (`user:password` format). Without this, no login is possible — the app warns at boot but does not crash. |
+| `backend.env.SAQ_AUTH_USERNAME` / `SAQ_AUTH_PASSWORD` | SAQ system worker auth. Only needed if `saq-system` is exposed externally. |
+
 ### Secrets Management
 
 No literal secrets live in `values.yaml`. Use one of:
 
-1. **existingSecret** — reference a pre-created Kubernetes Secret
-2. **Inline values** — set `postgres.password`, `redis.password`, etc. (rendered into a Secret)
-3. **env values** — set `backend.env.SECRET_KEY`, `backend.env.FERNET_KEY` directly
-
-Required secrets:
-- `SECRET_KEY` — JWT signing key (min 32 bytes)
-- `FERNET_KEY` — Connector credential encryption key (min 32 bytes)
-- `MODULO_USERS` — Admin user credentials (`user:password` format)
+1. **Inline values** (recommended) — set `postgres.password`, `backend.env.SECRET_KEY`, `backend.env.FERNET_KEY` directly (rendered into a Secret)
+2. **existingSecret** — reference a pre-created Kubernetes Secret for Postgres/Redis credentials
 
 ### Image Digest Pinning
 
@@ -123,15 +135,12 @@ Public images would remove the need for this.
 See `values.eks.example.yaml` for a validated EKS configuration using AWS managed services (RDS, ElastiCache, ALB).
 
 ```bash
-# Create secrets
-kubectl create secret generic modulo-secrets \
-  --from-literal=password=<rds-password> \
-  --from-literal=SECRET_KEY=$(openssl rand -hex 32) \
-  --from-literal=FERNET_KEY=$(openssl rand -hex 32)
-
-# Deploy
+# Deploy (SECRET_KEY and FERNET_KEY are mandatory — helm install fails without them)
 helm install modulo ./deploy/helm/modulo \
-  -f deploy/helm/modulo/values.eks.example.yaml
+  -f deploy/helm/modulo/values.eks.example.yaml \
+  --set postgres.password=<rds-password> \
+  --set backend.env.SECRET_KEY=$(openssl rand -base64 32) \
+  --set backend.env.FERNET_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 ```
 
 ## Local Development (kind)

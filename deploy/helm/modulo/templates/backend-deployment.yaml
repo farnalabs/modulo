@@ -66,13 +66,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "modulo.fullname" . }}-secrets
                   key: SECRET_KEY
-                  optional: true
             - name: FERNET_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "modulo.fullname" . }}-secrets
                   key: FERNET_KEY
-                  optional: true
             {{- range $key, $value := .Values.backend.env }}
             {{- if and (ne $key "DATABASE_URL") (ne $key "REDIS_URL") (ne $key "SECRET_KEY") (ne $key "FERNET_KEY") }}
             - name: {{ $key }}

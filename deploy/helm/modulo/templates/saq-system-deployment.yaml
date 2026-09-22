@@ -63,13 +63,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "modulo.fullname" . }}-secrets
                   key: SECRET_KEY
-                  optional: true
             - name: FERNET_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "modulo.fullname" . }}-secrets
                   key: FERNET_KEY
-                  optional: true
             - name: SAQ_AUTH_USERNAME
               valueFrom:
                 secretKeyRef:
