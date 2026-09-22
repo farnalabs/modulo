@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.core.feature_flags import CommunityTier, PlanContext, resolve_plan_context
+from modulo.core.runtime_config.key_bridge import override_or
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
@@ -44,22 +45,27 @@ async def get_scim_principal(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not settings.modulo_scim_token:
+    # FAR-1135: hot-reloadable keys — the runtime override (admin API)
+    # wins over the boot-time Settings value so SCIM can be enabled,
+    # rotated, or disabled without a restart.
+    scim_token = override_or("MODULO_SCIM_TOKEN", settings.modulo_scim_token)
+    if not scim_token:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM is not configured — set MODULO_SCIM_TOKEN",
         )
 
-    if not hmac.compare_digest(credentials.credentials, settings.modulo_scim_token):
+    if not hmac.compare_digest(credentials.credentials, scim_token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid SCIM token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if settings.modulo_scim_default_org_id:
+    default_org_id = override_or("MODULO_SCIM_DEFAULT_ORG_ID", settings.modulo_scim_default_org_id)
+    if default_org_id:
         try:
-            org_id = uuid.UUID(settings.modulo_scim_default_org_id)
+            org_id = uuid.UUID(default_org_id)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

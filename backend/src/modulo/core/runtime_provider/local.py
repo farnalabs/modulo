@@ -214,11 +214,15 @@ class LocalRuntimeProvider(RuntimeProvider):
 
 
 def create_local_provider_from_env() -> LocalRuntimeProvider:
-    """Build a LocalRuntimeProvider configured from environment variables.
+    """Build a LocalRuntimeProvider configured from the runtime store / environment.
 
-    Reads ``MODULO_MAX_LOCAL_CONCURRENCY`` (default 2) as the concurrency cap.
+    Reads ``MODULO_MAX_LOCAL_CONCURRENCY`` (default 2) as the concurrency
+    cap — via the runtime-config store first (FAR-1135 hot-reloadable
+    override), then the process environment.
     """
-    raw = os.environ.get("MODULO_MAX_LOCAL_CONCURRENCY", "2")
+    from modulo.core.runtime_config.key_bridge import override_or
+
+    raw = override_or("MODULO_MAX_LOCAL_CONCURRENCY", os.environ.get("MODULO_MAX_LOCAL_CONCURRENCY", "2"))
     try:
         max_concurrency = max(1, int(raw))
     except ValueError:

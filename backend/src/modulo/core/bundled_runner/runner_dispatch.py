@@ -171,10 +171,16 @@ async def resolve_sandbox_dispatch_route(
                 "profile, or wait for the digest to land."
             )
         try:
+            from modulo.core.runtime_config.key_bridge import override_int_or
             from modulo.settings import get_settings
 
             settings = get_settings()
-            hub = build_hub(max_local_concurrency=int(getattr(settings, "modulo_max_local_concurrency", 2) or 2))
+            # FAR-1135: MODULO_MAX_LOCAL_CONCURRENCY is hot-reloadable.
+            concurrency = override_int_or(
+                "MODULO_MAX_LOCAL_CONCURRENCY",
+                int(getattr(settings, "modulo_max_local_concurrency", 2) or 2),
+            )
+            hub = build_hub(max_local_concurrency=concurrency)
             provider = hub.resolve(profile)
         except ProviderNotConfiguredError as exc:
             raise SandboxDispatchUnboundError(str(exc)) from exc

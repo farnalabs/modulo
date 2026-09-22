@@ -173,6 +173,31 @@ class TestRuntimeConfigStore:
             assert entry.provenance == "override"
 
     # ----------------------------------------------------------------
+    # get_override (raw override tier)
+    # ----------------------------------------------------------------
+
+    def test_get_override_returns_raw_override(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            assert store.get_override("MODULO_LOG_LEVEL") == "DEBUG"
+
+    def test_get_override_ignores_env_and_default(self) -> None:
+        """The raw tier exposes an override only; env/default are not returned."""
+        self._purge_singleton()
+        with patch.dict(os.environ, {"REDIS_URL": "redis://env:6379"}, clear=True):
+            store = get_runtime_config_store()
+            assert store.get_override("REDIS_URL") is None
+
+    def test_get_override_returns_none_for_empty_key(self) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            assert store.get_override("") is None
+
+    # ----------------------------------------------------------------
     # set_override / clear_override
     # ----------------------------------------------------------------
 
