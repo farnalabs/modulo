@@ -73,13 +73,27 @@ def test_chain_error_finishes_span_with_error(bridge: LangGraphOtelBridge, expor
     assert len(spans) == 1
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
-    assert span.status.description is not None
-    assert "boom" in span.status.description
-    # Error detail is sanitised for export: no raw exception event or stack
-    # trace is recorded on the span (FAR-1131).
+    # Only the error category (exception class name) is exported — never the
+    # raw exception message or a stack trace (consent copy: "Error category
+    # frequencies (no error messages or stack traces)"; FAR-1131).
+    assert span.status.description == "ValueError"
+    assert "boom" not in (span.status.description or "")
     events = [e.name for e in span.events]
     assert "exception" not in events
     assert str(run_id) not in bridge._spans
+
+
+def test_error_status_description_excludes_message(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+    """Secret-bearing exception messages must never reach an exported span."""
+    run_id = uuid.uuid4()
+    bridge.on_chain_start(_serialized("SensitiveNode"), {}, run_id=run_id)
+    bridge.on_chain_error(RuntimeError("api_key=sk-secret-value\x00\x1f invalid"), run_id=run_id)
+
+    span = exporter.get_finished_spans()[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "RuntimeError"
+    assert "sk-secret-value" not in (span.status.description or "")
+    assert not [e for e in span.events if e.name == "exception"]
 
 
 def test_chain_attributes_set(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
@@ -452,7 +466,8 @@ def test_chat_model_error_records_exception(bridge: LangGraphOtelBridge, exporte
 
     span = exporter.get_finished_spans()[0]
     assert span.status.status_code == StatusCode.ERROR
-    assert "provider down" in (span.status.description or "")
+    assert span.status.description == "RuntimeError"
+    assert "provider down" not in (span.status.description or "")
     assert str(run_id) not in bridge._spans
 
 

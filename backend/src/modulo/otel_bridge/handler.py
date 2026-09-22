@@ -11,7 +11,6 @@ Import contract (enforced by import-linter):
 import asyncio
 import hashlib
 import logging
-import re
 import secrets
 import threading
 from typing import Any
@@ -28,10 +27,6 @@ from modulo.otel_bridge.trace_id import trace_id_int_for_thread
 
 _log = logging.getLogger(__name__)
 
-# Control characters stripped from error text before OTel export (M3).
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-_ERROR_DETAIL_MAX_LEN = 512
-
 
 def _anonymise_id(raw: str | None) -> str | None:
     """Truncated SHA-256 so ids are correlate-able within one export but not linkable to an instance."""
@@ -40,10 +35,16 @@ def _anonymise_id(raw: str | None) -> str | None:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def _sanitize_error_for_export(error: BaseException) -> str:
-    """Produce a redacted error string safe for OTel span export."""
-    text = str(error)[:_ERROR_DETAIL_MAX_LEN]
-    return _CONTROL_CHARS_RE.sub("", text)
+def _error_category_for_export(error: BaseException) -> str:
+    """Return the error category exported on an OTel error span.
+
+    Only the exception CLASS NAME (the error category) is exported — never the
+    exception message or a stack trace.  This matches the opt-in consent copy
+    ("Error category frequencies (no error messages or stack traces)") and
+    ``docs/operations/network-egress.md`` ("sanitised error categories").  The
+    full detail stays in local-only log sinks.
+    """
+    return type(error).__name__ or "Exception"
 
 
 class LangGraphOtelBridge(BaseCallbackHandler):
@@ -265,11 +266,11 @@ class LangGraphOtelBridge(BaseCallbackHandler):
             return
         try:
             if error is not None:
-                # Sanitise the error message for export — never ship raw
-                # exception text or stack traces to OTel (consent copy:
-                # "no error messages or stack traces").  The full detail
-                # stays in local-only log sinks.
-                span.set_status(Status(StatusCode.ERROR, _sanitize_error_for_export(error)))
+                # Export only the error category (exception class name) — never
+                # raw exception text or stack traces (consent copy: "Error
+                # category frequencies (no error messages or stack traces)").
+                # The full detail stays in local-only log sinks.
+                span.set_status(Status(StatusCode.ERROR, _error_category_for_export(error)))
             else:
                 span.set_status(Status(StatusCode.OK))
         except asyncio.CancelledError:

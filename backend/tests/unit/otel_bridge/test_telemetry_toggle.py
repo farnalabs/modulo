@@ -289,17 +289,17 @@ class TestOtelHandlerAnonymisation:
 
         assert _anonymise_id(None) is None
 
-    def test_sanitize_error_strips_control_chars(self):
-        from modulo.otel_bridge.handler import _sanitize_error_for_export
+    def test_error_category_exported_not_message(self):
+        from modulo.otel_bridge.handler import _error_category_for_export
 
-        result = _sanitize_error_for_export(RuntimeError("hello\x00\x1fworld"))
-        assert "\x00" not in result
-        assert "\x1f" not in result
-        assert "helloworld" in result
+        result = _error_category_for_export(RuntimeError("secret api key sk-123"))
+        assert result == "RuntimeError"
+        assert "secret" not in result
 
-    def test_sanitize_error_truncates_long_messages(self):
-        from modulo.otel_bridge.handler import _sanitize_error_for_export
+    def test_error_category_for_custom_exception_class(self):
+        from modulo.otel_bridge.handler import _error_category_for_export
 
-        long_msg = "x" * 1000
-        result = _sanitize_error_for_export(RuntimeError(long_msg))
-        assert len(result) <= 512
+        class BillingError(Exception):
+            pass
+
+        assert _error_category_for_export(BillingError("card declined")) == "BillingError"
