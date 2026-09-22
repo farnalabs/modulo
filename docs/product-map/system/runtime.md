@@ -9,12 +9,16 @@ code:
   - backend/src/modulo/api/routes/admin_run_retention.py
   - backend/src/modulo/api/middleware/rate_limiter.py
   - backend/src/modulo/api/routes/admin.py
+  - backend/src/modulo/core/runtime_config/store.py
+  - backend/src/modulo/core/runtime_config/key_bridge.py
 unit-tests:
   - backend/tests/unit/api/test_admin_runtime_config.py
   - backend/tests/unit/api/test_admin_housekeeping.py
   - backend/tests/unit/api/test_admin_run_retention.py
   - backend/tests/unit/rate_limiter/test_admin_rate_limits_api.py
   - backend/tests/unit/core/test_housekeeping.py
+  - backend/tests/unit/core/runtime_config/test_key_registry.py
+  - backend/tests/unit/core/runtime_config/test_key_bridge.py
 bdd:
   - backend/tests/bdd/features/admin/runtime-config.feature
   - backend/tests/bdd/features/admin/housekeeping.feature
@@ -38,8 +42,11 @@ purging old run data.
 
 - [x] GET/PUT `/api/v1/admin/runtime-config` lists known config keys with
       current/default/env/override values and drift detection; override and
-      clear are admin-only with unknown-key rejection
-      (`backend/tests/bdd/features/admin/runtime-config.feature`)
+      clear are admin-only with unknown-key rejection; overrides are accepted
+      only for hot-reloadable keys (each names its store-reading consumer)
+      and rejected with a reason for boot-only keys, and clear is allowed for
+      every known key (`backend/tests/bdd/features/admin/runtime-config.feature`,
+      `backend/tests/unit/core/runtime_config/test_key_registry.py`)
 - [x] POST `/api/v1/admin/runtime-config/reload` refreshes config from
       environment variables (`admin_runtime_config.py`)
 - [x] GET/PUT `/api/v1/admin/rate-limits` returns and replaces rate-limit rules;

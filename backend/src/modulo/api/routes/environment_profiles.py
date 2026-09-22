@@ -64,10 +64,14 @@ def _get_hub() -> RuntimeProviderHub:
     set — adding the key post-deployment and restarting the process is
     enough to switch from local to sandboxed execution.
     """
+    from modulo.core.runtime_config.key_bridge import override_int_or
     from modulo.settings import get_settings
 
     settings = get_settings()
-    return build_hub(max_local_concurrency=settings.modulo_max_local_concurrency)
+    # FAR-1135: MODULO_MAX_LOCAL_CONCURRENCY is hot-reloadable — the runtime
+    # override wins over the boot-time Settings value on each fresh hub.
+    concurrency = override_int_or("MODULO_MAX_LOCAL_CONCURRENCY", settings.modulo_max_local_concurrency)
+    return build_hub(max_local_concurrency=concurrency)
 
 
 # Provider_type request validation derives from the model's PROVIDER_TYPES

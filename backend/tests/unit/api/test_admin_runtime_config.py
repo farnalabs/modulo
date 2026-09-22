@@ -28,10 +28,19 @@ def _make_settings() -> Settings:
 
 
 @pytest.fixture(autouse=True)
-def _purge_store() -> None:
+def _purge_store() -> Generator[None, None, None]:
+    import logging
+
+    import modulo.core.runtime_config.key_bridge as key_bridge
     import modulo.core.runtime_config.store as store_mod
 
     store_mod._store = None
+    key_bridge._BOOT_LOG_LEVEL = None
+    root_level = logging.getLogger().level
+    yield
+    store_mod._store = None
+    key_bridge._BOOT_LOG_LEVEL = None
+    logging.getLogger().setLevel(root_level)
 
 
 class _MockAsyncSession:
@@ -186,6 +195,48 @@ class TestRuntimeConfigRoute:
     def test_put_unknown_key_returns_400(self, admin_client: TestClient) -> None:
         resp = admin_client.put("/api/v1/admin/runtime-config", json={"overrides": {"NONEXISTENT_KEY": "value"}})
         assert resp.status_code == 400
+
+    def test_put_boot_only_key_returns_400_with_reason(self, admin_client: TestClient) -> None:
+        """FAR-1135: overriding a boot-only key must be rejected, not silently accepted."""
+        resp = admin_client.put("/api/v1/admin/runtime-config", json={"overrides": {"DATABASE_URL": "postgres://x"}})
+        assert resp.status_code == 400
+        body = resp.json()
+        assert "DATABASE_URL" in body["detail"]
+        assert "cannot be overridden at runtime" in body["detail"]
+        # Nothing was stored.
+        store = get_runtime_config_store()
+        assert store.get_override("DATABASE_URL") is None
+
+    def test_put_debug_key_returns_400_security(self, admin_client: TestClient) -> None:
+        resp = admin_client.put("/api/v1/admin/runtime-config", json={"overrides": {"DEBUG": "true"}})
+        assert resp.status_code == 400
+        assert "security-sensitive" in resp.json()["detail"]
+
+    def test_put_invalid_log_level_returns_400(self, admin_client: TestClient) -> None:
+        """A value the consumer would ignore must be rejected up front."""
+        resp = admin_client.put("/api/v1/admin/runtime-config", json={"overrides": {"MODULO_LOG_LEVEL": "NOTALEVEL"}})
+        assert resp.status_code == 400
+        assert "Invalid log level" in resp.json()["detail"]
+
+    def test_put_non_integer_concurrency_returns_400(self, admin_client: TestClient) -> None:
+        resp = admin_client.put(
+            "/api/v1/admin/runtime-config", json={"overrides": {"MODULO_MAX_LOCAL_CONCURRENCY": "lots"}}
+        )
+        assert resp.status_code == 400
+        assert "must be an integer" in resp.json()["detail"]
+
+    def test_put_hot_key_runs_apply_hook(self, admin_client: TestClient) -> None:
+        """MODULO_LOG_LEVEL override is applied to the root logger immediately."""
+        import logging
+
+        resp = admin_client.put("/api/v1/admin/runtime-config", json={"overrides": {"MODULO_LOG_LEVEL": "ERROR"}})
+        assert resp.status_code == 200
+        assert logging.getLogger().level == logging.ERROR
+
+    def test_put_clear_boot_only_key_is_allowed(self, admin_client: TestClient) -> None:
+        """Clearing (never setting) stays allowed for every known key."""
+        resp = admin_client.put("/api/v1/admin/runtime-config", json={"clear": ["DATABASE_URL"]})
+        assert resp.status_code == 200
 
     def test_put_clear_returns_200(self, admin_client: TestClient) -> None:
         store = get_runtime_config_store()
