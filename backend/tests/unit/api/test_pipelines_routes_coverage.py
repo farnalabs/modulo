@@ -35,6 +35,7 @@ from sqlalchemy.sql import Select
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.pipelines import _finalize_locked_graph_save
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.hitl_gate_guard import (
@@ -1866,6 +1867,22 @@ def test_convert_to_agent_programming_error_maps_501() -> None:
         resp = http.post(f"{_CONVERT_URL}/{node_id}/convert-to-agent", json=_convert_body())
 
     assert resp.status_code == 501, resp.text
+
+
+async def test_finalize_locked_graph_save_reraises_unrecognised_error() -> None:
+    """A non-denial, non-ProgrammingError exception must propagate unchanged.
+
+    The helper's bare ``raise`` re-raises the *active* exception (the caller's
+    ``except`` block), so drive it from within one to match the real contract.
+    """
+    principal = MagicMock()
+    principal.organisation_id = _ORG_ID
+    principal.account_id = _USER_ID
+    try:
+        raise RuntimeError("kaboom")
+    except RuntimeError as caught:
+        with pytest.raises(RuntimeError, match="kaboom"):
+            await _finalize_locked_graph_save(caught, AsyncMock(), principal=principal, pipeline_id=_PIPELINE_ID)
 
 
 # ---------------------------------------------------------------------------

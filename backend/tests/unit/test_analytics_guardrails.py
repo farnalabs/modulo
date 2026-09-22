@@ -602,6 +602,34 @@ class TestRunGuardrailScorecard:
         assert len(session.executed) == 4, "no timezone/statement_timeout set_configs on sqlite"
 
 
+class TestRaiseMappedError:
+    """``_raise_mapped_error`` propagates typed analytics errors and
+    ``asyncio.CancelledError`` unchanged so the route can map them (or let the
+    cancellation through) without re-wrapping them.
+
+    The function's bare ``raise`` re-raises the *active* exception, i.e. the
+    one being handled by the caller's ``except`` block, so each case is driven
+    through that real call contract (an ``except`` for the cancel case, and the
+    production ``run_guardrail_scorecard`` path for the typed case).
+    """
+
+    def test_cancelled_error_propagates_untouched(self) -> None:
+        try:
+            raise asyncio.CancelledError
+        except asyncio.CancelledError as caught:
+            with pytest.raises(asyncio.CancelledError):
+                gr._raise_mapped_error(caught, _ORG)
+
+    async def test_typed_analytics_error_propagates_untouched(self) -> None:
+        session = _FakeSession(exc=AnalyticsRateLimitedError("slow down"))
+        with (
+            patch.object(gr, "set_rls_org", new_callable=AsyncMock),
+            patch.object(gr, "_rate_limited", return_value=False),
+            pytest.raises(AnalyticsRateLimitedError, match="slow down"),
+        ):
+            await TestRunGuardrailScorecard()._call(session)
+
+
 class TestResponseModel:
     """The REST response models are the wire-level advisory contract — assert
     no gate/block/decision surface exists on the actual Pydantic schema."""

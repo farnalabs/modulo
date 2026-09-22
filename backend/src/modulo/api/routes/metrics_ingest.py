@@ -3,8 +3,6 @@
 POST /api/v1/metrics/events — accepts a batch of curated product analytics
 events from the frontend, stages them in ``metrics_staging`` for the daily
 ``metrics_dump`` cron to consume.
-
-Design doc: Repos/admin/strategy/product-analytics-design.md §4, §8.
 """
 
 from __future__ import annotations
