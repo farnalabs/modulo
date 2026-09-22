@@ -100,6 +100,16 @@
       ],
       "automerge": false,
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "js-yaml v5 dropped YAML merge-key (<<) expansion — manifest tier/role gating depends on it",
+      "matchPackageNames": [
+        "js-yaml"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
     }
   ]
 }

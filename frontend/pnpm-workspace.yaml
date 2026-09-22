@@ -8,7 +8,7 @@ overrides:
   esbuild: ">=0.28.1"
   qs: ">=6.15.3"
   "@hono/node-server": ">=2.0.5"
-  js-yaml: "^5.0.0"
+  js-yaml: "^4.3.0"
   # FAR-646: @redocly/openapi-core pins js-yaml 4.3.1 exactly (its adapter reads
   # the `types` export that js-yaml 5.x removed). Remove this scoped pin once
   # openapi-typescript upgrades to @redocly/openapi-core 2.x (js-yaml ^5.2.2).
