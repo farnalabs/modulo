@@ -68,6 +68,15 @@ spec:
             capabilities:
               drop:
                 - ALL
+              # NET_BIND_SERVICE is required because the nginx binary in the
+              # upstream image carries a file capability (cap_net_bind_service=ep).
+              # Under no_new_privs (set by allowPrivilegeEscalation: false), the
+              # kernel refuses to exec a binary whose file capability is not a
+              # subset of the process's permitted set, yielding EPERM. Granting
+              # the capability here makes the exec check pass. The frontend still
+              # listens on 8080 (unprivileged) — this cap is not for port binding.
+              add:
+                - NET_BIND_SERVICE
           volumeMounts:
             - name: nginx-cache
               mountPath: /var/cache/nginx

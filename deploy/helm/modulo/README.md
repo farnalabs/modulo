@@ -12,10 +12,12 @@ Vendor-neutral Helm chart for the Modulo stack. Deploys backend API, SAQ workers
 ## Quick Start
 
 ```bash
-# Add the chart
+# Add the chart (requires two Postgres roles: admin + app)
 helm install modulo ./deploy/helm/modulo \
   --set postgres.host=your-rds-host \
   --set postgres.password=your-password \
+  --set postgres.username=modulo_app \
+  --set postgres.adminUsername=modulo \
   --set backend.env.SECRET_KEY=$(openssl rand -hex 32) \
   --set backend.env.FERNET_KEY=$(openssl rand -hex 32) \
   --set backend.env.MODULO_USERS="admin:$(openssl passwd -6 your-admin-password)"
@@ -25,7 +27,16 @@ helm install modulo ./deploy/helm/modulo \
 
 ### External Postgres (Default)
 
-The chart does NOT deploy Postgres by default. Set these values:
+The chart does NOT deploy Postgres by default. Modulo requires **two distinct Postgres roles**:
+
+| Role | Purpose | Used by |
+|------|---------|---------|
+| `modulo_app` | Restricted runtime role — DML only, no superuser, no BYPASSRLS | `DATABASE_URL` (backend, SAQ workers) |
+| `modulo` | Admin/superuser role — migrations, role bootstrap, DDL | `DATABASE_ADMIN_URL` (entrypoint only) |
+
+The `modulo_app` role is **created automatically** by `bootstrap_role` on startup — the operator only needs to provision the admin role with sufficient privileges (superuser or CREATEROLE + CREATEDB).
+
+Set these values:
 
 ```yaml
 postgres:
@@ -33,11 +44,12 @@ postgres:
   host: your-rds-host.amazonaws.com
   port: 5432
   database: modulo
-  username: modulo
+  username: modulo_app       # Restricted runtime role (DATABASE_URL)
+  adminUsername: modulo      # Admin/superuser role (DATABASE_ADMIN_URL)
   existingSecret: modulo-secrets  # Secret with "password" key
 ```
 
-Or set `postgres.password` directly (rendered into a Secret).
+Or set `postgres.password` directly (rendered into a Secret). The password is shared between both roles unless your setup requires separate credentials.
 
 ### External Redis (Default)
 
@@ -128,11 +140,13 @@ helm install modulo ./deploy/helm/modulo \
 # Create kind cluster
 kind create cluster --name modulo-dev
 
-# Deploy with embedded Redis
+# Deploy with embedded Redis (requires two Postgres roles: admin + app)
 helm install modulo ./deploy/helm/modulo \
   --set redis.embedded=true \
   --set postgres.host=host.docker.internal \
   --set postgres.password=changeme \
+  --set postgres.username=modulo_app \
+  --set postgres.adminUsername=modulo \
   --set backend.env.SECRET_KEY=dev-secret-key-not-for-production-32b! \
   --set backend.env.FERNET_KEY=dev-fernet-key-not-for-production-32b!! \
   --set backend.env.MODULO_USERS="admin:admin"

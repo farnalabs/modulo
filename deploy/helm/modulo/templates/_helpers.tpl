@@ -94,17 +94,18 @@ Otherwise falls back to backend.env.DATABASE_URL.
 
 {{/*
 Construct DATABASE_ADMIN_URL from Postgres config.
-Used by entrypoint.sh bootstrap_role.py to connect as the admin/superuser.
-In the chart's simplified model (single postgres user), this is identical to
-DATABASE_URL.  When postgres.host is unset, falls back to
-backend.env.DATABASE_ADMIN_URL.
+Used by entrypoint.sh bootstrap_role.py to connect as the admin/superuser
+for migrations and role bootstrap. Uses postgres.adminUsername (default: modulo)
+rather than postgres.username (modulo_app) — the two must differ so the
+app role is NOT the superuser.
+When postgres.host is unset, falls back to backend.env.DATABASE_ADMIN_URL.
 */}}
 {{- define "modulo.databaseAdminUrl" -}}
 {{- if .Values.postgres.host }}
 {{- $host := .Values.postgres.host }}
 {{- $port := .Values.postgres.port | int }}
 {{- $db := .Values.postgres.database }}
-{{- $user := .Values.postgres.username }}
+{{- $user := .Values.postgres.adminUsername | default "modulo" }}
 {{- $pass := "" }}
 {{- if .Values.postgres.existingSecret }}
 {{- $secret := lookup "v1" "Secret" (include "modulo.namespace" .) .Values.postgres.existingSecret }}

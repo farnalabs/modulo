@@ -70,8 +70,16 @@ postgres:
   host: ""
   port: 5432
   database: modulo
-  username: modulo
+  # The RESTRICTED runtime role used for application queries (DATABASE_URL).
+  # bootstrap_role creates/modifies this role on startup with DML-only grants.
+  username: modulo_app
+  # The admin/superuser role used for migrations and role bootstrap
+  # (DATABASE_ADMIN_URL). The operator must provision this role with
+  # superuser (or at minimum CREATEROLE + CREATEDB) rights so
+  # bootstrap_role can create/alter the app role.
+  adminUsername: modulo
   # Password reference: use existingSecret or set password (rendered into Secret).
+  # Shared between app and admin roles; split if your setup requires it.
   existingSecret: ""
   password: ""
 
