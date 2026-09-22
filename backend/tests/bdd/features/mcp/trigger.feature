@@ -4,10 +4,12 @@ Feature: MCP triggers a pipeline run
   So that AI assistants can start workflows directly
 
   The MCP server speaks JSON-RPC over the StreamableHTTP transport at POST /mcp —
-  the legacy /mcp/tools/call HTTP surface no longer exists. These scenarios drive
-  the REAL trigger_pipeline / review_hitl tool handlers (through the real FastMCP
-  tool + scope-gate layer) and the REAL McpAuthMiddleware gate, network-free and
-  DB-free, with only the auth re-validation and DB/dispatch seams mocked.
+  the legacy /mcp/tools/call HTTP surface no longer exists. These scenarios call
+  the REAL trigger_pipeline / review_hitl tool handler functions directly with the
+  request ContextVars hydrated by hand, exercising the REAL `_check_agent_tool_scope`
+  scope-gate chokepoint and the REAL McpAuthMiddleware gate, network-free and
+  DB-free, with only the auth re-validation and DB/dispatch seams mocked. The
+  FastMCP invoke/dispatch layer itself is not exercised here.
 
   Background:
     Given an MCP server is running at /mcp

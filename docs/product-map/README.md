@@ -584,14 +584,16 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > the trigger tool" gap (`configure/mcp.md`). The five `mcp/trigger.feature`
 > scenarios previously targeted the dead legacy `/mcp/tools/call` HTTP surface
 > (pinned `@awaiting-implementation`, never ran); they are rewritten to drive
-> the REAL shipped contract — `trigger_pipeline` tool dispatch through the real
-> FastMCP + scope-gate layer (manual run with `trigger_type manual` and the
-> caller's account via `create_run`, `input_payload` passthrough,
-> unknown-pipeline `pipeline_not_found` refusal), the real `McpAuthMiddleware`
-> 401 gate for unauthenticated requests, and the real role-hierarchy scope
-> denial (a `runner` key triggers but cannot `review_hitl` `approve` →
-> `insufficient_scope`), network-free and DB-free with only the auth
-> re-validation and DB/dispatch seams patched (`steps/test_alpha_mcp.py`).
+> the REAL shipped contract by calling the `trigger_pipeline` / `review_hitl`
+> handler functions directly (request ContextVars hydrated by hand) — exercising
+> the real `_check_agent_tool_scope` scope-gate chokepoint (manual run with
+> `trigger_type manual` and the caller's account via `create_run`, `input_payload`
+> passthrough, unknown-pipeline `pipeline_not_found` refusal), the real
+> `McpAuthMiddleware` 401 gate for unauthenticated requests, and the real
+> role-hierarchy scope denial (a `runner` key triggers but cannot `review_hitl`
+> `approve` → `insufficient_scope`), network-free and DB-free with only the auth
+> re-validation and DB/dispatch seams patched (`steps/test_alpha_mcp.py`). The
+> FastMCP invoke/dispatch layer itself is not exercised by these steps.
 > Removed the five scenarios from `PINNED_AWAITING_IMPLEMENTATION`.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
