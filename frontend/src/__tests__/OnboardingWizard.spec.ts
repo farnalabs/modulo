@@ -128,13 +128,19 @@ async function advanceToStep5() {
   return wrapper
 }
 
-// Drives the wizard to step 7 (Done) by creating the pipeline and skipping telemetry.
-async function advanceToDone() {
+// Drives the wizard to step 6 (Telemetry), creating the pipeline on the way.
+async function advanceToTelemetry() {
   const wrapper = await advanceToStep5()
   await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
   await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
   await nextTick()
   await clickNext(wrapper) // -> step 6 (telemetry)
+  return wrapper
+}
+
+// Drives the wizard to step 7 (Done) by creating the pipeline and skipping telemetry.
+async function advanceToDone() {
+  const wrapper = await advanceToTelemetry()
   // Telemetry step: click skip-to-end or next to advance to Done
   await clickNext(wrapper) // -> step 7 (Done)
   return wrapper
@@ -579,5 +585,71 @@ describe('OnboardingWizard — telemetry step (FAR-1131)', () => {
     await clickNext(wrapper) // -> step 6 (telemetry)
     await nextTick()
     expect(wrapper.text()).toContain('change this anytime')
+  })
+
+  it('surfaces the telemetry status load failure from the error envelope', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    const defaultGet = (api.GET as Mock).getMockImplementation()!
+    ;(api.GET as Mock).mockImplementation(async (url: string, opts?: unknown) => {
+      if (url === '/api/v1/admin/telemetry') return { data: undefined, error: { detail: 'telemetry offline' } }
+      return defaultGet(url, opts)
+    })
+    await clickNext(wrapper) // -> step 6 (telemetry) triggers loadTelemetryStatus
+    await flushPromises()
+    expect(wrapper.text()).toContain('telemetry offline')
+  })
+
+  it('surfaces the telemetry status load exception from the catch path', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    const defaultGet = (api.GET as Mock).getMockImplementation()!
+    ;(api.GET as Mock).mockImplementation(async (url: string, opts?: unknown) => {
+      if (url === '/api/v1/admin/telemetry') throw new Error('telemetry unreachable')
+      return defaultGet(url, opts)
+    })
+    await clickNext(wrapper) // -> step 6 (telemetry) triggers loadTelemetryStatus
+    await flushPromises()
+    expect(wrapper.text()).toContain('telemetry unreachable')
+  })
+
+  it('surfaces the telemetry save failure from the error envelope', async () => {
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    ;(api.PUT as Mock).mockResolvedValue({ data: undefined, error: { detail: 'save rejected' } })
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('save rejected')
+  })
+
+  it('surfaces the telemetry save exception from the catch path', async () => {
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    ;(api.PUT as Mock).mockRejectedValue(new Error('telemetry write exploded'))
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('telemetry write exploded')
+  })
+
+  it('ignores a second telemetry save while one is already in flight', async () => {
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    let resolvePut: (value: unknown) => void = () => {}
+    ;(api.PUT as Mock).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePut = resolve
+      }),
+    )
+    const vm = wrapper.vm as unknown as { saveTelemetry: (enabled: boolean) => Promise<void> }
+    const first = vm.saveTelemetry(true)
+    const second = vm.saveTelemetry(true)
+    resolvePut({ data: { enabled: true }, error: undefined })
+    await first
+    await second
+    expect(api.PUT).toHaveBeenCalledTimes(1)
   })
 })
