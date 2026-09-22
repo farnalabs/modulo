@@ -678,16 +678,107 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
 
-class TestSystemAdminRequired:
-    """Non-system-admin org admins must get 403 on all email-settings routes."""
+CROSS_ORG_ID = uuid4()
 
-    async def test_get_email_settings_403(self, client_non_sys_admin):
-        resp = await client_non_sys_admin.get(f"/api/v1/admin/org/{ORG_ID}/email-settings")
+
+@pytest.fixture
+def client_cross_org_admin(mock_session):
+    """Org admin of ORG_ID trying to access CROSS_ORG_ID — should be denied."""
+
+    class _FakeResult:
+        def scalar_one_or_none(self):
+            return None  # not a member of the target org
+
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    app.dependency_overrides[get_current_user] = lambda: NON_SYS_ADMIN_PRINCIPAL
+    mock_session.execute = AsyncMock(return_value=_FakeResult())
+    transport = ASGITransport(app=app)
+    client = AsyncClient(transport=transport, base_url="http://test")
+    yield client
+    app.dependency_overrides.clear()
+
+
+class TestOrgAdminAllowed:
+    """Org admins who are NOT system admins must be allowed (FAR-1134).
+
+    Pre-fix these all returned 403 because require_system_permission was a
+    second gate.  After removing that gate, require_target_org_role (which
+    scopes to the target org) is the sole gate — and an org admin passes it.
+    """
+
+    async def test_get_email_settings_allowed(self, client_non_sys_admin, mock_session):
+        from modulo.api.routes import admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID, name="Test", slug="test", settings_json={"email": {"smtp_host": "smtp.example.com"}}
+        )
+        original = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        try:
+            resp = await client_non_sys_admin.get(f"/api/v1/admin/org/{ORG_ID}/email-settings")
+            assert resp.status_code == 200
+        finally:
+            admin_email.get_organisation = original
+
+    async def test_put_email_settings_allowed(self, client_non_sys_admin, mock_session):
+        from modulo.api.routes import admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
+        original_get = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        original_update = admin_email.update_organisation
+        admin_email.update_organisation = AsyncMock(return_value=org)
+        try:
+            resp = await client_non_sys_admin.put(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings",
+                json={
+                    "smtp_host": "smtp.new.com",
+                    "smtp_port": 587,
+                    "smtp_username": "",
+                    "smtp_password": "",
+                    "email_from": "",
+                },
+            )
+            assert resp.status_code == 200
+        finally:
+            admin_email.get_organisation = original_get
+            admin_email.update_organisation = original_update
+
+    async def test_test_email_allowed(self, client_non_sys_admin, mock_session):
+        from modulo.api.routes import admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID, name="Test", slug="test", settings_json={"email": {"smtp_host": "smtp.example.com"}}
+        )
+        original = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        try:
+            resp = await client_non_sys_admin.post(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
+                json={"to": "admin@example.com"},
+            )
+            # 200 or 422 (no SMTP configured) — either means the authz gate passed
+            assert resp.status_code != 403
+        finally:
+            admin_email.get_organisation = original
+
+
+class TestCrossOrgForbidden:
+    """An admin of org A must be denied for org B's email settings."""
+
+    async def test_get_cross_org_403(self, client_cross_org_admin):
+        resp = await client_cross_org_admin.get(f"/api/v1/admin/org/{CROSS_ORG_ID}/email-settings")
         assert resp.status_code == 403
 
-    async def test_put_email_settings_403(self, client_non_sys_admin):
-        resp = await client_non_sys_admin.put(
-            f"/api/v1/admin/org/{ORG_ID}/email-settings",
+    async def test_put_cross_org_403(self, client_cross_org_admin):
+        resp = await client_cross_org_admin.put(
+            f"/api/v1/admin/org/{CROSS_ORG_ID}/email-settings",
             json={
                 "smtp_host": "smtp.example.com",
                 "smtp_port": 587,
@@ -698,9 +789,9 @@ class TestSystemAdminRequired:
         )
         assert resp.status_code == 403
 
-    async def test_test_email_403(self, client_non_sys_admin):
-        resp = await client_non_sys_admin.post(
-            f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
+    async def test_test_email_cross_org_403(self, client_cross_org_admin):
+        resp = await client_cross_org_admin.post(
+            f"/api/v1/admin/org/{CROSS_ORG_ID}/email-settings/test",
             json={"to": "admin@example.com"},
         )
         assert resp.status_code == 403
