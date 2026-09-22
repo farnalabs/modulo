@@ -16,7 +16,163 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/mcp/human_only.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/mcp/library_browse.feature")
-from tests.bdd.conftest import make_mock_pipeline
+from tests.bdd.conftest import ORG_ID, USER_ID, make_mock_pipeline, make_settings
+
+_PLACEHOLDER_KEY_ID = uuid.UUID("00000000-0000-0000-0000-000000000005")
+_API_KEY = "mk_testprefix_testsecretkey1234567890abc"
+
+
+def _set_mcp_ctx(role: str = "runner") -> None:
+    """Populate the request-scoped MCP ContextVars a tool handler reads."""
+    from modulo.api.mcp_server import (
+        _ctx_auth_token,
+        _ctx_auth_type,
+        _ctx_key_id,
+        _ctx_key_scope,
+        _ctx_node_allowed_tools,
+        _ctx_org_id,
+        _ctx_role,
+        _ctx_team_id,
+        _ctx_user_id,
+    )
+
+    _ctx_org_id.set(ORG_ID)
+    _ctx_role.set(role)
+    _ctx_user_id.set(USER_ID)
+    _ctx_key_id.set(_PLACEHOLDER_KEY_ID)
+    _ctx_auth_token.set(_API_KEY)
+    _ctx_auth_type.set("api_key")
+    _ctx_key_scope.set("org")
+    _ctx_team_id.set(None)
+    _ctx_node_allowed_tools.set(None)
+
+
+def _clear_mcp_ctx() -> None:
+    from modulo.api.mcp_server import (
+        _ctx_auth_token,
+        _ctx_auth_type,
+        _ctx_key_id,
+        _ctx_key_scope,
+        _ctx_node_allowed_tools,
+        _ctx_org_id,
+        _ctx_role,
+        _ctx_team_id,
+        _ctx_user_id,
+    )
+
+    for var in (
+        _ctx_org_id,
+        _ctx_role,
+        _ctx_user_id,
+        _ctx_key_id,
+        _ctx_auth_token,
+        _ctx_auth_type,
+        _ctx_key_scope,
+        _ctx_team_id,
+        _ctx_node_allowed_tools,
+    ):
+        var.set(None)
+
+
+def _make_session_context(session: AsyncMock) -> AsyncMock:
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+def _call_trigger(
+    request,
+    *,
+    input_payload: dict | None = None,
+    pipeline_missing: bool = False,
+) -> dict:
+    """Drive the real ``trigger_pipeline`` tool with DB/dispatch seams patched."""
+    import asyncio
+
+    from modulo.api.mcp_server import trigger_pipeline
+
+    pid = str(getattr(request.node, "_pipeline_id", None) or uuid.uuid4())
+    mock_get_pipeline_ret = None if pipeline_missing else MagicMock(owner_team_id=None)
+    mock_snapshot = None if pipeline_missing else MagicMock(id=uuid.uuid4(), graph_json={"nodes": {"n1": {}}})
+    mock_run = MagicMock(id=uuid.uuid4(), langgraph_thread_id=str(uuid.uuid4()))
+    session = _make_session_context(AsyncMock())
+
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+        patch("modulo.api.mcp_server.get_pipeline", return_value=mock_get_pipeline_ret) as mock_get_pipeline,
+        patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            return_value=mock_snapshot,
+        ),
+        patch("modulo.db.crud.run.create_run", return_value=mock_run) as mock_create_run,
+        patch("modulo.api.mcp_server._session", return_value=session),
+        patch("modulo.api.mcp_server.dispatch_run", new_callable=AsyncMock),
+    ):
+        _set_mcp_ctx("runner")
+        try:
+            result = asyncio.run(trigger_pipeline(pipeline_id=pid, input_payload=input_payload))
+        finally:
+            _clear_mcp_ctx()
+        request.node._create_run = mock_create_run
+        request.node._get_pipeline = mock_get_pipeline
+    return result
+
+
+def _call_review_hitl(request, action: str) -> dict:
+    """Drive the real ``review_hitl`` tool up to its scope gate (runner role)."""
+    import asyncio
+
+    from modulo.api.mcp_server import review_hitl
+
+    with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        _set_mcp_ctx("runner")
+        try:
+            result = asyncio.run(
+                review_hitl(
+                    run_id=str(uuid.uuid4()),
+                    gate_id=str(uuid.uuid4()),
+                    action=action,
+                    claim_token="claim_token_123",
+                )
+            )
+        finally:
+            _clear_mcp_ctx()
+    return result
+
+
+def _make_mcp_request(*, path: str = "/mcp", headers=None):
+    import asyncio
+
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": path,
+        "headers": headers or [],
+        "query_string": b"",
+        "raw_path": path.encode("ascii"),
+        "root_path": "",
+        "client": ("127.0.0.1", 1234),
+        "server": ("testserver", 80),
+        "scheme": "http",
+        "http_version": "1.1",
+    }
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    return Request(scope, receive=receive)
+
+
+def _mcp_response_payload(request):
+    """Return the tool-call result dict, falling back to an HTTP response body."""
+    result = getattr(request.node, "_result", None)
+    if isinstance(result, dict):
+        return result
+    resp = getattr(request.node, "_resp", None)
+    return resp.json() if resp is not None else {}
 
 
 @given("an MCP server is running at /mcp")
@@ -32,105 +188,113 @@ def valid_mcp_key(request):
 @given(parsers.parse('org "{org}" has pipeline "{name}"'))
 def org_has_pipeline(org: str, name: str, request):
     request.node._pipeline_name = name
+    pipeline = MagicMock()
+    pipeline.id = uuid.uuid4()
+    pipeline.name = name
+    pipeline.owner_team_id = None
+    request.node._pipeline_id = pipeline.id
 
 
-@when(parsers.parse('the MCP client sends a tools/call request for "{tool}" with pipeline "{pipeline}"'))
-def mcp_trigger_pipeline(tool: str, pipeline: str, client, request):
-    with (
-        patch("modulo.api.mcp_server.set_rls_org"),
-        patch(
-            "modulo.api.mcp_server.get_pipeline_by_name",
-            return_value=make_mock_pipeline(name=pipeline),
-        ),
-        patch(
-            "modulo.api.mcp_server.create_run",
-            return_value=MagicMock(id=uuid.uuid4(), status="pending"),
-        ),
-    ):
-        resp = client.post(
-            "/mcp/tools/call",
-            json={
-                "tool": tool,
-                "arguments": {"pipeline": pipeline},
-            },
-            headers={"Authorization": f"Bearer {getattr(request.node, '_mcp_key', '')}"},
-        )
-    request.node._resp = resp
+@given(parsers.parse('an MCP API key with role "{role}"'))
+def mcp_api_key_role(role: str, request):
+    request.node._mcp_role = role
+
+
+@when(parsers.parse('the MCP client calls "trigger_pipeline" for the pipeline'))
+def trigger_for_pipeline(request):
+    request.node._result = _call_trigger(request)
+
+
+@when(parsers.re(r'the MCP client calls "trigger_pipeline" with input_payload (?P<payload>.+)'))
+def trigger_with_payload(payload: str, request):
+    request.node._result = _call_trigger(request, input_payload=json.loads(payload))
+
+
+@when(parsers.parse('the MCP client calls "trigger_pipeline" for an unknown pipeline'))
+def trigger_unknown_pipeline(request):
+    request.node._result = _call_trigger(request, pipeline_missing=True)
+
+
+@when("an unauthenticated request reaches the MCP server")
+def unauth_reaches_mcp_server(request):
+    import asyncio
+
+    from starlette.responses import JSONResponse
+
+    async def call_next(_req):
+        return JSONResponse({})
+
+    with patch("modulo.api.mcp_server.get_settings", return_value=make_settings()):
+        from modulo.api.mcp_server import McpAuthMiddleware
+
+        middleware = McpAuthMiddleware(app=MagicMock())
+        status = asyncio.run(middleware.dispatch(_make_mcp_request(), call_next)).status_code
+    request.node._mcp_gate_status = status
+
+
+@then(parsers.parse("the MCP auth gate rejects the request with status code {status:d}"))
+def mcp_gate_rejected_with_status(status: int, request):
+    assert getattr(request.node, "_mcp_gate_status", None) == status
 
 
 @then("the response contains run_id")
 def response_contains_run_id(request):
-    data = request.node._resp.json()
-    assert "run_id" in data or data.get("content", {}).get("run_id")
+    data = _mcp_response_payload(request)
+    assert "run_id" in data
 
 
 @then(parsers.parse('a run is created with status "{status}"'))
 def run_created_with_status(status: str, request):
-    pass
+    result = getattr(request.node, "_result", None)
+    if isinstance(result, dict) and "status" in result:
+        assert result["status"] == status, f"Expected run status {status!r}, got {result['status']!r}"
+    create_run = getattr(request.node, "_create_run", None)
+    if create_run is not None:
+        create_run.assert_awaited_once()
+        assert create_run.await_args.kwargs["trigger_type"] == "manual"
 
 
-@when(parsers.parse('the MCP client sends a tools/call request for "{tool}" with run_context {ctx}'))
-def mcp_trigger_with_context(tool: str, ctx, client, request):
-    context = json.loads(ctx) if isinstance(ctx, str) else ctx
-    with (
-        patch("modulo.api.mcp_server.set_rls_org"),
-        patch(
-            "modulo.api.mcp_server.get_pipeline_by_name",
-            return_value=make_mock_pipeline(name=getattr(request.node, "_pipeline_name", "test")),
-        ),
-        patch(
-            "modulo.api.mcp_server.create_run",
-            return_value=MagicMock(id=uuid.uuid4(), status="pending"),
-        ),
-    ):
-        resp = client.post(
-            "/mcp/tools/call",
-            json={
-                "tool": tool,
-                "arguments": {
-                    "pipeline": getattr(request.node, "_pipeline_name", "test"),
-                    "run_context": context,
-                },
-            },
-            headers={"Authorization": f"Bearer {getattr(request.node, '_mcp_key', '')}"},
-        )
-    request.node._resp = resp
+@then(parsers.parse('the run is created with input_payload carrying branch "{branch}"'))
+def run_created_with_payload_branch(branch: str, request):
+    payload = request.node._create_run.await_args.kwargs["input_payload"]
+    assert payload.get("branch") == branch
 
 
-@then(parsers.parse("the run has run_context with branch {branch}"))
-def check_run_context_branch(branch: str, request):
-    pass
+@when(parsers.parse('the MCP client calls "review_hitl" with action "{action}"'))
+def review_hitl_forbidden(action: str, request):
+    request.node._result = _call_review_hitl(request, action)
 
 
-@when(parsers.parse('the MCP client sends a tools/call request for "{tool}" without API key'))
-def mcp_no_auth(tool: str, client, request):
-    resp = client.post("/mcp/tools/call", json={"tool": tool, "arguments": {}})
-    request.node._resp = resp
+@then(parsers.parse('the tool reports run status "{status}"'))
+def tool_reports_run_status(status: str, request):
+    result = _mcp_response_payload(request)
+    assert result.get("status") == status, f"Expected status {status!r}, got {result.get('status')!r}"
+    create_run = getattr(request.node, "_create_run", None)
+    assert create_run is not None
+    create_run.assert_awaited_once()
+    assert create_run.await_args.kwargs["trigger_type"] == "manual"
 
 
-@when(parsers.parse('the MCP client sends a tools/call request for "{tool}" with pipeline "{pipeline}"'))
-def mcp_trigger_nonexistent(tool: str, pipeline: str, client, request):
-    with (
-        patch("modulo.api.mcp_server.get_pipeline_by_name", return_value=None),
-    ):
-        resp = client.post(
-            "/mcp/tools/call",
-            json={"tool": tool, "arguments": {"pipeline": pipeline}},
-            headers={"Authorization": f"Bearer {getattr(request.node, '_mcp_key', '')}"},
-        )
-    request.node._resp = resp
+@then(parsers.parse('the tool returns error "{code}"'))
+def tool_returns_error(code: str, request):
+    assert _mcp_response_payload(request).get("error") == code, _mcp_response_payload(request)
+
+
+@then("the response carries an error")
+def response_carries_error(request):
+    assert "error" in _mcp_response_payload(request)
 
 
 @then(parsers.parse("the response contains isError true"))
 def response_is_error(request):
-    data = request.node._resp.json()
+    data = _mcp_response_payload(request)
     assert data.get("isError") is True
 
 
 @then(parsers.parse('the error message mentions "{text}"'))
 def error_mentions(text: str, request):
-    data = request.node._resp.json()
-    content = str(data.get("content", data.get("error", ""))).lower()
+    data = _mcp_response_payload(request)
+    content = str(data.get("detail", data.get("error", data))).lower()
     assert text.lower() in content
 
 
@@ -158,8 +322,8 @@ def mcp_tool_call_generic(tool: str, client, request):
 
 @then(parsers.parse('the error mentions "{text}"'))
 def error_mentions_text(text: str, request):
-    data = request.node._resp.json()
-    detail = str(data.get("content", data.get("error", data))).lower()
+    data = _mcp_response_payload(request)
+    detail = str(data.get("detail", data.get("error", data))).lower()
     assert text.lower() in detail
 
 
