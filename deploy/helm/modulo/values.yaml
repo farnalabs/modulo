@@ -124,10 +124,18 @@ backend:
       cpu: "1"
       memory: 1Gi
 
-  # Health checks derived from deploy/fly/nginx.conf and backend /healthz/ready.
+  # Health checks derived from backend src/modulo/api/routes/health.py.
+  #
+  # Liveness MUST use /healthz (shallow — returns {"status":"ok"} immediately).
+  # /healthz/ready is the DEEP readiness gate that checks database, redis,
+  # SAQ workers, dispatcher reconcile, system crons, and 13 other subsystems.
+  # It 503s during normal warmup. If liveness also points at /healthz/ready,
+  # the kubelet kills the container before subsystems initialise — classic
+  # liveness/readiness inversion (observed on the live cluster: restart loop
+  # every ~75s because dispatcher_reconcile was unavailable during startup).
   livenessProbe:
     httpGet:
-      path: /healthz/ready
+      path: /healthz
       port: http-backend
     initialDelaySeconds: 30
     periodSeconds: 15
