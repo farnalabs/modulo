@@ -691,7 +691,13 @@ def test_logout_family_not_found_still_succeeds(client: tuple[TestClient, AsyncM
 
 def test_logout_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
-    for exc, expected in [(_INTEGRITY, 409), (_PROG, 501), (_SQL, 503), (_RUNTIME, 500)]:
+    for exc, expected in [
+        (_INTEGRITY, 409),
+        (_PROG, 501),
+        (_SQL, 503),
+        (_RUNTIME, 500),
+        (HTTPException(status_code=409, detail="dup"), 409),
+    ]:
         with (
             patch(f"{_PREFIX}decode_refresh_token_claims", return_value=_claims()),
             patch(f"{_PREFIX}blacklist_family", new=AsyncMock(side_effect=exc)),
@@ -767,7 +773,12 @@ def test_me_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> None:
         url="/api/v1/auth/me",
         json_body={},
         patch_target="get_account_by_id",
-        expected={(_PROG, 501), (_SQL, 503), (_RUNTIME, 500)},
+        expected={
+            (_PROG, 501),
+            (_SQL, 503),
+            (_RUNTIME, 500),
+            (HTTPException(status_code=401, detail="bad"), 401),
+        },
     )
 
 
@@ -784,6 +795,14 @@ def test_csrf_token_sets_cookie(client: tuple[TestClient, AsyncMock]) -> None:
     assert resp.status_code == 200, resp.text
     assert resp.json()["csrf_token"]
     assert "XSRF-TOKEN" in resp.cookies
+
+
+def test_csrf_token_propagates_http_exception(client: tuple[TestClient, AsyncMock]) -> None:
+    http, _session = client
+    with patch(f"{_PREFIX}_set_csrf_cookie", side_effect=HTTPException(status_code=409, detail="dup")):
+        resp = http.get("/api/v1/auth/csrf-token")
+
+    assert resp.status_code == 409, resp.text
 
 
 # ---------------------------------------------------------------------------
