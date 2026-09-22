@@ -3422,3 +3422,36 @@ class TestFailNodelessObservability:
         assert "dispatched_at" in ctx
         assert "started_at" in ctx
         assert "saq_queue_wait_seconds" in ctx
+
+
+class TestResolveTerminalizer:
+    """FAR-720: name-based lookup guards in _resolve_terminalizer."""
+
+    def test_resolves_registered_batch_spec_coroutine(self) -> None:
+        """Every registered batch terminalizer resolves to a coroutine."""
+        for spec in ch._BATCH_TERMINALIZER_SPECS:
+            coroutine = ch._resolve_terminalizer(spec)
+            assert callable(coroutine)
+
+    def test_spec_without_coroutine_raises_type_error(self) -> None:
+        """A terminalizer spec with coroutine_name=None fails loudly."""
+        spec = ch.ReconcileTerminalizer(
+            key="x",
+            stats_key="x",
+            blob_keys=("x",),
+            stall_reason="executor_stalled",
+        )
+        with pytest.raises(TypeError, match="no coroutine registered"):
+            ch._resolve_terminalizer(spec)
+
+    def test_spec_with_unknown_coroutine_raises_attribute_error(self) -> None:
+        """A terminalizer spec pointing at a missing module attribute fails loudly."""
+        spec = ch.ReconcileTerminalizer(
+            key="x",
+            stats_key="x",
+            blob_keys=("x",),
+            stall_reason="executor_stalled",
+            coroutine_name="_terminalize_does_not_exist_anywhere",
+        )
+        with pytest.raises(AttributeError, match="not found in module"):
+            ch._resolve_terminalizer(spec)
