@@ -92,13 +92,11 @@ redis:
   host: redis-master
   port: 6379
   db: 0
-  # Password reference: use existingSecret or set password (rendered into Secret).
+  # Password reference: use existingSecret or set password (rendered into the
+  # chart Secret as REDIS_PASSWORD and applied to the embedded Redis container;
+  # REDIS_URL embeds the same password).
   existingSecret: ""
   password: ""
-
-# -- Embedded Redis (only when redis.embedded=true) -------------------------
-redisChart:
-  enabled: false
 
 # -- Backend ----------------------------------------------------------------
 backend:

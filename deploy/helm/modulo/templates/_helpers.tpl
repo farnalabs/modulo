@@ -67,6 +67,20 @@ Namespace name.
 {{- end }}
 
 {{/*
+Resolve a container image reference to a single string. A digest (immutable)
+takes precedence over a tag when both are set. Rendering one value prevents the
+duplicate `image:` key that breaks strict YAML parsing.
+Usage: {{ include "modulo.image" (dict "image" .Values.backend.image) }}
+*/}}
+{{- define "modulo.image" -}}
+{{- if .image.digest -}}
+{{- printf "%s@%s" .image.repository .image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .image.repository (.image.tag | default "latest") -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Construct DATABASE_URL from Postgres config.
 When postgres.host is set, builds the URL from individual fields.
 Otherwise falls back to backend.env.DATABASE_URL.
@@ -86,7 +100,7 @@ Otherwise falls back to backend.env.DATABASE_URL.
 {{- else }}
 {{- $pass = .Values.postgres.password }}
 {{- end }}
-{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user $pass $host $port $db }}
+{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user (urlquery $pass) $host $port $db }}
 {{- else }}
 {{- .Values.backend.env.DATABASE_URL | default "" }}
 {{- end }}
@@ -115,38 +129,51 @@ When postgres.host is unset, falls back to backend.env.DATABASE_ADMIN_URL.
 {{- else }}
 {{- $pass = .Values.postgres.password }}
 {{- end }}
-{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user $pass $host $port $db }}
+{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user (urlquery $pass) $host $port $db }}
 {{- else }}
 {{- .Values.backend.env.DATABASE_ADMIN_URL | default "" }}
 {{- end }}
 {{- end }}
 
 {{/*
+Resolve the effective Redis password.
+Precedence: redis.password, then the "password" key of redis.existingSecret.
+Returns "" when neither yields a value (no auth). Shared by REDIS_URL and the
+embedded Redis Deployment so URL credentials and --requirepass never diverge.
+*/}}
+{{- define "modulo.redisPassword" -}}
+{{- if .Values.redis.password -}}
+{{- .Values.redis.password -}}
+{{- else if .Values.redis.existingSecret -}}
+{{- $secret := lookup "v1" "Secret" (include "modulo.namespace" .) .Values.redis.existingSecret -}}
+{{- if $secret -}}
+{{- index $secret.data "password" | b64dec -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Construct REDIS_URL from Redis config.
 When redis.embedded is true, points at the chart's own Redis Service
-({{ include "modulo.fullname" . }}-redis on port 6379).
+({{ include "modulo.fullname" . }}-redis on port 6379), embedding the password
+when one is configured.
 When redis.host is set (external mode), builds the URL from individual fields.
 Otherwise falls back to backend.env.REDIS_URL.
 */}}
 {{- define "modulo.redisUrl" -}}
-{{- if .Values.redis.embedded }}
 {{- $db := .Values.redis.db | int }}
+{{- $pass := include "modulo.redisPassword" . }}
+{{- if .Values.redis.embedded }}
+{{- if $pass }}
+{{- printf "redis://:%s@%s-redis:6379/%d" (urlquery $pass) (include "modulo.fullname" .) $db }}
+{{- else }}
 {{- printf "redis://%s-redis:6379/%d" (include "modulo.fullname" .) $db }}
+{{- end }}
 {{- else if .Values.redis.host }}
 {{- $host := .Values.redis.host }}
 {{- $port := .Values.redis.port | int }}
-{{- $db := .Values.redis.db | int }}
-{{- $pass := "" }}
-{{- if .Values.redis.existingSecret }}
-{{- $secret := lookup "v1" "Secret" (include "modulo.namespace" .) .Values.redis.existingSecret }}
-{{- if $secret }}
-{{- $pass = index $secret.data "password" | b64dec }}
-{{- end }}
-{{- else }}
-{{- $pass = .Values.redis.password }}
-{{- end }}
 {{- if $pass }}
-{{- printf "redis://:%s@%s:%d/%d" $pass $host $port $db }}
+{{- printf "redis://:%s@%s:%d/%d" (urlquery $pass) $host $port $db }}
 {{- else }}
 {{- printf "redis://%s:%d/%d" $host $port $db }}
 {{- end }}

@@ -36,10 +36,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: saq-system
-          image: "{{ .Values.saqSystem.image.repository }}:{{ .Values.saqSystem.image.tag | default "latest" }}"
-          {{- if .Values.saqSystem.image.digest }}
-          image: "{{ .Values.saqSystem.image.repository }}@{{ .Values.saqSystem.image.digest }}"
-          {{- end }}
+          image: {{ include "modulo.image" (dict "image" .Values.saqSystem.image) | quote }}
           imagePullPolicy: {{ .Values.saqSystem.image.pullPolicy }}
           command:
             {{- toYaml .Values.saqSystem.command | nindent 12 }}

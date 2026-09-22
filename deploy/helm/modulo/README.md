@@ -67,9 +67,14 @@ redis:
 
 ```yaml
 redis:
-  enabled: true
-  embedded: true  # Deploy Redis in-cluster
+  embedded: true      # Deploy Redis in-cluster
+  # password: secret  # Optional. Sets --requirepass on the container and embeds
+                     # the credential in REDIS_URL; the probes authenticate too.
 ```
+
+`redis.embedded` is the only switch that controls the embedded Redis Deployment.
+(`redis.enabled` and the former `redisChart.enabled` were dead config and have
+been removed.)
 
 ### Required Values
 
@@ -109,6 +114,18 @@ backend:
 ```
 
 **Trade-off:** Digest pinning ensures exact image reproducibility but requires manual updates when new images are published. Tag-based references are simpler but may pull different images over time.
+
+When both are set the digest wins, and the chart renders a single image
+reference (`repository@digest`) — a tag is only used when no digest is set.
+
+### Connection URLs and Secret keys
+
+`DATABASE_URL`, `DATABASE_ADMIN_URL`, and `REDIS_URL` are always present in the
+chart Secret, even when empty, because the workloads consume them via
+non-optional `secretKeyRef` entries. A missing key would leave pods in
+`CreateContainerConfigError`; an empty value surfaces as a normal application
+startup error instead. `REDIS_PASSWORD` is rendered only when
+`redis.password` (or `redis.existingSecret`) is set.
 
 ### Image Pull Secrets (Private GHCR Images)
 

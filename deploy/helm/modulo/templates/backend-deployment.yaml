@@ -36,10 +36,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: backend
-          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default "latest" }}"
-          {{- if .Values.backend.image.digest }}
-          image: "{{ .Values.backend.image.repository }}@{{ .Values.backend.image.digest }}"
-          {{- end }}
+          image: {{ include "modulo.image" (dict "image" .Values.backend.image) | quote }}
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
           ports:
             - name: http-backend
@@ -72,7 +69,7 @@ spec:
                   name: {{ include "modulo.fullname" . }}-secrets
                   key: FERNET_KEY
             {{- range $key, $value := .Values.backend.env }}
-            {{- if and (ne $key "DATABASE_URL") (ne $key "REDIS_URL") (ne $key "SECRET_KEY") (ne $key "FERNET_KEY") }}
+            {{- if and (ne $key "DATABASE_URL") (ne $key "DATABASE_ADMIN_URL") (ne $key "REDIS_URL") (ne $key "SECRET_KEY") (ne $key "FERNET_KEY") }}
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}

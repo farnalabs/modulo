@@ -36,10 +36,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default "latest" }}"
-          {{- if .Values.frontend.image.digest }}
-          image: "{{ .Values.frontend.image.repository }}@{{ .Values.frontend.image.digest }}"
-          {{- end }}
+          image: {{ include "modulo.image" (dict "image" .Values.frontend.image) | quote }}
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           # Skip the nginx docker-entrypoint.sh which writes into /etc/nginx/conf.d/
           # (incompatible with readOnlyRootFilesystem). Our ConfigMap provides the

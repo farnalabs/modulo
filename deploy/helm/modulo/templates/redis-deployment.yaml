@@ -1,4 +1,9 @@
 {{- if .Values.redis.embedded }}
+{{- $redisPassword := include "modulo.redisPassword" . }}
+{{- $redisArgs := list "redis-server" "--maxmemory" "256mb" "--maxmemory-policy" "allkeys-lru" }}
+{{- if $redisPassword }}
+{{- $redisArgs = concat $redisArgs (list "--requirepass" "$(REDIS_PASSWORD)") }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,25 +44,32 @@ spec:
             - name: http-redis
               containerPort: 6379
               protocol: TCP
-          command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
-          {{- if .Values.redis.password }}
-          command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--requirepass", "$(REDIS_PASSWORD)"]
+          command:
+            {{- toYaml $redisArgs | nindent 12 }}
+          {{- if $redisPassword }}
           env:
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "modulo.fullname" . }}-secrets
                   key: REDIS_PASSWORD
-                  optional: true
           {{- end }}
           livenessProbe:
             exec:
+              {{- if $redisPassword }}
+              command: ["sh", "-c", 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping']
+              {{- else }}
               command: ["redis-cli", "ping"]
+              {{- end }}
             initialDelaySeconds: 10
             periodSeconds: 15
           readinessProbe:
             exec:
+              {{- if $redisPassword }}
+              command: ["sh", "-c", 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping']
+              {{- else }}
               command: ["redis-cli", "ping"]
+              {{- end }}
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
