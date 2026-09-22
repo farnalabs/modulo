@@ -2,7 +2,7 @@
 
 Runs against a real Postgres (testcontainers) via the integration session
 fixtures.  Verifies that EvalResult columns round-trip correctly, the FK to
-eval_definitions is enforced, and the persist-before-decide production path
+evals is enforced, and the persist-before-decide production path
 (pipeline_engine.eval_persist_order.run_evals_persist_before_decide) writes
 rows to the real database before the block/warn decision.
 
@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
 from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
+from tests.integration.conftest import EvalMirrorDefinition, insert_evals_mirror
 
 pytestmark = pytest.mark.integration
 
@@ -61,7 +62,13 @@ async def _insert_eval_definition(
     name: str | None = None,
     failure_behaviour: str = "warn",
 ) -> uuid.UUID:
-    """Insert an eval_definitions row and return its id."""
+    """Insert an eval_definitions row (and its 1:1 evals mirror) and return its id.
+
+    The same-UUID ``evals`` mirror is required because FAR-1100 chunk 3
+    (migration 0254) repointed ``eval_results.eval_id`` to ``evals`` before an
+    ``eval_results`` row can reference it; see ``insert_evals_mirror`` in the
+    integration conftest.
+    """
     eval_id = uuid.uuid4()
     eval_name = name or f"test-eval-{eval_id.hex[:8]}"
     async with engine.begin() as conn:
@@ -82,6 +89,18 @@ async def _insert_eval_definition(
                 "name": eval_name,
                 "fb": failure_behaviour,
             },
+        )
+        await insert_evals_mirror(
+            conn,
+            EvalMirrorDefinition(
+                id=eval_id,
+                organisation_id=org_id,
+                pipeline_id=pipeline_id,
+                name=eval_name,
+                eval_type="regex",
+                account_id=account_id,
+                node_id=node_id,
+            ),
         )
     return eval_id
 
@@ -271,7 +290,7 @@ class TestC10EvalResultColumnRoundTrip:
 
 
 # ---------------------------------------------------------------------------
-# Criterion 11: EvalResult FK to eval_definitions is enforced (real Postgres)
+# Criterion 11: EvalResult FK to evals is enforced (real Postgres)
 # ---------------------------------------------------------------------------
 
 

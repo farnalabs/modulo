@@ -83,6 +83,11 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     "eval_cases": frozenset({"input_payload", "expected_output"}),
     "eval_definitions": frozenset({"config_json"}),
     "eval_suites": frozenset({"eval_definition_ids"}),
+    # evals.config_json (migration 0254, FAR-1100 chunk 3): 0250 created the
+    # net-new column as plain json; 0254 promotes it to jsonb to match the
+    # 0147 standard while the ORM maps generic JSON for SQLite/MariaDB parity —
+    # the same multi-backend convention as eval_definitions.config_json.
+    "evals": frozenset({"config_json"}),
     "feature_flag_catalog": frozenset({"depends_on"}),
     "feedback_records": frozenset({"rejected_output", "correction_state"}),
     # hitl_claims.context_json (main's 0190, FAR-613) and gate_config_json
@@ -240,6 +245,11 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # the module has no ORM model to fall back on), never via the ORM.
         # permanent (documented repo divergence)
         "org_mint_budget_usage",
+        # FAR-1100 chunk 3 (migration 0254): migration-owned audit table for
+        # PolicyGate binding-validation rejections during the Eval backfill.
+        # Written by the migration only, never mapped by the ORM.
+        # permanent (documented repo divergence)
+        "eval_backfill_violations",
     }
 )
 
