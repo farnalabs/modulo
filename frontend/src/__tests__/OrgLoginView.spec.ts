@@ -435,12 +435,14 @@ describe('OrgLoginView - change organization', () => {
 
   it('still returns to /login when localStorage removal throws', async () => {
     localStorage.setItem('modulo_login_last_org', 'old-org')
-    // Repo pattern for throwing storage (see DashboardView-branches.spec):
-    // shadow the instance method and restore it before leaving the test.
-    const origRemoveItem = localStorage.removeItem
-    localStorage.removeItem = () => {
-      throw new Error('storage disabled')
-    }
+    // jsdom's localStorage is a Proxy that silently ignores instance-level
+    // reassignment of removeItem, so the throwing stub must be installed on
+    // Storage.prototype for the failure path to actually execute.
+    const removeItemSpy = vi
+      .spyOn(Storage.prototype, 'removeItem')
+      .mockImplementation(() => {
+        throw new Error('storage disabled')
+      })
     vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({
@@ -460,7 +462,7 @@ describe('OrgLoginView - change organization', () => {
 
       expect(mockRouter.push).toHaveBeenCalledWith('/login')
     } finally {
-      localStorage.removeItem = origRemoveItem
+      removeItemSpy.mockRestore()
     }
   })
 })
@@ -529,6 +531,24 @@ describe('OrgLoginView - used last time tag', () => {
     expect(wrapper.find('[data-testid="org-login-last-used-password"]').exists()).toBe(false)
   })
 
+  it('records the SSO provider_id when an SSO provider is activated', async () => {
+    mockOrgContext({
+      org: { slug: 'test-org', name: 'Test Org' },
+      providers: [{ provider_id: 'github', display_name: 'GitHub' }],
+      password_enabled: true,
+    })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-sso-github"]').exists()).toBe(true)
+    })
+
+    await wrapper.find('[data-testid="org-login-sso-github"]').trigger('click')
+
+    expect(localStorage.getItem('modulo_login_last_method')).toBe('github')
+    expect(wrapper.find('[data-testid="org-login-sso-github"]').text()).toContain('Used last time')
+  })
+
   it('shows no tag when the stored method is not available on this screen', async () => {
     localStorage.setItem('modulo_login_last_method', 'okta')
     mockOrgContext({ org: { slug: 'test-org', name: 'Test Org' }, providers: [], password_enabled: true })
@@ -556,10 +576,11 @@ describe('OrgLoginView - used last time tag', () => {
   })
 
   it('renders without a tag when localStorage reads throw', async () => {
-    const origGetItem = localStorage.getItem
-    localStorage.getItem = () => {
-      throw new Error('storage disabled')
-    }
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, 'getItem')
+      .mockImplementation(() => {
+        throw new Error('storage disabled')
+      })
     mockOrgContext({ org: { slug: 'test-org', name: 'Test Org' }, providers: [], password_enabled: true })
 
     try {
@@ -569,7 +590,7 @@ describe('OrgLoginView - used last time tag', () => {
       })
       expect(wrapper.text()).not.toContain('Used last time')
     } finally {
-      localStorage.getItem = origGetItem
+      getItemSpy.mockRestore()
     }
   })
 
@@ -605,10 +626,11 @@ describe('OrgLoginView - used last time tag', () => {
   })
 
   it('completes a successful login when localStorage writes throw', async () => {
-    const origSetItem = localStorage.setItem
-    localStorage.setItem = () => {
-      throw new Error('quota exceeded')
-    }
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new Error('quota exceeded')
+      })
     vi.spyOn(global, 'fetch')
       .mockResolvedValueOnce({
         ok: true,
@@ -638,7 +660,7 @@ describe('OrgLoginView - used last time tag', () => {
       })
       expect(wrapper.find('[data-testid="org-login-error"]').exists()).toBe(false)
     } finally {
-      localStorage.setItem = origSetItem
+      setItemSpy.mockRestore()
     }
   })
 })

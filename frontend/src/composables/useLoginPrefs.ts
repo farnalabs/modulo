@@ -23,16 +23,18 @@ function read(key: string): string | null {
 function write(key: string, value: string): void {
   try {
     window.localStorage.setItem(key, value)
-  } catch {
+  } catch (err) {
     // Storage unavailable — the preference is simply not remembered.
+    console.warn('[login-prefs] failed to persist login preference', err)
   }
 }
 
 function remove(key: string): void {
   try {
     window.localStorage.removeItem(key)
-  } catch {
+  } catch (err) {
     // Storage unavailable — nothing to clear.
+    console.warn('[login-prefs] failed to clear login preference', err)
   }
 }
 

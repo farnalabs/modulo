@@ -317,12 +317,14 @@ describe('LoginView - remembered org slug', () => {
   it('still navigates on org entry when localStorage writes throw', async () => {
     const location = fakeLocation('http://localhost/login')
     vi.stubGlobal('location', location)
-    // Repo pattern for throwing storage (see DashboardView-branches.spec):
-    // shadow the instance method and restore it before leaving the test.
-    const origSetItem = localStorage.setItem
-    localStorage.setItem = () => {
-      throw new Error('quota exceeded')
-    }
+    // jsdom's localStorage is a Proxy that silently ignores instance-level
+    // reassignment of getItem/setItem, so the throwing stub must be installed
+    // on Storage.prototype for the failure path to actually execute.
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new Error('quota exceeded')
+      })
     mockMultiOrgContext()
 
     try {
@@ -336,15 +338,16 @@ describe('LoginView - remembered org slug', () => {
 
       expect(location.href).toBe('/login/doomed-org')
     } finally {
-      localStorage.setItem = origSetItem
+      setItemSpy.mockRestore()
     }
   })
 
   it('still shows the org entry step when localStorage reads throw', async () => {
-    const origGetItem = localStorage.getItem
-    localStorage.getItem = () => {
-      throw new Error('storage disabled')
-    }
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, 'getItem')
+      .mockImplementation(() => {
+        throw new Error('storage disabled')
+      })
     mockMultiOrgContext()
 
     try {
@@ -354,7 +357,7 @@ describe('LoginView - remembered org slug', () => {
       })
       expect(wrapper.find('[data-testid="login-context-loading"]').exists()).toBe(false)
     } finally {
-      localStorage.getItem = origGetItem
+      getItemSpy.mockRestore()
     }
   })
 })
@@ -480,10 +483,11 @@ describe('LoginView - used last time tag', () => {
   })
 
   it('renders without a tag when localStorage reads throw', async () => {
-    const origGetItem = localStorage.getItem
-    localStorage.getItem = () => {
-      throw new Error('storage disabled')
-    }
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, 'getItem')
+      .mockImplementation(() => {
+        throw new Error('storage disabled')
+      })
     mockSingleOrgContext({ oidc: [], saml: false })
 
     try {
@@ -493,7 +497,7 @@ describe('LoginView - used last time tag', () => {
       })
       expect(wrapper.text()).not.toContain('Used last time')
     } finally {
-      localStorage.getItem = origGetItem
+      getItemSpy.mockRestore()
     }
   })
 
@@ -519,10 +523,11 @@ describe('LoginView - used last time tag', () => {
   })
 
   it('completes a successful login when localStorage writes throw', async () => {
-    const origSetItem = localStorage.setItem
-    localStorage.setItem = () => {
-      throw new Error('quota exceeded')
-    }
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new Error('quota exceeded')
+      })
     mockSingleOrgContext({ oidc: [], saml: false })
     vi.spyOn(global, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -546,7 +551,7 @@ describe('LoginView - used last time tag', () => {
       })
       expect(wrapper.find('[role="alert"]').exists()).toBe(false)
     } finally {
-      localStorage.setItem = origSetItem
+      setItemSpy.mockRestore()
     }
   })
 })
