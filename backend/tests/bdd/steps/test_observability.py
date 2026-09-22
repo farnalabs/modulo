@@ -315,7 +315,7 @@ def trace_no_credentials(ctx):
     spans = ctx.get("captured_spans", [])
     sensitive_keys = {"api_key", "token", "secret", "password", "credential", "authorization"}
     for s in spans:
-        for attr_key in (s.attributes or {}):
+        for attr_key in s.attributes or {}:
             for sensitive in sensitive_keys:
                 assert sensitive not in attr_key.lower(), f"Sensitive key '{attr_key}' found in span attributes"
 
