@@ -5,6 +5,9 @@ on:
     - cron: "*/10 * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   check-prod-health:
     name: Check app.modulo.run health

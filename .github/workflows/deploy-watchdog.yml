@@ -75,6 +75,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
+          persist-credentials: false
 
       # Design contract: every gh/flyctl call is wrapped so an API hiccup
       # logs a ::warning:: and exits 0 (failing safe - never dispatch blind).

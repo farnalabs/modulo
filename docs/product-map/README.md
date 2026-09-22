@@ -467,6 +467,28 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > credentials, 204 DELETE, and the org-isolation 404 on a foreign-org
 > fetch/delete. `_ORPHANED_BDD_FEATURES` stays empty.
 >
+> **Closed this walk (2026-09-21):** closed the composite content_json
+> validation gap (`composites/composite_library.feature`, under `feat-library`).
+> The "Composite content_json validation — missing required fields returns
+> error" scenario — the last `@awaiting-implementation` draft in
+> `composite_library.feature` — now drives the REAL `POST /api/v1/libraries`
+> create route: `LibraryPrimitiveCreate` in `api/routes/library.py` gained a
+> `model_validator` that rejects a `composite` primitive whose `content_json`
+> lacks the `nodes`/`edges` graph body with 422 (10 empty/missing-key/pass
+> cases are locked by the composite BDD steps and the
+> `test_library_routes.py` unit suite), instead of falling through to a bogus
+> 409 from the DB IntegrityError mapping. Removed the scenario from
+> `PINNED_AWAITING_IMPLEMENTATION` (the composite entry is now empty).
+> `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Review follow-up (2026-09-21):** extended the same composite graph
+> validation to the update boundary — `PATCH /api/v1/libraries/{id}` now rejects
+> (422) a composite whose patched `content_json` lacks the `nodes`/`edges` lists,
+> so an existing composite can no longer be mutated into a structurally broken
+> graph. The shared `_assert_composite_content_json` helper backs both the create
+> `model_validator` and the update route; unit coverage added in
+> `test_library_routes.py`. (PR #862 review feedback.)
+
 > **Closed this walk (2026-09-21):** closed `feat-sso`'s "No BDD scenarios
 > for admin provider CRUD" gap (`auth/sso-provider-ui.md`). Registered the new
 > `auth/sso_admin_crud.feature` into the executing BDD suite from the new
@@ -480,6 +502,22 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > 204 delete, 404 on a missing provider, the OIDC discovery-document and
 > SAML metadata-XML connection tests, group-to-team mapping set/get, and the
 > non-admin 403. `_ORPHANED_BDD_FEATURES` stays empty.
+
+> **Closed this walk (2026-09-21):** closed `feat-observability`'s
+> "`active_run_observability.feature` is deselected from CI" gap
+> (`observability/observability.md`). Un-gated the two scenarios in
+> `observability/active_run_observability.feature` and re-anchored them so they
+> drive the REAL `GET /api/v1/runs/{id}` and `GET /api/v1/runs/{id}/events`
+> routes with only the `_do_*` DB-fetch seams patched — the route handler, the
+> `require_permission_any_credential` authz dependency, and the `RunResponse` /
+> `RunEventsResponse` serialization all run for real. The event-stream scenario
+> additionally drives the REAL per-run `RunEventBroker` from the shared registry
+> (`replay_since` + the node-lifecycle filter asserted end to end), and the
+> detail scenario locks `trigger_actor` / `heartbeat_at` / `capacity` /
+> `work_item_refs` / `child_runs` on the wire. Removed the two scenarios from
+> `PINNED_AWAITING_IMPLEMENTATION`; the feature is now executing BDD coverage,
+> cited from both `feat-runs` (`build/runs.md`) and `feat-observability`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

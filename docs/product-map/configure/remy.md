@@ -64,7 +64,7 @@ listed org roles always granted).
   `backend/tests/unit/api/test_me_remy_skills.py` only.
 
 ## QA History
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `AnalyticsChart` surface (`components/analytics/AnalyticsChart.vue` static testids
   `analytics-chart` / `analytics-chart-canvas` / `analytics-chart-empty`) in the
   manifest `elements:` inventory for `/remy`: `RemyChat.vue` renders
@@ -73,7 +73,7 @@ listed org roles always granted).
   The component is now part of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/remy`
   and wired the two components into the reverse testid-coverage guard
@@ -81,7 +81,7 @@ listed org roles always granted).
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/remy`: the whole-page view(s) `UserRemySkillsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -89,14 +89,14 @@ listed org roles always granted).
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+- 2026-09-11: **product-map review pass** — registered the
   Remy chat surface on the `/remy` manifest `elements:` inventory: the page
   already documented its `RemyOnlyView.vue` chrome (`remy-only-*`) but not the
   `remy-analytics-card` static testid its embedded chat panel
   (`components/remy/RemyChat.vue`) ships. `test_mapped_route_elements_cover_owning_view_testids`
   now maps `/remy` to `RemyOnlyView.vue` + `RemyChat.vue` so the chat surface
   cannot drift invisible to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-08-28: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-28: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-remy`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/remy.py`,
   `api/routes/admin_remy.py`, `core/remy/*` and the `backend/tests/bdd/features/remy/`

@@ -65,6 +65,23 @@ class EvalType(StrEnum):
     HUMAN_SET = "human_set"
 
 
+class SuiteOutcome(StrEnum):
+    """Outcome of a suite-aggregate evaluation (FAR-971 §4.7).
+
+    * ``PASSED`` — all expected eval ids were persisted and the suite ratio
+      meets or exceeds the threshold (or no threshold was set).
+    * ``FAILED`` — all expected eval ids were persisted but the ratio is
+      below the threshold.
+    * ``INDETERMINATE`` — the suite's persisted eval id set does not cover
+      every expected eval id; the ratio is not computed and the suite
+      fails closed.
+    """
+
+    PASSED = "passed"
+    FAILED = "failed"
+    INDETERMINATE = "indeterminate"
+
+
 FailureBehaviour = Literal["warn", "block"]
 
 
@@ -150,6 +167,7 @@ class SuiteEvalResult(BaseModel):
     aggregate_score: float = Field(ge=0.0, le=1.0)  # 0.0-1.0
     passed: bool
     blocking_failures: list[str]
+    outcome: SuiteOutcome = SuiteOutcome.PASSED
 
 
 class LLMJudgeCallable(Protocol):
@@ -203,6 +221,42 @@ def _result_from_dict(
 class EvalEngine:
     """Stateless engine — evaluates one output against one eval definition per call."""
 
+    def _compute_result(
+        self,
+        output: dict[str, Any],
+        eval_def: EvalDefinition,
+        run_id: UUID,
+        llm_judge_callable: LLMJudgeCallable | None = None,
+    ) -> EvalResult:
+        """Core compute dispatch — shared by ``evaluate()`` and ``evaluate_result()``.
+
+        Returns the raw :class:`EvalResult` without any failure_behaviour
+        side-effect.  Exceptions that occur *during* compute (``UnknownEvalTypeError``,
+        ``GuardrailMisroutedError``, uncaught custom-function errors) propagate
+        unchanged — no partial state is created because they fire before any
+        persist step.
+        """
+        match eval_def.eval_type:
+            case EvalType.REGEX:
+                return self._evaluate_regex(output, eval_def, run_id)
+            case EvalType.JSON_SCHEMA:
+                return self._evaluate_json_schema(output, eval_def, run_id)
+            case EvalType.CUSTOM_FUNCTION:
+                return self._evaluate_custom(output, eval_def, run_id)
+            case EvalType.LLM_JUDGE:
+                return self._evaluate_llm(output, eval_def, run_id, llm_judge_callable)
+            case EvalType.GUARDRAIL:
+                # Guardrail detection is a sibling function (modulo.core.guardrails)
+                # that reuses the pure regex/json_schema helpers; it must never be
+                # routed through the generic engine — its config shape differs and
+                # block semantics are guardrail-owned (terminal eval_failed). Fail
+                # loudly on misrouting rather than silently mis-evaluate.
+                raise GuardrailMisroutedError(eval_def.name)
+            case EvalType.HUMAN_SET:
+                return self._evaluate_human_set(output, eval_def, run_id)
+            case _:
+                raise UnknownEvalTypeError(str(eval_def.eval_type))
+
     def evaluate(
         self,
         output: dict[str, Any],
@@ -229,32 +283,35 @@ class EvalEngine:
 
         """
         run_id = run_id or uuid4()
-        match eval_def.eval_type:
-            case EvalType.REGEX:
-                result = self._evaluate_regex(output, eval_def, run_id)
-            case EvalType.JSON_SCHEMA:
-                result = self._evaluate_json_schema(output, eval_def, run_id)
-            case EvalType.CUSTOM_FUNCTION:
-                result = self._evaluate_custom(output, eval_def, run_id)
-            case EvalType.LLM_JUDGE:
-                result = self._evaluate_llm(output, eval_def, run_id, llm_judge_callable)
-            case EvalType.GUARDRAIL:
-                # Guardrail detection is a sibling function (modulo.core.guardrails)
-                # that reuses the pure regex/json_schema helpers; it must never be
-                # routed through the generic engine — its config shape differs and
-                # block semantics are guardrail-owned (terminal eval_failed). Fail
-                # loudly on misrouting rather than silently mis-evaluate.
-                raise GuardrailMisroutedError(eval_def.name)
-            case EvalType.HUMAN_SET:
-                result = self._evaluate_human_set(output, eval_def, run_id)
-            case _:
-                raise UnknownEvalTypeError(str(eval_def.eval_type))
+        result = self._compute_result(output, eval_def, run_id, llm_judge_callable)
 
         if not result.passed:
             if eval_def.failure_behaviour == "block":
                 raise EvalBlockedError(eval_def.name, result.detail)
             _log.warning("Eval %s failed (warn): %s", eval_def.name, result.detail)
 
+        return result
+
+    def evaluate_result(
+        self,
+        output: dict[str, Any],
+        eval_def: EvalDefinition,
+        *,
+        run_id: UUID | None = None,
+        llm_judge_callable: LLMJudgeCallable | None = None,
+    ) -> EvalResult:
+        """Compute-only: return the result without raising ``EvalBlockedError``.
+
+        Same compute path as :meth:`evaluate` but never raises
+        ``EvalBlockedError`` — returns the ``EvalResult`` regardless of
+        ``failure_behaviour`` and pass/fail.  Other engine exceptions
+        (``UnknownEvalTypeError``, ``GuardrailMisroutedError``, and uncaught
+        exceptions from custom functions) are still raised.
+        """
+        run_id = run_id or uuid4()
+        result = self._compute_result(output, eval_def, run_id, llm_judge_callable)
+        if not result.passed:
+            _log.warning("Eval %s failed: %s", eval_def.name, result.detail)
         return result
 
     _RE_FLAG_MAP: ClassVar[dict[str, int]] = {
@@ -685,6 +742,8 @@ def evaluate_suite(
     if pass_threshold is not None:
         suite_passed = aggregate_score >= pass_threshold
 
+    outcome = SuiteOutcome.PASSED if suite_passed else SuiteOutcome.FAILED
+
     return SuiteEvalResult(
         suite_id=suite_id,
         total_evals=total,
@@ -692,6 +751,7 @@ def evaluate_suite(
         aggregate_score=aggregate_score,
         passed=suite_passed,
         blocking_failures=blocking_failures,
+        outcome=outcome,
     )
 
 
@@ -707,6 +767,7 @@ __all__ = [
     "GuardrailMisroutedError",
     "LLMJudgeCallable",
     "SuiteEvalResult",
+    "SuiteOutcome",
     "UnknownEvalTypeError",
     "evaluate_suite",
 ]

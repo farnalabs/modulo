@@ -52,7 +52,7 @@ an eligible tier.
   warehouse is not a shipped surface (that is the scope of `feat-analytics`).
 
 ## QA History
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/product-analytics`
   and wired the two components into the reverse testid-coverage guard
@@ -60,7 +60,7 @@ an eligible tier.
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+- 2026-09-11: **product-map review pass** — registered the
   consent prompt surface (`product-analytics/ProductAnalyticsConsentPrompt.vue`
   static testid `product-analytics-consent-prompt`) in the `/admin/product-analytics`
   manifest `elements:` inventory — the prompt renders organisation-wide via
@@ -68,7 +68,7 @@ an eligible tier.
   had no product-map home. `test_mapped_route_elements_cover_owning_view_testids`
   now maps the route to its page view + the prompt component, so the consent
   surface cannot drift invisible to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-product-analytics`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/product_analytics*.py`,
   `core/product_analytics/*` and the product-analytics unit/BDD/integration suites

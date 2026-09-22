@@ -50,6 +50,9 @@ defaults:
 env:
   DATA_DIR: /home/runner/.local/share/modulo/data
 
+permissions:
+  contents: read
+
 jobs:
   release-smoke:
     name: Release smoke (exact artifact)

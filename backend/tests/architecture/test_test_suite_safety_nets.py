@@ -136,11 +136,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Remove schema assignment",
         }
     ),
-    "tests/bdd/features/composites/composite_library.feature": frozenset(
-        {
-            "Composite content_json validation — missing required fields returns error",
-        }
-    ),
     "tests/bdd/features/errors/recovery.feature": frozenset(
         {
             "Already running run cannot be recovered",
@@ -190,12 +185,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "MCP trigger respects scope limits",
             "MCP trigger with run_context",
             "MCP trigger without auth is rejected",
-        }
-    ),
-    "tests/bdd/features/observability/active_run_observability.feature": frozenset(
-        {
-            "Run detail exposes the active-run observability fields",
-            "Run event stream exposes node lifecycle events",
         }
     ),
     "tests/bdd/features/pipelines/concurrency.feature": frozenset(

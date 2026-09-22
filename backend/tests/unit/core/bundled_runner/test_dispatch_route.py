@@ -254,7 +254,7 @@ def test_workspace_spec_selected_egress_refused_on_docker_tier() -> None:
     allowlists, so granting full outbound would be a fail-open on a security
     control.  The operator must use 'outbound' or 'none', or switch tiers."""
     profile = _profile("runner_docker", network_policy="selected")
-    with pytest.raises(SandboxTierRefusedError, match="network_policy='selected'"):
+    with pytest.raises(SandboxTierRefusedError, match="egress refused on Docker tier"):
         _workspace_spec_for_dispatch(
             profile,
             org_id=_ORG,

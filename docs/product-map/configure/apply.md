@@ -116,7 +116,7 @@ schemas, model-backends, pipelines and triggers features.
 ## Known Gaps
 
 ## QA History
-- 2026-09-19: **improve-architecture (product-map walk)** — closed the
+- 2026-09-19: **product-map review pass** — closed the
   "`--diff` graph detail is pipeline-only" gap. Extended `drift_detail` so a
   drifted schema / model backend / trigger carries a per-entity managed-field
   breakdown (`{"fields": {added/removed/modified}}`, keyed `<kind>:<name>` so
@@ -129,7 +129,7 @@ schemas, model-backends, pipelines and triggers features.
   `test_apply_drift.py` (schema / model backend / trigger field breakdowns,
   renderer output, and the no-bare-name-entry-for-non-pipeline guard).
 
-- 2026-09-19: **improve-architecture (product-map walk)** — closed the
+- 2026-09-19: **product-map review pass** — closed the
   "No BDD feature file" gap. Registered `cli/apply.feature` into the executing
   BDD suite from the new `steps/test_apply_cli.py`, driving the REAL
   `modulo.cli.apply` seams network-free and DB-free: the loader / `ApplyConfig`
@@ -146,7 +146,7 @@ schemas, model-backends, pipelines and triggers features.
   `drift create` / `drift summary` rendering). `_ORPHANED_BDD_FEATURES` stays
   empty.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/model-backends`, `/settings/triggers`
   and wired the two components into the reverse testid-coverage guard
@@ -154,7 +154,7 @@ schemas, model-backends, pipelines and triggers features.
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-10: **improve-architecture (product-map walk)** — added this
+- 2026-09-10: **product-map review pass** — added this
   behaviour-tracker for the registered manifest feature `feat-apply`
   (FAR-681), which had `product_map` refs from four routes but no
   `docs/product-map/` entry, so the graph root's "all registered manifest

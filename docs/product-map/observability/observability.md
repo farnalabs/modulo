@@ -36,6 +36,7 @@ bdd:
   - backend/tests/bdd/features/observability/error_forwarders.feature
   - backend/tests/bdd/features/observability/monitor_config.feature
   - backend/tests/bdd/features/observability/otel_traces.feature
+  - backend/tests/bdd/features/observability/active_run_observability.feature
   - backend/tests/bdd/features/errors/failed_state.feature
   - backend/tests/bdd/features/errors/retry.feature
   - backend/tests/bdd/features/error_tracking/error_dashboard.feature
@@ -82,14 +83,14 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
 - [x] Frontend views behind the shipped routes render the settings and the admin
       error dashboard/detail surfaces (`SettingsObservabilityView.vue`,
       `AdminErrorsView.vue`, `AdminErrorDetailView.vue`)
+- [x] Active-run observability contract: run detail exposes `trigger_actor`,
+      `heartbeat_at`, `capacity`, `work_item_refs` and `child_runs`, and the run
+      event stream exposes `node_started` / `node_completed` / `node_failed`
+      lifecycle events (`active_run_observability.feature`, `routes/runs.py` on
+      `GET /api/v1/runs/{id}` / `GET /api/v1/runs/{id}/events`)
 
 ## Known Gaps
 
-- **`active_run_observability.feature` is deselected from CI** — the
-  active-run observability contract (node-progress strip, queue banner, trigger
-  actor, heartbeat, work items, child runs) is gated because the mock BDD client
-  cannot drive the real run-detail/events routes; the shapes are unit-verified
-  only.
 - **No BDD for OTel *trace* span capture** — `otel_traces.feature` scenarios
   describe chain-span capture but run behind the OTel-exporter harness; the
   active metric/OTLP-config contracts are the BDD-locked surface.
@@ -100,7 +101,18 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   unit/BDD-verified at the API layer only.
 
 ## QA History
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-21: **product-map walk** — closed the "`active_run_observability.feature`
+  is deselected from CI" gap. Un-gated the two scenarios and re-anchored them so
+  they drive the REAL `GET /api/v1/runs/{id}` and `GET /api/v1/runs/{id}/events`
+  routes with only the `_do_*` DB-fetch seams patched (the route handler, the
+  `require_permission_any_credential` authz dependency, and `RunResponse` /
+  `RunEventsResponse` serialization run for real). The event-stream scenario
+  additionally drives the REAL per-run `RunEventBroker` in the shared registry,
+  so `replay_since` and the node-lifecycle filter are asserted end to end.
+  Removed the two scenarios from
+  `PINNED_AWAITING_IMPLEMENTATION`; the feature is now executing BDD coverage.
+
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/errors`, `/admin/errors/:id`, `/settings/error-forwarders`,
   `/settings/monitoring`, `/settings/observability`
@@ -112,7 +124,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   without importing it, so the entitlement gate could not resolve and the whole
   page surface silently degraded to an unresolved custom element.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   surface the `/admin/errors/:id`, `/settings/error-forwarders` and
   `/settings/monitoring` whole-page views render (`components/shared/JsonViewer.vue`
   and `components/shared/ErrorAlert.vue` static testids `json-viewer*` /
@@ -124,14 +136,14 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   `SettingsMonitorConfigView.vue`, so the error-detail / forwarders / browser-monitor
   surfaces stay visible to Remy's docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-11: **product-map review pass** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/admin/errors` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
   guard, so the error-list search control the page ships stays visible to Remy's
   docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/observability`: the whole-page view(s) `SettingsObservabilityView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -139,7 +151,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **improve-architecture (product-map walk)** — added this entry to
+- 2026-08-27: **product-map review pass** — added this entry to
   close the coverage gap for the registered `feat-observability` feature (no
   behaviour-tracker existed). Behaviours verified against `core/error_tracking/`,
   the `/api/v1/errors*` + `/api/v1/settings/observability` +

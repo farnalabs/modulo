@@ -84,6 +84,7 @@ from modulo.core.workflow_import_export import (
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.library_primitive import (
     create_library_primitive,
+    get_library_primitive,
     restore_library_primitive,
     soft_delete_library_primitive,
     update_library_primitive,
@@ -270,6 +271,25 @@ class LibraryPrimitiveListResponse(BaseModel):
 _PRIMITIVE_TYPE_PATTERN = f"^({'|'.join(PRIMITIVE_TYPES)})$"
 
 
+_COMPOSITE_CONTENT_KEYS = ("nodes", "edges")
+
+
+def _assert_composite_content_json(primitive_type: str, content_json: dict[str, Any] | None) -> None:
+    """Reject a composite primitive whose ``content_json`` lacks the graph body.
+
+    A ``composite`` primitive's ``content_json`` is the sub-pipeline graph
+    (``{"nodes": [...], "edges": [...]}``) that ``_build_pipeline_from_template``
+    and the composite routes consume. Reject a payload missing either key at the
+    boundary (422) instead of persisting a broken primitive.
+    """
+    if primitive_type != "composite":
+        return
+    content = content_json or {}
+    for key in _COMPOSITE_CONTENT_KEYS:
+        if key not in content or not isinstance(content[key], list):
+            raise ValueError(f"content_json for primitive_type 'composite' must include a '{key}' list")
+
+
 class LibraryPrimitiveCreate(TeamVisibilityMixin):
     primitive_type: str = Field(pattern=_PRIMITIVE_TYPE_PATTERN)
     name: str = Field(min_length=1, max_length=255)
@@ -280,6 +300,12 @@ class LibraryPrimitiveCreate(TeamVisibilityMixin):
     owner_team_id: uuid.UUID | None = None
     visibility: str = Field(default="org", pattern=r"^(org|team)$")
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
+
+    @model_validator(mode="after")
+    def _validate_composite_content_json(self) -> Self:
+        """Composite primitives store a graph body; reject a structurally empty one."""
+        _assert_composite_content_json(self.primitive_type, self.content_json)
+        return self
 
 
 class LibraryPrimitiveUpdate(TeamVisibilityMixin):
@@ -790,6 +816,16 @@ async def update_library_primitive_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            if "content_json" in updates:
+                existing = await get_library_primitive(session, primitive_id)
+                if existing is not None:
+                    try:
+                        _assert_composite_content_json(existing.primitive_type, updates["content_json"])
+                    except ValueError as exc:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail=str(exc),
+                        ) from None
             prim = await update_library_primitive(session, primitive_id, updates)
     except IntegrityError:
         _log.exception("library.update_library_primitive_endpoint")

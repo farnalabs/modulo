@@ -1,7 +1,6 @@
 """Step definitions for feature-flag inspection: list, per-flag detail, 404, toggle.
 
-Wired into the executing BDD suite on the 2026-09-14 improve-architecture
-product-map walk, closing the ``feat-license`` "no executing BDD surface for
+Wired into the executing BDD suite, closing the ``feat-license`` "no executing BDD surface for
 feature-flag inspection" gap: ``feature_flag_inspection.feature`` shipped under
 ``tests/bdd/features/licensing/`` but no step module registered it via
 ``scenarios(...)``, so it never executed and the inspection/override endpoints

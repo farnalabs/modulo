@@ -129,7 +129,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   covers the DB-backed pre-run checks.
 
 ## QA History
-- 2026-09-16: **improve-architecture (product-map walk)** — closed the last BDD
+- 2026-09-16: **product-map review pass** — closed the last BDD
   graph/config-validation gap. `pipelines/validation.feature` (a stale
   placeholder draft asserting graph semantics against the create endpoint,
   which only accepts `PipelineCreate`) was rewritten into an accurate save-time
@@ -142,13 +142,13 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   valid — all collect and pass. The redundant duplicate
   `pipelines/pipeline_config_validation.feature` (the same four scenarios only
   reworded) was deleted. `_ORPHANED_BDD_FEATURES` shrinks to zero.
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for `/pipelines`, which
   renders the header's `#right` action slot, and wired the component into the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) so the
   header action surface stays visible to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/node-categories`
   and wired the two components into the reverse testid-coverage guard
@@ -156,13 +156,13 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-12: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-12: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/composites/:id/editor`: the whole-page view `pipeline/CompositeEditorView.vue`
   now maps to its owning view so a newly shipped testid on the composite editor can
   no longer silently stay invisible to Remy's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/node-categories`: the whole-page view(s) `AdminNodeCategoriesView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -170,14 +170,14 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-11: **product-map review pass** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/pipelines` and
   `/pipelines/copy` manifest `elements:` inventory and wired the component into the
   reverse testid-coverage guard, so the pipeline search control both pages ship
   stays visible to Remy's docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/pipelines/copy`: the whole-page view(s) `CopyPipelineWizard.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -185,7 +185,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+- 2026-09-11: **product-map review pass** — registered the
   pipeline folder tree (`pipelines/FolderTree.vue` static testids `folder-tree`,
   `folder-tree-new`, `folder-tree-all-pipelines`) in the `/pipelines` manifest
   `elements:` inventory: the page already documented the folder row/toggle
@@ -193,7 +193,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   actions were the remaining drift. `test_mapped_route_elements_cover_owning_view_testids`
   now maps `/pipelines` to `PipelineListView.vue` + `FolderTree.vue` so the folder
   surface cannot ship invisible to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+- 2026-09-11: **product-map review pass** — registered the
   editor's command-management editor (`pipeline/SandboxCommandsEditor.vue`) static
   testids (`pipeline-editor-node-commands-editor`,
   `pipeline-editor-node-command-{add,empty,joiner,preview,scalar}`) in the
@@ -201,13 +201,13 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   `test_mapped_route_elements_cover_owning_view_testids` to map that route to the
   owning component, so the command surface can no longer ship controls invisible
   to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-09-10: **improve-architecture (product-map walk)** — registered the
+- 2026-09-10: **product-map review pass** — registered the
   editor's runner-binding (`AgentRunnerBindings.vue`) and snapshot-timeline
   (`PipelineSnapshotTimeline.vue`) static testids (`pipeline-editor-runner-binding-*`,
   `pipeline-editor-runner-bindings*`, `snapshot-timeline-*`) in the
   `/pipelines/:id/editor` manifest `elements:` inventory, so those two panels no
   longer ship controls invisible to Remy's docs indexer / `/api/v1/manifest`.
-- 2026-09-08: **improve-architecture (product-map walk)** — closed the
+- 2026-09-08: **product-map review pass** — closed the
   "no executing BDD surface for `run_lifecycle.feature` / `run_sequential.feature`"
   gap: both files are now registered in `steps/test_pipelines.py` and the missing
   step definitions are written (`a running pipeline with a node that returns None
@@ -219,26 +219,26 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   graph/config-validation BDD gap remains for `validation.feature` /
   `pipeline_config_validation.feature` — their steps are awaiting a dedicated
   graph-validation create/edit surface.
-- 2026-09-08: **improve-architecture (product-map walk)** — added the FAR-664
+- 2026-09-08: **product-map review pass** — added the FAR-664
   sandbox save-time validation behaviour to the graph layer: `agent_commands`
   list items terminated by a heredoc terminator are rejected at save time
   (`SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM`) while a scalar `agent_command` is
   unaffected (`graph_validator/__init__.py`
   `_check_sandbox_heredoc_list_item`, unit-covered in
   `test_edges_and_sandbox_validation.py`).
-- 2026-09-08: **improve-architecture (product-map walk)** — corrected a stale coverage
+- 2026-09-08: **product-map review pass** — corrected a stale coverage
   claim in Known Gaps: `run_lifecycle.feature` / `run_sequential.feature` were described
   as "exercised by the same step suite", but no step module registers them via
   `scenarios(...)` (verified across `backend/tests/bdd/steps/`). The claim now splits the
   registered run files (`run_context.feature`, `run_variants.feature`) from the two
   never-executing ones, and the latter are listed as a genuine no-executing BDD gap.
-- 2026-09-07: **improve-architecture (feature-gap walk)** — registered
+- 2026-09-07: **product-map review pass** — registered
   `checkpoint_resume.feature` in `steps/test_pipelines.py` (previously shipped but never
   executed) and aligned the resume step so a `Given a run that failed at node N` derives
   the restart node from the failure point. The three checkpoint/resume scenarios now
   collect and pass; the graph/config-validation BDD gap remains for
   `validation.feature` / `pipeline_config_validation.feature`.
-- 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-pipelines`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/pipelines.py`,
   `core/pipeline_engine` and the pipelines/graph-validator BDD+unit suites.

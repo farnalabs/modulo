@@ -313,6 +313,9 @@ async def receive_slack_event(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Duplicate Slack event",
         ) from exc
+    # EventNotAcceptedError is deliberately not caught here: the Slack path
+    # (handle_app_mention) never calls _enforce_event_acceptance, so this
+    # error cannot be raised from the Slack trigger route today.
     except PipelineRateLimitError as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

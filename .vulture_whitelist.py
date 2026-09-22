@@ -411,4 +411,11 @@ __all__ = [
     #     production callers wired in chunk 3) ---
     "resolve_policy_gate",  # policy gate resolution (unwired until chunk 3)
     "validate_binding",  # policy gate binding validation (unwired until chunk 3)
+    # --- FAR-971 chunk 2: persist-before-decide reorder ---
+    # _persist_gate_eval_results was the per-batch persistence helper for the
+    # HITL gate-eval loop.  Chunk 2 replaced it with the shared per-eval helper
+    # (eval_persist_order.run_evals_persist_before_decide), so it is no longer
+    # called by any production code.  Tests still reference it (test_node_runner_residual
+    # and test_eval_versioning) — not deleted until tests are migrated.
+    "_persist_gate_eval_results",
 ]

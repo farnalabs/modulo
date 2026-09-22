@@ -556,6 +556,15 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Pipeline configuration is invalid.",
     ),
+    # FAR-1115: an agent node (model-backed by intent) whose agent resolves
+    # to no model_backend_id — a real misconfiguration that the old stub
+    # path silently masked as a successful execution with zero tokens.
+    "config.missing_model_backend": ErrorCodeSpec(
+        error_class="config",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Agent node references an agent with no model backend configured.",
+    ),
 }
 
 
@@ -656,6 +665,8 @@ LEGACY_ALIASES: dict[str, str] = {
     "eval_suite_blocked": _CODE_EVAL_BLOCKED,
     # Config.
     "configuration_error": "config.error",
+    # FAR-1115: agent node with no model backend configured.
+    "NodeMissingModelBackendError": "config.missing_model_backend",
     # Capacity.
     "claim_cap_exhausted": "capacity.claim",
     # FAR-648: the dispatcher_reconcile expired-HITL-gate terminalizer writes

@@ -3,6 +3,9 @@ name: CodeScene Analysis
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   codescene:
     name: CodeScene scan
@@ -12,6 +15,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install CodeScene CLI
         run: |

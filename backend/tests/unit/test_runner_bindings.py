@@ -178,3 +178,42 @@ def test_precedence_runner_bindings_between_profile_and_node() -> None:
     )
     assert script_envs["K"] == "v"
     assert "APP_MODULO_OPENCODE_API_KEY" not in script_envs
+
+
+def test_sandbox_exceptions_are_single_definitions():
+    """FAR-1085: exactly ONE class per exception — no duplicated definitions.
+
+    Duplicated exception classes break isinstance/except matching across
+    modules (the FAR-996/997 lesson).  node_runner must re-export the
+    canonical classes from sandbox_errors.
+    """
+    from modulo.core.pipeline_engine import node_runner, sandbox_errors
+
+    assert node_runner.SandboxNodeFailedError is sandbox_errors.SandboxNodeFailedError
+    assert node_runner.SandboxTierRefusedError is sandbox_errors.SandboxTierRefusedError
+
+
+def test_sandbox_exceptions_cross_module_catchable():
+    """FAR-1085: a SandboxTierRefusedError raised via node_runner IS caught by sandbox_errors.
+
+    This is the regression this fix exists for — before unification, the
+    two classes were distinct types and except matching silently failed.
+    """
+    from modulo.core.pipeline_engine import sandbox_errors
+
+    # Raise via the node_runner re-export — this is how runner_dispatch and
+    # the executor surface the error.
+    from modulo.core.pipeline_engine.node_runner import (
+        SandboxTierRefusedError as NodeRunnerTier,
+    )
+
+    try:
+        raise NodeRunnerTier("test refusal")
+    except sandbox_errors.SandboxTierRefusedError:
+        pass  # expected — caught
+    else:
+        raise AssertionError(
+            "SandboxTierRefusedError raised via node_runner was NOT caught "
+            "by except sandbox_errors.SandboxTierRefusedError — classes are "
+            "still duplicated"
+        )

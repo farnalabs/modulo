@@ -102,7 +102,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   triggered/run via the suite machinery, not a standalone cron in the eval API.
 
 ## QA History
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/evals/editor`, `/evals/proposals`
   and wired the two components into the reverse testid-coverage guard
@@ -110,7 +110,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/evals/proposals`: the whole-page view(s) `EvalProposalsQueueView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -118,7 +118,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/evals/editor`: the whole-page view(s) `EvalEditorView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -126,7 +126,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-30: **improve-architecture (product-map walk)** — closed the
+- 2026-08-30: **product-map review pass** — closed the
   "no executing BDD surface for the `llm_judge` / `regex` scorer types" gap:
   `evals/eval_llm_judge.feature` and `evals/eval_regex.feature` now execute
   through the new step module `tests/bdd/steps/test_eval_scorer_gates.py`
@@ -139,7 +139,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   judge `model_backend_id`, and the guarded rubric prompt with the
   data-not-instructions delimiter wrapping.
 
-- 2026-08-30: **improve-architecture (product-map walk)** — new behaviour
+- 2026-08-30: **product-map review pass** — new behaviour
   tracker for the registered `feat-evals` manifest feature (routes `/evals/editor`,
   `/evals/proposals`, previously absent from the feature graph). Behaviours
   verified against `api/routes/evals.py` + `feedback.py`, `core/eval_engine/*`

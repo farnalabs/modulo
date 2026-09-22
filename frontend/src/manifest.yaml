@@ -4696,8 +4696,9 @@ features:
             - "[x] GET /api/v1/analytics/concurrency reports the pooled slot-utilisation series (pool_reference plus per-bucket max/avg active + queued), and GET /api/v1/analytics/guardrails returns an advisory-only guardrail scorecard (fires, rates, self-correction, evasion-band drift) that never gates autonomy"
             # Frontend (AnalyticsView, /analytics)
             - "[x] The analytics page renders the bucketed series, dimension/status/trigger filters, concurrency utilisation, the advisory guardrail scorecard and a JSON/CSV export, surfaced via /api/v1/analytics/*"
+            # Server-side scan export (FAR-102 scan surface)
+            - "[x] GET /api/v1/analytics/scan streams the WHOLE matching fact set in ONE response (NDJSON by default, or a Content-Disposition CSV attachment): the same typed filters, org + team-boundary scoping, per-org rate limit and bounded statement timeout as /export, but no offset/limit pagination — the server keyset-paginates over the stable (run_date, created_at, run_id) order in fixed page-size batches so memory stays bounded for any org size"
         deferrals:
-            - No server-side streaming / scan export for the whole org in one response (export is paginated JSON/CSV only)
             - Per-org analytics rate limiting is a best-effort in-memory window (60/min), not a shared Redis-scaled limiter
     feat-apply:
         description: '`modulo apply` — declarative configuration CLI (FAR-681)'

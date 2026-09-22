@@ -99,7 +99,7 @@ rate-limited by the `TriggerEngine`.
   operation (audited), not per-trigger.
 
 ## QA History
-- 2026-09-17: **improve-architecture (product-map walk)** — closed the
+- 2026-09-17: **product-map review pass** — closed the
   "Slack app-mention triggering is unit-tested only" gap: registered
   ``triggers/slack_app_mention.feature`` into the executing BDD suite from the
   new ``steps/test_slack_app_mention_triggers.py``, driving the real
@@ -113,7 +113,7 @@ rate-limited by the `TriggerEngine`.
   ``event_type_not_accepted`` / ``parse_failed`` /
   ``concurrency_limit_reached`` / ``rate_limited``).
   ``_ORPHANED_BDD_FEATURES`` stays empty.
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/triggers`
   and wired the two components into the reverse testid-coverage guard
@@ -121,7 +121,7 @@ rate-limited by the `TriggerEngine`.
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/triggers`: the whole-page view(s) `SettingsTriggersView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -129,7 +129,7 @@ rate-limited by the `TriggerEngine`.
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-29: **improve-architecture (product-map walk)** — new behaviour
+- 2026-08-29: **product-map review pass** — new behaviour
   tracker for the registered `feat-triggers` manifest feature (route
   `/settings/triggers`, previously absent from the feature graph). Behaviours
   verified against `api/routes/triggers.py`, `api/routes/webhooks.py`, the

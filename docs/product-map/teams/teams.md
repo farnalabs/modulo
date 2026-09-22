@@ -82,7 +82,7 @@ org profile, and is the product-map home for user roles.
   (they belong to the auth/JWT feature edges).
 
 ## QA History
-- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+- 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/users`, `/settings/teams`
   and wired the two components into the reverse testid-coverage guard
@@ -90,7 +90,7 @@ org profile, and is the product-map home for user roles.
   surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+- 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/teams`: the whole-page view(s) `SettingsTeamsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -98,7 +98,7 @@ org profile, and is the product-map home for user roles.
   testid can no longer silently stay invisible to Remy's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-teams`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/teams.py`,
   `auth/team_rbac.py`, `core/team_visibility.py` and the teams BDD/unit suites.

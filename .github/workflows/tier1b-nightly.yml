@@ -13,6 +13,9 @@ on:
 env:
   TESTCONTAINERS_RYUK_DISABLED: "true"
 
+permissions:
+  contents: read
+
 jobs:
   tier1b-nightly:
     name: "Tier 1b testcontainers (heavy: gitlab, vllm, tgi)"
@@ -22,6 +25,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Free up disk space
         # Heavy Tier 1b images (gitlab CE, vllm, tgi) are multi-GB; the runner's
         # local disk is the binding constraint. Remove preinstalled toolchains
