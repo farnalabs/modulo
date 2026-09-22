@@ -124,6 +124,15 @@ def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefDTO]] | None
     Canonicalisation: per-node lists are sorted by eval id (DB result order is
     not guaranteed) and serialised with sorted JSON keys.  UUIDs and Decimals
     are serialised via ``json.dumps(default=str)``.
+
+    NOTE (FAR-1100 cutover): the prior Pydantic ``EvalDefinition`` path used
+    ``model_dump(mode="json")`` which converts Decimals to floats (e.g.
+    ``0.5``).  The new ``EvalDefDTO`` dataclass path uses
+    ``dataclasses.asdict`` + ``json.dumps(default=str)`` which converts
+    Decimals to strings (e.g. ``"0.5"``).  This means every existing eval
+    definition hash changes on deploy — a one-time compiled-graph cache miss
+    that is harmless (the graph is recompiled on the next run with the fresh
+    definitions).  Field names and sets are identical between the two paths.
     """
     if not eval_defs_by_node:
         return ""
