@@ -110,11 +110,42 @@ network defaults) while preserving operator-owned ones.
 - Backend + SAQ + proxy: the compose default network.
 - Workspaces: the `modulo-runner-workspace` bridge ONLY — they cannot reach
   the proxy or backend services (verified + docker-marked-asserted).
-- Egress default: permitted (the tier's purpose). Per-profile opt-out:
-  `network_policy: none` → `--network=none` (loopback only).
+- Egress default: permitted — by design (the tier's purpose is an agent
+  with network access). Per-profile opt-out: `network_policy: none` →
+  `--network=none` (loopback only).
+- **Accepted gap: no bounded egress in this tier.** There is no egress
+  allowlist in the Docker tier (T1, and T2b). This is a DECISION, not an
+  omission: bounded egress belongs to your cluster's controls, not a
+  vendor-built gateway. For self-hosted compute, the supported bounded
+  answer is the Kubernetes tier (T3, still "to build"): run Modulo's runner
+  on your cluster and bound the workspace with your own NetworkPolicy. The
+  managed-sandbox tier (T2a / E2B) is a separate case — it supports egress
+  allowlists today via node-level `egress_policy: selected` +
+  `egress_allowlist` (an enforced, fail-closed allowlist inside the
+  sandbox).
 - Host-published ports (DB/Redis in the default compose) are reachable from
   egress-permitted workspaces — see the trust-boundary doc for the
   hardening criterion and operator mitigations.
+
+### Where this tier sits (execution-tier model)
+
+The execution tiers form a convenience↔control spectrum: Tiers 1–3 all run
+the agent in a Modulo-provisioned workspace, differing only in where the
+compute lives; T4 swaps in the customer's agent image.
+
+| Tier | Shape | Status |
+| -- | -- | -- |
+| **T1** Bundled Runner (self-hosted Docker) — this guide | simplest, self-contained; **deliberately permissive networking** — bounded egress is the customer's cluster's job, not a bespoke module of ours | shipped + hardened |
+| **T2a** Managed sandbox (E2B, and the adapter pattern for Daytona et al.) | zero-setup external compute | E2B shipped |
+| **T2b** Bundled Runner on rented compute (Hetzner/Ubicloud/any Docker host) | *not a new tier* — T1 on rented metal, works via `MODULO_DOCKER_HOST`; needs validation + docs, not an adapter | doc/validation |
+| **T3** Modulo runner on Kubernetes | **most recommended shape** — inherits the customer's RBAC, admission policy, NetworkPolicy and workload identity; bounded by *their* controls | to build |
+| **T4** Bring-your-own agent image | Modulo provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
+| **Dispatch** | govern an agent you already run — external CI triggers and customer-hosted agent endpoints | separate spike; connectors story, not a runner tier |
+
+T1 is deliberately the permissive end of the spectrum. For bounded egress
+on self-hosted compute, choose T3 (once built) and enforce with your own
+NetworkPolicy; the managed-sandbox tier (T2a / E2B) already supports
+node-level egress allowlists today.
 
 ## 6. Reconciler (leak repair)
 
