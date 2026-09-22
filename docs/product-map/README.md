@@ -553,6 +553,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > a config name, e2b skipped without an api_key, unknown config types rejected).
 > 13 scenarios execute in CI. `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-22):** closed `feat-observability`'s "No BDD for
+> OTel *trace* span capture" gap (`observability/observability.md`). The four
+> `otel_traces.feature` scenarios previously fabricated span dicts in `ctx` and
+> never exercised the real bridge; they are now re-anchored (`steps/test_observability.py`)
+> to drive the REAL `LangGraphOtelBridge` seams network-free and DB-free (the
+> `InMemorySpanExporter` pattern of `tests/unit/otel_bridge/test_handler.py`):
+> run-root trace seeding via `start_run_root`, chain callbacks per node
+> execution with the org/pipeline `set_run_context` stamps, a tool callback
+> parented under its agent node span (child `parent.span_id` == parent
+> `context.span_id`), connector chain callbacks whose span attributes carry no
+> credential fields, and a telemetry-disabled provider registered with NO span
+> processor so nothing reaches the exporter. The closed gap moved to a ticked
+> behaviour in the tracker + manifest; `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

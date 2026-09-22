@@ -88,12 +88,17 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
       event stream exposes `node_started` / `node_completed` / `node_failed`
       lifecycle events (`active_run_observability.feature`, `routes/runs.py` on
       `GET /api/v1/runs/{id}` / `GET /api/v1/runs/{id}/events`)
+- [x] OTel *trace* span capture is BDD-exercised against the REAL
+      `LangGraphOtelBridge` seams network-free and DB-free
+      (`otel_traces.feature`): chain spans carry the org/pipeline
+      `set_run_context` attribute stamps and appear for each node execution,
+      tool callbacks become child spans under their parent node span (real
+      parent/child wiring), connector callbacks stamp no credential fields in
+      span attributes, and a telemetry-disabled provider (no span processor)
+      exports no spans at all
 
 ## Known Gaps
 
-- **No BDD for OTel *trace* span capture** — `otel_traces.feature` scenarios
-  describe chain-span capture but run behind the OTel-exporter harness; the
-  active metric/OTLP-config contracts are the BDD-locked surface.
 - **Forwarder end-to-end delivery is not BDD-exercised per provider** — the
   forwarder config contract is locked; actual outbound delivery to each vendor
   is unit-tested at the dispatcher boundary.
@@ -101,6 +106,18 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   unit/BDD-verified at the API layer only.
 
 ## QA History
+- 2026-09-22: **product-map walk** — closed the "No BDD for OTel *trace* span
+  capture" gap. Re-anchored `otel_traces.feature` so its four scenarios drive
+  the REAL `LangGraphOtelBridge` seams network-free and DB-free (the
+  InMemorySpanExporter pattern of `tests/unit/otel_bridge/test_handler.py`):
+  run-root trace seeding via `start_run_root`, chain callbacks per node
+  execution with the org/pipeline `set_run_context` stamps, a tool callback
+  parented under its agent node span (child `parent.span_id` == parent
+  `context.span_id`), connector chain callbacks whose attributes carry no
+  credential fields, and a telemetry-disabled provider registered with NO span
+  processor so nothing reaches the exporter. The previous steps fabricated span
+  dicts in `ctx` and never touched the bridge.
+
 - 2026-09-21: **product-map walk** — closed the "`active_run_observability.feature`
   is deselected from CI" gap. Un-gated the two scenarios and re-anchored them so
   they drive the REAL `GET /api/v1/runs/{id}` and `GET /api/v1/runs/{id}/events`

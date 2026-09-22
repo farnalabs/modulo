@@ -182,88 +182,117 @@ def response_has_sample_span(ctx):
 
 # ============================================================================
 # otel_traces.feature — OTel Span Capture
+#
+# Closed 2026-09-22: previous steps fabricated span dicts in ctx and never
+# exercised the real bridge. They now drive the REAL LangGraphOtelBridge seams
+# network-free and DB-free (the OTel InMemorySpanExporter pattern of
+# tests/unit/otel_bridge/test_handler.py): run-root trace seeding
+# (start_run_root), chain + tool + connector callbacks, and the
+# set_run_context attribute stamps. "Telemetry disabled" builds a provider with
+# NO span processor, so no span can reach the exporter.
 # ============================================================================
+
+
+def _build_otel_harness(ctx: dict[str, Any], enabled: bool) -> None:
+    """Build (bridge, provider, exporter) into ctx once for the scenario."""
+    if ctx.get("bridge") is not None:
+        return
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from modulo.otel_bridge.handler import LangGraphOtelBridge
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    if enabled:
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+    ctx["exporter"] = exporter
+    ctx["provider"] = provider
+    ctx["bridge"] = LangGraphOtelBridge(tracer=provider.get_tracer("bdd.langgraph"))
+    ctx["otel_enabled"] = enabled
+    ctx["org_id"] = str(uuid.uuid4())
+    ctx["pipeline_id"] = str(uuid.uuid4())
+
+
+def _drive_run(ctx: dict[str, Any], nodes: tuple[str, ...], *, connector: bool = False) -> None:
+    """Drive the real bridge through a completed run (root + one span per node)."""
+    bridge = ctx["bridge"]
+    bridge.set_run_context(org_id=ctx["org_id"], pipeline_id=ctx["pipeline_id"])
+    bridge.start_run_root(f"{ctx['org_id']}:{ctx['pipeline_id']}")
+    for node in nodes:
+        run_id = uuid.uuid4()
+        bridge.on_chain_start(
+            {"name": node, "id": ["langchain", node]},
+            {},
+            run_id=run_id,
+            tags=["connector"] if connector else None,
+        )
+        bridge.on_chain_end({}, run_id=run_id)
+    bridge.end_run_root()
+    ctx["run_completed"] = True
 
 
 @given("OpenTelemetry is configured")
 def otel_configured(ctx):
-    ctx["otel_enabled"] = True
-    ctx["captured_spans"] = []
-    ctx["attrs"] = {"organisation_id": str(uuid.uuid4()), "pipeline_id": str(uuid.uuid4())}
+    _build_otel_harness(ctx, enabled=True)
 
 
 @given("OpenTelemetry is disabled")
 def otel_disabled(ctx):
-    ctx["otel_enabled"] = False
-    ctx["captured_spans"] = []
+    _build_otel_harness(ctx, enabled=False)
 
 
 @given("a pipeline run has completed")
 def run_completed(ctx):
-    ctx["pipeline_id"] = uuid.uuid4()
-    ctx["org_id"] = uuid.uuid4()
-    ctx["run_completed"] = True
-    ctx["captured_spans"] = ctx.get("captured_spans") or []
+    _build_otel_harness(ctx, enabled=True)
+    _drive_run(ctx, ("analyze", "summarize"))
 
 
 @given("a pipeline run with tool invocations")
 def run_with_tools(ctx):
-    ctx["pipeline_id"] = uuid.uuid4()
+    _build_otel_harness(ctx, enabled=True)
+    bridge = ctx["bridge"]
+    bridge.set_run_context(org_id=ctx["org_id"], pipeline_id=ctx["pipeline_id"])
+    bridge.start_run_root(f"{ctx['org_id']}:{ctx['pipeline_id']}")
+    agent_run = uuid.uuid4()
+    bridge.on_chain_start({"name": "agent", "id": ["langchain", "agent"]}, {}, run_id=agent_run)
+    tool_run = uuid.uuid4()
+    bridge.on_tool_start(
+        {"name": "search", "id": ["langchain", "search"]},
+        "query",
+        run_id=tool_run,
+        parent_run_id=agent_run,
+    )
+    bridge.on_tool_end("result", run_id=tool_run)
+    bridge.on_chain_end({}, run_id=agent_run)
+    bridge.end_run_root()
     ctx["has_tools"] = True
-    ctx["captured_spans"] = []
-    ctx["attrs"] = {"organisation_id": str(uuid.uuid4()), "pipeline_id": str(uuid.uuid4())}
+    ctx["run_completed"] = True
 
 
 @given("a pipeline run with connector operations")
 def run_with_connectors(ctx):
-    ctx["pipeline_id"] = uuid.uuid4()
+    _build_otel_harness(ctx, enabled=True)
+    _drive_run(ctx, ("github_query", "slack_notify"), connector=True)
     ctx["has_connectors"] = True
-    ctx["captured_spans"] = []
 
 
 @when("the OTel span exporter captures the trace")
 def otel_captures_trace(ctx):
-    spans = []
-    chain_span = {
-        "name": "langgraph.chain.analyze",
-        "attributes": {
-            "organisation_id": str(ctx.get("org_id", uuid.uuid4())),
-            "pipeline_id": str(ctx.get("pipeline_id", uuid.uuid4())),
-        },
-    }
-    spans.append(chain_span)
-
-    if ctx.get("has_tools"):
-        tool_span = {
-            "name": "langgraph.tool.search",
-            "attributes": {"tool.name": "search"},
-        }
-        spans.append(tool_span)
-
-    if ctx.get("has_connectors"):
-        conn_span = {
-            "name": "connector.query",
-            "attributes": {
-                "connector.type": "github",
-                "connector.operation": "query",
-                "connector.org_id": str(ctx.get("org_id", uuid.uuid4())),
-            },
-        }
-        spans.append(conn_span)
-
-    ctx["captured_spans"] = spans
+    ctx["captured_spans"] = list(ctx["exporter"].get_finished_spans())
 
 
 @when("a pipeline run completes")
 def pipeline_run_completes(ctx):
-    ctx["run_completed"] = True
+    _drive_run(ctx, ("analyze",))
 
 
 @then("the trace contains a span for each node execution")
 def trace_has_node_spans(ctx):
     spans = ctx.get("captured_spans", [])
-    span_names = [s["name"] for s in spans]
-    assert any("chain" in name for name in span_names), f"No chain spans found in {span_names}"
+    span_names = [s.name for s in spans]
+    assert any("langgraph.chain" in name for name in span_names), f"No chain spans found in {span_names}"
 
 
 @then("the trace contains attributes for organisation_id and pipeline_id")
@@ -272,12 +301,11 @@ def trace_has_org_and_pipeline(ctx):
     found_org = False
     found_pipeline = False
     for s in spans:
-        attrs = s.get("attributes", {})
-        for attr_key in attrs:
-            if "organisation_id" in attr_key:
-                found_org = True
-            if "pipeline_id" in attr_key:
-                found_pipeline = True
+        attrs = s.attributes or {}
+        if "organisation_id" in attrs:
+            found_org = True
+        if "pipeline_id" in attrs:
+            found_pipeline = True
     assert found_org, "No organisation_id attribute found in any span"
     assert found_pipeline, "No pipeline_id attribute found in any span"
 
@@ -287,7 +315,7 @@ def trace_no_credentials(ctx):
     spans = ctx.get("captured_spans", [])
     sensitive_keys = {"api_key", "token", "secret", "password", "credential", "authorization"}
     for s in spans:
-        for attr_key in s.get("attributes", {}):
+        for attr_key in s.attributes or {}:
             for sensitive in sensitive_keys:
                 assert sensitive not in attr_key.lower(), f"Sensitive key '{attr_key}' found in span attributes"
 
@@ -295,13 +323,18 @@ def trace_no_credentials(ctx):
 @then("each tool invocation has a child span under its parent node span")
 def tool_has_child_span(ctx):
     spans = ctx.get("captured_spans", [])
-    span_names = [s["name"] for s in spans]
-    assert any("tool" in name for name in span_names), f"No tool spans found in {span_names}"
+    tool = next((s for s in spans if "langgraph.tool.search" in s.name), None)
+    assert tool is not None, f"No tool spans found in {[s.name for s in spans]}"
+    assert tool.parent is not None, "tool span has no parent"
+
+    agent = next((s for s in spans if "langgraph.chain.agent" in s.name), None)
+    assert agent is not None, "agent node span missing"
+    assert tool.parent.span_id == agent.context.span_id
 
 
 @then("no OTel spans are exported")
 def no_otel_spans_exported(ctx):
-    spans = ctx.get("captured_spans", [])
+    spans = list(ctx["exporter"].get_finished_spans())
     assert len(spans) == 0, f"Expected no spans, got {len(spans)}"
 
 
