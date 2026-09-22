@@ -33,6 +33,19 @@ vi.mock('../stores/planStore', () => ({
 import router from '../router'
 import { clearAccessToken, setAccessToken } from '../lib/api/auth'
 
+// FAR-1152: the js-yaml v4 pin restores YAML merge-key expansion, so the
+// manifest's `<<: *team` on admin-notification-delivery now correctly yields
+// `required_roles: [admin]` / `required_tier: team`. The guard therefore runs
+// the role gate BEFORE the feature_flag branch this spec covers, so the token
+// must decode to an admin payload or navigation is denied before the flag is
+// ever consulted. Build a decodable JWT (header.payload.signature) whose
+// payload carries org_role: admin.
+function adminToken(): string {
+  const b64url = (obj: Record<string, unknown>) =>
+    btoa(JSON.stringify(obj)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+  return `${b64url({ alg: 'none', typ: 'JWT' })}.${b64url({ org_role: 'admin' })}.test-signature`
+}
+
 beforeEach(() => {
   localStorage.clear()
   setActivePinia(createPinia())
@@ -43,13 +56,13 @@ beforeEach(() => {
 
 describe('FAR-656: manifest route feature_flag guard', () => {
   it('redirects a feature-flagged route to the dashboard when its flag is disabled', async () => {
-    setAccessToken('real-jwt-token')
+    setAccessToken(adminToken())
     await router.push({ name: 'admin-notification-delivery' })
     expect(router.currentRoute.value.name).toBe('dashboard')
   }, 20_000)
 
   it('triggers a plan fetch (and still redirects) when the flag is disabled and the plan is not yet loaded', async () => {
-    setAccessToken('real-jwt-token')
+    setAccessToken(adminToken())
     planStoreStub.loaded = false
     await router.push({ name: 'admin-notification-delivery' })
     expect(router.currentRoute.value.name).toBe('dashboard')
@@ -57,7 +70,7 @@ describe('FAR-656: manifest route feature_flag guard', () => {
   }, 20_000)
 
   it('allows the route through when its flag is enabled', async () => {
-    setAccessToken('real-jwt-token')
+    setAccessToken(adminToken())
     featureEnabled.mockReturnValue(true)
     await router.push({ name: 'admin-notification-delivery' })
     expect(router.currentRoute.value.name).toBe('admin-notification-delivery')
