@@ -133,6 +133,7 @@ async def _seed_guardrail(
     }
     if config:
         cfg.update(config)
+    guardrail_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
@@ -141,7 +142,27 @@ async def _seed_guardrail(
                 "VALUES (:id, :oid, :pid, NULL, :name, 'guardrail', (:cfg)::json, 'warn', :aid)",
             ),
             {
-                "id": str(uuid.uuid4()),
+                "id": str(guardrail_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "name": name,
+                "cfg": json.dumps(cfg),
+                "aid": str(account_id),
+            },
+        )
+        # FAR-1100 chunk 3 (migration 0254) repointed eval_results.eval_id to
+        # evals and recreated the tenant trigger against evals: the legacy
+        # eval_definitions row needs its same-UUID evals mirror (the shape
+        # 0254's backfill produces) before the intake seam can persist the
+        # guardrail's eval_result.
+        await conn.execute(
+            text(
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
+                "eval_type, config_json, account_id) "
+                "VALUES (:id, :oid, :pid, NULL, :name, 'guardrail', (:cfg)::jsonb, :aid)"
+            ),
+            {
+                "id": str(guardrail_id),
                 "oid": str(org_id),
                 "pid": str(pipeline_id),
                 "name": name,

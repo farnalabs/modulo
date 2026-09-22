@@ -143,6 +143,14 @@ async def comp_rig(
             ),
             {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(test_org), "graph": json.dumps(graph)},
         )
+        guardrail_cfg = {
+            "action": "block",
+            "interception_point": "input",
+            "type": "regex",
+            "field": "body",
+            "pattern": r"SECRET_[A-Z0-9]{8}",
+        }
+        guardrail_id = uuid.uuid4()
         await conn.execute(
             text(
                 "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
@@ -150,18 +158,29 @@ async def comp_rig(
                 "VALUES (:id, :oid, :pid, NULL, 'no-secrets', 'guardrail', (:cfg)::json, 'warn', :aid)",
             ),
             {
-                "id": str(uuid.uuid4()),
+                "id": str(guardrail_id),
                 "oid": str(test_org),
                 "pid": str(pipeline_id),
-                "cfg": json.dumps(
-                    {
-                        "action": "block",
-                        "interception_point": "input",
-                        "type": "regex",
-                        "field": "body",
-                        "pattern": r"SECRET_[A-Z0-9]{8}",
-                    }
-                ),
+                "cfg": json.dumps(guardrail_cfg),
+                "aid": str(test_user),
+            },
+        )
+        # FAR-1100 chunk 3 (migration 0254) repointed eval_results.eval_id to
+        # evals and recreated the tenant trigger against evals: the legacy
+        # eval_definitions row needs its same-UUID evals mirror (the shape
+        # 0254's backfill produces) before the run-creation seam can persist the
+        # guardrail's eval_result.
+        await conn.execute(
+            text(
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
+                "eval_type, config_json, account_id) "
+                "VALUES (:id, :oid, :pid, NULL, 'no-secrets', 'guardrail', (:cfg)::jsonb, :aid)",
+            ),
+            {
+                "id": str(guardrail_id),
+                "oid": str(test_org),
+                "pid": str(pipeline_id),
+                "cfg": json.dumps(guardrail_cfg),
                 "aid": str(test_user),
             },
         )
