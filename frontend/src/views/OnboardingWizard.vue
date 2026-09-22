@@ -299,9 +299,7 @@
         <div v-else>
           <div class="rounded-lg border border-dashed p-6 text-center">
             <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-              <svg class="h-6 w-6 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5m.75-9 3-3 2.148 2.148A12.061 12.061 0 0 1 16.5 7.605" />
-              </svg>
+              <ChartLine class="h-6 w-6 text-primary" :stroke-width="1.5" aria-hidden="true" />
             </div>
             <h3 class="text-lg font-semibold">{{ $t('views.OnboardingWizard.telemetry_heading') }}</h3>
             <p class="mt-2 text-sm text-muted-foreground">
@@ -327,9 +325,14 @@
             <p class="mt-3 text-xs text-muted-foreground">
               {{ $t('views.OnboardingWizard.telemetry_no_pii') }}
             </p>
-            <div v-if="telemetryError" class="mt-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" aria-live="assertive">
-              {{ telemetryError }}
-            </div>
+            <ErrorAlert
+              v-if="telemetryError"
+              class="mt-3"
+              :message="telemetryError"
+              :on-retry="telemetryRetry ?? undefined"
+              role="alert"
+              aria-live="assertive"
+            />
             <div class="mt-6 flex items-center justify-center gap-3">
               <Button
                 :disabled="telemetrySaving"
@@ -441,10 +444,11 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Check, Layers } from '@lucide/vue'
+import { Check, ChartLine, Layers } from '@lucide/vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
@@ -526,6 +530,7 @@ const emptyRunWarning = ref<string | null>(null)
 const telemetryLoading = ref(false)
 const telemetrySaving = ref(false)
 const telemetryError = ref<string | null>(null)
+const telemetryRetry = ref<(() => void) | null>(null)
 
 const canProceed = computed(() => {
   switch (currentStep.value) {
@@ -772,13 +777,16 @@ function skipToEnd() {
 async function loadTelemetryStatus() {
   telemetryLoading.value = true
   telemetryError.value = null
+  telemetryRetry.value = null
   try {
     const { error: err } = await api.GET('/api/v1/admin/telemetry')
     if (err) {
       telemetryError.value = formatApiError(err)
+      telemetryRetry.value = loadTelemetryStatus
     }
   } catch (e: unknown) {
     telemetryError.value = formatApiError(e)
+    telemetryRetry.value = loadTelemetryStatus
   } finally {
     telemetryLoading.value = false
   }
@@ -788,15 +796,18 @@ async function saveTelemetry(enabled: boolean) {
   if (telemetrySaving.value) return
   telemetrySaving.value = true
   telemetryError.value = null
+  telemetryRetry.value = null
   try {
     const { error: err } = await api.PUT('/api/v1/admin/telemetry', {
       body: { enabled },
     })
     if (err) {
       telemetryError.value = formatApiError(err)
+      telemetryRetry.value = () => saveTelemetry(enabled)
     }
   } catch (e: unknown) {
     telemetryError.value = formatApiError(e)
+    telemetryRetry.value = () => saveTelemetry(enabled)
   } finally {
     telemetrySaving.value = false
   }

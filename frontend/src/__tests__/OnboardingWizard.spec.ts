@@ -635,6 +635,52 @@ describe('OnboardingWizard — telemetry step (FAR-1131)', () => {
     expect(wrapper.text()).toContain('telemetry write exploded')
   })
 
+  it('renders an inline ErrorAlert with a Retry that re-loads telemetry status', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    const defaultGet = (api.GET as Mock).getMockImplementation()!
+    let telemetryCalls = 0
+    ;(api.GET as Mock).mockImplementation(async (url: string, opts?: unknown) => {
+      if (url === '/api/v1/admin/telemetry') {
+        telemetryCalls += 1
+        if (telemetryCalls === 1) return { data: undefined, error: { detail: 'telemetry offline' } }
+        return { data: { enabled: false }, error: undefined }
+      }
+      return defaultGet(url, opts)
+    })
+    await clickNext(wrapper) // -> step 6 triggers loadTelemetryStatus (fails)
+    await flushPromises()
+    expect(wrapper.text()).toContain('telemetry offline')
+    const retry = wrapper.findAll('button').find((b) => b.text() === 'Retry')
+    expect(retry).toBeTruthy()
+    await retry!.trigger('click')
+    await flushPromises()
+    expect(telemetryCalls).toBe(2)
+    expect(wrapper.text()).not.toContain('telemetry offline')
+  })
+
+  it('renders an inline ErrorAlert with a Retry that re-saves telemetry', async () => {
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    let putCalls = 0
+    ;(api.PUT as Mock).mockImplementation(async () => {
+      putCalls += 1
+      if (putCalls === 1) return { data: undefined, error: { detail: 'save rejected' } }
+      return { data: { enabled: true }, error: undefined }
+    })
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('save rejected')
+    const retry = wrapper.findAll('button').find((b) => b.text() === 'Retry')
+    expect(retry).toBeTruthy()
+    await retry!.trigger('click')
+    await flushPromises()
+    expect(putCalls).toBe(2)
+    expect(wrapper.text()).not.toContain('save rejected')
+  })
+
   it('ignores a second telemetry save while one is already in flight', async () => {
     const wrapper = await advanceToTelemetry()
     await flushPromises()
