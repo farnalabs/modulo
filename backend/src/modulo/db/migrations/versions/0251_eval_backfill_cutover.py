@@ -10,6 +10,16 @@ After backfill: drops and recreates the ``eval_results.eval_id`` FK to target
 ``trg_eval_results_eval_id_tenant`` trigger to resolve via ``evals`` instead of
 ``eval_definitions``.
 
+**config_json type promotion:** 0147_json_to_jsonb_standardize promoted
+``eval_definitions.config_json`` to ``jsonb``, but 0250 created the new
+``evals.config_json`` as plain ``json`` (generic ``sa.JSON()``).  Postgres has
+no ``json = jsonb`` operator, so the content-correctness verification (and any
+future cross-table comparison) is un-parseable until the new column is
+promoted to the same ``jsonb`` standard.  This migration promotes
+``evals.config_json`` to ``jsonb`` before the backfill copy (and demotes it
+back in downgrade) — matching the repo parity rule that Postgres DDL carries
+JSONB while ORM models map generic ``JSON``.
+
 **CO-7 (accepted no-decision-records window):** Between this chunk's read
 cutover and chunk 4's landing, governance decisions produce NO decision records.
 This is not a regression — the legacy path was equally unaudited — and chunk 4
@@ -313,6 +323,35 @@ def _record_violations(violations: list[dict[str, Any]]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 2c: config_json type promotion (json -> jsonb)
+# ---------------------------------------------------------------------------
+
+
+def _promote_evals_config_json() -> None:
+    """Promote ``evals.config_json`` from ``json`` to ``jsonb``.
+
+    0147 promoted ``eval_definitions.config_json`` to ``jsonb`` while 0250
+    created ``evals.config_json`` as plain ``json``.  Postgres defines no
+    ``json = jsonb`` operator, so the content-correctness verification below
+    (and any future cross-table comparison) fails at parse time until the
+    columns share a type.  Promote the new column to the 0147 standard — the
+    backfill copy then runs jsonb -> jsonb.  Idempotent: re-casting jsonb as
+    jsonb is a no-op.
+    """
+    _execute("ALTER TABLE evals ALTER COLUMN config_json TYPE jsonb USING config_json::jsonb")
+
+
+def _demote_evals_config_json() -> None:
+    """Reverse the upgrade-time promotion (downgrade restores the 0250 type).
+
+    Backfilled rows are deleted before this runs (the guarded delete above),
+    so the demotion operates on at most the dead rows that survived the
+    FK-RESTRICT guard.  ``text`` round-trip is the safe jsonb -> json route.
+    """
+    _execute("ALTER TABLE evals ALTER COLUMN config_json TYPE json USING config_json::text::json")
+
+
+# ---------------------------------------------------------------------------
 # Step 3–4: Batched backfill
 # ---------------------------------------------------------------------------
 
@@ -321,12 +360,18 @@ def _backfill_evals() -> int:
     """Insert Eval rows (1:1 UUID reuse). Returns total inserted."""
     total = 0
     offset = 0
+    # JSON columns are cast to text on the way out: the driver may hand back
+    # parsed JSON objects for json/jsonb columns (codec-dependent), and a
+    # parsed object cannot be re-bound as a parameter for the INSERT.  A str
+    # binds fine into the (jsonb) target — Postgres coerces the literal.
+    _json_text_cast = {"config_json", "pre_version_raw"}
+    select_cols_sql = ", ".join((f"{c}::text AS {c}" if c in _json_text_cast else c) for c in _EVAL_COPY_COLUMNS)
     cols_sql = ", ".join(_EVAL_COPY_COLUMNS)
     while True:
         rows = (
             op.get_bind()
             .execute(
-                text("SELECT id, " + cols_sql + " FROM eval_definitions ORDER BY id LIMIT :lim OFFSET :off"),  # nosec B608
+                text("SELECT id, " + select_cols_sql + " FROM eval_definitions ORDER BY id LIMIT :lim OFFSET :off"),  # nosec B608
                 {"lim": _BATCH_SIZE, "off": offset},
             )
             .fetchall()
@@ -609,6 +654,10 @@ def upgrade() -> None:
         "WHERE deleted_at IS NULL AND node_id IS NOT NULL AND eval_type != 'guardrail'"
     ) - len(violations)
 
+    # ---- Step 2c: promote evals.config_json to jsonb (0147 parity) ----
+    logger.info("Step 2c: promoting evals.config_json json -> jsonb (0147 parity) …")
+    _promote_evals_config_json()
+
     # ---- Steps 3–4: batched backfill ----
     logger.info("Step 3: backfilling evals …")
     eval_count = _backfill_evals()
@@ -689,6 +738,9 @@ def downgrade() -> None:
             evals_with_decisions,
         )
     _execute("DELETE FROM evals WHERE id NOT IN (SELECT DISTINCT eval_id FROM policy_gate_decisions)")
+
+    # ---- Demote evals.config_json back to json (reverse Step 2c) ----
+    _demote_evals_config_json()
 
     # ---- Drop audit table ----
     inspector = sa.inspect(op.get_bind())
