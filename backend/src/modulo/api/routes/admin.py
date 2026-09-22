@@ -7,7 +7,7 @@ import secrets
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine
 from datetime import UTC, datetime, timedelta
-from typing import Any, NamedTuple, NoReturn
+from typing import Annotated, Any, NamedTuple, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, StrictBool, field_validator
@@ -35,9 +35,10 @@ from modulo.api.dependencies import (
     require_feature,
     require_permission,
     require_system_or_org_admin,
+    require_system_permission,
 )
 from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine.okr import track_okr_progress
@@ -4293,6 +4294,10 @@ async def admin_overdue_hitl_claims(
 # ---------------------------------------------------------------------------
 # Telemetry opt-in / opt-out (FAR-1131)
 # ---------------------------------------------------------------------------
+# Guarded by system.config.manage — the same permission that protects the
+# generic runtime-config surface.  MODULO_TELEMETRY_ENABLED is a
+# deployment-wide, process-global setting; an org-scoped role must not
+# be able to flip it.
 
 
 class TelemetryToggleRequest(BaseModel):
@@ -4306,14 +4311,9 @@ class TelemetryStatusResponse(BaseModel):
 @router.get("/telemetry", response_model=TelemetryStatusResponse)
 @handle_db_errors("admin.get_telemetry_status")
 async def get_telemetry_status(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission("system.config.manage")],
 ) -> TelemetryStatusResponse:
     """Return the current telemetry opt-in status."""
-    if current_user.org_role not in ("admin", "operator"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions",
-        )
     from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 
     return TelemetryStatusResponse(enabled=is_telemetry_enabled())
@@ -4323,22 +4323,29 @@ async def get_telemetry_status(
 @handle_db_errors("admin.set_telemetry_status")
 async def set_telemetry_status(
     req: TelemetryToggleRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: Annotated[AuthenticatedPrincipal, require_system_permission("system.config.manage")],
 ) -> TelemetryStatusResponse:
-    """Enable or disable OTel telemetry (opt-in only, no dark patterns)."""
-    if current_user.org_role not in ("admin", "operator"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions",
-        )
-    from modulo.core.runtime_config.store import get_runtime_config_store
+    """Enable or disable OTel telemetry (opt-in only, no dark patterns).
 
-    store = get_runtime_config_store()
-    if req.enabled:
-        store.set_override("MODULO_TELEMETRY_ENABLED", "true")
-    else:
-        store.clear_override("MODULO_TELEMETRY_ENABLED")
+    The override is persisted in the process-global RuntimeConfigStore and
+    immediately reconfigures the OTel exporter pipeline so that a decline
+    tears down exporters in-flight.
+    """
+    from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled, toggle_telemetry
 
-    from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
+    prior = is_telemetry_enabled()
+    toggle_telemetry(req.enabled)
+
+    # Best-effort audit — fail-open, never mask the applied change.
+    # Telemetry is deployment-wide (not org-scoped), so we log to the
+    # application logger rather than the org audit chain.
+    logger.info(
+        "admin.telemetry_toggled",
+        extra={
+            "actor": str(current_user.account_id),
+            "enabled": req.enabled,
+            "prior_enabled": prior,
+        },
+    )
 
     return TelemetryStatusResponse(enabled=is_telemetry_enabled())

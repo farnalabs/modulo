@@ -148,8 +148,21 @@ class TestIsTelemetryEnabled:
         from modulo.settings import get_settings
 
         get_settings.cache_clear()
-        with patch("modulo.core.runtime_config.store.get_runtime_config_store", side_effect=Exception("not init")):
+        with patch("modulo.core.runtime_config.store.get_runtime_config_store", side_effect=RuntimeError("not init")):
             assert is_telemetry_enabled() is False
+
+    def test_non_runtime_error_propagates(self, monkeypatch: pytest.MonkeyPatch):
+        """Non-RuntimeError exceptions from the store must propagate (not be swallowed)."""
+        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
+
+        with (
+            patch(
+                "modulo.core.runtime_config.store.get_runtime_config_store",
+                side_effect=ValueError("bad config"),
+            ),
+            pytest.raises(ValueError, match="bad config"),
+        ):
+            is_telemetry_enabled()
 
     def test_reads_from_store_override(self, monkeypatch: pytest.MonkeyPatch):
         """When the store has an override, is_telemetry_enabled reads it."""
@@ -199,3 +212,94 @@ class TestIsTelemetryEnabled:
         store.clear_override("MODULO_TELEMETRY_ENABLED")
         with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is True
+
+
+class TestToggleTelemetry:
+    """Tests for the toggle_telemetry() function (FAR-1131 C2 fix)."""
+
+    def test_toggle_enable_sets_override_and_reconfigures_otel(self, monkeypatch: pytest.MonkeyPatch):
+        """toggle_telemetry(True) sets the override and reconfigures OTel."""
+        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+        from modulo.core.runtime_config.store import RuntimeConfigStore
+        from modulo.core.runtime_config.telemetry_bridge import toggle_telemetry
+
+        store = RuntimeConfigStore()
+        with (
+            patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store),
+            patch("modulo.otel_bridge.export.setup_otel") as mock_setup,
+            patch("modulo.settings.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.modulo_otel_service_name = "test-svc"
+            toggle_telemetry(True)
+        assert store.get("MODULO_TELEMETRY_ENABLED") == "true"
+        mock_setup.assert_called_once_with(service_name="test-svc", telemetry_enabled=True)
+
+    def test_toggle_disable_sets_false_and_tears_down_otel(self, monkeypatch: pytest.MonkeyPatch):
+        """toggle_telemetry(False) sets override to false and tears down exporters."""
+        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        from modulo.core.runtime_config.store import RuntimeConfigStore
+        from modulo.core.runtime_config.telemetry_bridge import toggle_telemetry
+
+        store = RuntimeConfigStore()
+        with (
+            patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store),
+            patch("modulo.otel_bridge.export.setup_otel") as mock_setup,
+            patch("modulo.settings.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.modulo_otel_service_name = "test-svc"
+            toggle_telemetry(False)
+        assert store.get("MODULO_TELEMETRY_ENABLED") == "false"
+        mock_setup.assert_called_once_with(service_name="test-svc", telemetry_enabled=False)
+
+    def test_toggle_is_idempotent(self, monkeypatch: pytest.MonkeyPatch):
+        """Calling toggle_telemetry with the same value twice is safe."""
+        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        from modulo.core.runtime_config.store import RuntimeConfigStore
+        from modulo.core.runtime_config.telemetry_bridge import toggle_telemetry
+
+        store = RuntimeConfigStore()
+        with (
+            patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store),
+            patch("modulo.otel_bridge.export.setup_otel"),
+            patch("modulo.settings.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.modulo_otel_service_name = "test-svc"
+            toggle_telemetry(True)
+            toggle_telemetry(True)
+        assert store.get("MODULO_TELEMETRY_ENABLED") == "true"
+
+
+class TestOtelHandlerAnonymisation:
+    """Tests that the OTel handler anonymises ids and sanitises errors (M3)."""
+
+    def test_anonymise_id_hashes_value(self):
+        from modulo.otel_bridge.handler import _anonymise_id
+
+        result = _anonymise_id("org-123")
+        assert result is not None
+        assert len(result) == 16
+        # Same input → same output (deterministic)
+        assert _anonymise_id("org-123") == result
+        # Different input → different output
+        assert _anonymise_id("org-456") != result
+
+    def test_anonymise_id_none_returns_none(self):
+        from modulo.otel_bridge.handler import _anonymise_id
+
+        assert _anonymise_id(None) is None
+
+    def test_sanitize_error_strips_control_chars(self):
+        from modulo.otel_bridge.handler import _sanitize_error_for_export
+
+        result = _sanitize_error_for_export(RuntimeError("hello\x00\x1fworld"))
+        assert "\x00" not in result
+        assert "\x1f" not in result
+        assert "helloworld" in result
+
+    def test_sanitize_error_truncates_long_messages(self):
+        from modulo.otel_bridge.handler import _sanitize_error_for_export
+
+        long_msg = "x" * 1000
+        result = _sanitize_error_for_export(RuntimeError(long_msg))
+        assert len(result) <= 512

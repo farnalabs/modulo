@@ -524,7 +524,6 @@ const emptyRunWarning = ref<string | null>(null)
 
 // Telemetry opt-in state (FAR-1131)
 const telemetryLoading = ref(false)
-const telemetryEnabled = ref(false)
 const telemetrySaving = ref(false)
 const telemetryError = ref<string | null>(null)
 
@@ -774,11 +773,9 @@ async function loadTelemetryStatus() {
   telemetryLoading.value = true
   telemetryError.value = null
   try {
-    const { data, error: err } = await api.GET('/api/v1/admin/telemetry')
+    const { error: err } = await api.GET('/api/v1/admin/telemetry')
     if (err) {
       telemetryError.value = formatApiError(err)
-    } else if (data) {
-      telemetryEnabled.value = data.enabled
     }
   } catch (e: unknown) {
     telemetryError.value = formatApiError(e)
@@ -788,16 +785,15 @@ async function loadTelemetryStatus() {
 }
 
 async function saveTelemetry(enabled: boolean) {
+  if (telemetrySaving.value) return
   telemetrySaving.value = true
   telemetryError.value = null
   try {
-    const { data, error: err } = await api.PUT('/api/v1/admin/telemetry', {
+    const { error: err } = await api.PUT('/api/v1/admin/telemetry', {
       body: { enabled },
     })
     if (err) {
       telemetryError.value = formatApiError(err)
-    } else if (data) {
-      telemetryEnabled.value = data.enabled
     }
   } catch (e: unknown) {
     telemetryError.value = formatApiError(e)
