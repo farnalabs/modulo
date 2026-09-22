@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.auth.passwords import hash_password
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.audit_logger.labels import short_id
 from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.org_membership import OrgMembership
@@ -323,7 +324,12 @@ async def activate(
             org_id=org_id,
             event_type="break_glass_activated",
             actor_user_id=None,
-            payload_json={"operator": actor, "reason": reason},
+            payload_json={
+                "operator": actor,
+                "actor": actor,
+                "summary": f'Break-glass activated for org {short_id(org_id) or "unknown"} by operator "{actor}"',
+                "reason": reason,
+            },
         )
         await session.flush()
 
@@ -377,7 +383,12 @@ async def deactivate(
                 org_id=org_id,
                 event_type="break_glass_deactivated",
                 actor_user_id=None,
-                payload_json={"operator": actor, "reason": reason},
+                payload_json={
+                    "operator": actor,
+                    "actor": actor,
+                    "summary": f'Break-glass deactivated for org {short_id(org_id) or "unknown"} by operator "{actor}"',
+                    "reason": reason,
+                },
             )
             await session.flush()
     except SQLAlchemyError as exc:
@@ -437,7 +448,13 @@ async def force_last_admin(
                 org_id=org_id,
                 event_type="last_admin_forcibly_removed",
                 actor_user_id=None,
-                payload_json={"operator": actor, "reason": reason},
+                payload_json={
+                    "operator": actor,
+                    "actor": actor,
+                    "summary": f"Last non-break-glass admin {removed_account_id or 'unknown'} forcibly "
+                    f'removed from org {short_id(org_id) or "unknown"} by operator "{actor}"',
+                    "reason": reason,
+                },
             )
             await session.flush()
     except SQLAlchemyError as exc:

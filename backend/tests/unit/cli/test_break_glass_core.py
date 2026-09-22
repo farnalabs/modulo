@@ -170,6 +170,9 @@ class TestCoreActivate:
         hasher.assert_called_once_with(credential)
         audit.assert_awaited_once()
         assert audit.call_args.kwargs["event_type"] == "break_glass_activated"
+        assert audit.call_args.kwargs["payload_json"]["actor"] == "operator"
+        assert "Break-glass activated" in audit.call_args.kwargs["payload_json"]["summary"]
+        assert 'operator "operator"' in audit.call_args.kwargs["payload_json"]["summary"]
         assert session.flush.await_count >= 2
 
     async def test_email_collision_retries_then_succeeds(self) -> None:
@@ -218,6 +221,8 @@ class TestCoreDeactivate:
         assert len(result["account_ids"]) == 2
         assert session.execute.await_count == 2
         audit.assert_awaited_once()
+        assert audit.call_args.kwargs["payload_json"]["actor"] == "operator"
+        assert "Break-glass deactivated" in audit.call_args.kwargs["payload_json"]["summary"]
 
     async def test_specific_account_filters_out_others(self) -> None:
         session = _mock_session()
@@ -344,6 +349,9 @@ class TestCoreForceLastAdmin:
             result = await force_last_admin(session, org_id=_ORG_ID, actor="operator", reason="r", now=_NOW)
         assert result["removed_account_id"] == str(admins[0].id)
         audit.assert_awaited_once()
+        assert audit.call_args.kwargs["payload_json"]["actor"] == "operator"
+        assert "forcibly removed" in audit.call_args.kwargs["payload_json"]["summary"]
+        assert str(admins[0].id) in audit.call_args.kwargs["payload_json"]["summary"]
 
     async def test_custom_error_maps_to_atomicity(self) -> None:
         from modulo.cli.break_glass import DeactivateAtomicityError

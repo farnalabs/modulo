@@ -81,6 +81,12 @@ async def test_emits_event_with_expected_payload(monkeypatch: pytest.MonkeyPatch
     assert captured["payload_json"]["gate_outcome"] == "skipped"
     assert captured["payload_json"]["gate_id"] == "g1"
     assert str(captured["payload_json"]["pipeline_id"]) == str(pipeline_id)
+    assert captured["payload_json"]["actor"] == "system"
+    summary = captured["payload_json"]["summary"]
+    assert summary.startswith('Autonomy level "fully_autonomous" applied to run')
+    assert str(run_id)[:8] and str(run_id)[:8] in summary
+    assert "gate g1" in summary
+    assert "skipped" in summary
 
 
 async def test_noop_when_session_factory_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -227,6 +233,8 @@ async def test_nullable_fields_are_serialized_as_none(monkeypatch: pytest.Monkey
     assert kwargs["resource_id"] is None
     assert kwargs["payload_json"]["pipeline_id"] is None
     assert kwargs["payload_json"]["human_only"] is False
+    assert kwargs["payload_json"]["actor"] == "system"
+    assert "unknown" in kwargs["payload_json"]["summary"]
 
 
 async def test_human_only_flag_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
