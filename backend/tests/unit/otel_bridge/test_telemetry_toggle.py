@@ -151,7 +151,7 @@ class TestIsTelemetryEnabled:
         with patch("modulo.core.runtime_config.store.get_runtime_config_store", side_effect=RuntimeError("not init")):
             assert is_telemetry_enabled() is False
 
-    def test_non_runtime_error_propagates(self, monkeypatch: pytest.MonkeyPatch):
+    def test_non_runtime_error_propagates(self):
         """Non-RuntimeError exceptions from the store must propagate (not be swallowed)."""
         from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 
