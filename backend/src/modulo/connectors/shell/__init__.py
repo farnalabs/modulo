@@ -90,7 +90,7 @@ class ShellConnector(ConnectorBase):
         org_id: str | None = None,
     ) -> None:
         warnings.warn(
-            "ShellConnector is deprecated (ADR 003). Use sandbox_agent node type instead.",
+            "ShellConnector is deprecated (ADR 044). Use sandbox_agent node type instead.",
             DeprecationWarning,
             stacklevel=2,
         )
