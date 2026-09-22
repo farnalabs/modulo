@@ -141,7 +141,6 @@ from modulo.db.lifecycle_refs import (
     notify_refs_event,
     validate_ref_entry,
 )
-from modulo.db.models.eval_result import EvalResult as EvalResultModel
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.settings import work_item_refs_cap
 
@@ -4470,41 +4469,6 @@ def _resolve_llm_judge_callable(eval_def: Any) -> Any:
         if hub is not None:
             return _build_llm_judge_callable(hub, str(eval_def.config["model_backend_id"]))
     return None
-
-
-async def _persist_gate_eval_results(
-    state: dict[str, Any],
-    eval_definitions: Sequence[EvalDefinition],
-    eval_results_by_name: dict[str, EvalResult],
-    session_factory: Any,
-    org_id: Any,
-) -> None:
-    """Persist gate eval results to the eval_results table (best-effort)."""
-    if session_factory is not None and org_id is not None:
-        try:
-            _run_id: uuid.UUID | None = state.get("_run_id")
-            if _run_id is not None:
-                async with session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    await set_rls_execution_context(session)
-                    for eval_def in eval_definitions:
-                        eval_result = eval_results_by_name[eval_def.name]
-                        node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
-                        db_result = EvalResultModel(
-                            organisation_id=org_id,
-                            run_id=_run_id,
-                            node_id=node_uuid,
-                            eval_id=eval_def.id,
-                            eval_definition_version=eval_def.version,
-                            passed=eval_result.passed,
-                            score=eval_result.score,
-                            detail=eval_result.detail,
-                        )
-                        session.add(db_result)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("hitl_gate.persist_eval_failed")
 
 
 async def _run_gate_evals(
