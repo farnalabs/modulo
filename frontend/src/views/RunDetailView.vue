@@ -190,15 +190,21 @@
       </div>
 
       <!-- Work items -->
-      <section v-if="run.work_item_refs && run.work_item_refs.length > 0" data-testid="run-detail-work-items" class="rounded-lg border border-border bg-card p-4 mb-4">
+      <section v-if="run.work_item_refs && run.work_item_refs.length > 0" data-testid="run-detail-work-items" :data-enrichment="prEnrichmentStatus" class="rounded-lg border border-border bg-card p-4 mb-4">
         <h3 class="text-sm font-semibold mb-2">{{ $t('views.RunDetailView.work_items') }}</h3>
         <div class="space-y-1.5">
           <div v-for="(item, idx) in run.work_item_refs" :key="`${item.kind}-${item.ref}-${idx}`" class="flex flex-wrap items-center gap-2 text-xs">
             <template v-if="isGithubWorkItem(item)">
-              <a v-if="getPrUrl(item)" :href="getPrUrl(item)!" target="_blank" rel="noopener noreferrer" :data-testid="`run-detail-pr-link-${idx}`" class="inline-flex items-center transition-opacity hover:opacity-80">
+              <a v-if="getPrUrl(item)" :href="getPrUrl(item)!" target="_blank" rel="noopener noreferrer" :data-testid="`run-detail-pr-link-${idx}`" :title="prBadgeTooltip(item) || undefined" class="inline-flex items-center transition-opacity hover:opacity-80">
                 <span class="badge text-xs badge-context-blue">{{ githubWorkItemBadgeLabel(item) }}</span>
               </a>
-              <span v-else class="badge text-xs badge-context-blue">{{ githubWorkItemBadgeLabel(item) }}</span>
+              <span v-else class="badge text-xs badge-context-blue" :title="prBadgeTooltip(item) || undefined">{{ githubWorkItemBadgeLabel(item) }}</span>
+              <span
+                v-if="prEnrichedState(item)"
+                :data-testid="`run-detail-pr-state-${idx}`"
+                :data-state="prEnrichedState(item)"
+                class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 font-medium capitalize"
+              >{{ prStateLabel(prEnrichedState(item)!) }}</span>
               <span v-if="prTitle(item)" class="max-w-[24rem] truncate text-muted-foreground" :title="prTitle(item)!">{{ prTitle(item) }}</span>
             </template>
             <template v-else>
@@ -1262,11 +1268,109 @@ function githubWorkItemBadgeLabel(item: WorkItemRef): string {
 function prTitle(item: WorkItemRef): string | null {
   if (normalizeGithubKind(item.kind) !== 'github_pr') return null
   const ctx = prContext.value
-  if (!ctx || !ctx.title || !ctx.number) return null
-  const refId = githubRefId(item)
-  if (refId && /^\d+$/.test(refId) && refId !== ctx.number) return null
-  return ctx.title
+  if (ctx && ctx.title && ctx.number) {
+    const refId = githubRefId(item)
+    const mismatch = Boolean(refId) && /^\d+$/.test(refId) && refId !== ctx.number
+    if (!mismatch) return ctx.title
+    // Payload title belongs to a different PR — fall through: the live
+    // lookup may still know this one (FAR-737).
+  }
+  // FAR-737: payload has no PR title — fall back to the live GitHub title.
+  return prEnrichmentFor(item)?.title ?? null
 }
+
+// ── FAR-737: live GitHub enrichment for the PR work-item badge ──────────────
+// Display-time lookup via GET /runs/{id}/work-items/enrichment (connector-
+// mediated, TTL-cached server-side). Strictly best-effort: the badge renders
+// immediately from payload data and this only ever ADDS a state chip, a
+// tooltip, and a title fallback. Any failure (endpoint error, empty items,
+// connector unconfigured) leaves the plain linked badge untouched.
+type PrEnrichmentItem = components['schemas']['WorkItemEnrichmentItem']
+type PrEnrichmentStatus = 'idle' | 'loading' | 'enriched' | 'absent'
+
+const prEnrichment = ref<Record<string, PrEnrichmentItem>>({})
+const prEnrichmentStatus = ref<PrEnrichmentStatus>('idle')
+let prEnrichmentRequested = false
+
+function prEnrichmentKey(item: WorkItemRef): string | null {
+  if (normalizeGithubKind(item.kind) !== 'github_pr') return null
+  const ref = (item.ref || '').trim()
+  const match = ref.match(/^([^/\s#]+\/[^/\s#]+)#(\d+)$/)
+  if (match) return `${match[1]}#${match[2]}`
+  const refId = githubRefId(item)
+  const ctx = prContext.value
+  if (ctx && ctx.fullName) {
+    if (/^\d+$/.test(refId)) {
+      // Mirrors getPrUrl: a mismatched bare number links/enriches nothing.
+      if (!ctx.number || ctx.number === refId) return `${ctx.fullName}#${refId}`
+      return null
+    }
+    if (ctx.number) return `${ctx.fullName}#${ctx.number}`
+  }
+  return null
+}
+
+function prEnrichmentFor(item: WorkItemRef): PrEnrichmentItem | null {
+  const key = prEnrichmentKey(item)
+  return key ? (prEnrichment.value[key] ?? null) : null
+}
+
+function prEnrichedState(item: WorkItemRef): 'open' | 'merged' | 'closed' | null {
+  const enrichment = prEnrichmentFor(item)
+  if (!enrichment) return null
+  if (enrichment.merged) return 'merged'
+  if (enrichment.state === 'open') return 'open'
+  if (enrichment.state === 'closed') return 'closed'
+  return null
+}
+
+function prStateLabel(state: 'open' | 'merged' | 'closed'): string {
+  return t(`views.RunDetailView.pr_state_${state}`)
+}
+
+function prBadgeTooltip(item: WorkItemRef): string | null {
+  return prEnrichmentFor(item)?.title || null
+}
+
+async function fetchPrEnrichment(runId: string): Promise<void> {
+  if (prEnrichmentRequested) return
+  prEnrichmentRequested = true
+  prEnrichmentStatus.value = 'loading'
+  try {
+    const { data, error } = await api.GET('/api/v1/runs/{run_id}/work-items/enrichment', {
+      params: { path: { run_id: runId } },
+    })
+    if (error || !data) {
+      prEnrichmentStatus.value = 'absent'
+      return
+    }
+    const map: Record<string, PrEnrichmentItem> = {}
+    for (const entry of data.items ?? []) {
+      map[entry.ref] = entry
+    }
+    prEnrichment.value = map
+    prEnrichmentStatus.value = Object.keys(map).length > 0 ? 'enriched' : 'absent'
+  } catch (e: unknown) {
+    // Best-effort: the plain badge must never wait on or break for this.
+    console.warn('Failed to load PR work-item enrichment', e)
+    prEnrichmentStatus.value = 'absent'
+  }
+}
+
+watch(
+  () => run.value?.work_item_refs,
+  (refs) => {
+    // The schema types work_item_refs as unknown[]; the local RunResponse
+    // override narrows it to WorkItemRef[] — cast to the local shape.
+    const items = (refs ?? []) as WorkItemRef[]
+    if (items.length === 0) return
+    if (!items.some((it) => normalizeGithubKind(it.kind) === 'github_pr')) return
+    const runId = route.params.id as string
+    if (!runId) return
+    void fetchPrEnrichment(runId)
+  },
+  { immediate: true },
+)
 
 async function revealPrompt(nodeName: string) {
   const cached = revealedPrompts.value[nodeName]

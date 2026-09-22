@@ -68,6 +68,7 @@ from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.core.secret_patterns import mask_secret_values_in_text
 from modulo.core.trigger_engine import TriggerEngine
+from modulo.core.work_item_enrichment import derive_pr_targets, enrich_pr_targets
 from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.node_observation import observe_node
 from modulo.db.crud.observability import get_otel_config
@@ -1902,6 +1903,89 @@ async def get_run_io_endpoint(
 
     node_labels = _build_node_labels(snapshot.graph_json if snapshot else None)
     return _build_run_io_response(run, node_labels, blobs)
+
+
+class WorkItemEnrichmentItem(BaseModel):
+    """Live GitHub facts for one PR work-item badge (FAR-737)."""
+
+    ref: str
+    repo: str
+    number: int
+    title: str | None = None
+    state: Literal["open", "closed"] | None = None
+    merged: bool | None = None
+    html_url: str | None = None
+
+
+class WorkItemEnrichmentResponse(BaseModel):
+    """Enrichment payload for the Run Detail PR badges.
+
+    Always 200-on-success: missing / failed lookups are simply absent from
+    ``items`` so the view falls back to the plain linked badge.
+    """
+
+    items: list[WorkItemEnrichmentItem] = Field(default_factory=list)
+
+
+@router.get("/{run_id}/work-items/enrichment", response_model=WorkItemEnrichmentResponse)
+@handle_db_errors("runs.get_run_work_item_enrichment")
+async def get_run_work_item_enrichment(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission_any_credential("run.status"),
+    settings: Settings = Depends(get_settings),
+) -> WorkItemEnrichmentResponse:
+    """Live GitHub enrichment for the run's PR work-item badges (FAR-737).
+
+    Display-time, connector-mediated lookup through the run's ORG-scoped
+    GitHub connector, served through a TTL cache. Non-negotiable fallback:
+    every enrichment failure class (no connector configured, credential
+    decrypt error, GitHub unreachable, PR 404) degrades to an empty/partial
+    ``items`` list — this endpoint exists to make the badge RICHER, never to
+    gate the run view, which renders the existing plain linked badge on any
+    error or empty result.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+            refs = run.work_item_refs
+            raw_payload = getattr(run, "input_payload", None)
+            payload = raw_payload if isinstance(raw_payload, dict) else None
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception("runs.get_run_work_item_enrichment")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception("runs.get_run_work_item_enrichment")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+    except SQLAlchemyError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    targets = derive_pr_targets(refs, payload)
+    if not targets:
+        return WorkItemEnrichmentResponse()
+    enriched = await enrich_pr_targets(session, principal.organisation_id, targets, settings)
+    return WorkItemEnrichmentResponse(items=[WorkItemEnrichmentItem(**item) for item in enriched])
 
 
 @router.get("/{run_id}/export-fixture")

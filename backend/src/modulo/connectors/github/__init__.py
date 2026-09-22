@@ -310,6 +310,8 @@ class GitHubConnector(ConnectorBase):
       "tree"            — recursive file/directory listing; filters: {"repo": "owner/repo",
                          "ref": "main", "path": "subdir", "recursive": true}
       "pulls"           — list pull requests; filters: {"repo": ..., "state": "open", "sort": ..., "direction": ...}
+      "pull"            — get a single pull request; filters: {"repo": ..., "pull_number": ...}
+                         (returns the PR object: title, state, merged, html_url — FAR-737)
       "pr_commits"      — list commits on a PR; filters: {"repo": ..., "pull_number": ...}
       "pr_files"        — list changed files on a PR; filters: {"repo": ..., "pull_number": ...}
       "issues"          — list issues; filters: {"repo": ..., "state": ..., "labels": ..., ...}
@@ -966,6 +968,7 @@ class GitHubConnector(ConnectorBase):
             "file": self._query_file,
             "tree": self._query_tree,
             "pulls": self._query_pulls,
+            "pull": self._query_pull,
             "pr_commits": self._query_pr_commits,
             "pr_files": self._query_pr_files,
             "issues": self._query_issues,
@@ -1030,6 +1033,13 @@ class GitHubConnector(ConnectorBase):
         r = await self._call_api("GET", f"/repos/{owner_repo}/pulls", params=params)
         prs: list[dict[str, Any]] = self._parse_json(r)
         return self._paginated_result(prs, r)
+
+    async def _query_pull(self, q: ConnectorQuery) -> ConnectorResult:
+        """Fetch a single PR object (title/state/merged/html_url — FAR-737 badge enrichment)."""
+        owner_repo = self._require_filter(q.filters, "repo", "pull")
+        pull_number = self._require_filter(q.filters, "pull_number", "pull")
+        r = await self._call_api("GET", f"/repos/{owner_repo}/pulls/{pull_number}")
+        return self._result([self._parse_json(r)], r)
 
     async def _query_pr_commits(self, q: ConnectorQuery) -> ConnectorResult:
         owner_repo = self._require_filter(q.filters, "repo", "pr_commits")
