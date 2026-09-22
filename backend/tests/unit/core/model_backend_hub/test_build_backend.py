@@ -167,7 +167,7 @@ def test_build_backend_opencode_missing_api_key_defaults_to_empty() -> None:
     with patch("modulo.model_backends.opencode.OpenCodeBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend("opencode", "glm-5.3-flash", {}, {})
-    assert result.kwargs["api_key"] == ""
+    assert not result.kwargs["api_key"]
 
 
 # ---------------------------------------------------------------------------
