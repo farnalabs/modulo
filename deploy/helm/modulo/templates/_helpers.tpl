@@ -100,7 +100,7 @@ Otherwise falls back to backend.env.DATABASE_URL.
 {{- else }}
 {{- $pass = .Values.postgres.password }}
 {{- end }}
-{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user (urlquery $pass) $host $port $db }}
+{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user (urlquery $pass | replace "+" "%20") $host $port $db }}
 {{- else }}
 {{- .Values.backend.env.DATABASE_URL | default "" }}
 {{- end }}
@@ -129,7 +129,7 @@ When postgres.host is unset, falls back to backend.env.DATABASE_ADMIN_URL.
 {{- else }}
 {{- $pass = .Values.postgres.password }}
 {{- end }}
-{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user (urlquery $pass) $host $port $db }}
+{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user (urlquery $pass | replace "+" "%20") $host $port $db }}
 {{- else }}
 {{- .Values.backend.env.DATABASE_ADMIN_URL | default "" }}
 {{- end }}
@@ -165,7 +165,7 @@ Otherwise falls back to backend.env.REDIS_URL.
 {{- $pass := include "modulo.redisPassword" . }}
 {{- if .Values.redis.embedded }}
 {{- if $pass }}
-{{- printf "redis://:%s@%s-redis:6379/%d" (urlquery $pass) (include "modulo.fullname" .) $db }}
+{{- printf "redis://:%s@%s-redis:6379/%d" (urlquery $pass | replace "+" "%20") (include "modulo.fullname" .) $db }}
 {{- else }}
 {{- printf "redis://%s-redis:6379/%d" (include "modulo.fullname" .) $db }}
 {{- end }}
@@ -173,7 +173,7 @@ Otherwise falls back to backend.env.REDIS_URL.
 {{- $host := .Values.redis.host }}
 {{- $port := .Values.redis.port | int }}
 {{- if $pass }}
-{{- printf "redis://:%s@%s:%d/%d" (urlquery $pass) $host $port $db }}
+{{- printf "redis://:%s@%s:%d/%d" (urlquery $pass | replace "+" "%20") $host $port $db }}
 {{- else }}
 {{- printf "redis://%s:%d/%d" $host $port $db }}
 {{- end }}

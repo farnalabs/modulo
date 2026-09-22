@@ -44,12 +44,8 @@ Or use existingSecret to reference a pre-created Kubernetes Secret.
 
 === Database ===
 
-{{- if .Values.postgres.enabled }}
-Postgres is running inside the chart.
-{{- else }}
 Postgres is EXTERNAL. Ensure DATABASE_URL is set in backend.env or
-the postgres.existingSecret secret contains a valid connection string.
-{{- end }}
+postgres.host/postgres.password are set so the chart can construct it.
 
 === Redis ===
 

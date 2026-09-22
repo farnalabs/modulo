@@ -62,7 +62,7 @@ spec:
                   name: {{ include "modulo.fullname" . }}-secrets
                   key: FERNET_KEY
             {{- range $key, $value := .Values.saqRunner.env }}
-            {{- if and (ne $key "DATABASE_URL") (ne $key "REDIS_URL") (ne $key "SECRET_KEY") (ne $key "FERNET_KEY") }}
+            {{- if and (ne $key "DATABASE_URL") (ne $key "REDIS_URL") (ne $key "SECRET_KEY") (ne $key "FERNET_KEY") (ne $key "SAQ_AUTH_USERNAME") (ne $key "SAQ_AUTH_PASSWORD") }}
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}

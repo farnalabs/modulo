@@ -49,7 +49,6 @@ limitRange:
 
 # -- External Postgres (Amazon RDS) -----------------------------------------
 postgres:
-  enabled: false
   host: modulo-db.cluster-xxxxxx.us-east-1.rds.amazonaws.com
   port: 5432
   database: modulo
@@ -59,7 +58,6 @@ postgres:
 
 # -- External Redis (Amazon ElastiCache) ------------------------------------
 redis:
-  enabled: true
   embedded: false
   host: modulo-redis.xxxxxx.0001.use1.cache.amazonaws.com
   port: 6379

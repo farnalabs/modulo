@@ -4,8 +4,8 @@
 # Vendor-neutral defaults. Runs unmodified on EKS/AKS/GKE with sensible
 # resource limits and pod security policies.
 #
-# External Postgres and Redis are the defaults — the chart does NOT deploy
-# a database. Set postgres.enabled=true only for development/testing.
+# External Postgres is required — the chart does NOT deploy a database.
+# Redis is external by default; set redis.embedded=true to deploy one in-cluster.
 #
 # Secrets: no literal secrets live in this file. Use existingSecret references
 # or set values that get rendered into a Secret resource only when explicitly
@@ -65,8 +65,9 @@ serviceAccount:
   annotations: {}
 
 # -- External Postgres (default) --------------------------------------------
+# This chart never deploys Postgres; provide an external database via
+# postgres.host (recommended) or backend.env.DATABASE_URL.
 postgres:
-  enabled: false
   host: ""
   port: 5432
   database: modulo
@@ -84,10 +85,9 @@ postgres:
   password: ""
 
 # -- External Redis (default) -----------------------------------------------
+# When embedded=true, deploy a Redis container in the chart.
+# When embedded=false (default), use an external Redis.
 redis:
-  enabled: true
-  # When embedded=true, deploy a Redis container in the chart.
-  # When embedded=false (default), use an external Redis.
   embedded: false
   host: redis-master
   port: 6379

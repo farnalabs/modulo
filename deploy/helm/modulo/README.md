@@ -40,7 +40,6 @@ Set these values:
 
 ```yaml
 postgres:
-  enabled: false  # Use external Postgres
   host: your-rds-host.amazonaws.com
   port: 5432
   database: modulo
@@ -55,7 +54,6 @@ Or set `postgres.password` directly (rendered into a Secret). The password is sh
 
 ```yaml
 redis:
-  enabled: true
   embedded: false  # Use external Redis
   host: your-redis-host.cache.amazonaws.com
   port: 6379
@@ -73,8 +71,8 @@ redis:
 ```
 
 `redis.embedded` is the only switch that controls the embedded Redis Deployment.
-(`redis.enabled` and the former `redisChart.enabled` were dead config and have
-been removed.)
+(`postgres.enabled`, `redis.enabled` and the former `redisChart.enabled` were
+dead config and have been removed. Postgres is always external.)
 
 ### Required Values
 
