@@ -298,7 +298,8 @@ async def _assert_c1_c2_c3_c4_c5(engine: AsyncEngine, seeded: dict[str, uuid.UUI
     """Backfill completeness: row counts + anti-join + population exclusions."""
     eval_count = await _scalar(engine, "SELECT COUNT(*) FROM evals")
     ed_count = await _scalar(engine, "SELECT COUNT(*) FROM eval_definitions")
-    assert eval_count == ed_count == 5, f"expected 1:1 Eval backfill, evals={eval_count}, eval_definitions={ed_count}"
+    assert eval_count == 5, f"expected 5 Eval rows after 1:1 backfill, got {eval_count}"
+    assert ed_count == 5, f"expected 5 source eval_definitions rows, got {ed_count}"
 
     eligible = await _scalar(
         engine,
@@ -442,7 +443,8 @@ async def test_upgrade_is_idempotent_on_existing_backfill(isolated_db_url: str) 
 
         assert evals_after == evals_before, "re-running the backfill must not insert or duplicate Eval rows"
         assert gates_after == gates_before, "re-running the backfill must not insert or duplicate PolicyGate rows"
-        assert violations_after == violations_before == 0, "violation inventory must stay empty on a clean re-run"
+        assert violations_after == violations_before, "re-run must not add or remove inventory rows"
+        assert violations_before == 0, "violation inventory must stay empty on a clean re-run"
         assert ed_count == 5, f"legacy table untouched by re-run, got {ed_count}"
 
         await _assert_c1_c2_c3_c4_c5(engine, seeded, defs)
