@@ -9,7 +9,7 @@ populates the three timestamps when present and returns ``None`` when absent.
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from modulo.api.routes.runs import (
     _build_list_item,
@@ -142,3 +142,17 @@ def test_run_response_known_fixes_empty_when_detail_absent() -> None:
 
     assert resp.known_fixes is not None
     assert not resp.known_fixes
+
+
+def test_run_response_known_fixes_empty_when_serialisation_fails() -> None:
+    """Defensive contract: if serialising a matched fix raises, the run detail
+    response still succeeds with an empty known_fixes list — never a 500."""
+    from modulo.api.routes import runs as runs_module
+
+    def _boom(_detail: object) -> object:
+        raise RuntimeError("boom")
+
+    with patch.object(runs_module, "match_known_fixes", _boom):
+        resp = _build_run_response(_make_run(status="failed", error_code="node.cancelled", error_detail="anything"))
+
+    assert resp.known_fixes == []

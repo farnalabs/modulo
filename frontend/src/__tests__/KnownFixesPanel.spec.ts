@@ -69,4 +69,20 @@ describe('KnownFixesPanel', () => {
 
     expect(wrapper.find('[data-testid="run-detail-known-fixes"] a').exists()).toBe(false)
   })
+
+  it('renders entries without a fix_id, keyed by list index', () => {
+    const wrapper = mount(KnownFixesPanel, {
+      props: {
+        fixes: [
+          { title: 'Fix without an id', body: 'Body without an id.' },
+          { fix_id: 'with_id', title: 'Fix with an id', body: 'Body with an id.' },
+        ],
+      },
+    })
+
+    const articles = wrapper.findAll('article')
+    expect(articles).toHaveLength(2)
+    expect(wrapper.find('[data-testid="run-detail-known-fix-0"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-known-fix-with_id"]').exists()).toBe(true)
+  })
 })
