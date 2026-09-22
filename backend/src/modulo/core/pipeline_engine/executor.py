@@ -3313,7 +3313,7 @@ class PipelineExecutor:
             snapshot_id,
             lambda: build_graph_from_json(
                 graph_json,
-                eval_definitions_by_node=eval_defs_by_node,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
+                eval_definitions_by_node=eval_defs_by_node,
                 session_factory=self._session_factory,
                 org_id=org_id,
                 pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
@@ -3328,7 +3328,7 @@ class PipelineExecutor:
             # graph as the execute path — matching _prepare_and_stream below.
             graph_struct_hash=struct_hash_with_eval_defs(
                 compute_retry_aware_topology_hash(graph_json, pipeline_retry_policy),
-                eval_defs_by_node,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
+                eval_defs_by_node,
             ),
         )
 
@@ -4553,7 +4553,7 @@ class PipelineExecutor:
             scope.snapshot_id,
             lambda: build_graph_from_json(
                 graph_json,
-                eval_definitions_by_node=eval_defs_by_node,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
+                eval_definitions_by_node=eval_defs_by_node,
                 session_factory=self._session_factory,
                 org_id=scope.org_id,
                 pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
@@ -4564,7 +4564,7 @@ class PipelineExecutor:
             pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
             graph_struct_hash=struct_hash_with_eval_defs(
                 compute_retry_aware_topology_hash(graph_json, pipeline_retry_policy),
-                eval_defs_by_node,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
+                eval_defs_by_node,
             ),
         )
 

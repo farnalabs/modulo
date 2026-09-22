@@ -64,32 +64,8 @@ class EvalDefDTO:
     suite_id: str | None = None
     version: int = 1
 
-    def model_dump(self, *, mode: str = "json", exclude: set[str] | None = None, **_kw: Any) -> dict[str, Any]:
-        """Compatibility shim for callers that expect a Pydantic ``model_dump``.
-
-        ``graph_cache.compute_eval_defs_hash`` calls
-        ``d.model_dump(mode="json", exclude={"created_at"})`` on every DTO.
-        This method satisfies that contract without requiring Pydantic.
-        """
-        d = vars(self)
-        if exclude:
-            d = {k: v for k, v in d.items() if k not in exclude}
-        if mode == "json":
-            # Serialise UUIDs and Decimals to JSON-safe primitives.
-            return {k: _json_safe(v) for k, v in d.items()}
-        return dict(d)
-
 
 _log = logging.getLogger(__name__)
-
-
-def _json_safe(v: Any) -> Any:
-    """Convert non-JSON-serialisable values to primitives for ``model_dump``."""
-    if isinstance(v, uuid.UUID):
-        return str(v)
-    if isinstance(v, Decimal):
-        return float(v)
-    return v
 
 
 # ---------------------------------------------------------------------------
