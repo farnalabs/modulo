@@ -4,7 +4,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
   # NOTE (FAR-773): the weekly Bundled Runner backstop cron deliberately does
   # NOT live here. A schedule trigger fires the ENTIRE fast-validation suite;
@@ -853,110 +852,6 @@ jobs:
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
         run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -p no:warnings
-
-  fast-lane-classify:
-    # FAR-1099: Classify PRs for fast-lane eligibility. Runs the classifier
-    # script that checks (1) all changed paths are class-A (test-infra only),
-    # (2) guardrails pass (cap, no test-weakening, SHA-pinned check). The
-    # result is a named check run ("fast-lane-eligible") on the PR's head SHA
-    # that the merge-queue reads when evaluating fast-lane eligibility.
-    #
-    # Design: the classifier step captures its exit code into a step output
-    # and always exits 0 (following the route-coverage pattern — see
-    # route-coverage step above). This keeps the workflow run "success" for
-    # every PR (class-B included), so the merge-queue collect step and
-    # notify-pr-failure are not broken. A separate step creates the
-    # "fast-lane-eligible" check run via the Check Runs API with the correct
-    # conclusion, giving the merge-queue a SHA-pinned, per-PR eligibility
-    # signal: success (eligible), neutral (ineligible), failure (rc=2 error).
-    #
-    # `continue-on-error` is not used in this workflow: every job must fail
-    # CI when it fails, so a non-zero classifier exit cannot be masked. Where
-    # a non-fatal outcome is genuinely needed, it is reported explicitly (see
-    # the route-coverage steps above) rather than suppressed. The check-run
-    # approach satisfies both constraints: the job stays green (no
-    # continue-on-error), and ineligibility is published as a `neutral`
-    # (non-failing) check run — never a red one — so the feature stays inert
-    # for every non-fast-lane PR. The merge-queue grants the fast lane only on
-    # a `success` conclusion, so `neutral` is a correct, non-blocking denial.
-    # A red check here would trigger the Branch Fixer on every class-B PR.
-    name: fast-lane-classify
-    if: github.event_name == 'pull_request'
-    runs-on: ubicloud-standard-2
-    permissions:
-      contents: read
-      pull-requests: read
-      checks: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
-        with:
-          python-version: "3.12"
-          enable-cache: true
-      - name: Run fast-lane classifier
-        id: classify
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          uv run --no-build --project backend --no-sync python scripts/fast_lane_classify.py \
-            --pr-number ${{ github.event.pull_request.number }} \
-            --head-sha ${{ github.event.pull_request.head.sha }} \
-            --repo ${{ github.repository }} \
-            --base-ref "origin/${{ github.event.pull_request.base.ref }}"
-          rc=$?
-          echo "classify_rc=$rc" >> "$GITHUB_OUTPUT"
-          # Always exit 0: the job stays green (workflow run = success) for
-          # every PR. The eligibility signal is the named check run created
-          # below, not the job conclusion.
-          exit 0
-      - name: Create fast-lane-eligible check run
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          RC="${{ steps.classify.outputs.classify_rc }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          # Conclusion contract (FAR-1099):
-          #   0 -> success  : class-A and (if labelled) guardrails pass
-          #   1 -> neutral  : class-B / unlabelled — NOT a failure. The PR takes
-          #                   the normal reviewed lane. A `failure` here would
-          #                   put a red check on every non-fast-lane PR, re-
-          #                   dispatching the Branch Fixer and breaking the
-          #                   feature's "side-effect-free for existing PRs"
-          #                   guarantee.
-          #   * -> failure  : rc=2 is a genuine classifier/usage error.
-          case "$RC" in
-            0)
-              CONCLUSION="success"
-              TITLE="Fast-lane eligible"
-              SUMMARY="PR is fast-lane eligible (class-A, guardrails pass). Merge-queue may skip review for this PR." ;;
-            1)
-              CONCLUSION="neutral"
-              TITLE="Fast-lane ineligible"
-              SUMMARY="PR is NOT fast-lane eligible (class-B or guardrail violation). Standard review lane applies." ;;
-            *)
-              CONCLUSION="failure"
-              TITLE="Fast-lane classifier error"
-              SUMMARY="The fast-lane classifier exited with code ${RC} (usage/infra error). Eligibility could not be determined; standard review lane applies." ;;
-          esac
-          # Build the body with jq so the nested `output` object is sent
-          # correctly (a dotted `-f output.title=` sends a literal key and
-          # GitHub drops it, leaving the check run with no title/summary).
-          BODY=$(jq -n \
-            --arg name "fast-lane-eligible" \
-            --arg sha "$HEAD_SHA" \
-            --arg conclusion "$CONCLUSION" \
-            --arg title "$TITLE" \
-            --arg summary "$SUMMARY" \
-            '{name: $name, head_sha: $sha, status: "completed", conclusion: $conclusion, output: {title: $title, summary: $summary}}')
-          gh api "repos/${{ github.repository }}/check-runs" \
-            --method POST \
-            --input - <<< "$BODY" \
-            --jq '.id'
-          echo "fast-lane check run created: conclusion=$CONCLUSION on $HEAD_SHA"
 
   notify-pr-failure:
     name: Trigger Branch Fixer
