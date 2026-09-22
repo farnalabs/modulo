@@ -254,7 +254,7 @@ async def _run_bootstrap(settings: Settings) -> None:
 
     The entrypoint already runs bootstrap before alembic; the lifespan path runs
     it BEFORE and AFTER alembic so the boundary survives every boot and is
-    re-applied after the migration's grants land (ADR-017/018 amendment). The
+    re-applied after the migration's grants land (ADR-047/018 amendment). The
     admin URL falls back to the app URL when DATABASE_ADMIN_URL is unset (like
     env.py).
 
@@ -319,7 +319,7 @@ async def _db_is_at_migration_head(settings: Settings) -> bool:
 async def _run_migrations(settings: Settings) -> None:
     """Run Alembic migrations to head, with a bounded retry loop and FATAL exhaustion.
 
-    This is the single authoritative migration runner (ADR 017). The entrypoint
+    This is the single authoritative migration runner (ADR 047). The entrypoint
     may have already applied migrations (``alembic upgrade heads`` is idempotent)
     but the advisory lock guarantees two migration runs never overlap. Transient
     DB errors are retried; on exhaustion this raises — it is called bare from
@@ -856,7 +856,7 @@ async def _run_boot_guards_and_seeds(settings: Settings) -> None:
     # warn|fail mode.
     await _run_break_glass_watchdog(settings)
 
-    # Hard-fail guard: the 'owner' org role was dropped (ADR 017 A1a). The
+    # Hard-fail guard: the 'owner' org role was dropped (ADR 047 A1a). The
     # migration converts owner -> admin transactionally, so owner rows must be
     # zero here. A transient SQLAlchemyError on the assertion query itself is
     # logged + ignored (a blip must not brick boot — the invariant is already

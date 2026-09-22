@@ -5,7 +5,7 @@ break-glass operator secrets. This is the operational procedure for
 recovering an organisation whose only admin cannot authenticate.
 
 **Prerequisite reading:**
-- ADR 017 (centralized-authorization), ADR 018 (centralized-authorization) — the auth architecture and the ONE deliberate login-route hook deviation
+- ADR 047 (centralized-authorization), ADR 018 (centralized-authorization) — the auth architecture and the ONE deliberate login-route hook deviation
 - `docs/configuration-reference.md` §Break-glass Admin Recovery — env settings
 - `docs/deployment-security.md` — deployment security baseline
 - `docs/security/secret-management.md` — secret handling / vault
@@ -50,7 +50,7 @@ Before an incident, confirm all of the following hold:
    from `MODULO_BREAK_GLASS_DATABASE_URL`). Bootstrap failure is FATAL when
    `ENABLED=true`. The role requires a superuser to grant BYPASSRLS — a
    managed-Postgres platform without superuser is a hard platform constraint
-   (see ADR-017/018).
+   (see ADR-047/018).
 3. **CLI installed** — `modulo-break-glass` (registered console script, mirrors
    `modulo-migrate`'s `asyncio.run` wrapper). Connects as `modulo_breakglass`
    via a dedicated lazy engine — never the app `database_url`.
@@ -386,7 +386,7 @@ the `modulo_breakglass` session (actor in `payload_json`, `account_id` NULL).
 | Topic | Document |
 |---|---|
 | Product requirements | `docs/configuration-reference.md` §Break-glass Admin Recovery |
-| Auth architecture / login hook | ADR 017 (centralized-authorization), ADR 018 (centralized-authorization) |
+| Auth architecture / login hook | ADR 047 (centralized-authorization), ADR 018 (centralized-authorization) |
 | Env settings | `docs/configuration-reference.md` §Break-glass Admin Recovery |
 | Deploy-gate precondition | `docs/deployment.md` §Break-Glass Admin Recovery Deploy Gate |
 | Deployment security baseline | `docs/deployment-security.md` |

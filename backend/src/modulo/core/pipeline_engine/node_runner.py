@@ -8389,7 +8389,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # inert); a setup failure disables the bridge for this node but
             # NEVER blocks the dispatch or wedges the agent loop. The
             # endpoint is the Modulo sandbox-agent process's localhost —
-            # the ADR 003 amendment documents how it is exposed into the
+            # the ADR 044 amendment documents how it is exposed into the
             # sandbox (in the test-driven slice it is the same host).
             if loop_intercept_config is not None and loop_intercept_config.enabled:
                 try:
@@ -9814,7 +9814,7 @@ def _build_sandbox_node_config(
     delivery_sentinel: str | None = node_def.get("delivery_sentinel")
     delivery_sentinel = delivery_sentinel if isinstance(delivery_sentinel, str) and delivery_sentinel else None
 
-    # FAR-211: agent-loop interior tool-call interception (ADR 003 amendment).
+    # FAR-211: agent-loop interior tool-call interception (ADR 044 amendment).
     # When the node carries a ``loop_intercept`` config, a Modulo-hosted bridge
     # runs INSIDE the sandbox alongside the agent: tool calls are reported to
     # the Modulo side BEFORE execution and tool results BEFORE they re-enter
@@ -9909,7 +9909,7 @@ def make_sandbox_agent_fn(
       - context_files: dict[str, str] —  optional files to write into the sandbox
         keyed by path
       - loop_intercept: dict | None —  optional agent-loop interior tool-call
-        interception config (FAR-211 / ADR 003 amendment). When enabled AND the
+        interception config (FAR-211 / ADR 044 amendment). When enabled AND the
         pipeline has bound guardrails, a Modulo-hosted bridge runs inside the
         sandbox: tool calls are evaluated against the SAME bound guardrails as
         the T1 ingestion edge before execution and before results re-enter the

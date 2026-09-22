@@ -1,6 +1,6 @@
 """HITL-gate weakening guard primitive (hitl-gate-removal-guard-plan.md v19).
 
-Shared diff primitive consumed by the ADR 017 service-layer backstop write
+Shared diff primitive consumed by the ADR 047 service-layer backstop write
 paths (``replace_pipeline_graph`` / ``rollback_to_snapshot``). It detects
 "weakening" of an existing HITL gate configuration and reports it so that
 non-privileged callers can be denied before any graph mutation executes.
@@ -8,7 +8,7 @@ non-privileged callers can be denied before any graph mutation executes.
 Design notes (plan §1, §3):
 
 - **Pure comparison** — the primitive never consults ``assert_org_role`` or
-  ``authz_enforce``. The HITL guard is a non-liftable carve-out (ADR 017
+  ``authz_enforce``. The HITL guard is a non-liftable carve-out (ADR 047
   Decision 3); privilege arrives as a boolean resolved by the caller from a
   flag-independent live-role read.
 - **``caller_type == "mcp"`` forces ``is_privileged`` to ``False``** — this is
@@ -460,7 +460,7 @@ async def resolve_effective_privilege(
     - ``caller_type == "mcp"``: always ``False``, no DB query attempted at all
       — the entire MCP exclusion mechanism.
     - ``caller_type == "rest"`` with ``account_id``: re-reads the caller's
-      live org role via ADR-017's centralized ``resolve_role_from_membership``.
+      live org role via ADR-047's centralized ``resolve_role_from_membership``.
       A DB error denies immediately with ``role-check-db-error`` (fail-closed,
       no retry — retrying inside the same transaction hits Postgres's
       aborted-transaction state, 25P02). A missing/deactivated membership
@@ -626,7 +626,7 @@ async def _resolve_effective_guardrail_admin(
     """Re-read the caller's live org role under the lock (admin-level check).
 
     Mirrors ``resolve_effective_privilege``: for ``caller_type == "rest"`` the
-    live role is re-read via ADR-017's ``resolve_role_from_membership``. A DB
+    live role is re-read via ADR-047's ``resolve_role_from_membership``. A DB
     error denies with ``role-check-db-error`` (fail-closed, no retry); a
     missing/deactivated membership denies with ``role-changed``. For
     ``caller_type == "mcp"`` the caller-supplied admin flag is used as-is (the

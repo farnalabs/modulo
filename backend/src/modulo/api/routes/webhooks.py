@@ -652,7 +652,7 @@ async def replay_webhook(
             await set_rls_execution_context(session)
 
             if principal is None:
-                # ADR 017: unauthenticated replay requires a valid HMAC signature
+                # ADR 047: unauthenticated replay requires a valid HMAC signature
                 # over the stored payload (same check as receive_webhook).
                 hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
                 modulo_timestamp = request.headers.get("X-Modulo-Timestamp")

@@ -104,7 +104,7 @@ async def resolve_role_from_membership(session: AsyncSession, account_id: str, o
     """Return the LIVE org role for the account in the org, or None if no active membership.
 
     Filters ``deactivated_at IS NULL`` — a soft-deactivated membership must not
-    resolve a role (ADR 017). The INNER JOIN on ``accounts`` requires
+    resolve a role (ADR 047). The INNER JOIN on ``accounts`` requires
     ``accounts.active IS TRUE`` (deliverable A of the break-glass plan): an
     account deactivated globally resolves to None in every org, closing the
     account-global-deactivation latent bug. It ALSO excludes deny-eligible

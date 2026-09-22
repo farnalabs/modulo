@@ -6,7 +6,7 @@ Feature: User Roles
   Background:
     Given I am authenticated as an admin in org "acme"
 
-  # ADR 017 per-scenario flip table (PR B):
+  # ADR 047 per-scenario flip table (PR B):
   # - "Viewer cannot create pipelines" and "Viewer cannot delete pipelines"
   #   flip from 200/204 to 403 once the pipeline sweep (pipeline.create and
   #   pipeline.delete @ operator) lands. The editor role is the operator role.

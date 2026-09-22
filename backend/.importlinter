@@ -260,6 +260,6 @@ ignore_imports =
     modulo.core.runtime_provider -> modulo.core.runtime_provider.local
     modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.docker
     modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.e2b
-    # The deprecated local_docker adapter (ADR 003) delegates to the canonical
+    # The deprecated local_docker adapter (ADR 044) delegates to the canonical
     # Docker provider; it stays inside the package and is out of D2 scope.
     modulo.core.runtime_provider.local_docker -> modulo.core.runtime_provider.docker

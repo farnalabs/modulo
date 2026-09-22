@@ -1,4 +1,4 @@
-"""Unit tests for the tenancy-bounded authorization kill switch (ADR 017 DECISION 3).
+"""Unit tests for the tenancy-bounded authorization kill switch (ADR 047 DECISION 3).
 
 Covers ``resolve_authz_enforce``, the request-scoped ``_authz_enforce_ctx``
 fail-open gate in ``assert_org_role``, the REST ``require_permission`` lift,

@@ -83,7 +83,7 @@ async def resolve_authz_enforce(
 
     Reads ``organisations.authz_enforce`` (dedicated boolean column) — the
     per-org kill switch. Defaults to True when the row is absent. Per-request
-    read (uncached). ADR 017 DECISION 3.
+    read (uncached). ADR 047 DECISION 3.
 
     Fail-closed: a SQL read error also defaults to True (enforce). The caller
     must provide an active transaction (e.g. ``async with session.begin():``);

@@ -25,7 +25,7 @@ _log = logging.getLogger(__name__)
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
-# Hardcoded exact-path CSRF exemptions (ADR 017 DECISION 1). These endpoints
+# Hardcoded exact-path CSRF exemptions (ADR 047 DECISION 1). These endpoints
 # authenticate via client_secret (body or Basic auth) — cookie-independent —
 # so a CSRF cookie check would 403 them even though they carry no CSRF risk.
 # They are deliberately exact paths, NOT env-configurable: a deploy can never

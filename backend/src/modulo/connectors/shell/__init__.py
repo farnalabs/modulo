@@ -1,7 +1,7 @@
 """ShellConnector — execute commands and manage files in a workspace via RuntimeProvider.
 
 .. deprecated::
-    ShellConnector is deprecated since ADR 003 (2026-07-16).  The Modulo agent
+    ShellConnector is deprecated since ADR 044 (2026-07-16).  The Modulo agent
     execution environment model (ADR 001) has been superseded by the Agent
     Dispatch Model.  Modulo no longer runs agents inside sandboxes — it
     dispatches work to external agent runtimes via the ``sandbox_agent`` node
@@ -54,9 +54,9 @@ class ShellConnector(ConnectorBase):
     """Execute shell commands and manage files inside a workspace lease.
 
     .. deprecated::
-        ShellConnector is deprecated since ADR 003 (2026-07-16).  The Modulo
+        ShellConnector is deprecated since ADR 044 (2026-07-16).  The Modulo
         agent execution environment model (ADR 001) has been superseded by the
-        Agent Dispatch Model (ADR 003).  Modulo no longer runs agents inside
+        Agent Dispatch Model (ADR 044).  Modulo no longer runs agents inside
         sandboxes — it dispatches work to external agent runtimes via the
         ``sandbox_agent`` node type.  ShellConnector will be removed in a
         future release.

@@ -26,7 +26,7 @@ status: covered
 
 Automatic pipeline snapshotting plus structured diff and rollback, exposed through the
 `snapshots` endpoints under `/api/v1/pipelines`. A snapshot is captured automatically when a run is triggered,
-so any pipeline version can be recovered or compared. Referenced by ADR 017/018 as a
+so any pipeline version can be recovered or compared. Referenced by ADR 047/018 as a
 product-map entry touched during centralized authorization cleanup.
 
 ## Behaviours
@@ -70,6 +70,6 @@ semantics stay unit-tested (
   via ``tests/bdd/steps/test_pipelines.py``. Recorded the real BDD references and
   moved the entry to ``status: covered``.
 - 2026-08-25: **product-map review pass** — restored this entry as part of
-  rebuilding the `docs/product-map/` feature graph. The entry is referenced by ADR 017/018
+  rebuilding the `docs/product-map/` feature graph. The entry is referenced by ADR 047/018
   (centralized-authorization cleanup). Re-verified endpoints and CRUD modules against the
   current tree. Status: partial (no BDD coverage).

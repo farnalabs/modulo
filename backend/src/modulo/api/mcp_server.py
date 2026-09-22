@@ -614,7 +614,7 @@ async def _trigger_pipeline_rate_allowed() -> bool:
     return await _trigger_pipeline_limiter.consume(_trigger_pipeline_client_key())
 
 
-# API-key role-cap degradation counter (ADR 017 DECISION 4): increments every
+# API-key role-cap degradation counter (ADR 047 DECISION 4): increments every
 # time a live-role clamp demotes a key (or an owner removal kills one), so mass
 # key-degradation is visible in logs and metrics. Module-level + lock, mirroring
 # the CatchAllMiddleware counter pattern.
@@ -663,7 +663,7 @@ async def _set_authz_enforce(org_id: uuid.UUID) -> None:
 
     ``check_tool_scope`` reads it via ``assert_org_role``. Fail-closed: on any
     read error the flag defaults to enforcement ON (True) and the failure is
-    logged under the structured kill-switch key. ADR 017 DECISION 3.
+    logged under the structured kill-switch key. ADR 047 DECISION 3.
     """
     try:
         async with _session(org_id) as s:
@@ -723,7 +723,7 @@ async def _session(org_id: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
 # Per-event auth validation
 # ---------------------------------------------------------------------------
 
-# TTL-bounded live-role cache for SSE per-event revalidation (ADR 017): at most
+# TTL-bounded live-role cache for SSE per-event revalidation (ADR 047): at most
 # one org_memberships read per connection per window, so a demoted admin loses
 # scope mid-stream without a DB round-trip on every event.
 _LIVE_ROLE_TTL_SECONDS = 15.0
@@ -745,7 +745,7 @@ def _evict_stale_live_role_cache(now: float) -> None:
 
 
 async def _revalidate_live_role(token: str, account_id: uuid.UUID, org_id: uuid.UUID) -> str | None:
-    """TTL-bounded live-role re-read for a JWT principal (ADR 017).
+    """TTL-bounded live-role re-read for a JWT principal (ADR 047).
 
     Returns the live org role, or None if the membership is missing/deactivated
     (removed user) or the read failed — the caller then denies (fail closed,
@@ -778,7 +778,7 @@ async def _validate_api_key_live(token: str, org_id: uuid.UUID) -> bool:
     """Re-validate an API-key credential and clamp its role against the live role."""
     async with _session(org_id) as s:
         key = await validate_api_key(s, token, org_id)
-    # ADR 017 DECISION 4 — clamp on every per-event re-validation too.
+    # ADR 047 DECISION 4 — clamp on every per-event re-validation too.
     # The stored key.role is the minted role; the effective role is
     # min(minted, live), resolved TTL-bounded through the same cache
     # the JWT path uses (per-connection keyed by token).
@@ -856,7 +856,7 @@ async def _validate_oauth_live(token: str) -> bool:
             org_id=claims.organisation_id,
         ):
             return False
-    # ADR 017: re-resolve the account's LIVE role (TTL-bounded per
+    # ADR 047: re-resolve the account's LIVE role (TTL-bounded per
     # connection) and re-apply the scope→live clamp so a demoted
     # operator loses scope mid-stream too.
     live_role = await _revalidate_live_role(
@@ -877,7 +877,7 @@ async def validate_current_auth() -> bool:
     Checks the stored credential against the DB/issuer to detect mid-session
     revocation, expiry, or OAuth token family blacklisting. For JWT principals
     the LIVE org role is re-resolved (TTL-bounded) and ``_ctx_role`` is re-set
-    so a demoted admin loses scope mid-stream (ADR 017).
+    so a demoted admin loses scope mid-stream (ADR 047).
     Returns True if the credential is still valid, False otherwise.
 
     Fail closed: the credential and org come exclusively from the
@@ -1066,7 +1066,7 @@ async def _authenticate_api_key(
         # Now re-validate within the correct RLS context.
         async with _session(org_id) as s:
             key = await validate_api_key(s, token, org_id=org_id)
-            # ADR 017 DECISION 4 — live role-cap on EVERY MCP call. The
+            # ADR 047 DECISION 4 — live role-cap on EVERY MCP call. The
             # stored key.role is the minted role; the effective role is
             # min(minted, live). A demoted operator's key degrades to
             # the live role on the next call (never persisted — the ORM
@@ -1203,7 +1203,7 @@ async def _authenticate_oauth_jwt(
                 ),
                 None,
             )
-        # ADR 017: no claim-less default-up. A None role claim fails closed,
+        # ADR 047: no claim-less default-up. A None role claim fails closed,
         # and the LIVE role is re-read from org_memberships so a demoted or
         # removed member loses access on the very next request.
         if principal.org_role is None:
@@ -1332,7 +1332,7 @@ async def _finalize_oauth_principal(
     """Resolve the OAuth principal role, set request context, and continue.
 
     Fail-closed: a DB read failure or missing/deactivated membership denies
-    the request (ADR 017 — the scope grant is clamped to the account's live
+    the request (ADR 047 — the scope grant is clamped to the account's live
     org role so a demoted operator loses scope on the next call).
     """
     # Resolve role from scopes (highest scope wins) — the scope grant is then
@@ -2376,7 +2376,7 @@ async def _update_pipeline_graph_impl(
         return pid_err
     assert pid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
-    # ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
+    # ADR 047 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
     # the MCP surface is structurally excluded from gate weakening. The
     # guarded function hardcodes is_privileged=False when
     # caller_type=="mcp" (no DB query); the literal below is enforced by a
@@ -3767,7 +3767,7 @@ async def _load_pending_hitl_gates(
 
 # ---------------------------------------------------------------------------
 # FAR-641: read-only HITL gate-inspection tools. Inspection only — decisions
-# stay in review_hitl (human_only gates stay browser-human-only, ADR 017) and
+# stay in review_hitl (human_only gates stay browser-human-only, ADR 047) and
 # gate configs are never written from MCP (the graph-write guard hardcodes
 # is_privileged=False for caller_type="mcp").
 # ---------------------------------------------------------------------------
@@ -8998,7 +8998,7 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
     ``Referrer-Policy: no-referrer`` header keeps the client's query params
     from leaking to any third-party referer. The old POST handler that minted
     codes directly (anonymous, unbound) is DELETED — codes are only minted by
-    the authenticated consent approve endpoint (ADR 017 DECISION 1).
+    the authenticated consent approve endpoint (ADR 047 DECISION 1).
     """
     params = request.query_params
     param_error = _oauth_authorize_param_errors(params)
@@ -9179,7 +9179,7 @@ async def _exchange_authorization_code(
     Runs the OAuth token exchange steps inside a DB transaction: validate the
     client secret, set RLS org context, consume the authorization code (PKCE
     verified inside), re-verify the consenting account's LIVE role against the
-    granted scopes (ADR 017), create a token family, and mint the token pair.
+    granted scopes (ADR 047), create a token family, and mint the token pair.
     Returns ``(response_dict, error)`` — ``response_dict`` is the success body
     on success; OAuth/DB exceptions propagate to the caller's ``try/except``.
     """
@@ -9211,7 +9211,7 @@ async def _exchange_authorization_code(
         )
 
         # Step 4: The consenting account's LIVE role must still cover the
-        # granted scopes — a demoted/removed account is denied (ADR 017).
+        # granted scopes — a demoted/removed account is denied (ADR 047).
         await verify_live_role_covers_scopes(
             s,
             account_id=auth_code.account_id,
@@ -9293,7 +9293,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
     against the stored S256 challenge (RFC 7636 §4.5/§4.6). ``client_secret``
     may arrive in the form body OR an HTTP Basic Authorization header. The
     consenting account's LIVE org role is re-verified against the granted
-    scopes — a demoted account is denied a token (ADR 017).
+    scopes — a demoted account is denied a token (ADR 047).
     """
     from modulo.auth.oauth import (
         InvalidClientError,
@@ -9384,7 +9384,7 @@ async def _exchange_refresh_token(
 
     Validates the client secret, sets RLS org context, decodes the refresh
     token, re-verifies the consenting account's LIVE role still covers the
-    token's scopes (ADR 017), then issues a new pair with an incremented
+    token's scopes (ADR 047), then issues a new pair with an incremented
     sequence — invalidating the old refresh token. Returns
     ``(response_dict, error)``; OAuth/DB exceptions propagate to the caller.
     """
@@ -9403,7 +9403,7 @@ async def _exchange_refresh_token(
 
         claims = decode_oauth_refresh_token(creds["refresh_token"], settings.secret_key)
 
-        # ADR 017: the consenting account's LIVE role must still cover the
+        # ADR 047: the consenting account's LIVE role must still cover the
         # scopes — a demoted/removed account is denied a fresh token.
         await verify_live_role_covers_scopes(
             s,
@@ -9471,7 +9471,7 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
     Re-verifies the client secret (body or Basic auth) and the consenting
     account's LIVE org role against the token's scopes — if the account was
     demoted (or removed) since the token was issued, the refresh is DENIED
-    (ADR 017 demote-then-refresh). The refresh token is rotated: a new pair is
+    (ADR 047 demote-then-refresh). The refresh token is rotated: a new pair is
     issued with an incremented sequence, invalidating the old refresh token.
     """
     from modulo.auth.oauth import (

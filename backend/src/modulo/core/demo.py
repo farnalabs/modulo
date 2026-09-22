@@ -10,7 +10,7 @@ reads nothing but ``modulo.settings`` — no secrets are logged here.
 from modulo.settings import Settings
 
 DEMO_ORG_SLUG = "demo"
-# Read-only: viewer is the bottom of the org-role hierarchy (ADR 017) and every
+# Read-only: viewer is the bottom of the org-role hierarchy (ADR 047) and every
 # mutating route requires runner/operator/admin through require_permission.
 DEMO_ORG_ROLE = "viewer"
 

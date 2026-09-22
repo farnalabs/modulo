@@ -1,4 +1,4 @@
-"""Unit tests for the centralized permission registry (ADR 017).
+"""Unit tests for the centralized permission registry (ADR 047).
 
 Covers ``assert_org_role`` boundary matrix, ``resolve_required`` fail-fast
 behaviour, and the import-time registry validation.

@@ -1,4 +1,4 @@
-"""BDD step definitions: MCP OAuth 2.0 authorization code flow (ADR 017 A1b)."""
+"""BDD step definitions: MCP OAuth 2.0 authorization code flow (ADR 047 A1b)."""
 
 import contextlib
 import json

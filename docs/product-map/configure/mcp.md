@@ -1,7 +1,7 @@
 ---
 id: feat-mcp
 prd: N/A
-adr: [ADR 017 (centralized-authorization)]
+adr: [ADR 047 (centralized-authorization)]
 code:
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/api/mcp_tool_registry.py
@@ -55,7 +55,7 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
       per-event on SSE streams
 - [x] Dual-layer scope enforcement: the middleware gate is re-checked at the
       viewmodel layer by `core/mcp/scope_validator.py` against the centralized
-      permission registry (ADR 017) — a bypass of the middleware cannot widen a
+      permission registry (ADR 047) — a bypass of the middleware cannot widen a
       tool's effective role — and team-bound tools enforce the caller's team
       binding
 - [x] OAuth 2.0 client management (browser-authenticated): register/list/delete
@@ -112,7 +112,7 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   executes against the shipped contracts: the discoverable tool inventory
   (FastMCP tool manager, the same registry `test_mcp_structural_coverage.py`
   pins) and the fail-closed auth gate (`McpAuthMiddleware` rejects
-  unauthenticated / invalid-credential requests with 401, ADR 017). The draft
+  unauthenticated / invalid-credential requests with 401, ADR 047). The draft
   previously described a PUBLIC `tools/list` that does not match the shipped
   server (its middleware rejects unauthenticated introspection fail-closed),
   so it was rewritten to describe the real contract and dropped from the

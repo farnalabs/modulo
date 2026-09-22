@@ -1,4 +1,4 @@
-"""Unit tests for the API-key role-cap + live re-validation (ADR 017 A2).
+"""Unit tests for the API-key role-cap + live re-validation (ADR 047 A2).
 
 Covers:
 1. ``_clamp_role`` pure function (never escalates; removal denies)
@@ -135,7 +135,7 @@ class TestMintCap:
         assert excinfo.value.status_code == 403
 
 
-# ── Middleware live clamp (dispatch-level demote test, ADR-017 pinned set) ──
+# ── Middleware live clamp (dispatch-level demote test, ADR-047 pinned set) ──
 
 
 @pytest.mark.asyncio(loop_scope="module")
