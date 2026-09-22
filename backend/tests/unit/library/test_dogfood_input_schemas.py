@@ -10,6 +10,7 @@ the ``validate_payload`` MCP tool.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,7 @@ from jsonschema import Draft202012Validator
 
 from modulo.core.seed_data.library_schemas import SCHEMAS
 
-DOGFOOD_SCHEMAS_DIR = Path(__file__).resolve().parents[4] / "devtools" / "dogfood" / "schemas"
+_DOGFOOD_SCHEMAS_DIR_RAW = os.environ.get("MODULO_DOGFOOD_SCHEMAS_DIR")
 
 
 def _definition(name: str) -> dict[str, Any]:
@@ -77,9 +78,16 @@ def test_invalid_payload_fails_validation(name: str) -> None:
 
 
 def _reference_files() -> list[Path]:
-    if not DOGFOOD_SCHEMAS_DIR.is_dir():
-        pytest.skip(f"Dogfood schema references dir not found: {DOGFOOD_SCHEMAS_DIR}")
-    return sorted(DOGFOOD_SCHEMAS_DIR.glob("*.schema.json"))
+    if not _DOGFOOD_SCHEMAS_DIR_RAW:
+        pytest.skip(
+            "MODULO_DOGFOOD_SCHEMAS_DIR env var not set; "
+            "set it to the path containing *.schema.json reference copies to "
+            "enable this test"
+        )
+    schemas_dir = Path(_DOGFOOD_SCHEMAS_DIR_RAW)
+    if not schemas_dir.is_dir():
+        pytest.skip(f"MODULO_DOGFOOD_SCHEMAS_DIR points to a non-existent directory: {schemas_dir}")
+    return sorted(schemas_dir.glob("*.schema.json"))
 
 
 def test_reference_copies_match_seed_definitions() -> None:

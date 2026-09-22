@@ -781,10 +781,10 @@ def _claim_token_attempt_suffix(claim_lease: str | None) -> str:
 def _effective_self_reported_cap() -> float:
     """The per-node clamp ceiling (Settings knob, min-capped at the column cap).
 
-    devtools' ``read_opencode_cost`` uses the CONSTANTS default via this name;
+    The sandbox-agent cost reader uses the CONSTANTS default via this name;
     the backend node_runner clamp is AUTHORITATIVE — the executor re-applies
     the Settings-knob clamp (effective value min-capped at the column cap) when
-    it extracts ``model_cost_usd`` from the node output, so a devtools-side
+    it extracts ``model_cost_usd`` from the node output, so an upstream
     default drift can never bypass the knob.
     """
     try:
@@ -823,7 +823,8 @@ def _extract_reported_cost(
     stays rejected.
 
     The raw input is read from ``model_cost_raw_usd`` WHEN PRESENT (the
-    producer's pre-clamp value — devtools writes it), falling back to
+    producer's pre-clamp value, written by the pipeline-side cost reader),
+    falling back to
     ``model_cost_usd`` for legacy producers. The flags derive from the TRUE raw.
 
     CLAMP ORDER (pinned): the value is clamped at the per-node cap
@@ -834,7 +835,7 @@ def _extract_reported_cost(
     ``was_clamped = clamped != raw`` (ANY clamp — band OR per-node);
     ``out_of_band_high = raw > band``.
 
-    SCHEMA-DRIFT FLAG READ AT THE TOP: the devtools-emitted ``schema_drift``
+    SCHEMA-DRIFT FLAG READ AT THE TOP: the pipeline-emitted ``schema_drift``
     producer-wire key (the FATAL minimal dict ``{"schema_drift": true}``
     forwarded by write_output) returns ``None`` (no report) when truthy — a
     drifted-schema node reports NO cost. The COUNTER INCREMENT does NOT happen

@@ -448,8 +448,8 @@ concurrency groups keyed on `${{ github.ref }}`.
 Modulo uses PR-based delivery. Push your branch, open a pull request, and CI
 (`ci.yml`) validates it automatically; merging is handled by the
 `merge-queue.yml` workflow once checks pass and review approves. For
-farnalabs-internal delivery the `<push-and-create-PR>` / `<poll-PR-until-merged>` helpers
-exist in the devtools tooling repo.
+For farnalabs-internal delivery, additional automation helpers
+exist in the internal tooling repo (not part of the public contribution flow).
 
 ---
 

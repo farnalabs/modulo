@@ -121,7 +121,7 @@ amends it to:
 > agents, per-user automations). Org-wide remains the deliberate opt-in for
 > shared service identities.*
 
-**Reciprocal edit for ADR 017 (Conductor lands in devtools alongside this
+**Reciprocal edit for ADR 017 (co-located with this
 ADR):** append to DECISION 1, "Amended by ADR 030: user-scoped MCP keys add
 a per-user credential class for identity-bound machine clients; org API keys
 remain the default for shared machine identities."
