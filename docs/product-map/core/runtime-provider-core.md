@@ -22,6 +22,7 @@ unit-tests:
   - backend/tests/unit/api/test_environment_profiles_routes.py
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
+  - backend/tests/bdd/features/runtime_providers/provider_matrix.feature
   - backend/tests/bdd/features/workflows/binding.feature
 depends-on: []
 status: covered
@@ -55,16 +56,39 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       `DeprecationWarning` and doc notice; existing ShellConnector pipelines continue
       running, and the node type is marked deprecated in the UI — new pipelines should
       use `sandbox_agent`
+- [x] Platform-provider matrix is BDD-exercised against the REAL runtime-provider
+      seams network-free and DB-free (`provider_matrix.feature`):
+      `build_hub` registers `local` unconditionally and gates `e2b` /
+      the docker family on their documented env signals (an unrelated
+      `MODULO_RUNNER_*` var never registers Docker — FAR-996); the hub resolves
+      deterministically (hint wins, docker-family aliases share one provider,
+      known-but-unregistered types raise `ProviderNotConfiguredError` naming the
+      remediation env var, unknown types raise `UnknownProviderTypeError` naming
+      the valid vocabulary, a missing type is unresolvable); and the factory
+      `initialise` loads docker-family configs under their config name, skips e2b
+      without an api_key, and rejects unknown types
 
 ## Known Gaps
 
-- **No BDD coverage for the platform-provider matrix** — environment-profile BDD exists,
-  but no `.feature` file exercises each provider backend end to end.
 - **E2B provider is V3-deferred / environment-dependent** — runs only where the E2B
   integration is configured.
 
 ## QA History
 
+- 2026-09-22: **product-map walk** — closed the "No BDD coverage for the
+  platform-provider matrix" gap (`provider_matrix.feature`, steps in
+  `features/runtime_providers/test_provider_matrix_steps.py`), driving the REAL
+  `build_hub` / `RuntimeProviderHub.resolve` / factory `initialise` seams
+  network-free and DB-free (real `LocalRuntimeProvider` / `DockerRuntimeProvider`
+  / `E2BRuntimeProvider(api_key=...)` constructors, which open no connections):
+  the env-gated registration matrix (local always; e2b / docker family gated on
+  their documented signals; unrelated `MODULO_RUNNER_*` never registers Docker,
+  FAR-996), the deterministic resolve matrix (hint-wins, docker-family aliases →
+  one provider, known-but-unregistered → `ProviderNotConfiguredError` naming the
+  remediation env var, unknown → `UnknownProviderTypeError` naming the valid
+  vocabulary, missing type → unresolvable), and the config-driven `initialise`
+  (docker-family aliases under a config name, e2b skipped without an api_key,
+  unknown config types rejected). 13 scenarios execute in CI.
 - 2026-09-02: **FAR-551** — collapsed the duplicate `/admin/environments` UI +
   `environments.py` router into `/environment-profiles`; ported the `/test`
   connectivity check; added the missing API feature-gate.
