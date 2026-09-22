@@ -465,9 +465,8 @@ async def test_drain_gate_ignores_non_executing_runs(isolated_db_url: str) -> No
         await _assert_c8(engine)
         ed_count = await _scalar(engine, "SELECT COUNT(*) FROM eval_definitions")
         eval_count = await _scalar(engine, "SELECT COUNT(*) FROM evals")
-        assert eval_count == ed_count == 6, (
-            f"backfill must complete with parked runs present: evals={eval_count}, eval_definitions={ed_count}"
-        )
+        assert eval_count == 6, f"backfill must complete with parked runs present: evals={eval_count}"
+        assert ed_count == 6, f"backfill must complete with parked runs present: eval_definitions={ed_count}"
     finally:
         await engine.dispose()
 
