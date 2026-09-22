@@ -213,6 +213,29 @@ class TestIsTelemetryEnabled:
         with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is True
 
+    def test_store_none_value_falls_back_to_settings(self, monkeypatch: pytest.MonkeyPatch):
+        """When the store returns None for the key, fall back to Settings.
+
+        The MODULO_TELEMETRY_ENABLED default is "false" rather than None, so
+        this defends the None arm of the store-first check for stores that
+        were reset/torn down for test isolation.
+        """
+        monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        from modulo.core.runtime_config.store import RuntimeConfigStore
+        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
+        from modulo.settings import get_settings
+
+        get_settings.cache_clear()
+        store = RuntimeConfigStore()
+        with (
+            patch.object(store, "get", return_value=None),
+            patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store),
+        ):
+            assert is_telemetry_enabled() is True
+
 
 class TestToggleTelemetry:
     """Tests for the toggle_telemetry() function (FAR-1131 C2 fix)."""
