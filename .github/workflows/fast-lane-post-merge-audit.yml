@@ -1,0 +1,179 @@
+name: "Fast Lane: Post-merge audit"
+
+# Verify that every fast-lane merge received a post-merge review comment
+# from the reviewer identity (modulo-reviewbot).
+#
+# This workflow catches the class of silent failure where the PR Reviewer
+# pipeline dispatches but the reviewer does nothing — a reviewer that
+# silently does nothing is indistinguishable from a reviewer that found
+# nothing, which is exactly the class of silent failure the fast-lane
+# circuit breaker exists to eliminate.
+#
+# Dependency: the audit treats "reviewer commented" as the signal of a
+# completed review.  This requires the reviewer to comment even on a
+# clean review (no findings).  That behaviour is delivered separately in
+# the private devtools repo.  Without it, a clean review would be
+# reported as unaudited.
+#
+# Trigger: workflow_dispatch plus a low-frequency schedule (~every 6h).
+# This repo has documented evidence that GitHub drops high-frequency
+# cron events on high-activity repos (lesson: "GitHub's scheduler
+# DROPS high-frequency cron events on high-activity repos" in the
+# workspace AGENTS.md, incident 2026-08-29/30).  A 6-hour cadence is
+# low enough to survive the scheduler while still catching missing
+# reviews within a single business day.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 6 hours — low enough to avoid GitHub's cron-dropping
+    # behaviour on high-activity repos.
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  audit-fast-lane-reviews:
+    name: Audit fast-lane post-merge reviews
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+
+      # ----------------------------------------------------------------
+      # Step 1: Fetch fast-lane merges within the audit window
+      # ----------------------------------------------------------------
+      - name: Fetch fast-lane merges
+        id: merges
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          # Window: 24h before now.  Merges older than this are out of
+          # scope (they were audited or missed by a prior run).
+          SINCE=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+                  || date -u -v-24H '+%Y-%m-%dT%H:%M:%SZ')
+
+          MERGES=$(gh pr list \
+            --repo "$REPO" \
+            --state merged \
+            --limit 100 \
+            --json number,title,mergedAt,mergeCommit \
+            --jq "[.[] | select(.title | ascii_downcase | contains(\"[auto-merge: test-infra]\")) | {commit: .mergeCommit.oid, pr_number: .number, merged_at: .mergedAt}] | map(select(.merged_at >= \"$SINCE\"))")
+
+          echo "merges=$MERGES" >> "$GITHUB_OUTPUT"
+          COUNT=$(echo "$MERGES" | python -c "import sys,json; print(len(json.load(sys.stdin)))")
+          echo "Found $COUNT fast-lane merge(s) in the last 24h."
+
+      # ----------------------------------------------------------------
+      # Step 2: Fetch review comments on those PRs
+      # ----------------------------------------------------------------
+      - name: Fetch review comments
+        id: comments
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MERGES: ${{ steps.merges.outputs.merges }}
+        shell: bash
+        run: |
+          # Collect PR numbers from the merges JSON.
+          PR_NUMS=$(echo "$MERGES" | python -c "
+          import sys, json
+          merges = json.load(sys.stdin)
+          print(' '.join(str(m['pr_number']) for m in merges))
+          ")
+
+          if [ -z "$PR_NUMS" ]; then
+            echo "[]" > /tmp/comments.json
+            echo "No fast-lane merges to audit — skipping comment fetch."
+          else
+            : > /tmp/comments.json
+            for PR in $PR_NUMS; do
+              # Fetch issue comments (not PR review comments — the
+              # reviewer posts via gh pr comment, not the review API,
+              # because GitHub refuses reviews on merged PRs).
+              PR_COMMENTS=$(gh api "repos/$REPO/issues/$PR/comments" \
+                --paginate \
+                --jq '[.[] | {author: .user.login, created_at: .created_at, pr_number: '$PR'}]' \
+                2>/dev/null || echo "[]")
+              # Merge into the accumulator.
+              python -c "
+          import json, sys
+          existing = json.load(open('/tmp/comments.json'))
+          new = json.loads(sys.argv[1])
+          existing.extend(new)
+          json.dump(existing, open('/tmp/comments.json', 'w'))
+          " "$PR_COMMENTS"
+            done
+          fi
+
+          COMMENTS=$(cat /tmp/comments.json)
+          echo "comments=$COMMENTS" >> "$GITHUB_OUTPUT"
+          COUNT=$(echo "$COMMENTS" | python -c "import sys,json; print(len(json.load(sys.stdin)))")
+          echo "Fetched $COUNT comment(s) across all PRs."
+
+      # ----------------------------------------------------------------
+      # Step 3: Run the audit helper
+      # ----------------------------------------------------------------
+      - name: Run audit
+        id: audit
+        env:
+          MERGES: ${{ steps.merges.outputs.merges }}
+          COMMENTS: ${{ steps.comments.outputs.comments }}
+        shell: bash
+        run: |
+          # Run the pure-logic helper.  It exits 0 (all audited) or
+          # 1 (unaudited found).  We capture the exit code separately
+          # so the step can emit annotations before failing.
+          set +e
+          OUTPUT=$(uv run --no-build --project backend --no-sync python scripts/fast_lane_audit.py \
+            --window-hours 24 \
+            --merges-json "$MERGES" \
+            --comments-json "$COMMENTS" 2>&1)
+          AUDIT_RC=$?
+          set -e
+
+          echo "$OUTPUT"
+          echo "audit_rc=$AUDIT_RC" >> "$GITHUB_OUTPUT"
+
+          if [ "$AUDIT_RC" -eq 0 ]; then
+            echo "All fast-lane merges have been reviewed."
+          else
+            echo "::error::Fast-lane audit found unaudited merges (see output above)."
+          fi
+
+      # ----------------------------------------------------------------
+      # Step 4: Post Linear comment (fail-open)
+      # ----------------------------------------------------------------
+      - name: Notify Linear (fail-open)
+        if: steps.audit.outputs.audit_rc != '0' && env.LINEAR_API_KEY != ''
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          AUDIT_OUTPUT: ${{ steps.audit.outputs.audit_rc }}
+        shell: bash
+        run: |
+          # Best-effort: post a comment to the FAR team noting the
+          # unaudited merges.  Failure here must not fail the workflow.
+          # LINEAR_API_KEY is optional; the step is skipped when absent.
+          #
+          # We search for a relevant ticket or create a comment on a
+          # known tracking ticket.  This is intentionally simple — the
+          # audit output already contains the PR numbers and commits.
+          echo "Linear notification is a no-op for now — the audit output above names the unaudited PRs."
+          echo "When LINEAR_API_KEY is wired, this step will post to the FAR team."
+
+      # ----------------------------------------------------------------
+      # Step 5: Fail the run if unaudited merges exist
+      # ----------------------------------------------------------------
+      - name: Fail on unaudited merges
+        if: steps.audit.outputs.audit_rc != '0'
+        shell: bash
+        run: |
+          echo "::error::Post-merge review audit failed — unaudited fast-lane merges detected."
+          echo "See the 'Run audit' step output for details."
+          exit 1
