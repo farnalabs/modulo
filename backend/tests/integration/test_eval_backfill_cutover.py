@@ -242,14 +242,19 @@ async def _seed_snapshot(engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uu
 
 
 async def _seed_run(
-    engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.UUID, snapshot_id: uuid.UUID
+    engine: AsyncEngine,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    status: str = "complete",
 ) -> uuid.UUID:
     """Minimal runs row (mirrors test_eval_cutover_e2e seeding).
 
-    Uses the TERMINAL ``complete`` status: migration 0254's Step 0 drain
-    check treats pending/running runs as in-flight and would poll for the
-    full drain timeout — a pre-migration eval result belongs to a finished
-    run, so a terminal status is both realistic and drain-safe.
+    Defaults to the TERMINAL ``complete`` status: migration 0254's Step 0 drain
+    check treats ``running`` runs as in-flight and would poll for the full drain
+    timeout — a pre-migration eval result belongs to a finished run, so a
+    terminal status is both realistic and drain-safe.  Callers proving the drain
+    scope pass a non-terminal ``status`` explicitly.
     """
     run_id = uuid.uuid4()
     run_number = int(run_id.int % 10**9) + 1
@@ -259,7 +264,7 @@ async def _seed_run(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
                 "trigger_type, input_hash, input_payload, langgraph_thread_id, "
                 "run_number, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, 'complete')"
+                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :status)"
             ),
             {
                 "id": str(run_id),
@@ -269,6 +274,7 @@ async def _seed_run(
                 "ih": uuid.uuid4().hex,
                 "thread": f"{org_id}:{run_id}",
                 "rn": run_number,
+                "status": status,
             },
         )
     return run_id
@@ -431,6 +437,37 @@ async def test_upgrade_backfill_completeness_and_populations(isolated_db_url: st
         await _assert_c1_c2_c3_c4_c5(engine, seeded, defs)
         await _assert_c6(engine)
         await _assert_c8(engine)
+    finally:
+        await engine.dispose()
+
+
+async def test_drain_gate_ignores_non_executing_runs(isolated_db_url: str) -> None:
+    """Step 0 drain scope: non-executing non-terminal runs never block the cutover.
+
+    Regression for the 2026-09-22 production deploy wedge: a live database
+    carrying parked/recovery runs (``awaiting_human``, ``hitl_parked``,
+    ``claimed``, ``unknown``, ``pending``) must still migrate — the drain wait
+    gates on ``running`` runs only.  Under the pre-fix gate this test polled for
+    the full 600s drain timeout and aborted.
+    """
+    db_url = isolated_db_url
+    engine = create_async_engine(db_url, poolclass=NullPool)
+    try:
+        seeded = await _seed_org_and_pipeline(engine)
+        await _seed_eval_definitions(engine, seeded)
+        snapshot_id = await _seed_snapshot(engine, seeded["org_id"], seeded["pipeline_id"])
+        for status in ("awaiting_human", "hitl_parked", "claimed", "unknown", "pending"):
+            await _seed_run(engine, seeded["org_id"], seeded["pipeline_id"], snapshot_id, status=status)
+
+        command.upgrade(_alembic_config(db_url), MIGRATION_REV)
+
+        # The migration completed despite 5 non-executing non-terminal runs.
+        await _assert_c8(engine)
+        ed_count = await _scalar(engine, "SELECT COUNT(*) FROM eval_definitions")
+        eval_count = await _scalar(engine, "SELECT COUNT(*) FROM evals")
+        assert eval_count == ed_count == 6, (
+            f"backfill must complete with parked runs present: evals={eval_count}, eval_definitions={ed_count}"
+        )
     finally:
         await engine.dispose()
 
