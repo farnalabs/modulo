@@ -60,14 +60,23 @@ _BATCH_SIZE = 500
 _DRAIN_POLL_INTERVAL_S = 5
 _DRAIN_TIMEOUT_S = 600  # 10 minutes
 
-# Active (in-flight) run statuses — from modulo.db.models.run.ACTIVE_RUN_STATUSES.
-_ACTIVE_RUN_STATUSES = (
+# Statuses the Step-0 drain gate patrols: a run that is queued (``pending``)
+# or executing (``running``) and so will either finish on its own or be
+# admitted shortly.  Deliberately NOT the full
+# ``modulo.db.models.run.ACTIVE_RUN_STATUSES`` set — the excluded states
+# cannot be mid-write during the FK repoint and can persist indefinitely:
+# ``awaiting_human`` and ``hitl_parked`` wait on a human decision (FAR-604 D2
+# parks an unanswered gate), ``claimed`` is the HITL review-claim status set
+# by the claim route (it flips a run out of ``awaiting_human``; it is not a
+# worker execution claim, which is ``running``), and ``unknown`` is a
+# lost-sandbox recovery state only an operator re-run clears.  Patrolling the
+# full set made the gate unsatisfiable in a live deployment — the 2026-09-22
+# prod-deploy outage: 13 never-draining runs aborted the rehearsal and
+# blocked every deploy.  Migrations cannot import app constants, so the set
+# is inlined.
+_DRAIN_RUN_STATUSES = (
     "pending",
     "running",
-    "awaiting_human",
-    "claimed",
-    "unknown",
-    "hitl_parked",
 )
 
 # Columns copied from eval_definitions → evals.
@@ -129,11 +138,17 @@ def _scalar(sql: str) -> Any:
 
 
 def _drain_check() -> None:
-    """Poll for in-flight runs; abort if any remain after timeout."""
+    """Poll for in-flight runs; abort if any remain after timeout.
+
+    Only :data:`_DRAIN_RUN_STATUSES` (pending/running) are waited on.
+    ``awaiting_human``, ``claimed``, ``hitl_parked`` and ``unknown`` are
+    excluded: they are non-executing states that can persist indefinitely, so
+    patrolling them would make the gate unsatisfiable in a live deployment.
+    """
     deadline = time.monotonic() + _DRAIN_TIMEOUT_S
     active_sql = (
         "SELECT id FROM runs WHERE status IN ("  # nosec B608
-        + ", ".join(f"'{s}'" for s in _ACTIVE_RUN_STATUSES)  # nosec B608
+        + ", ".join(f"'{s}'" for s in _DRAIN_RUN_STATUSES)  # nosec B608
         + ") LIMIT 20"
     )
     while True:
