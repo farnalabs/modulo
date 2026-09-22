@@ -777,15 +777,15 @@ def _eval_def(
     org_id: uuid.UUID | None = None,
     pipeline_id: uuid.UUID | None = None,
 ) -> Any:
-    from modulo.core.eval_engine import EvalDefinition, EvalType
+    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
-    return EvalDefinition(
+    return EvalDefDTO(
         id=eval_id or uuid.uuid4(),
         org_id=org_id or uuid.uuid4(),
         pipeline_id=pipeline_id or uuid.uuid4(),
         node_id="A",
         name="gate-eval",
-        eval_type=EvalType.REGEX,
+        eval_type="regex",
         config=config or {"pattern": "v1"},
         failure_behaviour="warn",
         version=1,

@@ -615,7 +615,7 @@ When a pipeline runs, the run executes with the **pipeline owner's authority**, 
 - A run may only use secrets scoped to the **pipeline's owner team**; cross-team secret use requires moving the secret to an org-visible scope.
 - `runs.owner_team_id` is **metadata** (for dashboard aggregation), not a security control. Run access is derived from pipeline access; runs do not need their own team gate.
 
-See ADR 038 (`Repos/devtools/adr/038-rbac-security-boundary.md`) for the full decision.
+See ADR 038 (rbac-security-boundary) for the full decision.
 
 ### Folder Security Model (ADR 038)
 
@@ -712,7 +712,7 @@ OpenTelemetry-native. Default exporter: stdout JSON. Configurable OTLP endpoint 
 
 ## Architecture Decision Records
 
-ADRs live in the private `farnalabs/devtools` repo at `Repos/devtools/adr/` (migrated out of this repo 2026-09-02, FAR-434; they were previously in-repo under `docs/adr/`). They document key trade-offs:
+ADRs document key trade-offs and are maintained alongside this project's private development tooling (migrated out of this repo 2026-09-02, FAR-434).
 
 | ADR | Title | Status |
 |-----|-------|--------|

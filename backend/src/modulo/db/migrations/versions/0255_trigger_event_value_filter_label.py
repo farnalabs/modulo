@@ -1,8 +1,11 @@
 """Widen ck_trigger_events_validation_result for FAR-1144 value-filter label.
 
-Revision ID: 0254_trigger_event_value_filter_label
-Revises: 0253_runs_enforcement_mode_outcome
+Revision ID: 0255_trigger_event_value_filter_label
+Revises: 0254_eval_backfill_cutover
 Create Date: 2026-09-22
+Renumbered: 0254 -> 0255 to resolve the numeric-prefix collision with main's
+0254_eval_backfill_cutover (FAR-1100); the chain is now
+0253_runs_enforcement_mode_outcome -> 0254_eval_backfill_cutover -> this revision.
 
 FAR-1144 adds a distinct validation_result label for the value-filter gate
 (``event_filters``) which previously reused ``event_type_not_accepted``,
@@ -25,8 +28,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0254_trigger_event_value_filter_label"
-down_revision: str | None = "0253_runs_enforcement_mode_outcome"
+revision: str = "0255_trigger_event_value_filter_label"
+down_revision: str | None = "0254_eval_backfill_cutover"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

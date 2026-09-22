@@ -36,7 +36,7 @@ from alembic.script import ScriptDirectory
 
 from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
 
-_MIGRATION_NAME = "0254_trigger_event_value_filter_label"
+_MIGRATION_NAME = "0255_trigger_event_value_filter_label"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
@@ -115,9 +115,11 @@ _MIGRATION_PATH = (
 # chained onto 0249_validation_level, and 0251_schema_enforcement_telemetry (FAR-902)
 # chained onto 0250_eval_policy_gate, and 0252_enforcement_daily_facts (FAR-902) chained
 # onto 0251_schema_enforcement_telemetry, and 0253_runs_enforcement_mode_outcome (FAR-902)
-# chained onto 0252_enforcement_daily_facts, and 0254_trigger_event_value_filter_label
-# (FAR-1144) chained onto 0253_runs_enforcement_mode_outcome as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0254_trigger_event_value_filter_label"
+# chained onto 0252_enforcement_daily_facts, and 0254_eval_backfill_cutover (FAR-1100)
+# chained onto 0253_runs_enforcement_mode_outcome, and
+# 0255_trigger_event_value_filter_label (FAR-1144) chained onto
+# 0254_eval_backfill_cutover as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0255_trigger_event_value_filter_label"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

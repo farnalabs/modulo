@@ -509,11 +509,14 @@ jobs:
           # Audit trail: every bot closure must post its reason, and a comment
           # failure must never be silenced -- a silent close is indistinguishable
           # from a buggy or malicious one (see AGENTS.md Lessons Learned, PR #2092).
+          # The close itself stays best-effort (duplicate PRs whose changes are
+          # already on main genuinely should close), but a failed comment is an
+          # ::error:: annotation so it is loudly visible, not a quiet warning.
           for NUM in $(cat /tmp/noop_prs.txt 2>/dev/null); do
             echo "  Closing duplicate PR #$NUM (changes already on main)..."
             CLOSE_REASON="Auto-closed by the merge queue as a duplicate: this PR's changes are already on main (merged via another PR), so squash-merging it into the queue produced no commit. If this was a mistake, reopen the PR and re-request a review."
             if ! gh pr comment "$NUM" --body "$CLOSE_REASON" > /dev/null 2>&1; then
-              echo "::warning::closure comment failed for PR #$NUM - closing without audit-trail comment. Reason NOT posted: $CLOSE_REASON"
+              echo "::error::closure comment failed for PR #$NUM - closing without audit-trail comment. Reason NOT posted: $CLOSE_REASON"
             fi
             gh pr close "$NUM" 2>/dev/null || true
           done
@@ -983,22 +986,23 @@ jobs:
                 esac
               fi
             else
-              echo "    PR #$NUM failed to merge via gh -- will close with comment"
+              echo "    PR #$NUM failed to merge via gh -- leaving OPEN for the next queue cycle (see below)"
               FAILED="$FAILED $NUM"
             fi
           done
 
-          # For any PRs that couldn't be merged via gh, close with a truthful
-          # reason. This loop is ONLY reached from the failure branch above, so
-          # these PRs were NOT merged -- never claim otherwise in the comment.
-          # The run URL carries the authoritative outcome and logs.
+          # A failed `gh pr merge` is NOT terminal: the queue runs on a ~15-min
+          # cron and is designed to skip-and-retry. Transient failures (CI not
+          # yet complete at collection time, a GitHub API blip, a momentary
+          # branch-protection state) must not kill an approved, mergeable PR --
+          # closing here destroyed PR #885 that way (FAR-1146). So for each PR
+          # in $FAILED we do NOT close, comment, or delete the branch: we emit a
+          # loud warning and leave the PR open for the next cycle to retry.
+          # `failed_gh_merge` is still written to $GITHUB_OUTPUT below because
+          # downstream steps read it.
           for NUM in $FAILED; do
             RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            CLOSE_REASON="Auto-closed by the merge queue: its squash-merge attempt for this PR did not succeed. See run $RUN_URL for the outcome and logs."
-            if ! gh pr comment "$NUM" --body "$CLOSE_REASON" > /dev/null 2>&1; then
-              echo "::warning::closure comment failed for PR #$NUM - closing without audit-trail comment. Reason NOT posted: $CLOSE_REASON"
-            fi
-            gh pr close "$NUM" 2>/dev/null || true
+            echo "::warning::PR #$NUM: squash-merge attempt failed; PR stays OPEN for the next queue cycle (not closed). See run $RUN_URL for the outcome and logs."
           done
 
           GH_MERGED=$(echo "$GH_MERGED" | xargs)
