@@ -14,6 +14,24 @@ test.describe('Dashboard', () => {
     await expect(page.locator('h1')).toContainText('Dashboard')
   })
 
+  test('trend window toggles reflect selection', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await page.reload()
+
+    const heading = page.locator('[data-testid="dashboard-title"]')
+    await expect(heading).toBeVisible()
+
+    const allToggle = page.locator('[data-testid="trend-toggle-all"]')
+    // Fresh session defaults to the all-time window (selectedWindow === null).
+    await expect(allToggle).toHaveAttribute('aria-pressed', 'true')
+
+    const weekToggle = page.locator('[data-testid="trend-toggle-7"]')
+    await weekToggle.click()
+
+    await expect(weekToggle).toHaveAttribute('aria-pressed', 'true')
+    await expect(allToggle).toHaveAttribute('aria-pressed', 'false')
+  })
+
   test('run activity card shows HITL and rejection rate labels', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.reload()
