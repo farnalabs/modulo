@@ -2760,6 +2760,36 @@ class TestHitlGateMissingTerminalizerWiring:
 
         assert terminalizer.await_args.kwargs["grace_seconds"] == 180
 
+    @pytest.mark.asyncio
+    async def test_terminalize_capped_counter_fires_at_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A zero-claim sweep returning exactly ``terminalize_max`` rows signals
+        a saturated batch — the tick raises ``terminalize_capped`` so the
+        overflow backlog is observable, mirroring the sibling terminalizers."""
+        terminalizer = AsyncMock(return_value=[uuid.uuid4(), uuid.uuid4()])
+        summary, _reenqueue, _ingest, _redis, _awaiting, _session = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_missing=terminalizer,
+            settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 2},
+        )
+
+        assert summary["hitl_gate_missing_terminalized"] == 2
+        assert summary["terminalize_capped"] == 1
+
+    @pytest.mark.asyncio
+    async def test_terminalize_capped_counter_silent_under_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A zero-claim sweep below the cap must not raise the overflow signal."""
+        terminalizer = AsyncMock(return_value=[uuid.uuid4()])
+        summary, _reenqueue, _ingest, _redis, _awaiting, _session = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_missing=terminalizer,
+            settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 25},
+        )
+
+        assert summary["hitl_gate_missing_terminalized"] == 1
+        assert summary["terminalize_capped"] == 0
+
 
 class TestRecordFactForTerminalizedRun:
     """FAR-648 phantom-fact guard: the compensating daily-fact recorder (P6',
