@@ -55,6 +55,7 @@ from modulo.core.eval_engine.coverage_gap import (
     DEFAULT_MIN_RUNS,
     compute_coverage_gap,
 )
+from modulo.core.eval_engine.eval_definition_freeze import raise_if_frozen
 from modulo.core.eval_engine.suite_run import (
     EVAL_LEADERBOARD_DEFAULT_DAYS,
     EVAL_LEADERBOARD_MAX_DAYS,
@@ -94,9 +95,6 @@ _CODE_EVALS_SUITE_ALERTING = "evals.suite_alerting"
 _CODE_EVALS_COVERAGE_GAP = "evals.coverage_gap"
 _EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
-# FAR-1100 chunk 3 → 3b freeze: single import point; remove when chunk 3b lands (CO-8).
-from modulo.core.eval_engine.eval_definition_freeze import raise_if_frozen  # noqa: E402
-
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["evals"])

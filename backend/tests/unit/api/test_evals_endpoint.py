@@ -142,23 +142,9 @@ class TestCreateEvalDefinition:
     URL = "/api/v1/evals"
 
     def test_create_returns_201(self, admin_client: TestClient) -> None:
-        mock_pipeline = MagicMock()
-        mock_pipeline.id = _PIPELINE_ID
-        mock_session = _make_mock_session()
-        mock_session.execute.side_effect = [
-            _make_result(),  # require_permission authz_enforce (kill-switch) read
-            _make_result(scalar_value=None),  # set_rls_org
-            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
-        ]
-        mock_session.add = MagicMock()
-        mock_session.flush = AsyncMock()
-
-        async def override_session() -> AsyncGenerator[AsyncMock, None]:
-            yield mock_session
-
-        app.dependency_overrides[get_db_session] = override_session
+        # FAR-1100 chunk 3 → 3b freeze: create is frozen.  The freeze guard
+        # fires first, before any DB/validation logic.  Revert when chunk 3b
+        # lands (CO-8) — restore the original 201 happy-path assertion.
         resp = admin_client.post(
             self.URL,
             json={
@@ -171,34 +157,12 @@ class TestCreateEvalDefinition:
                 "suite_id": "suite-1",
             },
         )
-        assert resp.status_code == 201
-        data = resp.json()
-        assert data["name"] == "Test Eval"
-        assert data["eval_type"] == "regex"
-        assert data["failure_behaviour"] == "block"
-        assert data["pass_threshold"] == pytest.approx(0.8)
-        assert data["suite_id"] == "suite-1"
-        assert data["config_json"] == {"pattern": r"\d+"}
-        assert data["version"] == 1
+        assert resp.status_code == 409
+        assert "chunk 3b" in resp.json()["detail"]
 
     def test_create_omit_optionals(self, admin_client: TestClient) -> None:
-        mock_pipeline = MagicMock()
-        mock_pipeline.id = _PIPELINE_ID
-        mock_session = _make_mock_session()
-        mock_session.execute.side_effect = [
-            _make_result(),  # require_permission authz_enforce (kill-switch) read
-            _make_result(scalar_value=None),  # set_rls_org
-            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
-        ]
-        mock_session.add = MagicMock()
-        mock_session.flush = AsyncMock()
-
-        async def override_session() -> AsyncGenerator[AsyncMock, None]:
-            yield mock_session
-
-        app.dependency_overrides[get_db_session] = override_session
+        # FAR-1100 chunk 3 → 3b freeze: create is frozen.  Revert when
+        # chunk 3b lands (CO-8).
         resp = admin_client.post(
             self.URL,
             json={
@@ -207,10 +171,8 @@ class TestCreateEvalDefinition:
                 "eval_type": "regex",
             },
         )
-        assert resp.status_code == 201
-        data = resp.json()
-        assert data["pass_threshold"] is None
-        assert data["suite_id"] is None
+        assert resp.status_code == 409
+        assert "chunk 3b" in resp.json()["detail"]
 
     def test_create_admin_required(self, runner_client: TestClient) -> None:
         resp = runner_client.post(
@@ -246,9 +208,10 @@ class TestCreateEvalDefinition:
         assert resp.status_code == 422
 
     def test_create_guardrail_forbidden_detection_envelope(self, admin_client: TestClient) -> None:
-        # PRD §8.17: guardrail detection must be regex|json_schema. A nested
-        # ``detection`` envelope that declares a forbidden type is rejected at
-        # the API edge (never reaches the engine to fail closed at run time).
+        # FAR-1100 chunk 3 → 3b freeze: the guard fires before validation, so
+        # this returns 409 instead of the original 422 (guardrail detection
+        # envelope check).  The original 422 behaviour is restored when chunk
+        # 3b lands (CO-8).
         resp = admin_client.post(
             self.URL,
             json={
@@ -259,26 +222,12 @@ class TestCreateEvalDefinition:
                 "failure_behaviour": "block",
             },
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 409
+        assert "chunk 3b" in resp.json()["detail"]
 
     def test_create_guardrail_detection_envelope_accepted(self, admin_client: TestClient) -> None:
-        mock_pipeline = MagicMock()
-        mock_pipeline.id = _PIPELINE_ID
-        mock_session = _make_mock_session()
-        mock_session.execute.side_effect = [
-            _make_result(),  # require_permission authz_enforce (kill-switch) read
-            _make_result(scalar_value=None),  # set_rls_org
-            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
-        ]
-        mock_session.add = MagicMock()
-        mock_session.flush = AsyncMock()
-
-        async def override_session() -> AsyncGenerator[AsyncMock, None]:
-            yield mock_session
-
-        app.dependency_overrides[get_db_session] = override_session
+        # FAR-1100 chunk 3 → 3b freeze: create is frozen.  Revert when
+        # chunk 3b lands (CO-8).
         resp = admin_client.post(
             self.URL,
             json={
@@ -289,8 +238,8 @@ class TestCreateEvalDefinition:
                 "failure_behaviour": "block",
             },
         )
-        assert resp.status_code == 201
-        assert resp.json()["eval_type"] == "guardrail"
+        assert resp.status_code == 409
+        assert "chunk 3b" in resp.json()["detail"]
 
 
 # ── GET /api/v1/evals ──────────────────────────────────────────────────────
@@ -537,20 +486,8 @@ class TestUpdateEvalDefinition:
     URL = "/api/v1/evals"
 
     def test_update_returns_200(self, admin_client: TestClient) -> None:
-        mock_session = _make_mock_session()
-        eval_def = _make_eval_def(name="Original", pass_threshold=None, suite_id=None)
-        mock_session.execute.side_effect = [
-            _make_result(),  # require_permission authz_enforce (kill-switch) read
-            _make_result(scalar_value=None),  # set_rls_org
-            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=eval_def),
-        ]
-
-        async def override_session() -> AsyncGenerator[AsyncMock, None]:
-            yield mock_session
-
-        app.dependency_overrides[get_db_session] = override_session
+        # FAR-1100 chunk 3 → 3b freeze: update is frozen.  Revert when
+        # chunk 3b lands (CO-8) — restore the original 200 happy-path assertion.
         resp = admin_client.put(
             f"{self.URL}/{_EVAL_DEF_ID}",
             json={
@@ -559,32 +496,16 @@ class TestUpdateEvalDefinition:
                 "suite_id": "suite-2",
             },
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["name"] == "Updated Eval"
-        assert data["pass_threshold"] == pytest.approx(0.9)
-        assert data["suite_id"] == "suite-2"
-        # FAR-382: an update bumps the version and snapshots the pre-edit config
-        # so a rubric change is explicitly version-scoped.
-        assert data["version"] == 2
-        assert data["pre_version_raw"] == {"config_json": {"pattern": r"\d+"}}
+        assert resp.status_code == 409
+        assert "chunk 3b" in resp.json()["detail"]
 
     def test_update_not_found(self, admin_client: TestClient) -> None:
-        mock_session = _make_mock_session()
-        mock_session.execute.side_effect = [
-            _make_result(),  # require_permission authz_enforce (kill-switch) read
-            _make_result(scalar_value=None),  # set_rls_org
-            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=None),
-        ]
-
-        async def override_session() -> AsyncGenerator[AsyncMock, None]:
-            yield mock_session
-
-        app.dependency_overrides[get_db_session] = override_session
+        # FAR-1100 chunk 3 → 3b freeze: the guard fires before the DB lookup,
+        # so this returns 409 instead of the original 404.  The original 404
+        # behaviour is restored when chunk 3b lands (CO-8).
         resp = admin_client.put(f"{self.URL}/{uuid.uuid4()}", json={"name": "Nope"})
-        assert resp.status_code == 404
+        assert resp.status_code == 409
+        assert "chunk 3b" in resp.json()["detail"]
 
     def test_update_admin_required(self, runner_client: TestClient) -> None:
         resp = runner_client.put(f"{self.URL}/{_EVAL_DEF_ID}", json={"name": "Should Fail"})
