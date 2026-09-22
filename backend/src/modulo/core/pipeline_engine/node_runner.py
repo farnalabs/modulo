@@ -125,7 +125,10 @@ from modulo.core.pipeline_engine.sandbox_errors import (
 from modulo.core.pipeline_engine.sandbox_errors import (
     SandboxTierRefusedError as SandboxTierRefusedError,  # noqa: PLC0414 - explicit re-export
 )
-from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
+from modulo.core.pipeline_engine.sandbox_mode import (
+    _validate_sandbox_mode_config,
+    sandbox_jinja_environment,
+)
 from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
     should_notify_on_complete,
@@ -7388,7 +7391,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         rendered_prompt: str = ""
         rendered_agent_command = agent_command
     else:
-        env = SandboxedEnvironment()
+        env = sandbox_jinja_environment()
         template = env.from_string(agent_prompt_template)
         # FAR-436: context_scope — the sandbox agent's run_context VIEW (the keys
         # fed to the prompt + agent_command templates) is allowlist-gated to the

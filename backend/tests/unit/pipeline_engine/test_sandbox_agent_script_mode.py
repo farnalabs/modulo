@@ -296,6 +296,22 @@ def test_jinja_helper_validates_agent_commands_list():
     assert "n1" in err
 
 
+def test_node_runner_binds_shared_sandbox_jinja_environment():
+    """The run-time renderer resolves the SAME helper as the save-time gate (FAR-226).
+
+    node_runner imports ``sandbox_jinja_environment`` into its own namespace at
+    module load (used by ``_sandbox_agent_impl`` to render the sandbox
+    ``agent_prompt`` + ``agent_command``). Pinning the identity here means a
+    regression to an inline ``SandboxedEnvironment()`` in the run-time path
+    fails loudly, keeping the save-time parse and the run-time render
+    guaranteed to share one environment.
+    """
+    from modulo.core.pipeline_engine import node_runner
+    from modulo.core.pipeline_engine.sandbox_mode import sandbox_jinja_environment
+
+    assert node_runner.sandbox_jinja_environment is sandbox_jinja_environment
+
+
 # ---------------------------------------------------------------------------
 # 2. Verbatim script_command execution (no Jinja render)
 # ---------------------------------------------------------------------------
