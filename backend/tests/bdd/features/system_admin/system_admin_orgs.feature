@@ -38,6 +38,23 @@ Feature: System Admin — Organisation Management
     When I attempt to delete the organisation
     Then I receive a 403 Forbidden error
 
+  Scenario: System admin lists all organisations
+    Given I am authenticated as a system admin
+    And the system has several organisations
+    When I list all organisations
+    Then I see all organisations
+
+  Scenario: Reserved infrastructure orgs are hidden from the list
+    Given I am authenticated as a system admin
+    And the system holds reserved infrastructure orgs
+    When I list all organisations
+    Then reserved infrastructure orgs are hidden
+
+  Scenario: Regular admin cannot list organisations
+    Given I am authenticated as an org admin
+    When I attempt to list all organisations
+    Then I receive a 403 Forbidden error
+
   Scenario: System admin views an org license falling back to the system license
     Given I am authenticated as a system admin
     And an organisation "acme-corp" exists

@@ -26,10 +26,14 @@ manage org-level licenses.
 - [x] POST `/api/v1/admin/orgs` creates a new org with slug uniqueness check and
       cost-component seeding; duplicate slug returns 409
       (`backend/tests/bdd/features/system_admin/system_admin_orgs.feature`)
-- [x] GET `/api/v1/admin/orgs` lists all orgs (hides the nil-UUID orphan org)
+- [x] GET `/api/v1/admin/orgs` lists all orgs (hides the nil-UUID orphan org and
+      the modulo-library registry org); regular admin receives 403
+      (`system_admin_orgs.feature`)
 - [x] POST `/api/v1/admin/orgs/{org_id}/users` creates a user within an org with
-      cross-tenant account takeover protection and password validation
-      (`backend/tests/bdd/features/system_admin/system_admin_users.feature`)
+      cross-tenant account takeover protection (email already a member → 409,
+      local account holding a password in another org → 409) and boundary
+      role/password validation (invalid role or weak password → 422), a missing
+      org → 404, and regular admin → 403 (`system_admin_users.feature`)
 - [x] DELETE `/api/v1/admin/orgs/{org_id}` deletes an organisation; returns 404
       if not found and 403 for a regular admin
       (`backend/tests/bdd/features/system_admin/system_admin_orgs.feature`)
@@ -57,6 +61,16 @@ manage org-level licenses.
       (`system_admin_orgs.feature`, `system_admin_users.feature`)
 
 ## QA History
+- 2026-09-21: **product-map walk** — closed the remaining
+  org-CRUD BDD gaps. `system_admin_orgs.feature` gained 3 org-listing scenarios
+  (system-admin list success with the two seeded orgs, the reserved
+  infrastructure orgs filtered from the list, and a regular-admin 403) and
+  `system_admin_users.feature` gained 5 create-user error-path scenarios (email
+  already a member → 409, cross-tenant local-account adoption → 409, invalid
+  role → 422, weak password → 422, missing org → 404), all driving the real
+  `/api/v1/admin/orgs` routes with DB seams patched
+  (`steps/test_system_admin.py`). The org-CRUD gap tracked under
+  `feat-teams-org-entity` is now closed too.
 - 2026-09-17: **product-map review pass** — closed the "No BDD
   for org-level license management" gap: added 10 license scenarios to
   `system_admin_orgs.feature` (GET org-key resolution / system fallback /
