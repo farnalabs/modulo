@@ -52,6 +52,7 @@ from modulo.core.trigger_engine import (
     TriggerEngine,
     _apply_payload_mapping,
     _extract_work_item_refs,
+    _warn_unrecognised_config_keys,
     verify_timestamp,
 )
 from modulo.db.crud.run import create_run
@@ -436,6 +437,7 @@ async def handle_app_mention(
     try:
         trigger = await engine._load_trigger(session, trigger_id, org_id)
         cfg = trigger.config_json or {}
+        _warn_unrecognised_config_keys(trigger_id, cfg)
 
         signing_secret = await _resolve_signing_secret(session, trigger_id, cfg, org_id)
 

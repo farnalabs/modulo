@@ -1317,6 +1317,9 @@ async def fire_cron_trigger(
                 return {"status": "skipped", "reason": "pipeline_not_found"}
 
         config = trigger.config_json or {}
+        from modulo.core.trigger_engine import _warn_unrecognised_config_keys
+
+        _warn_unrecognised_config_keys(trigger_id, config)
         input_payload = config.get("input_template", {})
 
         try:
@@ -1555,6 +1558,9 @@ async def fire_polling_trigger(
         trigger, skip = await _polling_pre_fire_gate(session, trigger_id=trigger_id, org_id=org_id)
         if skip is not None:
             return skip
+        from modulo.core.trigger_engine import _warn_unrecognised_config_keys
+
+        _warn_unrecognised_config_keys(trigger_id, trigger.config_json or {})
 
         conn_result = await session.execute(
             select(ConnectorInstance).where(

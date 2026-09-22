@@ -422,6 +422,47 @@ class _RateLimitState:
 
 
 # ---------------------------------------------------------------------------
+# Config-key guard (load-time warning for unrecognised keys)
+# ---------------------------------------------------------------------------
+
+# Keys the engine actually reads from a trigger's config_json.  Keep in sync
+# with ``_RECOGNISED_TRIGGER_CONFIG_KEYS`` in
+# ``modulo.api.routes.triggers`` (the write-time gate) — the sets MUST
+# match; a key added to one and not the other is a bug.
+_RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "hmac_secret",
+        "signing_secret",
+        "ci_failure_coalesce_window_seconds",
+        "payload_mapping",
+        "accepted_events",
+        "event_filters",
+        "rate_limit",
+        "work_item_ref_paths",
+    }
+)
+
+
+def _warn_unrecognised_config_keys(trigger_id: uuid.UUID, cfg: dict[str, Any]) -> None:
+    """Emit a loud warning when a trigger's config contains keys the engine does not read.
+
+    Existing broken configs (e.g. ``events`` instead of ``accepted_events``)
+    keep working — the warning makes them visible without breaking the
+    delivery path.  This is a *load-time* warning, not a write-time
+    rejection; the write-time gate lives in ``triggers.py``.
+    """
+    unrecognised = sorted(set(cfg) - _RECOGNISED_TRIGGER_CONFIG_KEYS)
+    if unrecognised:
+        _log.warning(
+            "Trigger %s config_json contains key(s) the engine does not read: %s. "
+            "Recognised keys: %s. The declared key(s) are silently ignored at delivery time.",
+            trigger_id,
+            unrecognised,
+            sorted(_RECOGNISED_TRIGGER_CONFIG_KEYS),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
 
@@ -488,6 +529,7 @@ class TriggerEngine:
 
             # HMAC validation (only if secret is configured)
             cfg = trigger.config_json or {}
+            _warn_unrecognised_config_keys(trigger.id, cfg)
             hmac_secret_raw: str | None = cfg.get("hmac_secret")
             hmac_secret: str | None = None
             if hmac_secret_raw is not None:
@@ -759,6 +801,7 @@ class TriggerEngine:
                 snapshot_id=snapshot_id,
             )
             cfg = trigger.config_json or {}
+            _warn_unrecognised_config_keys(trigger.id, cfg)
 
             # No dedup check for replays - this is an intentional re-fire.
             # The original event already went through dedup validation.
@@ -1253,7 +1296,7 @@ class TriggerEngine:
                 trigger=delivery.trigger,
                 org_id=delivery.org_id,
                 payload_hash=payload_hash,
-                result="event_type_not_accepted",
+                result="event_value_filter_not_accepted",
             )
             raise EventNotAcceptedError(
                 delivery.trigger.id,

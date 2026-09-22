@@ -75,6 +75,47 @@ _MSG_ONLY_CRON_TRIGGERS_CAN = "Only cron triggers can have cron configuration"
 _CODE_TRIGGERS_TEST_TRIGGER = "triggers.test_trigger"
 _MAX_PREVIEW_COUNT = 50
 
+# Keys the trigger engine actually reads from config_json.  A create/update
+# whose config_json declares a key NOT in this set is rejected with a clear
+# 400 — the key would be silently ignored at delivery time, which is worse
+# than failing loudly.  When the engine gains a new key, add it here AND to
+# the engine's cfg.get() call site in the same change.
+_RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "hmac_secret",
+        "signing_secret",
+        "ci_failure_coalesce_window_seconds",
+        "payload_mapping",
+        "accepted_events",
+        "event_filters",
+        "rate_limit",
+        "work_item_ref_paths",
+    }
+)
+
+
+def _validate_trigger_config_keys(config: dict[str, Any] | None) -> None:
+    """Reject config_json keys the trigger engine does not read.
+
+    Raises ``HTTPException`` 400 naming every offending key and the set of
+    keys the engine recognises.  A ``None`` or empty config passes through —
+    there are no keys to mis-declare.
+    """
+    if not config:
+        return
+    unrecognised = sorted(set(config) - _RECOGNISED_TRIGGER_CONFIG_KEYS)
+    if unrecognised:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"config_json contains key(s) the trigger engine does not read: "
+                f"{unrecognised}. "
+                f"Recognised keys: {sorted(_RECOGNISED_TRIGGER_CONFIG_KEYS)}. "
+                "If you intended to filter events, use 'accepted_events' "
+                "(event-type gate) or 'event_filters' (value gate)."
+            ),
+        )
+
 
 _log = logging.getLogger(__name__)
 
@@ -940,6 +981,7 @@ async def create_trigger(
                             "with this (pipeline, name) identity already exists"
                         ),
                     )
+            _validate_trigger_config_keys(req.config_json)
             next_fire_at = _resolve_cron_next_fire(req.trigger_type, req.cron_expression, req.cron_timezone)
             if req.trigger_type == "ongoing":
                 # FAR-158 ongoing guard: validated BEFORE creating (the shared
@@ -1049,6 +1091,7 @@ async def _apply_trigger_update(
     if "daily_spend_limit" in req.model_fields_set:
         trigger.daily_spend_limit = req.daily_spend_limit
     if req.config_json is not None:
+        _validate_trigger_config_keys(req.config_json)
         merged = _merge_trigger_config(trigger.config_json, req.config_json)
         trigger.config_json = _encrypt_trigger_config_secrets(merged, settings.fernet_key)
     if req.cron_expression is not None:

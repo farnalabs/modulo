@@ -32,6 +32,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ParamSpec, cast
 from urllib.parse import quote, urlencode
 
+from fastapi import HTTPException as FastAPIHTTPException
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy import select
@@ -62,7 +63,7 @@ from modulo.api.middleware.sensitive_mask import (
 )
 from modulo.api.middleware.sensitive_mask import mask_config_json, merge_masked_config
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
-from modulo.api.routes.triggers import _streak_status_for
+from modulo.api.routes.triggers import _streak_status_for, _validate_trigger_config_keys
 from modulo.auth.api_key import (
     ApiKeyInvalidError,
     validate_api_key,
@@ -5239,6 +5240,10 @@ async def _create_trigger_impl(
     pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
     if input_err:
         return input_err
+    try:
+        _validate_trigger_config_keys(config_json)
+    except FastAPIHTTPException as exc:
+        return {"error": "validation", "detail": exc.detail}
     if pid is None:
         raise RuntimeError("_create_trigger_impl: validate returned no error and no pipeline id")
 
@@ -5585,6 +5590,10 @@ async def update_trigger(
         tid, input_err = _validate_trigger_update_inputs(trigger_id, max_concurrent_runs, daily_spend_limit)
         if input_err:
             return input_err
+        try:
+            _validate_trigger_config_keys(config_json)
+        except FastAPIHTTPException as exc:
+            return {"error": "validation", "detail": exc.detail}
         if tid is None:
             raise RuntimeError("_validate_trigger_update_inputs returned an error dict but no parsed trigger id")
 

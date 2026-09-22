@@ -38,6 +38,11 @@ VALIDATION_RESULT_VALUES: tuple[str, ...] = (
     # FAR-604: dispatcher backpressure refused run creation (queue over
     # depth/age limits); error_detail carries the depths.
     "backpressure_skipped",
+    # FAR-1144: the value-filter gate (event_filters) previously reused
+    # ``event_type_not_accepted``, making the event log indistinguishable
+    # from the event-type gate (accepted_events).  A distinct label lets
+    # operators tell which gate rejected a delivery.
+    "event_value_filter_not_accepted",
 )
 
 _TRIGGER_EVENT_VALIDATION_SQL = f"validation_result IN {tuple(VALIDATION_RESULT_VALUES)}"
