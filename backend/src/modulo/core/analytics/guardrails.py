@@ -421,7 +421,7 @@ def _raise_mapped_error(exc: Exception, org_id: uuid.UUID) -> NoReturn:
     a generic DB-unavailable error so no raw exception escapes to the route.
     """
     if isinstance(exc, asyncio.CancelledError):
-        raise exc
+        raise
     if isinstance(
         exc,
         (
@@ -432,7 +432,7 @@ def _raise_mapped_error(exc: Exception, org_id: uuid.UUID) -> NoReturn:
             AnalyticsDatabaseError,
         ),
     ):
-        raise exc
+        raise
     if isinstance(exc, ProgrammingError):
         _log.exception("analytics.guardrails.programming_error", extra={"org_id": str(org_id)})
         raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
