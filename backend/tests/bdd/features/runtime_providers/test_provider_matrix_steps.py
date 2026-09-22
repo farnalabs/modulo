@@ -79,7 +79,7 @@ def _request_resolve(request, hub) -> None:
 
 
 def _error(request) -> Exception | None:
-    return _hub_state(request)["resolve_error"] or _hub_state(request).get("initialise_error")
+    return _hub_state(request)["resolve_error"]
 
 
 # -- Given ---------------------------------------------------------------
