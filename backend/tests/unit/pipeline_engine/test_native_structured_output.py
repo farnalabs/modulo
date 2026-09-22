@@ -141,3 +141,32 @@ class TestInvokeNodeModelSchemaThreading:
                 "n1",
                 output_schema_json={"type": "object"},
             )
+
+    async def test_raw_schema_used_when_rendered_fails_bounds(self) -> None:
+        """When the rendered schema fails bounds but the raw one passes, send raw.
+
+        Covers the ``elif raw_ok`` fallback: ``_is_safe_schema`` returns True
+        for the raw schema (first call) and False for the rendered copy (second
+        call), so the raw schema is forwarded and the native flag is set.
+        """
+        backend = _RecordingBackend(supports_native=True)
+        hub = _FakeHub(backend)
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        flag = [False]
+        with (
+            patch(
+                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                return_value=hub,
+            ),
+            patch.object(nr, "_is_safe_schema", side_effect=[(True, ""), (False, "too large")]),
+        ):
+            result = await nr._invoke_node_model(
+                "prompt",
+                "11111111-2222-3333-4444-555555555555",
+                "n1",
+                output_schema_json=schema,
+                _native_output_flag=flag,
+            )
+        assert result == {"result": "ok"}
+        assert backend.calls[0]["output_schema"] == schema
+        assert flag[0] is True

@@ -79,8 +79,11 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # chains off 0246_sso_join_gate, and 0248_agent_schema_profile (FAR-900)
 # chains off 0247_sso_presets, and 0249_validation_level (FAR-935)
 # chains off 0248_agent_schema_profile, and 0250_eval_policy_gate (FAR-1060)
-# chains off 0249_validation_level as the chain head.
-_CHAIN_HEAD_MIGRATION = "0250_eval_policy_gate"
+# chains off 0249_validation_level, and 0251_schema_enforcement_telemetry (FAR-902)
+# chains off 0250_eval_policy_gate, and 0252_enforcement_daily_facts (FAR-902) chains
+# off 0251_schema_enforcement_telemetry, and 0253_runs_enforcement_mode_outcome (FAR-902)
+# chains off 0252_enforcement_daily_facts as the chain head.
+_CHAIN_HEAD_MIGRATION = "0253_runs_enforcement_mode_outcome"
 
 
 def _source(name: str) -> str:

@@ -4540,6 +4540,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/schema-enforcement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Schema Enforcement
+         * @description D3: Operator-readable run-detail enforcement surface.
+         *
+         *     Returns per-node enforcement records so lenient-mode warnings are
+         *     READABLE.  Response shape: per node/attempt, the outcome, resolved
+         *     profile, native-vs-verbatim, repair/wasted counts, and the validation
+         *     errors (respecting the 64KB bound + truncation flag applied at write
+         *     time).  Includes run-level aggregate counts.
+         *
+         *     GET /api/v1/runs/{run_id}/schema-enforcement
+         */
+        get: operations["get_run_schema_enforcement_api_v1_runs__run_id__schema_enforcement_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/schema-enforcement/flip-guard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Schema Enforcement Flip Guard
+         * @description D2: Read-only flip guard — advises whether lenient-to-strict is safe.
+         *
+         *     Examines ALL enforcement records for the caller's organisation and
+         *     returns the guard's verdict + supporting counts.
+         *
+         *     **This endpoint NEVER mutates the mode.**  Changing the mode remains
+         *     a separate, explicit, already-authorised operator action.
+         *
+         *     GET /api/v1/runs/schema-enforcement/flip-guard
+         */
+        get: operations["get_schema_enforcement_flip_guard_api_v1_runs_schema_enforcement_flip_guard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runners/status": {
         parameters: {
             query?: never;
@@ -29475,6 +29531,95 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    get_run_schema_enforcement_api_v1_runs__run_id__schema_enforcement_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_schema_enforcement_flip_guard_api_v1_runs_schema_enforcement_flip_guard_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

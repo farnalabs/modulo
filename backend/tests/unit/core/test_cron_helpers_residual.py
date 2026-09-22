@@ -2261,6 +2261,67 @@ async def test_run_reconcile_sweeps_reraises_cancellation(sweep_patch: tuple[str
             await ch._run_reconcile_sweeps(redis_client, summary)
 
 
+def _patch_reconcile_sweeps_before_enforcement(stack: ExitStack) -> None:
+    """Neutralise every sweep before the FAR-902 enforcement block."""
+    stack.enter_context(patch.object(ch, "_open_factory", return_value=MagicMock()))
+    stack.enter_context(patch.object(ch, "_open_system_factory", return_value=MagicMock()))
+    stack.enter_context(patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, return_value={}))
+    stack.enter_context(patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, return_value={}))
+    stack.enter_context(patch.object(ch, "_sweep_workspace_input_drift_flags", new_callable=AsyncMock, return_value={}))
+    stack.enter_context(patch("modulo.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, return_value={}))
+    stack.enter_context(
+        patch(
+            "modulo.core.rollback_thresholds.evaluate_rollback_thresholds",
+            new_callable=AsyncMock,
+            return_value={},
+        )
+    )
+    stack.enter_context(
+        patch(
+            "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+            new_callable=AsyncMock,
+            return_value={},
+        )
+    )
+
+
+async def test_run_reconcile_sweeps_enforcement_corrected_logs(caplog):
+    """A non-zero enforcement correction is recorded and logged (FAR-902)."""
+    redis_client = _redis()
+    summary: dict[str, Any] = {}
+    with ExitStack() as stack:
+        _patch_reconcile_sweeps_before_enforcement(stack)
+        stack.enter_context(
+            patch(
+                "modulo.core.analytics.enforcement_sweep.sweep_schema_enforcement_facts",
+                new_callable=AsyncMock,
+                return_value={"scanned": 7, "corrected": 3},
+            )
+        )
+        stack.enter_context(caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"))
+        await ch._run_reconcile_sweeps(redis_client, summary)
+    assert summary["enforcement_sweep_scanned"] == 7
+    assert summary["enforcement_sweep_corrected"] == 3
+    assert any("dispatcher_reconcile.enforcement_sweep" in m for m in caplog.messages)
+
+
+async def test_run_reconcile_sweeps_enforcement_reraises_cancellation():
+    """A CancelledError from the enforcement sweep propagates (FAR-902)."""
+    redis_client = _redis()
+    summary: dict[str, Any] = {}
+    with ExitStack() as stack:
+        _patch_reconcile_sweeps_before_enforcement(stack)
+        stack.enter_context(
+            patch(
+                "modulo.core.analytics.enforcement_sweep.sweep_schema_enforcement_facts",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            )
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await ch._run_reconcile_sweeps(redis_client, summary)
+
+
 # ---------------------------------------------------------------------------
 # Polling fire-path residual arms — spend gate, re-raise propagation
 # ---------------------------------------------------------------------------

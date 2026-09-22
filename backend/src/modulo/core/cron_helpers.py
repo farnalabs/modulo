@@ -5921,6 +5921,30 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         summary["runner_markers_transitioned"] = 0
         summary["runner_capacity_violations"] = 0
         _log.warning("dispatcher_reconcile.runner_marker_sweep_failed", exc_info=True)
+    # FAR-902: schema enforcement aggregate counters compensating sweep —
+    # corrects terminal runs whose run_daily_facts enforcement columns are
+    # NULL but whose run_node_outputs rows have schema_enforcement_json data.
+    # The predicate matches the partial index ix_run_node_outputs_enforcement_pending.
+    try:
+        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+
+        enforcement_result = await sweep_schema_enforcement_facts(_open_system_factory())
+        summary["enforcement_sweep_scanned"] = enforcement_result.get("scanned", 0)
+        summary["enforcement_sweep_corrected"] = enforcement_result.get("corrected", 0)
+        if enforcement_result.get("corrected"):
+            _log.info(
+                "dispatcher_reconcile.enforcement_sweep",
+                extra={
+                    "scanned": enforcement_result.get("scanned", 0),
+                    "corrected": enforcement_result.get("corrected", 0),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["enforcement_sweep_scanned"] = 0
+        summary["enforcement_sweep_corrected"] = 0
+        _log.warning("dispatcher_reconcile.enforcement_sweep_failed", exc_info=True)
 
 
 async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
