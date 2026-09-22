@@ -233,6 +233,21 @@ class TestRuntimeConfigRoute:
         assert resp.status_code == 200
         assert logging.getLogger().level == logging.ERROR
 
+    def test_put_hot_key_hook_failure_does_not_500(
+        self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-1135: the override is committed before the hook runs — a hook
+        failure must be logged, not rolled into a 500 (commit-then-error)."""
+        import modulo.api.routes.admin_runtime_config as route_mod
+
+        def _explode() -> None:
+            raise RuntimeError("hook blew up")
+
+        monkeypatch.setitem(route_mod.APPLY_HOOKS, "MODULO_LOG_LEVEL", _explode)
+        resp = admin_client.put("/api/v1/admin/runtime-config", json={"overrides": {"MODULO_LOG_LEVEL": "ERROR"}})
+        assert resp.status_code == 200
+        assert get_runtime_config_store().get_override("MODULO_LOG_LEVEL") == "ERROR"
+
     def test_put_clear_boot_only_key_is_allowed(self, admin_client: TestClient) -> None:
         """Clearing (never setting) stays allowed for every known key."""
         resp = admin_client.put("/api/v1/admin/runtime-config", json={"clear": ["DATABASE_URL"]})

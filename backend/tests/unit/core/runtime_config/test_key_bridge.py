@@ -46,6 +46,29 @@ class TestGetOverride:
     def test_empty_key_returns_none(self) -> None:
         assert get_override("") is None
 
+    def test_returns_none_when_store_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A torn-down store degrades to the fallback rather than raising.
+
+        Only a ``RuntimeError`` (the singleton torn down) is swallowed; any
+        other exception is a real bug and must propagate.
+        """
+
+        def _raise_runtime_error() -> None:
+            raise RuntimeError("store torn down")
+
+        monkeypatch.setattr(key_bridge, "get_runtime_config_store", _raise_runtime_error)
+        assert get_override("MODULO_SCIM_TOKEN") is None
+
+    def test_store_unexpected_error_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-RuntimeError from the store accessor is not silently masked."""
+
+        def _raise_value_error() -> None:
+            raise ValueError("real bug")
+
+        monkeypatch.setattr(key_bridge, "get_runtime_config_store", _raise_value_error)
+        with pytest.raises(ValueError, match="real bug"):
+            get_override("MODULO_SCIM_TOKEN")
+
 
 class TestOverrideOr:
     def test_falls_back_when_no_override(self) -> None:
@@ -107,6 +130,25 @@ class TestApplyLogLevel:
             get_runtime_config_store().clear_override("MODULO_LOG_LEVEL")
             key_bridge.apply_log_level()
             assert root.level == original
+        finally:
+            root.setLevel(original)
+
+    def test_reapply_keeps_original_boot_level(self) -> None:
+        """Changing the override while one is active must not re-capture the
+        boot level; the pre-override root level survives to the eventual clear."""
+        from modulo.core.runtime_config.store import get_runtime_config_store
+
+        root = logging.getLogger()
+        original = root.level
+        try:
+            store = get_runtime_config_store()
+            store.set_override("MODULO_LOG_LEVEL", "ERROR")
+            key_bridge.apply_log_level()
+            assert original == key_bridge._BOOT_LOG_LEVEL
+            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            key_bridge.apply_log_level()
+            assert root.level == logging.DEBUG
+            assert original == key_bridge._BOOT_LOG_LEVEL
         finally:
             root.setLevel(original)
 
