@@ -231,6 +231,23 @@ def _create_violation_table() -> None:
             sa.Column(
                 "created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
             ),
+            sa.UniqueConstraint(
+                "migration_revision",
+                "eval_definition_id",
+                name="uq_eval_backfill_violations_rev_eval",
+            ),
+        )
+    else:
+        # Table exists — add the unique constraint if missing (idempotent re-run).
+        _execute(
+            "DO $$ BEGIN "
+            "IF NOT EXISTS ("
+            "  SELECT 1 FROM pg_constraint WHERE conname = 'uq_eval_backfill_violations_rev_eval'"
+            ") THEN "
+            "  ALTER TABLE eval_backfill_violations "
+            "    ADD CONSTRAINT uq_eval_backfill_violations_rev_eval "
+            "    UNIQUE (migration_revision, eval_definition_id); "
+            "END IF; END $$;"
         )
 
 
@@ -301,7 +318,7 @@ def _validate_bindings() -> list[dict[str, Any]]:
 
 
 def _record_violations(violations: list[dict[str, Any]]) -> None:
-    """Write violation records to the audit table."""
+    """Write violation records to the audit table (idempotent — ON CONFLICT DO NOTHING)."""
     if not violations:
         return
     for v in violations:
@@ -309,7 +326,8 @@ def _record_violations(violations: list[dict[str, Any]]) -> None:
             text(
                 "INSERT INTO eval_backfill_violations "
                 "(migration_revision, eval_definition_id, eval_name, eval_type, node_id, violated_exclusions) "
-                "VALUES (:rev, :eid, :ename, :etype, :nid, :vej::jsonb)"
+                "VALUES (:rev, :eid, :ename, :etype, :nid, :vej::jsonb) "
+                "ON CONFLICT ON CONSTRAINT uq_eval_backfill_violations_rev_eval DO NOTHING"
             ),
             {
                 "rev": revision,
