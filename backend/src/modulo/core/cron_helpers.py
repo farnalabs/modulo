@@ -291,6 +291,26 @@ _EXECUTOR_SUPERSEDED_ERROR_CODE = "executor_superseded"
 _HITL_GATE_EXPIRED_ERROR_CODE = "hitl_gate_expired"
 _HITL_GATE_EXPIRED_ERROR_DETAIL = "HITL gate expired unanswered; run cancelled to release its concurrency slot."
 
+# ---------------------------------------------------------------------------
+# FAR-721 complement to the FAR-648 terminalizer above (zombie ``awaiting_human``
+# runs with ZERO ``hitl_claims`` rows). The FAR-648 sweep and the FAR-604 park
+# sweep (``run_admission._PARK_RUNS_SQL``) both require an ``EXISTS`` of at
+# least one matching claim row, so an ``awaiting_human`` run whose gate/claim
+# row was NEVER written is collected by NEITHER sweep and holds an org-level
+# concurrency slot forever. The gate insert and the ``awaiting_human`` status
+# write are NOT same-transaction (the executor's interrupt handler commits
+# ``HITLManager.create_gate`` in a dedicated session BEFORE ``finalize_cost``
+# flips the status in a separate session), so a crash/divergence in the gap, or
+# any legacy/manual orphan, can leave a run awaiting_human with zero claims.
+# Terminalized ``cancelled`` (never ``failed``) so the slot is released and
+# analytics buckets the class as operator_or_hitl_cancelled — the same
+# convention the FAR-648 terminalizer uses.
+# ---------------------------------------------------------------------------
+_HITL_GATE_MISSING_ERROR_CODE = "hitl_gate_missing"
+_HITL_GATE_MISSING_ERROR_DETAIL = (
+    "Run orphaned awaiting_human with no HITL gate/claim row; cancelled to release its concurrency slot."
+)
+
 # Exported reconciliation stats for /healthz/ready (PR D — hitl-health-obs).
 # The ``age_terminalized`` / ``enqueue_failed_ttl_terminalized`` keys are
 # semantic aliases of the executor-superseded (age-bound wedge) and
@@ -316,6 +336,7 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "mid_graph_wedge_terminalized": 0,
     "age_terminalized": 0,
     "hitl_gate_expired_terminalized": 0,
+    "hitl_gate_missing_terminalized": 0,
     "dispatch_failed_terminalized": 0,
     "enqueue_failed_ttl_terminalized": 0,
     "enqueue_failed_redispatched": 0,
@@ -359,6 +380,7 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["mid_graph_wedge_terminalized"] = stats.get("mid_graph_wedge_terminalized", 0)
     _dispatcher_reconcile_stats["age_terminalized"] = stats.get("age_terminalized", 0)
     _dispatcher_reconcile_stats["hitl_gate_expired_terminalized"] = stats.get("hitl_gate_expired_terminalized", 0)
+    _dispatcher_reconcile_stats["hitl_gate_missing_terminalized"] = stats.get("hitl_gate_missing_terminalized", 0)
     _dispatcher_reconcile_stats["dispatch_failed_terminalized"] = stats.get("dispatch_failed_terminalized", 0)
     _dispatcher_reconcile_stats["enqueue_failed_ttl_terminalized"] = stats.get("enqueue_failed_ttl_terminalized", 0)
     _dispatcher_reconcile_stats["enqueue_failed_redispatched"] = stats.get("enqueue_failed_redispatched", 0)
@@ -5059,6 +5081,79 @@ async def _terminalize_expired_hitl_gates(
     return [run_id for (run_id,) in rows]
 
 
+async def _terminalize_hitl_gate_missing(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    grace_seconds: int,
+    max_rows: int | None = None,
+) -> list[uuid.UUID]:
+    """Terminalize ``awaiting_human`` runs with ZERO ``hitl_claims`` rows (FAR-721).
+
+    Complement to :func:`_terminalize_expired_hitl_gates` (FAR-648). Both that
+    sweep and the FAR-604 park sweep (``run_admission._PARK_RUNS_SQL``) gate on
+    an ``EXISTS`` of a matching gate/claim row, so an ``awaiting_human`` run
+    whose gate was never written is a zombie NEITHER sweep collects, while it
+    keeps holding an org-level concurrency slot. This sweep terminalizes only
+    that class: ``awaiting_human`` + ``cancellation_requested = false`` + ZERO
+    claim rows + ``created_at`` older than the grace window, as ``cancelled``
+    with the distinct ``hitl_gate_missing`` error code.
+
+    NOT over-collected: the executor's interrupt handler durably commits the
+    gate (``HITLManager.create_gate``) in a dedicated session BEFORE the
+    ``awaiting_human`` status write (``finalize_cost``, separate session), so
+    at the instant a run flips to ``awaiting_human`` its claim row ALWAYS
+    exists — a legitimately in-flight gate can never be zero-claim. Any such
+    run past the grace is a true orphan. Live-human safety is enforced by the
+    NOT EXISTS itself: ANY claim row (claimed or not, decided or not, expired
+    or not) keeps the run out, a strictly narrower predicate than the FAR-648
+    sweep's — a run with a live HITL claim is never collected.
+
+    TOCTOU-safe by construction (same single-guarded-UPDATE idiom as the
+    FAR-648 terminalizer): the predicate (source status, cancel-wins guard,
+    zero-claims, age) is re-validated at execution time inside the org
+    transaction, so a claim inserted between the tick's read and this write no
+    longer matches (rowcount 0). ``created_at`` is the age anchor because
+    ``runs.updated_at`` is a static insert-time default that no status
+    transition bumps in this codebase. ``max_rows`` bounds the UPDATE per tick
+    like the sibling terminalizers.
+    """
+    result = await session.execute(
+        text(
+            "UPDATE runs SET status='cancelled', error_code=:code, "
+            "error_detail=:detail, completed_at=now() "
+            "WHERE ctid IN ("
+            "  SELECT ctid FROM runs "
+            "  WHERE organisation_id=:oid AND status=:awaiting_status "
+            "  AND cancellation_requested=false "
+            "  AND created_at < now() - (:grace_seconds * interval '1 second') "
+            "  AND NOT EXISTS ("
+            "    SELECT 1 FROM hitl_claims hc "
+            "    WHERE hc.organisation_id = runs.organisation_id "
+            "    AND hc.run_id = runs.id) "
+            "  LIMIT :max_rows) "
+            "RETURNING id"
+        ),
+        {
+            "oid": str(org_id),
+            "code": _HITL_GATE_MISSING_ERROR_CODE,
+            "detail": _HITL_GATE_MISSING_ERROR_DETAIL,
+            "grace_seconds": grace_seconds,
+            "awaiting_status": AWAITING_HUMAN_STATUS,
+            "max_rows": _terminalize_max_rows(max_rows),
+        },
+    )
+    rows = result.all()
+    for (run_id,) in rows:
+        _log.warning(
+            "dispatcher_reconcile: zero-claim awaiting_human zombie terminalized %s "
+            "(no hitl_claims rows older than %ds grace)",
+            run_id,
+            grace_seconds,
+        )
+    return [run_id for (run_id,) in rows]
+
+
 async def _fail_run_dispatch_failed(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
     """Terminal-fail an enqueue-failed run past the TTL backstop.
 
@@ -5554,6 +5649,7 @@ def _dispatcher_summary() -> dict[str, Any]:
         "mid_graph_wedge_terminalized": 0,
         "age_terminalized": 0,
         "hitl_gate_expired_terminalized": 0,
+        "hitl_gate_missing_terminalized": 0,
         "runner_markers_scanned": 0,
         "runner_markers_cleared": 0,
         "runner_markers_transitioned": 0,
@@ -5650,6 +5746,21 @@ async def _reconcile_org(
             if len(expired_gates) >= terminalize_max:
                 summary["terminalize_capped"] += 1
             terminalized_run_ids.extend((run_id, org_id) for run_id in expired_gates)
+            # FAR-721: the zero-claim complement to FAR-648. The EXISTS-gated
+            # FAR-648 sweep (and the FAR-604 park sweep) can never match a run
+            # whose gate/claim row was never written; this terminalizer
+            # collects the ``awaiting_human``-with-zero-claims orphan past the
+            # SAME grace, so it releases its org slot and gets its facts.
+            missing_gates = await _terminalize_hitl_gate_missing(
+                session,
+                org_id,
+                grace_seconds=hitl_gate_cancel_grace_seconds,
+                max_rows=terminalize_max,
+            )
+            summary["hitl_gate_missing_terminalized"] += len(missing_gates)
+            if len(missing_gates) >= terminalize_max:
+                summary["terminalize_capped"] += 1
+            terminalized_run_ids.extend((run_id, org_id) for run_id in missing_gates)
             rows = (
                 await session.execute(
                     select(
@@ -5994,6 +6105,8 @@ async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
             record_stall_reason("dispatch_failed", summary["dispatch_failed_terminalized"])
         if summary["hitl_gate_expired_terminalized"]:
             record_stall_reason("hitl_gate_expired", summary["hitl_gate_expired_terminalized"])
+        if summary["hitl_gate_missing_terminalized"]:
+            record_stall_reason("hitl_gate_missing", summary["hitl_gate_missing_terminalized"])
     except asyncio.CancelledError:
         raise
     except Exception:

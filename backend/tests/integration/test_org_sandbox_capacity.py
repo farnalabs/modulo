@@ -1499,3 +1499,191 @@ async def test_gate_expiry_terminalizer_is_org_scoped(
     status_a, code_a = await _run_state(db_engine, org_a, run_a)
     assert status_a == "awaiting_human"
     assert code_a is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-721 zero-claim-awaiting_human terminalizer — real Postgres under the
+# non-superuser RLS engine. The FAR-648 sweep and the FAR-604 park sweep both
+# require an EXISTS of a matching hitl_claims row, so an awaiting_human run
+# whose gate/claim row was never written is collected by NEITHER and holds an
+# org slot. This sweep terminalizes exactly that class past the grace window:
+# ``awaiting_human`` + zero claims + created before the grace, as
+# ``cancelled``/``hitl_gate_missing``; any run with a claim (live or not) and
+# any run inside the grace is spared.
+# ---------------------------------------------------------------------------
+
+
+async def test_zero_claim_awaiting_human_older_than_grace_terminalizes(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """An awaiting_human run with ZERO hitl_claims rows created before the
+    grace window is a true orphan (a legitimate in-flight gate ALWAYS has its
+    claim row durably committed before the status flip) — terminalized
+    ``cancelled``/``hitl_gate_missing`` (FAR-721)."""
+    from modulo.core.cron_helpers import _terminalize_hitl_gate_missing
+
+    org_id, user_id = await _seed_org_account(db_engine, "HitlMissingOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissing", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    run = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="awaiting_human",
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+
+    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_gate_missing, grace_seconds=3600)
+    assert count == 1
+
+    status, code = await _run_state(db_engine, org_id, run)
+    assert status == "cancelled"
+    assert code == "hitl_gate_missing"
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        completed_at = (
+            await session.execute(text("SELECT completed_at FROM runs WHERE id = :rid"), {"rid": str(run)})
+        ).scalar_one()
+    assert completed_at is not None
+
+
+async def test_zero_claim_awaiting_human_with_live_claim_spared(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """A run with ANY claim row is live human work — even one whose gate
+    expired — and is NEVER collected by the zero-claim sweep (its NOT EXISTS
+    predicate spares it). Acceptance: a run with a live HITL claim is never
+    terminalized."""
+    from modulo.core.cron_helpers import _terminalize_hitl_gate_missing
+
+    org_id, user_id = await _seed_org_account(db_engine, "HitlMissingClaimedOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissingClaimed", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    run = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="awaiting_human",
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    await _seed_hitl_claim(db_engine, org_id, run, pipe, "gate-1", expires_at=datetime.now(UTC) + timedelta(hours=24))
+
+    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_gate_missing, grace_seconds=3600)
+    assert count == 0
+
+    status, _code = await _run_state(db_engine, org_id, run)
+    assert status == "awaiting_human"
+
+
+async def test_zero_claim_awaiting_human_in_grace_spared(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """A zero-claim run INSIDE the grace window is spared — the sweep only
+    collects the genuinely-orphaned class once it has aged past the grace."""
+    from modulo.core.cron_helpers import _terminalize_hitl_gate_missing
+
+    org_id, user_id = await _seed_org_account(db_engine, "HitlMissingGraceOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissingGrace", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    run = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="awaiting_human",
+        created_at=datetime.now(UTC) - timedelta(minutes=30),
+    )
+
+    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_gate_missing, grace_seconds=3600)
+    assert count == 0
+
+    status, _code = await _run_state(db_engine, org_id, run)
+    assert status == "awaiting_human"
+
+
+async def test_zero_claim_cancellation_requested_run_spared(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """CANCEL-WINS precedence: a cancellation-requested zero-claim run is
+    owned by the cancel path — the sweep never writes ``cancelled`` over it."""
+    from modulo.core.cron_helpers import _terminalize_hitl_gate_missing
+
+    org_id, user_id = await _seed_org_account(db_engine, "HitlMissingCancelOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissingCancel", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    run = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="awaiting_human",
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        await session.execute(text("UPDATE runs SET cancellation_requested = true WHERE id = :rid"), {"rid": str(run)})
+
+    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_gate_missing, grace_seconds=3600)
+    assert count == 0
+
+    status, _code = await _run_state(db_engine, org_id, run)
+    assert status == "awaiting_human"
+
+
+async def test_zero_claim_terminalizer_is_org_scoped(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """Cross-org isolation: reconciling org B must never terminalize org A's
+    identical zero-claim orphan. Pins the ``hc.organisation_id =
+    runs.organisation_id`` correlation and the org-scoped UPDATE."""
+    from modulo.core.cron_helpers import _terminalize_hitl_gate_missing
+
+    org_a, user_a = await _seed_org_account(db_engine, "HitlMissingCrossOrgA", cap=None)
+    pipe_a = await _seed_pipeline(db_engine, org_a, "PipeHitlMissingCrossA", user_a)
+    snap_a = await _seed_snapshot(db_engine, org_a, pipe_a, _SANDBOX_GRAPH)
+    run_a = await _seed_run(
+        db_engine,
+        org_a,
+        pipe_a,
+        snap_a,
+        status="awaiting_human",
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+
+    org_b, user_b = await _seed_org_account(db_engine, "HitlMissingCrossOrgB", cap=None)
+    pipe_b = await _seed_pipeline(db_engine, org_b, "PipeHitlMissingCrossB", user_b)
+    snap_b = await _seed_snapshot(db_engine, org_b, pipe_b, _SANDBOX_GRAPH)
+    run_b = await _seed_run(
+        db_engine,
+        org_b,
+        pipe_b,
+        snap_b,
+        status="awaiting_human",
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+
+    count = await _terminalize_count(app_engine, org_b, _terminalize_hitl_gate_missing, grace_seconds=3600)
+    assert count == 1
+
+    status_b, code_b = await _run_state(db_engine, org_b, run_b)
+    assert status_b == "cancelled"
+    assert code_b == "hitl_gate_missing"
+
+    status_a, code_a = await _run_state(db_engine, org_a, run_a)
+    assert status_a == "awaiting_human"
+    assert code_a is None

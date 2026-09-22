@@ -178,15 +178,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "MCP without hitl:review scope is blocked",
         }
     ),
-    "tests/bdd/features/mcp/trigger.feature": frozenset(
-        {
-            "MCP client triggers a run",
-            "MCP trigger for non-existent pipeline returns error",
-            "MCP trigger respects scope limits",
-            "MCP trigger with run_context",
-            "MCP trigger without auth is rejected",
-        }
-    ),
     "tests/bdd/features/pipelines/concurrency.feature": frozenset(
         {
             "Completed run frees concurrency slot",

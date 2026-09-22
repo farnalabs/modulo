@@ -73,6 +73,15 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
       list-run/cost and other sensitive tools are role-gated, HITL-gated tools
       route through human review, and the suite guards structural tool
       coverage so new tools cannot ship unscoped
+- [x] MCP trigger dispatch (2026-09-22): the `trigger_pipeline` tool drives the
+      real manual-run path (snapshot + `create_run` with the caller's account,
+      `trigger_type manual`, then dispatch) and is scope-gated through the
+      centralized permission registry (`run.trigger` at runner), with the 401
+      auth gate enforced by `McpAuthMiddleware`; the five
+      `mcp/trigger.feature` scenarios execute in CI against these real handler
+      and middleware seams (the tool handlers are invoked directly with the
+      request ContextVars hydrated by hand, so the FastMCP invoke/dispatch layer
+      itself is not exercised)
 - [x] Every API key carries an immutable caller scope (`org` | `user`,
       ADR 030/FAR-620): user-scoped keys act as their creator and are
       REST-JWT-minted only (flag + 10-key quota gated); MCP minting stays
@@ -98,6 +107,22 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   published as a distinct surface here.
 
 ## QA History
+- 2026-09-22: **product-map review pass** — closed the "no executing BDD for
+  the trigger tool" gap: the five `mcp/trigger.feature` scenarios previously
+  targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned
+  `@awaiting-implementation`) and never ran. They are rewritten to drive the
+  REAL shipped contract by calling the `trigger_pipeline` / `review_hitl`
+  handler functions directly (request ContextVars hydrated by hand) — exercising
+  the real `_check_agent_tool_scope` scope-gate chokepoint (manual run with
+  `trigger_type manual` and the caller's account, `input_payload` passthrough,
+  unknown-pipeline `pipeline_not_found` refusal), the real `McpAuthMiddleware`
+  401 gate for unauthenticated requests, and the real role-hierarchy scope
+  denial (a `runner` key triggers but cannot `review_hitl` `approve` →
+  `insufficient_scope`) — network-free and DB-free with only the auth
+  re-validation and DB/dispatch seams patched. The FastMCP invoke/dispatch layer
+  itself is not exercised by these steps. Removed the five scenarios
+  from `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/mcp`

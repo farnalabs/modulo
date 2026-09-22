@@ -1680,6 +1680,7 @@ async def test_reconcile_org_read_failure_returns(caplog):
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
         "hitl_gate_expired_terminalized": 0,
+        "hitl_gate_missing_terminalized": 0,
         "scanned": 0,
     }
     with (
@@ -1713,6 +1714,7 @@ async def test_reconcile_org_processes_rows():
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
         "hitl_gate_expired_terminalized": 0,
+        "hitl_gate_missing_terminalized": 0,
         "scanned": 0,
     }
     with (
@@ -1825,6 +1827,8 @@ async def test_update_reconcile_telemetry_records_stall_reasons():
         "claim_cap_terminalized": 2,
         "mid_graph_wedge_terminalized": 3,
         "dispatch_failed_terminalized": 4,
+        "hitl_gate_expired_terminalized": 5,
+        "hitl_gate_missing_terminalized": 6,
     }
     record = MagicMock()
     with (
@@ -1836,7 +1840,39 @@ async def test_update_reconcile_telemetry_records_stall_reasons():
     ):
         await ch._update_reconcile_telemetry(summary)
     recorded = [call.args[0] for call in record.call_args_list]
-    assert recorded == ["executor_stalled", "claim_cap_exhausted", "executor_superseded", "dispatch_failed"]
+    assert recorded == [
+        "executor_stalled",
+        "claim_cap_exhausted",
+        "executor_superseded",
+        "dispatch_failed",
+        "hitl_gate_expired",
+        "hitl_gate_missing",
+    ]
+
+
+async def test_update_reconcile_telemetry_skips_zero_hitl_keys():
+    """FAR-721: a tick that collected no zero-claim orphans must not emit a
+    ``hitl_gate_missing`` stall reason, and the guard must be reachable without
+    a KeyError from a summary that carries the key as zero (the sibling
+    telemetry tests above omit it entirely)."""
+    summary: dict[str, Any] = {
+        "nodeless_failed": 0,
+        "claim_cap_terminalized": 0,
+        "mid_graph_wedge_terminalized": 0,
+        "dispatch_failed_terminalized": 0,
+        "hitl_gate_expired_terminalized": 0,
+        "hitl_gate_missing_terminalized": 0,
+    }
+    record = MagicMock()
+    with (
+        patch.object(ch, "is_telemetry_enabled", return_value=True),
+        patch.object(ch, "_open_system_factory", return_value=MagicMock()),
+        patch("modulo.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock),
+        patch("modulo.core.error_tracking.metrics.sample_error_group_metrics", new_callable=AsyncMock),
+        patch("modulo.core.error_tracking.metrics.record_stall_reason", record),
+    ):
+        await ch._update_reconcile_telemetry(summary)
+    record.assert_not_called()
 
 
 async def test_update_reconcile_telemetry_disabled_returns_early():
@@ -2204,6 +2240,7 @@ async def test_reconcile_org_reraises_cancellation():
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
         "hitl_gate_expired_terminalized": 0,
+        "hitl_gate_missing_terminalized": 0,
         "scanned": 0,
     }
     with (
