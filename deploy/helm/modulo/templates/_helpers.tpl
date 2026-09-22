@@ -93,6 +93,34 @@ Otherwise falls back to backend.env.DATABASE_URL.
 {{- end }}
 
 {{/*
+Construct DATABASE_ADMIN_URL from Postgres config.
+Used by entrypoint.sh bootstrap_role.py to connect as the admin/superuser.
+In the chart's simplified model (single postgres user), this is identical to
+DATABASE_URL.  When postgres.host is unset, falls back to
+backend.env.DATABASE_ADMIN_URL.
+*/}}
+{{- define "modulo.databaseAdminUrl" -}}
+{{- if .Values.postgres.host }}
+{{- $host := .Values.postgres.host }}
+{{- $port := .Values.postgres.port | int }}
+{{- $db := .Values.postgres.database }}
+{{- $user := .Values.postgres.username }}
+{{- $pass := "" }}
+{{- if .Values.postgres.existingSecret }}
+{{- $secret := lookup "v1" "Secret" (include "modulo.namespace" .) .Values.postgres.existingSecret }}
+{{- if $secret }}
+{{- $pass = index $secret.data "password" | b64dec }}
+{{- end }}
+{{- else }}
+{{- $pass = .Values.postgres.password }}
+{{- end }}
+{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user $pass $host $port $db }}
+{{- else }}
+{{- .Values.backend.env.DATABASE_ADMIN_URL | default "" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Construct REDIS_URL from Redis config.
 When redis.embedded is true, points at the chart's own Redis Service
 ({{ include "modulo.fullname" . }}-redis on port 6379).

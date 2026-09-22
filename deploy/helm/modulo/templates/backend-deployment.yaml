@@ -51,6 +51,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "modulo.fullname" . }}-secrets
                   key: DATABASE_URL
+            - name: DATABASE_ADMIN_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.fullname" . }}-secrets
+                  key: DATABASE_ADMIN_URL
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:

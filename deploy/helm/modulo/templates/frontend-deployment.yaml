@@ -47,7 +47,7 @@ spec:
           command: ["nginx", "-g", "daemon off;"]
           ports:
             - name: http-frontend
-              containerPort: 80
+              containerPort: 8080
               protocol: TCP
           {{- with .Values.frontend.livenessProbe }}
           livenessProbe:
