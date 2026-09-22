@@ -7,6 +7,7 @@ Covers target derivation (the server-side mirror of the view's
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -15,6 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core import work_item_enrichment
+from modulo.core.connector_hub import ConnectorDecryptError
 from modulo.core.work_item_enrichment import (
     clear_enrichment_cache,
     derive_pr_targets,
@@ -250,3 +253,101 @@ async def test_enrich_scopes_connector_lookup_to_the_run_org() -> None:
     assert lister.call_count == 1
     _, kwargs = lister.call_args
     assert kwargs["organisation_id"] == _ORG_ID
+
+
+# ---------------------------------------------------------------------------
+# derive_pr_targets — payload PR-number parsing edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_derive_payload_without_pull_request_key_contributes_no_number() -> None:
+    """A payload dict with no ``pull_request`` key must not fabricate a PR."""
+    targets = derive_pr_targets(
+        [{"kind": "pr", "ref": "206"}],
+        {"repository": {"full_name": "acme/widgets"}},
+    )
+    assert targets == [("acme/widgets#206", "acme/widgets", 206)]
+
+
+def test_derive_payload_number_bool_is_not_a_number() -> None:
+    """``True`` is an ``int`` in Python but must NOT be read as a PR number."""
+    targets = derive_pr_targets(
+        [{"kind": "pr", "ref": "206"}],
+        {"repository": {"full_name": "acme/widgets"}, "pull_request": {"number": True}},
+    )
+    assert targets == [("acme/widgets#206", "acme/widgets", 206)]
+
+
+def test_derive_payload_number_numeric_string_is_parsed() -> None:
+    targets = derive_pr_targets(
+        [{"kind": "pr", "ref": "206"}],
+        {"repository": {"full_name": "acme/widgets"}, "pull_request": {"number": "206"}},
+    )
+    assert targets == [("acme/widgets#206", "acme/widgets", 206)]
+
+
+def test_derive_payload_number_non_numeric_string_is_ignored() -> None:
+    targets = derive_pr_targets(
+        [{"kind": "pr", "ref": "206"}],
+        {"repository": {"full_name": "acme/widgets"}, "pull_request": {"number": "abc"}},
+    )
+    assert targets == [("acme/widgets#206", "acme/widgets", 206)]
+
+
+# ---------------------------------------------------------------------------
+# enrich_pr_targets — defensive fallbacks (never raise to the route)
+# ---------------------------------------------------------------------------
+
+
+async def test_enrich_connector_list_failure_negative_caches() -> None:
+    """A DB/list error degrades to a negative cache entry, not a raise."""
+    lister = AsyncMock(side_effect=RuntimeError("db down"))
+    with patch("modulo.core.work_item_enrichment.list_connector_instances", new=lister):
+        first = await enrich_pr_targets(_session(), _ORG_ID, _TARGETS, _settings())
+        second = await enrich_pr_targets(_session(), _ORG_ID, _TARGETS, _settings())
+
+    assert not first
+    assert not second
+    assert lister.call_count == 1
+
+
+async def test_enrich_decrypt_failure_negative_caches() -> None:
+    """An undecryptable credential degrades to the plain badge for the TTL."""
+    hub = _hub(AsyncMock())
+    hub.initialise = AsyncMock(side_effect=ConnectorDecryptError(uuid.uuid4()))
+    with _env(instances=[_github_instance()], hub=hub) as (lister, _hub_cls):
+        first = await enrich_pr_targets(_session(), _ORG_ID, _TARGETS, _settings())
+        second = await enrich_pr_targets(_session(), _ORG_ID, _TARGETS, _settings())
+
+    assert not first
+    assert not second
+    assert lister.call_count == 1
+
+
+async def test_enrich_empty_records_is_not_enriched() -> None:
+    """A connector returning no records leaves the key unenriched."""
+    sample = AsyncMock(return_value=[])
+    with _env(instances=[_github_instance()], hub=_hub(sample)):
+        result = await enrich_pr_targets(_session(), _ORG_ID, _TARGETS, _settings())
+
+    assert not result
+
+
+async def test_enrich_cancelled_error_propagates() -> None:
+    """``CancelledError`` is a ``BaseException`` — it must NOT be swallowed."""
+    sample = AsyncMock(side_effect=asyncio.CancelledError())
+    with (
+        _env(instances=[_github_instance()], hub=_hub(sample)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await enrich_pr_targets(_session(), _ORG_ID, _TARGETS, _settings())
+
+
+async def test_enrich_cache_overflow_clears_wholesale(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cache is wholesale-cleared once it exceeds its hard bound."""
+    monkeypatch.setattr(work_item_enrichment, "_CACHE_MAX_ENTRIES", 1)
+    with _env(instances=[], hub=_hub(AsyncMock())):
+        await enrich_pr_targets(_session(), _ORG_ID, [("a/b#1", "a/b", 1)], _settings())
+        await enrich_pr_targets(_session(), _ORG_ID, [("c/d#2", "c/d", 2)], _settings())
+
+    assert [key for _org, key in work_item_enrichment._cache] == ["c/d#2"]
