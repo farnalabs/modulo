@@ -25,6 +25,13 @@ cutover and chunk 4's landing, governance decisions produce NO decision records.
 This is not a regression — the legacy path was equally unaudited — and chunk 4
 closes it.  Recorded here per the doc-truth gate.
 
+**Step 0 drain scope:** the pre-cutover drain wait gates on EXECUTING (``running``)
+runs only.  Parked/recovery statuses (``awaiting_human``, ``hitl_parked``,
+``claimed``, ``unknown``, ``pending``) are non-executing and can persist
+indefinitely by design, so waiting for them to drain would abort the migration
+forever on any live deployment; they are logged for visibility instead
+(``_DRAIN_BLOCKING_RUN_STATUSES``).
+
 The migration is a no-op on non-Postgres (SQLite relies on ORM ``create_all``).
 
 Revision ID: 0254_eval_backfill_cutover
@@ -60,7 +67,7 @@ _BATCH_SIZE = 500
 _DRAIN_POLL_INTERVAL_S = 5
 _DRAIN_TIMEOUT_S = 600  # 10 minutes
 
-# Active (in-flight) run statuses — from modulo.db.models.run.ACTIVE_RUN_STATUSES.
+# Non-terminal run statuses — from modulo.db.models.run.ACTIVE_RUN_STATUSES.
 _ACTIVE_RUN_STATUSES = (
     "pending",
     "running",
@@ -68,6 +75,30 @@ _ACTIVE_RUN_STATUSES = (
     "claimed",
     "unknown",
     "hitl_parked",
+)
+
+# Step 0 gates the cutover on EXECUTING runs only.  A ``running`` run is the
+# only non-terminal state in which a run can reach into the eval tables while
+# the cutover is in flight, so it is the only status the drain wait blocks on.
+# Every other non-terminal status is non-executing and can persist indefinitely
+# by design:
+#   * ``awaiting_human`` / ``hitl_parked`` — parked on a human decision; a park
+#     is not execution (modulo.db.models.run.PIPELINE_CAPACITY_STATUSES excludes
+#     both for the same reason);
+#   * ``claimed`` — a reviewer holds the HITL gate; the run is not executing;
+#   * ``unknown`` — indeterminate outcome held until an operator re-runs it;
+#   * ``pending`` — queued / capacity-deferred, not executing yet.
+# Requiring those to drain would demand a fleet-wide quiescence window a live
+# deployment can never reach: on 2026-09-22 production held 13 non-terminal
+# runs across the entire 600s window (steady, per the deployment log) and the
+# migration aborted on every attempt, wedging the deploy indefinitely.  Draining
+# only ``running`` mirrors the stale-run sweep contract — a stranded running run
+# is reaped by ``stale_run_recovery_sweep`` — while the migration's
+# transaction-scoped DDL locks and its count/content verification remain the real
+# cutover guard against a run that starts writing concurrently.
+_DRAIN_BLOCKING_RUN_STATUSES = ("running",)
+_DRAIN_NON_BLOCKING_RUN_STATUSES = tuple(
+    status for status in _ACTIVE_RUN_STATUSES if status not in _DRAIN_BLOCKING_RUN_STATUSES
 )
 
 # Columns copied from eval_definitions → evals.
@@ -128,12 +159,40 @@ def _scalar(sql: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _log_non_blocking_runs() -> None:
+    """Log the non-executing non-terminal runs the drain gate does not wait on.
+
+    Visibility only — these runs never block the cutover (see
+    ``_DRAIN_BLOCKING_RUN_STATUSES``); the breakdown is logged so an operator
+    can see the parked/recovery backlog the migration is proceeding past.
+    """
+    non_blocking_sql = (
+        "SELECT status, COUNT(*) FROM runs WHERE status IN ("  # nosec B608
+        + ", ".join(f"'{s}'" for s in _DRAIN_NON_BLOCKING_RUN_STATUSES)  # nosec B608
+        + ") GROUP BY status"
+    )
+    rows = op.get_bind().execute(text(non_blocking_sql)).fetchall()
+    if rows:
+        breakdown = ", ".join(f"{row[0]}={row[1]}" for row in rows)
+        logger.warning(
+            "Drain check: %d non-executing run(s) present (%s) — not gating the cutover.",
+            sum(row[1] for row in rows),
+            breakdown,
+        )
+
+
 def _drain_check() -> None:
-    """Poll for in-flight runs; abort if any remain after timeout."""
+    """Poll for executing runs; abort if any remain after timeout.
+
+    Only ``running`` runs gate the cutover (``_DRAIN_BLOCKING_RUN_STATUSES``);
+    non-executing non-terminal runs are logged once for visibility but never
+    block, since they can persist indefinitely.
+    """
+    _log_non_blocking_runs()
     deadline = time.monotonic() + _DRAIN_TIMEOUT_S
     active_sql = (
         "SELECT id FROM runs WHERE status IN ("  # nosec B608
-        + ", ".join(f"'{s}'" for s in _ACTIVE_RUN_STATUSES)  # nosec B608
+        + ", ".join(f"'{s}'" for s in _DRAIN_BLOCKING_RUN_STATUSES)  # nosec B608
         + ") LIMIT 20"
     )
     while True:
@@ -142,7 +201,7 @@ def _drain_check() -> None:
             return
         if time.monotonic() >= deadline:
             msg = (
-                f"Migration abort: {len(stuck_ids)} run(s) still in active state "
+                f"Migration abort: {len(stuck_ids)} executing run(s) still active "
                 f"after {_DRAIN_TIMEOUT_S}s timeout.  "
                 f"Stuck run IDs: {stuck_ids}"
             )
