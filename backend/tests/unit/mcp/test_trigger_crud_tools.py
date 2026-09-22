@@ -616,6 +616,47 @@ class TestUpdateTriggerSuccess(_AuthContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
+    async def test_unrecognised_config_key_in_config_json_returns_validation(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A config_json CHANGE carrying an unread key returns a validation
+        error that names the offending key and the recognised set."""
+        trigger = _make_mock_trigger()
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await update_trigger(trigger_id=str(trigger.id), config_json={"events": ["a", "b"]})
+
+        assert result["error"] == "validation"
+        assert "merged config_json" in result["detail"]
+        assert "events" in result["detail"]
+        assert "accepted_events" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_legacy_unrecognised_config_key_stays_updatable_without_config_change(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A legacy trigger whose stored config contains an unread key must
+        remain updatable via MCP for other fields — the write-time gate only
+        fires when config_json itself changes (REST parity)."""
+        trigger = _make_mock_trigger(config_json={"events": ["x"]})
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await update_trigger(trigger_id=str(trigger.id), active=False)
+
+        assert result.get("error") is None
+        assert result["active"] is False
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
     async def test_masked_secret_round_trip_preserves_stored_value(
         self,
         mock_session: AsyncMock,
@@ -860,6 +901,30 @@ class TestCreateTriggerOngoing(_AuthContext):
 
         assert result["error"] == "validation"
         assert "daily_spend_limit" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_unrecognised_config_key_rejected_at_create(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """MCP create_trigger with a config_json key the engine does not read
+        returns the write-time gate's validation error (names the key)."""
+        mock_sesh = AsyncMock()
+        mock_sesh.get = AsyncMock(return_value=_pipeline_cap(10))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await create_trigger(
+            pipeline_id=str(uuid.uuid4()),
+            trigger_type="ongoing",
+            max_concurrent_runs=3,
+            daily_spend_limit=25.0,
+            config_json={"events": ["a"]},
+        )
+
+        assert result["error"] == "validation"
+        assert "events" in result["detail"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")

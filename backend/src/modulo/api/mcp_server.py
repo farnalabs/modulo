@@ -5629,7 +5629,11 @@ async def update_trigger(
                 next_fire_at,
                 prev_active,
             )
-            if trigger.config_json is not None:
+            # Validate the write-time config gate ONLY when config_json was
+            # part of the request (mirrors the REST _apply_trigger_update
+            # semantics): a legacy trigger with an unread key must stay
+            # updatable by any other field via MCP, same as via REST.
+            if config_json is not None:
                 try:
                     _validate_trigger_config_keys(trigger.config_json, context="merged config_json")
                 except FastAPIHTTPException as exc:
