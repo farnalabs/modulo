@@ -382,3 +382,153 @@ class TestPersistSchemaEnforcementRecordCrud:
             assert len(rows) == 1
             assert rows[0].schema_enforcement_json["outcome"] == "verbatim_passed"
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Test: terminal-failure enforcement records (FAR-902 D3)
+# ---------------------------------------------------------------------------
+
+
+class TestTerminalFailureEnforcementRecord:
+    """A TERMINAL validation failure must still yield an enforcement record.
+
+    ``_validate_against_schema`` raises ``OutputSchemaValidationError`` on the
+    strict-terminal (repair exhausted / native decode failure) and lenient
+    required-field-violation paths.  Before this fix those arms produced NO
+    record, so the most severe outcomes never reached
+    ``run_node_outputs.schema_enforcement_json``.  These tests drive each
+    raising arm and assert the record is built AND persisted.
+    """
+
+    @staticmethod
+    def _required_schema() -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+
+    def test_lenient_required_violation_carries_record(self) -> None:
+        """Lenient required-field violation: raises, but carries the record."""
+        from modulo.core.pipeline_engine.node_runner import (
+            OutputSchemaValidationError,
+            _finalize_node_result,
+        )
+
+        with pytest.raises(OutputSchemaValidationError) as exc_info:
+            _finalize_node_result(
+                "node-1",
+                {"other": "value"},  # missing required 'name'
+                self._required_schema(),
+                None,
+                mode="lenient",
+                resolved_profile="verbatim",
+            )
+
+        exc = exc_info.value
+        assert exc.outcome == SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED.value
+        rec = exc.enforcement_record
+        assert rec is not None, "terminal failure produced no enforcement record"
+        assert rec["outcome"] == SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED.value
+        assert rec["resolved_profile"] == "verbatim"
+        assert rec["validation_errors"], "the failing errors must ride the record"
+        assert any(e.get("constraint") == "required" for e in rec["validation_errors"])
+
+    def test_strict_terminal_failure_carries_record(self) -> None:
+        """Strict repair exhaustion: raises, but carries the record + stats."""
+        from modulo.core.pipeline_engine.node_runner import (
+            OutputSchemaValidationError,
+            _finalize_node_result,
+        )
+
+        with pytest.raises(OutputSchemaValidationError) as exc_info:
+            _finalize_node_result(
+                "node-1",
+                {"name": 123},  # wrong type → strict repair exhausted
+                self._required_schema(),
+                None,
+                mode="strict",
+                _repair_invoke_fn=None,
+                resolved_profile="verbatim",
+                native_output=False,
+            )
+
+        exc = exc_info.value
+        assert exc.outcome == SchemaValidationOutcome.REPAIR_EXHAUSTED.value
+        rec = exc.enforcement_record
+        assert rec is not None, "terminal failure produced no enforcement record"
+        assert rec["outcome"] == SchemaValidationOutcome.REPAIR_EXHAUSTED.value
+        assert rec["native_output"] is False
+        assert rec["validation_errors"]
+
+    def test_error_builder_returns_none_without_outcome(self) -> None:
+        """A plain ``ValueError`` (no FAR-902 context) builds no record."""
+        from modulo.core.pipeline_engine.node_runner import _build_error_enforcement_record
+
+        assert (
+            _build_error_enforcement_record(ValueError("unrelated"), resolved_profile=None, native_output=False) is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_persist_helper_noops_without_record(self) -> None:
+        """A ``None`` record (or missing identifiers) is a silent no-op."""
+        from unittest.mock import AsyncMock, patch
+
+        from modulo.core.pipeline_engine.node_runner import (
+            _persist_enforcement_record_best_effort,
+        )
+
+        persist = AsyncMock()
+        with patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist):
+            await _persist_enforcement_record_best_effort(
+                None,
+                session_factory=lambda: None,
+                run_id=uuid.uuid4(),
+                org_id=uuid.uuid4(),
+                node_id="node-1",
+                attempt_key="attempt-0",
+            )
+        persist.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_terminal_record_is_persisted(self) -> None:
+        """The terminal-failure record actually lands in run_node_outputs."""
+        from sqlalchemy import select
+
+        from modulo.core.pipeline_engine.node_runner import (
+            OutputSchemaValidationError,
+            _finalize_node_result,
+            _persist_enforcement_record_best_effort,
+        )
+        from modulo.db.models.run_node_outputs import RunNodeOutput
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as conn:
+            await conn.run_sync(RunNodeOutput.__table__.create)
+        sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        run_id = uuid.uuid4()
+        org_id = uuid.uuid4()
+
+        with pytest.raises(OutputSchemaValidationError) as exc_info:
+            _finalize_node_result(
+                "node-1",
+                {"other": "value"},
+                self._required_schema(),
+                None,
+                mode="lenient",
+            )
+        assert exc_info.value.enforcement_record is not None
+
+        await _persist_enforcement_record_best_effort(
+            exc_info.value.enforcement_record,
+            session_factory=sf,
+            run_id=run_id,
+            org_id=org_id,
+            node_id="node-1",
+            attempt_key="attempt-0",
+        )
+
+        async with sf() as session:
+            row = (await session.execute(select(RunNodeOutput).where(RunNodeOutput.node_id == "node-1"))).scalar_one()
+            assert row.schema_enforcement_json["outcome"] == SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED.value
+        await engine.dispose()

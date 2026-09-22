@@ -35,6 +35,7 @@ from modulo.core.pipeline_engine.node_runner import (
     make_connector_fn,
     make_sandbox_agent_fn,
 )
+from modulo.core.pipeline_engine.schema_repair import SchemaValidationOutcome
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _ORG_UUID = uuid.UUID(_ORG_ID)
@@ -2944,3 +2945,32 @@ async def test_sandbox_schema_enforcement_persist_cancellation_propagates(
         pytest.raises(asyncio.CancelledError),
     ):
         await fn(_SANDBOX_SCHEMA_STATE)
+
+
+async def test_sandbox_terminal_schema_failure_persists_enforcement_record(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """FAR-902 (D3): a TERMINAL schema-validation failure persists the record.
+
+    Drives the ``except ValueError`` arm: a required-field violation raises
+    (and, in script mode, terminalizes as ``ScriptInvalidOutputError``), but
+    the enforcement record must be written BEFORE the node terminalizes.
+    """
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "k")
+    fn = make_sandbox_agent_fn(
+        _script_node_def(output_schema_json={"required": ["result"]}),
+        session_factory=lambda: _FakeSession(),
+    )
+    sandbox = _make_sandbox_mock(output_json='{"other": 1}')
+    persist = AsyncMock()
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "set_rls_org", AsyncMock()),
+        patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
+        pytest.raises(ScriptInvalidOutputError, match="schema"),
+    ):
+        await fn(_SANDBOX_SCHEMA_STATE)
+    persist.assert_awaited_once()
+    record = persist.await_args.kwargs["enforcement_record"]
+    assert record["outcome"] == SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED.value
+    assert record["validation_errors"]
