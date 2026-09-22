@@ -38,9 +38,13 @@ documentation and validation, **not an adapter**.
 | Patching / ops | The vendor's problem | Your problem (kernel, Docker, TLS certs, proxy image bumps) |
 | Which to choose | Bursty or light use; when you need a bounded egress allowlist **today** | Steady heavy use where a flat VM is cheaper than metered seconds; when workloads must stay on compute you control |
 
-Both run the same `sandbox_agent` node contract and the same hardening
-defaults (read-only rootfs, dropped caps, uid 1001 — operator guide §7). The
-difference is who owns the metal and who owns the egress story.
+Both run the same `sandbox_agent` **node contract**. The container
+hardening defaults (uid 1001, read-only rootfs, dropped caps,
+seccomp/AppArmor — operator guide §7, trust-boundary doc "Container
+hardening") are **Docker-tier-only**: the Docker/Bundled Runner tier
+enforces them at container create-time, while the E2B managed sandbox's
+isolation is vendor-managed. The difference is who owns the metal and who
+owns the isolation (and the egress story).
 
 ## 2. Walkthrough
 
@@ -235,9 +239,9 @@ docker-marked harness suite — **but the IP leg is engine-dependent.** The
 harness runs a control experiment first and skips the IP assertion with an
 explicit notice when an engine demonstrably permits cross-bridge traffic.
 
-**Observed broken:** Docker Desktop engine **29.2 / 29.7** no longer
-installs the `DOCKER-ISOLATION` ruleset (observed 2026-09-10 on engine
-29.7.2). On such engines, name resolution is still blocked (the workspace
+**Observed broken:** the engine no longer installs the
+`DOCKER-ISOLATION` ruleset — observed 2026-09-10 on Docker Desktop engine
+29.7.2. On such engines, name resolution is still blocked (the workspace
 resolves no proxy DNS name), but **IP-level reachability from a workspace
 to the proxy/backend bridge is not blocked by the engine.**
 
