@@ -63,7 +63,7 @@ async def ingest_web_vitals(
 ) -> None:
     """Ingest a batch of Web Vitals measurements from the frontend.
 
-    ADR 017: swept with ``metrics.ingest`` (``viewer`` minimum) — telemetry
+    ADR 047: swept with ``metrics.ingest`` (``viewer`` minimum) — telemetry
     ingestion must keep working for viewers, so the minimum role is the lowest.
     """
     if not req.events:
