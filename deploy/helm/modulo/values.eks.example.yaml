@@ -43,9 +43,11 @@ limitRange:
   default:
     cpu: "1"
     memory: "1Gi"
+    ephemeral-storage: 2Gi
   defaultRequest:
     cpu: "250m"
     memory: "256Mi"
+    ephemeral-storage: 512Mi
 
 # -- External Postgres (Amazon RDS) -----------------------------------------
 postgres:
@@ -76,9 +78,11 @@ backend:
     requests:
       cpu: 500m
       memory: 1Gi
+      ephemeralStorage: 1Gi
     limits:
       cpu: "2"
       memory: 2Gi
+      ephemeralStorage: 2Gi
   env:
     MODULO_PUBLIC_URL: "https://modulo.example.com"
     MODULO_LOG_LEVEL: info
@@ -99,9 +103,11 @@ saqRunner:
     requests:
       cpu: 500m
       memory: 1Gi
+      ephemeralStorage: 2Gi
     limits:
       cpu: "2"
       memory: 2Gi
+      ephemeralStorage: 4Gi
   env:
     SAQ_WORKER_CONCURRENCY: "20"
     SAQ_REDIS_POOL_SIZE: "50"
@@ -118,9 +124,11 @@ saqSystem:
     requests:
       cpu: 250m
       memory: 512Mi
+      ephemeralStorage: 1Gi
     limits:
       cpu: "1"
       memory: 1Gi
+      ephemeralStorage: 2Gi
 
 # -- Frontend (2 replicas for HA) ------------------------------------------
 frontend:
@@ -134,9 +142,11 @@ frontend:
     requests:
       cpu: 100m
       memory: 128Mi
+      ephemeralStorage: 256Mi
     limits:
       cpu: 250m
       memory: 256Mi
+      ephemeralStorage: 512Mi
 
 # -- Ingress (AWS ALB) ------------------------------------------------------
 ingress:

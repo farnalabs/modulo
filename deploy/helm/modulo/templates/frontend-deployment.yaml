@@ -23,6 +23,10 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      # The Modulo workloads never call the Kubernetes API, and the chart's
+      # ServiceAccount carries no RBAC bindings, so mounting a token only
+      # widens the blast radius of a compromised pod (kubernetes:S6865).
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -55,7 +59,14 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           resources:
-            {{- toYaml .Values.frontend.resources | nindent 12 }}
+            limits:
+              cpu: {{ .Values.frontend.resources.limits.cpu | quote }}
+              memory: {{ .Values.frontend.resources.limits.memory | quote }}
+              ephemeral-storage: {{ .Values.frontend.resources.limits.ephemeralStorage | quote }}
+            requests:
+              cpu: {{ .Values.frontend.resources.requests.cpu | quote }}
+              memory: {{ .Values.frontend.resources.requests.memory | quote }}
+              ephemeral-storage: {{ .Values.frontend.resources.requests.ephemeralStorage | quote }}
           securityContext:
             # readOnlyRootFilesystem is safe for the nginx frontend: the entrypoint
             # is skipped (command override), /var/cache/nginx and /var/run are
@@ -73,7 +84,7 @@ spec:
               # the capability here makes the exec check pass. The frontend still
               # listens on 8080 (unprivileged) — this cap is not for port binding.
               add:
-                - NET_BIND_SERVICE
+                - NET_BIND_SERVICE  # NOSONAR kubernetes:S5849 — reviewed exception: required to exec the file-capability nginx binary under no_new_privs; the process still listens on the unprivileged port 8080.
           volumeMounts:
             - name: nginx-cache
               mountPath: /var/cache/nginx

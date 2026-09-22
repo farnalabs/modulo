@@ -46,9 +46,11 @@ limitRange:
   default:
     cpu: "500m"
     memory: "512Mi"
+    ephemeral-storage: 2Gi
   defaultRequest:
     cpu: "100m"
     memory: "128Mi"
+    ephemeral-storage: 512Mi
 
 # -- Pod Security Admission -------------------------------------------------
 # Apply "restricted" enforcement at namespace level. All Modulo containers run
@@ -118,9 +120,14 @@ backend:
     requests:
       cpu: 250m
       memory: 512Mi
+      # Ephemeral-storage is the writable layer + emptyDir (/tmp) budget. It is
+      # required by the SonarCloud storage rules (kubernetes:S6870/S6897) and
+      # bounds a runaway container from exhausting the node's local disk.
+      ephemeralStorage: 1Gi
     limits:
       cpu: "1"
       memory: 1Gi
+      ephemeralStorage: 2Gi
 
   # Health checks derived from backend src/modulo/api/routes/health.py.
   #
@@ -176,9 +183,13 @@ saqRunner:
     requests:
       cpu: 250m
       memory: 512Mi
+      # SAQ jobs stage agent workspaces under /tmp, so the runner gets a
+      # larger ephemeral-storage budget than the other components.
+      ephemeralStorage: 2Gi
     limits:
       cpu: "1"
       memory: 1Gi
+      ephemeralStorage: 4Gi
 
   env: {}
   nodeSelector: {}
@@ -207,9 +218,11 @@ saqSystem:
     requests:
       cpu: 250m
       memory: 512Mi
+      ephemeralStorage: 1Gi
     limits:
       cpu: "1"
       memory: 1Gi
+      ephemeralStorage: 2Gi
 
   env: {}
   nodeSelector: {}
@@ -235,9 +248,11 @@ frontend:
     requests:
       cpu: 100m
       memory: 128Mi
+      ephemeralStorage: 256Mi
     limits:
       cpu: 250m
       memory: 256Mi
+      ephemeralStorage: 512Mi
 
   # Frontend is a static SPA — liveness/readiness are simple.
   livenessProbe:

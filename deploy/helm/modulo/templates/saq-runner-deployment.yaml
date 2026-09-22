@@ -23,6 +23,10 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      # The Modulo workloads never call the Kubernetes API, and the chart's
+      # ServiceAccount carries no RBAC bindings, so mounting a token only
+      # widens the blast radius of a compromised pod (kubernetes:S6865).
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -71,7 +75,14 @@ spec:
             - configMapRef:
                 name: {{ include "modulo.fullname" . }}-config
           resources:
-            {{- toYaml .Values.saqRunner.resources | nindent 12 }}
+            limits:
+              cpu: {{ .Values.saqRunner.resources.limits.cpu | quote }}
+              memory: {{ .Values.saqRunner.resources.limits.memory | quote }}
+              ephemeral-storage: {{ .Values.saqRunner.resources.limits.ephemeralStorage | quote }}
+            requests:
+              cpu: {{ .Values.saqRunner.resources.requests.cpu | quote }}
+              memory: {{ .Values.saqRunner.resources.requests.memory | quote }}
+              ephemeral-storage: {{ .Values.saqRunner.resources.requests.ephemeralStorage | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false
