@@ -549,7 +549,8 @@ export default {
       "modulo": "Modulo",
       "or_continue_with": "or continue with",
       "sign_in_to_org": "Sign in to {orgName}",
-      "sign_in_with": "Sign in with {provider}"
+      "sign_in_with": "Sign in with {provider}",
+      "used_last_time": "Used last time"
     },
     "OrgLoginView": {
       "sign_in_to_your_organisation": "Sign in to your organisation",
@@ -557,7 +558,8 @@ export default {
       "organisation_slug_label": "Organisation name or slug",
       "organisation_slug_placeholder": "e.g. acme-corp",
       "organisation_slug_hint": "Enter your organisation's name or URL slug to continue.",
-      "continue": "Continue"
+      "continue": "Continue",
+      "change_organization": "(change organization)"
     },
     "NotificationsPage": {
       "title": "Notifications",
