@@ -35,10 +35,15 @@ agent runs).
 | **T4** Bring-your-own agent image | Modulo provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
 | **Dispatch** | govern an agent you already run — external CI triggers and customer-hosted agent endpoints | separate spike; connectors story, not a runner tier |
 
-**T3 is the bounded-egress answer.** When an operator needs the workspace's
-egress bounded to an allowlist, the supported path is T3: the customer's own
-NetworkPolicy on their Kubernetes cluster enforces the bound. There is no
-bounded middle tier in Docker (T1/T2b), by decision.
+**T3 is the bounded-egress answer for self-hosted compute.** When an
+operator on a Docker tier (T1, and T2b) needs the workspace's egress
+bounded to an allowlist, the supported self-hosted path is T3 — the
+customer's own NetworkPolicy on their Kubernetes cluster enforces the
+bound (T3 is still "to build"). There is no bounded middle tier in Docker
+(T1/T2b), by decision. The managed-sandbox tier (T2a / E2B) is a separate
+case: it already enforces egress allowlists today via the node-level
+`egress_policy: selected` + `egress_allowlist` — a real, fail-closed
+allowlist applied inside the sandbox.
 
 ## Workspace egress surface (what an agent can reach)
 
@@ -64,14 +69,25 @@ egress is unrestricted by design. A per-profile opt-in sets
 `--network=none` (loopback only).
 
 **Accepted gap: no bounded egress in the Docker tier.** There is no egress
-allowlist in this tier. This is a DECISION, not an omission: a vendor-built
-egress gateway (an nftables or proxy middlebox owning enforcement) would be
-the same criticised shape as the socket proxy — a bespoke module owning a
-control the operator should own. The bounded answer is the Kubernetes tier
-(T3, in the model above): run Modulo's runner on your cluster and bound the
-workspace with YOUR NetworkPolicy, RBAC, and admission policy. There will be
-NO bespoke egress gateway. This decision supersedes FAR-1039 (the earlier
-per-profile allowlist plan is dropped, not deferred).
+allowlist in this tier (T1, and T2b — the Docker/self-hosted tiers). This
+is a DECISION, not an omission: a vendor-built egress gateway (an nftables
+or proxy middlebox owning enforcement) would be the same criticised shape
+as the socket proxy — a bespoke module owning a control the operator
+should own. The bounded answer for self-hosted compute is the Kubernetes
+tier (T3, in the model above): run Modulo's runner on your cluster and
+bound the workspace with YOUR NetworkPolicy, RBAC, and admission policy —
+T3 is still "to build". There will be NO bespoke egress gateway. This
+decision supersedes FAR-1039 (the earlier per-profile allowlist plan is
+dropped, not deferred).
+
+This gap is scoped to the Docker tiers only: the managed-sandbox tier
+(T2a / E2B) enforces egress allowlists today — set `egress_policy:
+selected` plus `egress_allowlist` on the sandbox_agent NODE (the
+environment-profile model carries no allowlist field), and the sandbox
+applies it as an enforced, fail-closed allowlist inside the sandbox
+(`build_egress_selected_script` in `pipeline_engine/sandbox_policy.py`;
+the tier capability matrix in `pipeline_engine/egress.py` marks
+`selected: True` for `e2b`, `False` for `docker`).
 
 **workspace_network validation (FAR-1020).** The `workspace_network` value in
 an environment profile's `config_json` is validated at three layers:
@@ -314,11 +330,11 @@ mechanically guarded here:
   network/pid/ipc, no unrestricted `cap_add` in overlay services; no host
   ports for the proxy) — the overlay conforms today; the CI job that
   enforces it is the same GA/CI item.
-- **Bounded egress allowlists per profile** — deliberately NOT built for
-  this tier; this is an ACCEPTED GAP (see "Accepted gap" above), not an
-  omission. The `none` opt-in IS enforced at provision. The bounded answer
-  is the Kubernetes tier (T3) with the customer's own NetworkPolicy; no
-  bespoke egress gateway will be added (decision supersedes FAR-1039).
+- **Bounded egress allowlists per profile** — not a "not yet" item: this is
+  a deliberate never-on-this-tier decision, an ACCEPTED GAP (see
+  "Accepted gap: no bounded egress in the Docker tier" above), not pending
+  work. The `none` opt-in IS enforced at provision; the managed-sandbox
+  tier (T2a / E2B) already enforces node-level allowlists today.
 
 ### Enforced
 

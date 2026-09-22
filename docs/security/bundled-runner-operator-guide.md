@@ -114,11 +114,15 @@ network defaults) while preserving operator-owned ones.
   with network access). Per-profile opt-out: `network_policy: none` →
   `--network=none` (loopback only).
 - **Accepted gap: no bounded egress in this tier.** There is no egress
-  allowlist in the Docker tier. This is a DECISION, not an omission: bounded
-  egress belongs to your cluster's controls, not a vendor-built gateway.
-  If you need an egress allowlist, run the Kubernetes tier (T3) and bound
-  the workspace with your own NetworkPolicy — that is the supported bounded
-  answer.
+  allowlist in the Docker tier (T1, and T2b). This is a DECISION, not an
+  omission: bounded egress belongs to your cluster's controls, not a
+  vendor-built gateway. For self-hosted compute, the supported bounded
+  answer is the Kubernetes tier (T3, still "to build"): run Modulo's runner
+  on your cluster and bound the workspace with your own NetworkPolicy. The
+  managed-sandbox tier (T2a / E2B) is a separate case — it supports egress
+  allowlists today via node-level `egress_policy: selected` +
+  `egress_allowlist` (an enforced, fail-closed allowlist inside the
+  sandbox).
 - Host-published ports (DB/Redis in the default compose) are reachable from
   egress-permitted workspaces — see the trust-boundary doc for the
   hardening criterion and operator mitigations.
@@ -138,8 +142,10 @@ compute lives; T4 swaps in the customer's agent image.
 | **T4** Bring-your-own agent image | Modulo provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
 | **Dispatch** | govern an agent you already run — external CI triggers and customer-hosted agent endpoints | separate spike; connectors story, not a runner tier |
 
-T1 is deliberately the permissive end of the spectrum. For bounded egress,
-choose T3 and enforce with your own NetworkPolicy.
+T1 is deliberately the permissive end of the spectrum. For bounded egress
+on self-hosted compute, choose T3 (once built) and enforce with your own
+NetworkPolicy; the managed-sandbox tier (T2a / E2B) already supports
+node-level egress allowlists today.
 
 ## 6. Reconciler (leak repair)
 
