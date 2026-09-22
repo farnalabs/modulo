@@ -16,6 +16,7 @@ kept for correctness if compilation becomes async in the future.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import threading
@@ -27,8 +28,8 @@ from typing import Annotated, Any, cast
 import jmespath
 from langgraph.graph import StateGraph
 
-from modulo.core.eval_engine import EvalDefinition
 from modulo.core.node_output_split import DEFAULT_NODE_TYPE
+from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
 from modulo.core.pipeline_engine.jmespath_eval import evaluate_jmespath_condition
 from modulo.core.pipeline_engine.node_runner import (
     make_connector_fn,
@@ -109,7 +110,7 @@ def get_or_compile(
     return result
 
 
-def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefinition]] | None) -> str:
+def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefDTO]] | None) -> str:
     """Deterministic content hash of the node-scoped eval definitions (FAR-502).
 
     ``build_graph_from_json`` bakes ``eval_definitions_by_node`` into the HITL
@@ -121,15 +122,23 @@ def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefinition]] | 
     the cache and force a recompile with the fresh definitions.
 
     Canonicalisation: per-node lists are sorted by eval id (DB result order is
-    not guaranteed) and serialised with sorted JSON keys. ``created_at`` is
-    excluded — the ``EvalDefinition`` DTO stamps ``datetime.now()`` on every
-    load, so including it would force a spurious recompile on every run.
+    not guaranteed) and serialised with sorted JSON keys.  UUIDs and Decimals
+    are serialised via ``json.dumps(default=str)``.
+
+    NOTE (FAR-1100 cutover): the prior Pydantic ``EvalDefinition`` path used
+    ``model_dump(mode="json")`` which converts Decimals to floats (e.g.
+    ``0.5``).  The new ``EvalDefDTO`` dataclass path uses
+    ``dataclasses.asdict`` + ``json.dumps(default=str)`` which converts
+    Decimals to strings (e.g. ``"0.5"``).  This means every existing eval
+    definition hash changes on deploy — a one-time compiled-graph cache miss
+    that is harmless (the graph is recompiled on the next run with the fresh
+    definitions).  Field names and sets are identical between the two paths.
     """
     if not eval_defs_by_node:
         return ""
     canonical: dict[str, list[dict[str, Any]]] = {
         node: sorted(
-            (d.model_dump(mode="json", exclude={"created_at"}) for d in defs),
+            (dataclasses.asdict(d) for d in defs),
             key=lambda d: json.dumps(d, sort_keys=True, default=str),
         )
         for node, defs in eval_defs_by_node.items()
@@ -140,7 +149,7 @@ def compute_eval_defs_hash(eval_defs_by_node: dict[str, list[EvalDefinition]] | 
 
 def struct_hash_with_eval_defs(
     struct_hash: str,
-    eval_defs_by_node: dict[str, list[EvalDefinition]] | None,
+    eval_defs_by_node: dict[str, list[EvalDefDTO]] | None,
 ) -> str:
     """Fold :func:`compute_eval_defs_hash` into a compile-cache struct hash.
 
@@ -858,7 +867,7 @@ def _add_hitl_gate_edge(
     target_ids: set[str],
     gate_node_ids: set[str],
     reject_targets_by_source: dict[str, str],
-    eval_definitions_by_node: dict[str, list[EvalDefinition]] | None,
+    eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None,
     session_factory: Callable[..., Any] | None,
     org_id: uuid.UUID | None,
     node_type_map: dict[str, str],
@@ -913,7 +922,7 @@ def _add_normal_edges(
     target_ids: set[str],
     gate_node_ids: set[str],
     reject_targets_by_source: dict[str, str],
-    eval_definitions_by_node: dict[str, list[EvalDefinition]] | None,
+    eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None,
     session_factory: Callable[..., Any] | None,
     org_id: uuid.UUID | None,
     node_type_map: dict[str, str],
@@ -944,7 +953,7 @@ def _add_normal_edges(
 def build_graph_from_json(
     graph_json: dict[str, Any],
     *,
-    eval_definitions_by_node: dict[str, list[EvalDefinition]] | None = None,
+    eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None = None,
     session_factory: Callable[..., Any] | None = None,
     org_id: uuid.UUID | None = None,
     pipeline_node_timeout_seconds: int = 300,

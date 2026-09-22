@@ -92,7 +92,7 @@ from modulo.core.cost_controller.breakdown.params import (
     coerce_reported_token,
     is_proven_zero_token_usage,
 )
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
+from modulo.core.eval_engine import EvalEngine, EvalResult, EvalType
 from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
@@ -106,7 +106,7 @@ from modulo.core.pipeline_engine.error_codes import (
     sanitize_error_text,
 )
 from modulo.core.pipeline_engine.errors import NodeMissingModelBackendError, RouterNoMatchError
-from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
+from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO, run_evals_persist_before_decide
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.hitl_context import serialize_value, slice_with_marker
 from modulo.core.pipeline_engine.idempotency import (
@@ -4047,7 +4047,7 @@ def _run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
 def _build_llm_judge_callable(
     hub: Any,
     backend_id_str: str,
-) -> Callable[[dict[str, Any], EvalDefinition], dict[str, Any]]:
+) -> Callable[[dict[str, Any], EvalDefDTO], dict[str, Any]]:
     """Build a synchronous LLM judge callable backed by a model backend.
 
     The ``LLMJudgeCallable`` protocol is synchronous, but ``make_hitl_gate_fn``
@@ -4059,7 +4059,7 @@ def _build_llm_judge_callable(
 
     def _judge(
         output: dict[str, Any],
-        eval_def: EvalDefinition,
+        eval_def: EvalDefDTO,
     ) -> dict[str, Any]:
         field = eval_def.config.get("field", "")
         content = output.get(field, "")
@@ -4474,7 +4474,7 @@ def _resolve_llm_judge_callable(eval_def: Any) -> Any:
 
 async def _run_gate_evals(
     state: dict[str, Any],
-    eval_definitions: Sequence[EvalDefinition] | None,
+    eval_definitions: Sequence[EvalDefDTO] | None,
     node_type_map: dict[str, str] | None,
     gate_id: str,
     session_factory: Any,
@@ -4491,11 +4491,11 @@ async def _run_gate_evals(
         return {}
     _run_id = state.get("_run_id")
 
-    def _resolve_eval_target_for_gate(eval_def: EvalDefinition) -> Any:
+    def _resolve_eval_target_for_gate(eval_def: EvalDefDTO) -> Any:
         """Per-eval target resolution (Defect 4 fix)."""
         return _resolve_gate_eval_target(state, eval_def.node_id, node_type_map)
 
-    def _on_gate_eval_result(eval_def: EvalDefinition, result: EvalResult) -> None:
+    def _on_gate_eval_result(eval_def: EvalDefDTO, result: EvalResult) -> None:
         """Per-eval structured log (Defect 3 fix — restores dropped log)."""
         _log.info(
             "hitl_gate.eval_result",
@@ -4620,7 +4620,7 @@ def _resolve_subject_parent_and_key(
 def make_hitl_gate_fn(
     hitl_gate_config: dict[str, Any],
     *,
-    eval_definitions: Sequence[EvalDefinition] | None = None,
+    eval_definitions: Sequence[EvalDefDTO] | None = None,
     session_factory: Callable[..., Any] | None = None,
     org_id: uuid.UUID | None = None,
     node_type_map: dict[str, str] | None = None,

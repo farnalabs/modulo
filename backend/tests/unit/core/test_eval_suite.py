@@ -142,11 +142,12 @@ class TestEvalSuiteBlockedError:
 
 
 class TestEvalResultCascadeConfig:
-    """DB-level cascade from eval_definitions to eval_results is configured (PRD 8.17).
+    """DB-level cascade from evals to eval_results is configured (PRD 8.17).
 
     eval_results.eval_id carries ``ondelete="CASCADE"`` so deleting an eval
-    definition removes its stored results. Verified against the SQLAlchemy FK
-    metadata (the behaviour is DB-enforced at the constraint level).
+    removes its stored results. Verified against the SQLAlchemy FK metadata
+    (the behaviour is DB-enforced at the constraint level). After the FAR-1100
+    read cutover the FK targets the ``evals`` table, not ``eval_definitions``.
     """
 
     def test_eval_result_fk_cascades_on_eval_delete(self) -> None:
@@ -154,7 +155,7 @@ class TestEvalResultCascadeConfig:
 
         fk = next(iter(EvalResult.__table__.c.eval_id.foreign_keys))
         assert fk.ondelete == "CASCADE"
-        assert fk.column.table.name == "eval_definitions"
+        assert fk.column.table.name == "evals"
 
 
 # ---------------------------------------------------------------------------
@@ -171,18 +172,25 @@ def _make_eval_row(
     pass_threshold: float | None = None,
     pipeline_id: uuid.UUID | None = None,
 ) -> MagicMock:
-    """A mock EvalDefinition ORM row with the attributes the executor reads."""
+    """A mock ``Eval`` ORM row with the attributes the executor reads."""
     row = MagicMock()
     row.id = eval_id or uuid4()
     row.node_id = node_id
     row.name = name
     row.eval_type = "regex"
     row.config_json = {"pattern": "x"}
-    row.failure_behaviour = "warn"
     row.pass_threshold = pass_threshold
     row.suite_id = suite_id
+    row.version = 1
     row.pipeline_id = pipeline_id or uuid4()
     return row
+
+
+def _make_policy_gate_row(*, action: str = "warn") -> MagicMock:
+    """A mock ``PolicyGate`` ORM row carrying the ``action`` the executor reads."""
+    gate = MagicMock()
+    gate.action = action
+    return gate
 
 
 class TestBuildEvalDefsByNode:
@@ -193,8 +201,8 @@ class TestBuildEvalDefsByNode:
 
         node_uuid = uuid4()
         rows = [
-            _make_eval_row(node_id=node_uuid, name="node-scoped"),
-            _make_eval_row(node_id=None, name="pipeline-level"),
+            (_make_eval_row(node_id=node_uuid, name="node-scoped"), _make_policy_gate_row()),
+            (_make_eval_row(node_id=None, name="pipeline-level"), None),
         ]
         org_id = uuid4()
         pipeline_id = uuid4()
@@ -217,7 +225,10 @@ class TestBuildEvalDefsByNode:
         from modulo.core.pipeline_engine.executor import PipelineExecutor
 
         node_uuid = uuid4()
-        rows = [_make_eval_row(node_id=node_uuid, name="e1"), _make_eval_row(node_id=node_uuid, name="e2")]
+        rows = [
+            (_make_eval_row(node_id=node_uuid, name="e1"), _make_policy_gate_row()),
+            (_make_eval_row(node_id=node_uuid, name="e2"), _make_policy_gate_row()),
+        ]
         by_node = PipelineExecutor._build_eval_defs_by_node(rows, uuid4(), uuid4())
         assert len(by_node[str(node_uuid)]) == 2
 
