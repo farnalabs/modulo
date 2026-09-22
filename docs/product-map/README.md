@@ -534,6 +534,25 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > the corresponding behaviour lines (`system/system-orgs.md`) and the manifest
 > registry entry is now `status: covered`.
 
+> **Closed this walk (2026-09-22):** closed `feat-core-runtime-provider-core`'s
+> "No BDD coverage for the platform-provider matrix" gap
+> (`core/runtime-provider-core.md`). Registered the new
+> `runtime_providers/provider_matrix.feature` into the executing BDD suite
+> (steps in the colocated
+> `features/runtime_providers/test_provider_matrix_steps.py`), driving the REAL
+> `build_hub` / `RuntimeProviderHub.resolve` / factory `initialise` seams
+> network-free and DB-free (real `LocalRuntimeProvider` / `DockerRuntimeProvider`
+> / `E2BRuntimeProvider(api_key=...)` constructors open no connections): the
+> env-gated registration matrix (local always; e2b / docker family gated on
+> their documented signals; an unrelated `MODULO_RUNNER_*` var never registers
+> Docker — FAR-996), the deterministic resolve matrix (hint-wins,
+> docker-family aliases share one provider, known-but-unregistered →
+> `ProviderNotConfiguredError` naming the remediation env var, unknown →
+> `UnknownProviderTypeError` naming the valid vocabulary, missing type →
+> unresolvable), and the config-driven `initialise` (docker-family aliases under
+> a config name, e2b skipped without an api_key, unknown config types rejected).
+> 13 scenarios execute in CI. `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
