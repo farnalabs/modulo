@@ -20,6 +20,7 @@ import re as _re
 from typing import Any
 
 import jinja2
+from jinja2.sandbox import SandboxedEnvironment as SandboxedEnvironment  # noqa: PLC0414 - explicit re-export
 
 _SANDBOX_MODES = frozenset({"llm", "script"})
 _SANDBOX_DEFAULT_MODE = "llm"
@@ -316,6 +317,20 @@ def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, d
     return mode, agent_command, {"agent_prompt": str(agent_prompt)}
 
 
+def sandbox_jinja_environment() -> SandboxedEnvironment:
+    """Return the canonical ``SandboxedEnvironment`` for sandbox_agent templates (FAR-226).
+
+    Single source of truth shared by the save-time validator
+    (:func:`validate_sandbox_agent_command_jinja`) and the node runner's E2B
+    dispatch path (``node_runner._sandbox_agent_impl``) so the save-time parse
+    and the run-time render use the same environment. Undefined variables are
+    LENIENT (the sandbox default ``Undefined``) — exactly the run-time
+    handling — so save-time validation checks only that a template can be
+    parsed, never that its variables resolve.
+    """
+    return SandboxedEnvironment()
+
+
 def validate_sandbox_agent_command_jinja(node_def: dict[str, Any]) -> str | None:
     """Validate that an llm-mode sandbox_agent's ``agent_commands`` list is Jinja-renderable.
 
@@ -326,12 +341,14 @@ def validate_sandbox_agent_command_jinja(node_def: dict[str, Any]) -> str | None
     (``TemplateSyntaxError``), otherwise ``None``. Only llm mode is checked —
     script mode runs ``script_command`` VERBATIM with no Jinja render.
 
-    Uses the same ``SandboxedEnvironment`` as node_runner so save-time and
-    run-time rendering agree. Undefined variables are lenient (render to empty
-    under the sandbox's default ``Undefined``), so missing ``{{ input.* }}``
-    references are NOT flagged here — only genuinely broken template syntax,
-    which the runtime would otherwise only discover (and fall back verbatim on)
-    at run time.
+    Renders through :func:`sandbox_jinja_environment` — the SAME
+    ``SandboxedEnvironment`` helper the node runner's E2B sandbox dispatch
+    path (``_sandbox_agent_impl``) uses — so save-time and run-time rendering
+    agree. Undefined variables are lenient
+    (render to empty under the sandbox's default ``Undefined``), so missing
+    ``{{ input.* }}`` references are NOT flagged here — only genuinely broken
+    template syntax, which the runtime would otherwise only discover (and fall
+    back verbatim on) at run time.
     """
     node_id = node_def.get("id")
     if node_def.get("mode", _SANDBOX_DEFAULT_MODE) != _SANDBOX_DEFAULT_MODE:
@@ -340,10 +357,9 @@ def validate_sandbox_agent_command_jinja(node_def: dict[str, Any]) -> str | None
     if not agent_commands:
         return None
     command = node_def.get("commands_concatenation_string", " && ").join(str(c) for c in agent_commands)
-    from jinja2.sandbox import SandboxedEnvironment
-
+    env = sandbox_jinja_environment()
     try:
-        SandboxedEnvironment().from_string(str(command))
+        env.from_string(str(command))
     except jinja2.TemplateSyntaxError as exc:
         return f"sandbox_agent node '{node_id}' agent_commands is not valid Jinja2: {exc}"
     return None
