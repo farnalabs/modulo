@@ -2,7 +2,7 @@ Feature: Runtime provider platform matrix (ADR 003 / ADR 029)
   As a platform engineer
   I want runtime providers to register, resolve and factory-load deterministically
   So that an environment profile always dispatches to exactly the configured
-  backend backend with no guessing and actionable remediation when it cannot
+  backend with no guessing and actionable remediation when it cannot
 
   Background:
     Given the runtime provider environment is clean
