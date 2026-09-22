@@ -2827,6 +2827,21 @@ elements:
       - testid: onboarding-wizard-skip-to-end
         type: button
         dynamic_testid: false
+      - testid: onboarding-wizard-telemetry-enable
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-wizard-telemetry-skip
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-wizard-telemetry-forbidden
+        type: element
+        dynamic_testid: false
+      - testid: onboarding-wizard-telemetry-status
+        type: element
+        dynamic_testid: false
+      - testid: onboarding-wizard-telemetry-saved
+        type: element
+        dynamic_testid: false
     /pipelines:
       - testid: pipeline-list-move-error
         type: element

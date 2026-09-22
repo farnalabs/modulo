@@ -1828,7 +1828,7 @@ async def test_update_reconcile_telemetry_records_stall_reasons():
     }
     record = MagicMock()
     with (
-        patch.object(ch, "get_settings", return_value=_settings(modulo_telemetry_enabled=True)),
+        patch.object(ch, "is_telemetry_enabled", return_value=True),
         patch.object(ch, "_open_system_factory", return_value=MagicMock()),
         patch("modulo.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock),
         patch("modulo.core.error_tracking.metrics.sample_error_group_metrics", new_callable=AsyncMock),
@@ -1842,7 +1842,7 @@ async def test_update_reconcile_telemetry_records_stall_reasons():
 async def test_update_reconcile_telemetry_disabled_returns_early():
     record = MagicMock()
     with (
-        patch.object(ch, "get_settings", return_value=_settings(modulo_telemetry_enabled=False)),
+        patch.object(ch, "is_telemetry_enabled", return_value=False),
         patch("modulo.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock) as sample_runs,
         patch("modulo.core.error_tracking.metrics.record_stall_reason", record),
     ):
@@ -1866,7 +1866,7 @@ async def test_update_reconcile_telemetry_reraises_cancellation():
         "dispatch_failed_terminalized": 0,
     }
     with (
-        patch.object(ch, "get_settings", return_value=_settings(modulo_telemetry_enabled=True)),
+        patch.object(ch, "is_telemetry_enabled", return_value=True),
         patch.object(ch, "_open_system_factory", return_value=MagicMock()),
         patch(
             "modulo.core.error_tracking.metrics.sample_run_runtime_metrics",
@@ -1886,7 +1886,7 @@ async def test_update_reconcile_telemetry_swallows_failure(caplog):
         "dispatch_failed_terminalized": 0,
     }
     with (
-        patch.object(ch, "get_settings", return_value=_settings(modulo_telemetry_enabled=True)),
+        patch.object(ch, "is_telemetry_enabled", return_value=True),
         patch(
             "modulo.core.error_tracking.metrics.sample_run_runtime_metrics",
             new_callable=AsyncMock,
