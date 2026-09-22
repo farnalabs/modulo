@@ -194,6 +194,10 @@ Everything else — hardening, labels, reconciler scoping — behaves
 identically; the reconciler's machine-identity label isolates multiple
 deployments sharing one engine.
 
+For the full rented-VM walkthrough (T2b) — including the engine-dependent
+bridge-isolation verification step and its deferred-validation status — see
+`docs/operations/bundled-runner-rented-compute.md`.
+
 **FAR-1038: TLS is required for remote TCP endpoints.** A remote engine
 endpoint without TLS is rejected at provider registration with an actionable
 error. **Loopback** TCP endpoints (`tcp://localhost:2375`,

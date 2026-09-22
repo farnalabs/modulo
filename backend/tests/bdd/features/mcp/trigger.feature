@@ -1,52 +1,47 @@
-Feature: MCP Trigger Pipeline Run
+Feature: MCP triggers a pipeline run
   As an MCP client (e.g. Claude Desktop)
   I want to trigger a pipeline run via the MCP protocol
   So that AI assistants can start workflows directly
 
+  The MCP server speaks JSON-RPC over the StreamableHTTP transport at POST /mcp —
+  the legacy /mcp/tools/call HTTP surface no longer exists. These scenarios call
+  the REAL trigger_pipeline / review_hitl tool handler functions directly with the
+  request ContextVars hydrated by hand, exercising the REAL `_check_agent_tool_scope`
+  scope-gate chokepoint and the REAL McpAuthMiddleware gate, network-free and
+  DB-free, with only the auth re-validation and DB/dispatch seams mocked. The
+  FastMCP invoke/dispatch layer itself is not exercised here.
+
   Background:
     Given an MCP server is running at /mcp
-    And I have a valid MCP API key
 
-  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
-  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
-  @awaiting-implementation
   Scenario: MCP client triggers a run
     Given org "acme" has pipeline "my-pipeline"
-    When the MCP client sends a tools/call request for "trigger" with pipeline "my-pipeline"
-    Then the response status is 200
-    And the response contains run_id
-    And a run is created with status "pending"
+    And an MCP API key with role "runner"
+    When the MCP client calls "trigger_pipeline" for the pipeline
+    Then the response contains run_id
+    And the tool reports run status "pending"
 
-  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
-  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
-  @awaiting-implementation
   Scenario: MCP trigger with run_context
     Given org "acme" has pipeline "my-pipeline"
-    When the MCP client sends a tools/call request for "trigger" with run_context {"branch": "main"}
-    Then the run has run_context with branch "main"
+    And an MCP API key with role "runner"
+    When the MCP client calls "trigger_pipeline" with input_payload {"branch": "main"}
+    Then the run is created with input_payload carrying branch "main"
 
-  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
-  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
-  @awaiting-implementation
   Scenario: MCP trigger without auth is rejected
-    When the MCP client sends a tools/call request for "trigger" without API key
-    Then the response status is 401
+    When an unauthenticated request reaches the MCP server
+    Then the MCP auth gate rejects the request with status code 401
 
-  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
-  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
-  @awaiting-implementation
   Scenario: MCP trigger for non-existent pipeline returns error
-    When the MCP client sends a tools/call request for "trigger" with pipeline "ghost"
-    Then the response contains isError true
-    And the error message mentions "not found"
+    Given an MCP API key with role "runner"
+    When the MCP client calls "trigger_pipeline" for an unknown pipeline
+    Then the response carries an error
+    And the tool returns error "pipeline_not_found"
 
-  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
-  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
-  @awaiting-implementation
   Scenario: MCP trigger respects scope limits
-    Given the MCP API key has scope "trigger:run" only
-    When the MCP client sends a tools/call request for "trigger"
-    Then the request is allowed
-    When the MCP client sends a tools/call request for "review_hitl"
-    Then the response contains isError true
-    And the error mentions "forbidden"
+    Given org "acme" has pipeline "my-pipeline"
+    And an MCP API key with role "runner"
+    When the MCP client calls "trigger_pipeline" for the pipeline
+    Then the response contains run_id
+    When the MCP client calls "review_hitl" with action "approve"
+    Then the response carries an error
+    And the tool returns error "insufficient_scope"

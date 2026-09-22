@@ -36,6 +36,7 @@ from modulo.connectors.base import (
     CompensationResult,
 )
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 
@@ -118,6 +119,8 @@ async def _append_attempt_audit(
     raw payloads.
     """
     payload = {
+        "actor": SYSTEM_ACTOR,
+        "summary": f'Compensation {outcome.value} for node "{node_id}" ({resource})',
         "node_id": node_id,
         "resource": resource,
         "outcome": outcome.value,
@@ -140,6 +143,8 @@ async def _append_attempt_audit(
                 resource_type="run",
                 resource_id=run_id,
                 payload_json={
+                    "actor": SYSTEM_ACTOR,
+                    "summary": f'Compensation failed for node "{node_id}" ({resource})',
                     "node_id": node_id,
                     "resource": resource,
                     "reason": (detail or "")[:_SUMMARY_REASON_CAP],
@@ -168,6 +173,11 @@ async def _append_summary_audit(
             resource_type="run",
             resource_id=run_id,
             payload_json={
+                "actor": SYSTEM_ACTOR,
+                "summary": (
+                    f"Compensation summary written for run {short_id(run_id) or 'unknown'}: "
+                    f'{len(executed)} executed node(s), blocking eval "{blocking_eval_name}"'
+                ),
                 "blocking_eval_name": blocking_eval_name or None,
                 "executed_node_count": len(executed),
             },

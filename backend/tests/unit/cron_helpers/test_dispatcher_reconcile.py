@@ -82,16 +82,22 @@ class _MockSession:
         if "set_config" in s:
             return MagicMock()
         if "UPDATE runs SET" in s:
-            # Dedicated org-scoped terminalizer UPDATEs (B4/B5/FAR-648) — zero
-            # rows matched by default; individual tests configure
-            # terminalizer_rows.
+            # Dedicated org-scoped terminalizer UPDATEs (B4/B5/FAR-648/
+            # FAR-721) — zero rows matched by default; individual tests
+            # configure terminalizer_rows.
             ids = self.terminalizer_rows.get("executor_superseded", [])
             if "claim_cap_exhausted" in s:
                 ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
-            if "hitl_claims" in s:
-                # FAR-648 expired-HITL-gate terminalizer — the only
-                # UPDATE-runs statement referencing hitl_claims (its error
-                # code is a bound param, so it cannot be keyed by code).
+            elif "created_at < now()" in s:
+                # FAR-721 zero-claim-awaiting_human terminalizer — keyed by
+                # its age-bound predicate since it references hitl_claims in
+                # its NOT EXISTS guard (like the FAR-648 sweep) and its error
+                # code is a bound param.
+                ids = self.terminalizer_rows.get("hitl_gate_missing", [])
+            elif "hitl_claims" in s:
+                # FAR-648 expired-HITL-gate terminalizer — the EXISTS-gated
+                # UPDATE-runs statement (error code is a bound param, so it
+                # cannot be keyed by code).
                 ids = self.terminalizer_rows.get("hitl_gate_expired", [])
             r = MagicMock()
             r.all.return_value = [(uid,) for uid in ids]
@@ -213,15 +219,18 @@ async def _run_reconcile(
     awaiting_committed: bool = True,
     terminalizer_ids: dict[str, list[uuid.UUID]] | None = None,
     terminalizer: AsyncMock | None = None,
+    terminalizer_missing: AsyncMock | None = None,
     settings_overrides: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Any, Any, Any, Any, _MockSession]:
     """Drive one ``dispatcher_reconcile`` tick against a fully mocked env.
 
     ``terminalizer`` optionally patches ``_terminalize_expired_hitl_gates``
-    (FAR-648 wiring tests) — the caller keeps its own reference and asserts on
-    it directly; ``settings_overrides`` feeds ``_settings`` so a test can
-    prove a settings-derived value (e.g. the gate-expiry grace) reaches the
-    reconciled code unchanged. Both default to the historical behaviour.
+    (FAR-648 wiring tests) and ``terminalizer_missing`` optionally patches
+    ``_terminalize_hitl_gate_missing`` (FAR-721 wiring tests) — the caller
+    keeps its own reference and asserts on it directly; ``settings_overrides``
+    feeds ``_settings`` so a test can prove a settings-derived value (e.g. the
+    gate-expiry grace) reaches the reconciled code unchanged. Both default to
+    the historical behaviour.
     """
     _patch_env(monkeypatch)
     session = _MockSession([_org_result([ORG]), _rows_result(rows)])
@@ -240,6 +249,8 @@ async def _run_reconcile(
         stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
         if terminalizer is not None:
             stack.enter_context(patch.object(ch, "_terminalize_expired_hitl_gates", terminalizer))
+        if terminalizer_missing is not None:
+            stack.enter_context(patch.object(ch, "_terminalize_hitl_gate_missing", terminalizer_missing))
         reenqueue = stack.enter_context(
             patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result)
         )
@@ -268,6 +279,8 @@ async def _run_reconcile(
     session.record_facts = record_facts
     if terminalizer is not None:
         session.terminalizer = terminalizer
+    if terminalizer_missing is not None:
+        session.terminalizer_missing = terminalizer_missing
     return summary, reenqueue, ingest, redis_client, awaiting_guard, session
 
 
@@ -2623,6 +2636,159 @@ class TestHitlGateExpiryTerminalizerWiring:
         )
 
         assert terminalizer.await_args.kwargs["grace_seconds"] == 180
+
+
+class TestTerminalizeHitlGateMissing:
+    """FAR-721: the zero-claim-``awaiting_human`` terminalizer's SQL contract.
+
+    The complement sweep is a SINGLE guarded UPDATE (the same TOCTOU-safe
+    idiom as the FAR-648 sweep) whose orphan predicate is a ``NOT EXISTS`` over
+    ANY ``hitl_claims`` row, so a run with a live claim is never collected.
+    These tests pin the predicate shape; the behavioral matrix (orphan older
+    than grace collected; live-claim / in-grace orphan spared) runs against
+    real Postgres in tests/integration/test_org_sandbox_capacity.py."""
+
+    async def _run(self, terminalized: list[uuid.UUID] | None = None) -> tuple[list[uuid.UUID], _MockSession]:
+        session = _MockSession([])
+        if terminalized is not None:
+            session.terminalizer_rows["hitl_gate_missing"] = terminalized
+        returned = await ch._terminalize_hitl_gate_missing(session, ORG, grace_seconds=3600)
+        return returned, session
+
+    @pytest.mark.asyncio
+    async def test_writes_cancelled_with_hitl_gate_missing_code_and_detail(self) -> None:
+        """P7' contract: the terminalizer writes status='cancelled' with the
+        new ``hitl_gate_missing`` code and its synthetic error_detail — distinct
+        from the FAR-648 ``hitl_gate_expired`` code."""
+        _returned, session = await self._run()
+        stmt, params = session.executed[-1]
+        sql = str(stmt)
+        assert "status='cancelled'" in sql
+        assert params["code"] == ch._HITL_GATE_MISSING_ERROR_CODE
+        assert ch._HITL_GATE_MISSING_ERROR_CODE == "hitl_gate_missing"
+        assert ch._HITL_GATE_MISSING_ERROR_CODE != ch._HITL_GATE_EXPIRED_ERROR_CODE
+        assert params["detail"] == ch._HITL_GATE_MISSING_ERROR_DETAIL
+
+    @pytest.mark.asyncio
+    async def test_source_status_bound_to_awaiting_human_constant(self) -> None:
+        """qa F15: the ``awaiting_human`` status literal is a bound param named
+        from the shared model constant — never a raw SQL literal."""
+        _returned, session = await self._run()
+        stmt, params = session.executed[-1]
+        assert "status=:awaiting_status" in str(stmt)
+        assert params["awaiting_status"] == ch.AWAITING_HUMAN_STATUS
+        assert ch.AWAITING_HUMAN_STATUS == "awaiting_human"
+
+    @pytest.mark.asyncio
+    async def test_grace_window_ages_on_created_at(self) -> None:
+        """The grace anchor is ``created_at``: ``runs.updated_at`` is an
+        insert-time default no status transition bumps in this codebase (see
+        the sweep's docstring), so it cannot age an awaiting_human run."""
+        _returned, session = await self._run()
+        stmt, params = session.executed[-1]
+        sql = str(stmt)
+        assert "created_at < now() - (:grace_seconds * interval '1 second')" in sql
+        assert params["grace_seconds"] == 3600
+
+    @pytest.mark.asyncio
+    async def test_zero_claim_predicate_is_a_not_exists_over_any_claim(self) -> None:
+        """The orphan predicate excludes ANY claim row — claimed or not,
+        decided or not, expired or in grace — so a run with a live or historical
+        HITL claim can never be over-collected."""
+        _returned, session = await self._run()
+        sql = str(session.executed[-1][0])
+        assert "NOT EXISTS" in sql
+        assert "SELECT 1 FROM hitl_claims hc" in sql
+        assert "hc.organisation_id = runs.organisation_id" in sql
+        assert "hc.run_id = runs.id" in sql
+
+    @pytest.mark.asyncio
+    async def test_predicate_keeps_cancel_wins_precedence(self) -> None:
+        """A cancellation-requested run is owned by the cancel path — the
+        terminalizer must never write ``cancelled`` over it."""
+        _returned, session = await self._run()
+        assert "cancellation_requested=false" in str(session.executed[-1][0])
+
+    @pytest.mark.asyncio
+    async def test_returns_terminalized_ids_and_warns_per_run(self, caplog: pytest.LogCaptureFixture) -> None:
+        orphaned = [uuid.uuid4(), uuid.uuid4()]
+        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+            returned, _session = await self._run(orphaned)
+        assert returned == orphaned
+        zombie_warns = [r for r in caplog.records if "zero-claim awaiting_human zombie terminalized" in r.message]
+        assert len(zombie_warns) == len(orphaned)
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_empty(self) -> None:
+        returned, _session = await self._run()
+        assert not returned
+
+
+class TestHitlGateMissingTerminalizerWiring:
+    """FAR-721 wiring: the reconcile tick must invoke the zero-claim
+    terminalizer with the settings grace and fold its results into the summary
+    stats key + the post-commit compensating daily fact (P6', FAR-162)."""
+
+    def test_stats_key_declared_in_both_vocabularies(self) -> None:
+        assert "hitl_gate_missing_terminalized" in ch._dispatcher_reconcile_stats
+        assert "hitl_gate_missing_terminalized" in ch._dispatcher_summary()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_invokes_terminalizer_with_settings_grace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        orphaned_run = uuid.uuid4()
+        terminalizer = AsyncMock(return_value=[orphaned_run])
+        summary, _reenqueue, _ingest, _redis, _awaiting, session = await _run_reconcile(
+            monkeypatch, [], terminalizer_missing=terminalizer
+        )
+
+        terminalizer.assert_awaited_once()
+        assert terminalizer.await_args.kwargs["grace_seconds"] == 3600
+        assert summary["hitl_gate_missing_terminalized"] == 1
+        session.record_facts.assert_awaited_once_with(orphaned_run, ORG)
+
+    @pytest.mark.asyncio
+    async def test_grace_is_settings_derived_not_hardcoded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The knob is read from settings every tick — an operator override
+        reaches the terminalizer unchanged."""
+        terminalizer = AsyncMock(return_value=[])
+        await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_missing=terminalizer,
+            settings_overrides={"hitl_gate_cancel_grace_seconds": 180},
+        )
+
+        assert terminalizer.await_args.kwargs["grace_seconds"] == 180
+
+    @pytest.mark.asyncio
+    async def test_terminalize_capped_counter_fires_at_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A zero-claim sweep returning exactly ``terminalize_max`` rows signals
+        a saturated batch — the tick raises ``terminalize_capped`` so the
+        overflow backlog is observable, mirroring the sibling terminalizers."""
+        terminalizer = AsyncMock(return_value=[uuid.uuid4(), uuid.uuid4()])
+        summary, _reenqueue, _ingest, _redis, _awaiting, _session = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_missing=terminalizer,
+            settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 2},
+        )
+
+        assert summary["hitl_gate_missing_terminalized"] == 2
+        assert summary["terminalize_capped"] == 1
+
+    @pytest.mark.asyncio
+    async def test_terminalize_capped_counter_silent_under_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A zero-claim sweep below the cap must not raise the overflow signal."""
+        terminalizer = AsyncMock(return_value=[uuid.uuid4()])
+        summary, _reenqueue, _ingest, _redis, _awaiting, _session = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_missing=terminalizer,
+            settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 25},
+        )
+
+        assert summary["hitl_gate_missing_terminalized"] == 1
+        assert summary["terminalize_capped"] == 0
 
 
 class TestRecordFactForTerminalizedRun:
