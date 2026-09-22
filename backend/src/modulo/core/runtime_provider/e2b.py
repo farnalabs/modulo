@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import shlex
 import time
 from typing import Any
 
+from modulo.core.runtime_config.key_bridge import get_e2b_api_key
 from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
 
 _log = logging.getLogger(__name__)
@@ -28,7 +28,9 @@ class E2BRuntimeProvider(RuntimeProvider):
 
     The E2B API key is resolved in this order:
     1. ``api_key`` argument passed to the constructor
-    2. ``MODULO_E2B_API_KEY`` environment variable
+    2. runtime override / ``MODULO_E2B_API_KEY`` env var
+       (``key_bridge.get_e2b_api_key`` — the same bridge the provider-
+       registration gate and node-runner enforcement check use, FAR-1159)
 
     To store per-organisation keys securely, use ``FernetSecretsBackend`` at
     the service layer and pass the resolved key to the constructor.
@@ -37,7 +39,7 @@ class E2BRuntimeProvider(RuntimeProvider):
     provider_id = "e2b"
 
     def __init__(self, api_key: str | None = None) -> None:
-        self._api_key = api_key or os.environ.get("MODULO_E2B_API_KEY")
+        self._api_key = api_key or get_e2b_api_key()
         if not self._api_key:
             raise ValueError("E2B API key is required. Pass api_key= or set MODULO_E2B_API_KEY.")
         self._sandboxes: dict[str, Any] = {}

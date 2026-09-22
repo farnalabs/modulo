@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.models.mcp_setup_token import McpSetupToken
 from modulo.settings import get_settings
 from modulo.util.one_time_token import generate_token, hash_token
@@ -60,7 +61,7 @@ async def create_handoff(
     _log.info("Created handoff: type=%s resource_id=%s org=%s", resource_type, resource_id, org_id)
 
     settings = get_settings()
-    base_url = settings.modulo_public_url.rstrip("/")
+    base_url = get_public_url(settings).rstrip("/")
     setup_url = f"{base_url}/setup/{resource_type}/{resource_id}#token={raw_token}"
 
     return {

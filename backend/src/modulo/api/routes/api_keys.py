@@ -32,6 +32,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.feature_flags import get_registry, resolve_plan_context
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.models.account import Account
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -702,7 +703,7 @@ async def mcp_config_endpoint(
 ) -> McpConfigResponse:
     """Return the MCP server URL and config snippet for Claude Desktop / Cursor."""
     try:
-        mcp_url = f"{settings.modulo_public_url}/mcp"
+        mcp_url = f"{get_public_url(settings)}/mcp"
         snippet = {
             "mcpServers": {
                 "modulo": {

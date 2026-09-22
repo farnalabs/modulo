@@ -148,6 +148,7 @@ from modulo.core.mcp.scope_validator import (
 )
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.trigger_streak import (
     anchor_trigger_streak_epoch,
     clear_trigger_streak_after_reenable,
@@ -8980,7 +8981,8 @@ def _oauth_authorize_param_errors(params: Mapping[str, str]) -> JSONResponse | N
 
 def _oauth_authorize_settings_error(settings: Any) -> JSONResponse | None:
     """Return an error response when the public URL is unconfigured."""
-    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
+    public_url = get_public_url(settings)
+    if not public_url or public_url == "http://localhost:8000":
         return JSONResponse(
             {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
             status_code=500,
@@ -9270,7 +9272,8 @@ async def _oauth_token_impl(request: Request) -> JSONResponse:
         return cred_err
 
     settings = get_settings()
-    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
+    public_url = get_public_url(settings)
+    if not public_url or public_url == "http://localhost:8000":
         return JSONResponse(
             {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
             status_code=500,

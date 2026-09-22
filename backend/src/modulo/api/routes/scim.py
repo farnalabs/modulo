@@ -28,6 +28,7 @@ from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.admin import _raise_bg_pgcode
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal, require_scim_feature
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.crud.last_admin_guard import (
     LastAdminLockoutError,
     LastAdminLockoutUnavailableError,
@@ -194,7 +195,7 @@ def _group_to_scim(group: Team, members: list[dict[str, str]], base_url: str) ->
 
 
 def _get_base_url(settings: Settings) -> str:
-    url = settings.modulo_public_url
+    url = get_public_url(settings)
     if not url:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

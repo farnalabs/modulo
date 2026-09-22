@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -212,3 +213,97 @@ class TestConsumerWiring:
             assert exc.value.status_code == 501
         finally:
             store.clear_override("MODULO_SCIM_TOKEN")
+
+    def _boot_settings(self, **extra: object) -> Any:
+        from modulo.settings import Settings
+
+        values: dict[str, Any] = {
+            "database_url": "postgresql+asyncpg://localhost/test",
+            "secret_key": "a" * 32,
+            "fernet_key": "a" * 32,
+        }
+        values.update(extra)
+        return Settings(**values)
+
+    def test_public_url_override_wins_in_frontend_url_resolver(self) -> None:
+        """FAR-1159 prove-the-fix: a runtime MODULO_PUBLIC_URL override reaches
+        the frontend-URL resolver; clearing it reverts to the boot Settings."""
+        from modulo.api.frontend_url import resolve_frontend_url
+        from modulo.core.runtime_config.store import get_runtime_config_store
+
+        settings = self._boot_settings(modulo_public_url="https://boot.example.com")
+        store = get_runtime_config_store()
+        store.set_override("MODULO_PUBLIC_URL", "https://hot.example.com")
+        try:
+            # Fails without the bridge: the resolver would read Settings only.
+            assert resolve_frontend_url(settings) == "https://hot.example.com"
+        finally:
+            store.clear_override("MODULO_PUBLIC_URL")
+        assert resolve_frontend_url(settings) == "https://boot.example.com"
+
+    def test_public_url_override_wins_in_hitl_run_link(self) -> None:
+        """FAR-1159 prove-the-fix: the HITL email run link honours the override."""
+        import uuid
+
+        from modulo.core.hitl_email_alerts import _run_link
+        from modulo.core.runtime_config.store import get_runtime_config_store
+
+        settings = self._boot_settings(modulo_public_url="https://boot.example.com")
+        run_id = uuid.uuid4()
+        store = get_runtime_config_store()
+        store.set_override("MODULO_PUBLIC_URL", "https://hot.example.com")
+        try:
+            # Fails without the bridge: the link would be built from Settings only.
+            assert _run_link(settings, run_id) == f"https://hot.example.com/runs/{run_id}"
+        finally:
+            store.clear_override("MODULO_PUBLIC_URL")
+        assert _run_link(settings, run_id) == f"https://boot.example.com/runs/{run_id}"
+
+    def test_e2b_registration_gate_reads_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1159 prove-the-fix: the build_hub registration gate resolves
+        MODULO_E2B_API_KEY via the bridge — an override registers E2B with no
+        env var, and clearing it fails closed (provider not registered)."""
+        from modulo.core.runtime_config.store import get_runtime_config_store
+        from modulo.core.runtime_provider import build_hub
+        from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+
+        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("DOCKER_HOST", raising=False)
+        store = get_runtime_config_store()
+        store.set_override("MODULO_E2B_API_KEY", "hot-key")
+        try:
+            # Fails without the bridge: the gate reads os.environ directly.
+            hub = build_hub()
+            provider = hub.get("e2b")
+            assert isinstance(provider, E2BRuntimeProvider)
+            assert provider._api_key == "hot-key"
+        finally:
+            store.clear_override("MODULO_E2B_API_KEY")
+        # Fail-closed after clear: no override, no env -> E2B not registered.
+        assert build_hub().get("e2b") is None
+
+    def test_e2b_constructor_reads_override_and_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1159: the E2B provider constructor resolves the override and
+        still refuses (typed ValueError) when no key exists at all."""
+        from modulo.core.runtime_config.store import get_runtime_config_store
+        from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+
+        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+        store = get_runtime_config_store()
+
+        # Fail-closed: neither override nor env -> typed refusal.
+        with pytest.raises(ValueError, match="E2B API key is required"):
+            E2BRuntimeProvider()
+
+        store.set_override("MODULO_E2B_API_KEY", "hot-key")
+        try:
+            # Fails without the bridge: the constructor reads os.environ only.
+            provider = E2BRuntimeProvider()
+            assert provider._api_key == "hot-key"
+        finally:
+            store.clear_override("MODULO_E2B_API_KEY")
+
+        # Fail-closed again once the override is cleared.
+        with pytest.raises(ValueError, match="E2B API key is required"):
+            E2BRuntimeProvider()

@@ -154,7 +154,9 @@ async def resolve_hitl_email_recipients(
 
 def _run_link(settings: Settings, run_id: uuid.UUID) -> str:
     """Deep link to the run awaiting review (settings base URL + /runs/<id>)."""
-    return f"{settings.modulo_public_url.rstrip('/')}/runs/{run_id}"
+    from modulo.core.runtime_config.key_bridge import get_public_url
+
+    return f"{get_public_url(settings).rstrip('/')}/runs/{run_id}"
 
 
 def _build_email(
