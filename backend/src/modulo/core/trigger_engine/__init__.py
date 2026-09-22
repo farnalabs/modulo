@@ -429,8 +429,14 @@ class _RateLimitState:
 # with ``_RECOGNISED_TRIGGER_CONFIG_KEYS`` in
 # ``modulo.api.routes.triggers`` (the write-time gate) — the sets MUST
 # match; a key added to one and not the other is a bug.
+#
+# The set is the union of every ``config.get(...)`` read site across the
+# trigger engine and its fire paths (``cron_helpers``, ``agent_signal``,
+# ``slack_app_mention``); see the mirrored definition in
+# ``modulo.api.routes.triggers`` for the per-surface grouping.
 _RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
     {
+        # Webhook / HMAC / event filtering
         "hmac_secret",
         "signing_secret",
         "ci_failure_coalesce_window_seconds",
@@ -439,6 +445,29 @@ _RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
         "event_filters",
         "rate_limit",
         "work_item_ref_paths",
+        # Rate-limit keying (TriggerEngine._compute_rate_limit_key)
+        "key_fields",
+        "match_mode",
+        # Cron / ongoing schedule + run input
+        "input_template",
+        "snapshot_id",
+        "scan_interval_seconds",
+        # Polling configuration
+        "poll_interval_seconds",
+        "poll_query",
+        "condition_expression",
+        "connector_instance_id",
+        # Agent-signal source matching
+        "source_pipeline_id",
+        "source_node_id",
+        # Suite-run execution context
+        "dataset_id",
+        "model_backend_id",
+        "scenario_inputs",
+        "cost_per_llm_case",
+        "suite_ceiling",
+        "entity_thresholds",
+        "eval_definition_version",
     }
 )
 
