@@ -128,13 +128,15 @@ async function advanceToStep5() {
   return wrapper
 }
 
-// Drives the wizard to step 6 (Done) by creating the pipeline.
+// Drives the wizard to step 7 (Done) by creating the pipeline and skipping telemetry.
 async function advanceToDone() {
   const wrapper = await advanceToStep5()
   await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
   await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
   await nextTick()
-  await clickNext(wrapper) // Finish
+  await clickNext(wrapper) // -> step 6 (telemetry)
+  // Telemetry step: click skip-to-end or next to advance to Done
+  await clickNext(wrapper) // -> step 7 (Done)
   return wrapper
 }
 
@@ -411,10 +413,10 @@ describe('OnboardingWizard — create pipeline (step 5)', () => {
       default_autonomy_level: 'balanced',
     })
 
-    // Finish (Next) becomes available after creation.
+    // Next becomes available after creation (telemetry step follows).
     const nextBtn = wrapper.find('[data-testid="onboarding-wizard-next"]')
     expect(nextBtn.attributes('disabled')).toBeUndefined()
-    expect(nextBtn.text()).toContain('Finish')
+    expect(nextBtn.text()).toContain('Next')
   })
 
   it('the pipeline creation failure surfaces the error detail (FAR-608 fix)', async () => {
@@ -505,5 +507,77 @@ describe('OnboardingWizard — done (step 6)', () => {
     await nextTick()
     expect(wrapper.text()).toContain('Failed to start pipeline')
     expect(wrapper.text()).toContain('runner unavailable')
+  })
+})
+
+describe('OnboardingWizard — telemetry step (FAR-1131)', () => {
+  it('shows telemetry step after Wire Pipeline', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    expect(wrapper.text()).toContain('Help Improve Modulo')
+    expect(wrapper.text()).toContain('Enable Telemetry')
+    expect(wrapper.text()).toContain('Skip for Now')
+  })
+
+  it('loads telemetry status when reaching the telemetry step', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await nextTick()
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/admin/telemetry')
+  })
+
+  it('enable button calls PUT with enabled=true', async () => {
+    ;(api.PUT as Mock).mockResolvedValue({ data: { enabled: true }, error: undefined })
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await nextTick()
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(api.PUT).toHaveBeenCalledWith('/api/v1/admin/telemetry', { body: { enabled: true } })
+  })
+
+  it('skip button advances to Done without calling PUT', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await nextTick()
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-skip"]').trigger('click')
+    await nextTick()
+    expect(api.PUT).not.toHaveBeenCalled()
+    // Should now be on Done step
+    expect(wrapper.text()).toContain("You're all set!")
+  })
+
+  it('telemetry step shows what-is-collected items', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await nextTick()
+    expect(wrapper.text()).toContain('pipeline run counts')
+    expect(wrapper.text()).toContain('Error category')
+    expect(wrapper.text()).toContain('features are used')
+  })
+
+  it('telemetry step shows can-change-later notice', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await nextTick()
+    expect(wrapper.text()).toContain('change this anytime')
   })
 })

@@ -28,6 +28,7 @@ from modulo.core.runtime_config.store import (
     RuntimeConfigStore,
     get_runtime_config_store,
 )
+from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 
 __all__ = [
     "DEFAULT_VALUES",
@@ -40,6 +41,7 @@ __all__ = [
     "clear_org_flag_cache",
     "get_runtime_config_store",
     "is_org_flag_enabled",
+    "is_telemetry_enabled",
     "read_org_flag",
     "set_org_flag",
 ]

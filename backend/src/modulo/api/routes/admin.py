@@ -4288,3 +4288,57 @@ async def admin_overdue_hitl_claims(
         ) from None
 
     return OverdueClaimsResponse(claims=[OverdueClaimItem(**c) for c in claims])
+
+
+# ---------------------------------------------------------------------------
+# Telemetry opt-in / opt-out (FAR-1131)
+# ---------------------------------------------------------------------------
+
+
+class TelemetryToggleRequest(BaseModel):
+    enabled: StrictBool
+
+
+class TelemetryStatusResponse(BaseModel):
+    enabled: bool
+
+
+@router.get("/telemetry", response_model=TelemetryStatusResponse)
+@handle_db_errors("admin.get_telemetry_status")
+async def get_telemetry_status(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+) -> TelemetryStatusResponse:
+    """Return the current telemetry opt-in status."""
+    if current_user.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+        )
+    from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
+
+    return TelemetryStatusResponse(enabled=is_telemetry_enabled())
+
+
+@router.put("/telemetry", response_model=TelemetryStatusResponse)
+@handle_db_errors("admin.set_telemetry_status")
+async def set_telemetry_status(
+    req: TelemetryToggleRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+) -> TelemetryStatusResponse:
+    """Enable or disable OTel telemetry (opt-in only, no dark patterns)."""
+    if current_user.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+        )
+    from modulo.core.runtime_config.store import get_runtime_config_store
+
+    store = get_runtime_config_store()
+    if req.enabled:
+        store.set_override("MODULO_TELEMETRY_ENABLED", "true")
+    else:
+        store.clear_override("MODULO_TELEMETRY_ENABLED")
+
+    from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
+
+    return TelemetryStatusResponse(enabled=is_telemetry_enabled())

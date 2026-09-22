@@ -291,8 +291,72 @@
         </div>
       </div>
 
-      <!-- Step 6: Done -->
-      <div v-if="currentStep === 6" class="space-y-6 py-4 text-center">
+      <!-- Step 6: Telemetry Opt-In (FAR-1131) -->
+      <div v-if="currentStep === 6" class="space-y-4">
+        <div v-if="telemetryLoading" class="space-y-3 py-4" aria-hidden="true">
+          <div class="h-16 animate-pulse rounded-lg bg-muted" />
+        </div>
+        <div v-else>
+          <div class="rounded-lg border border-dashed p-6 text-center">
+            <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+              <svg class="h-6 w-6 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5m.75-9 3-3 2.148 2.148A12.061 12.061 0 0 1 16.5 7.605" />
+              </svg>
+            </div>
+            <h3 class="text-lg font-semibold">{{ $t('views.OnboardingWizard.telemetry_heading') }}</h3>
+            <p class="mt-2 text-sm text-muted-foreground">
+              {{ $t('views.OnboardingWizard.telemetry_description') }}
+            </p>
+            <p class="mt-2 text-sm text-muted-foreground">
+              {{ $t('views.OnboardingWizard.telemetry_what_sent') }}
+            </p>
+            <ul class="mx-auto mt-3 max-w-md space-y-1 text-left text-sm text-muted-foreground">
+              <li class="flex items-start gap-2">
+                <span class="mt-0.5 text-primary" aria-hidden="true">&#8226;</span>
+                {{ $t('views.OnboardingWizard.telemetry_item_pipeline_runs') }}
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="mt-0.5 text-primary" aria-hidden="true">&#8226;</span>
+                {{ $t('views.OnboardingWizard.telemetry_item_error_rates') }}
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="mt-0.5 text-primary" aria-hidden="true">&#8226;</span>
+                {{ $t('views.OnboardingWizard.telemetry_item_feature_usage') }}
+              </li>
+            </ul>
+            <p class="mt-3 text-xs text-muted-foreground">
+              {{ $t('views.OnboardingWizard.telemetry_no_pii') }}
+            </p>
+            <div v-if="telemetryError" class="mt-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" aria-live="assertive">
+              {{ telemetryError }}
+            </div>
+            <div class="mt-6 flex items-center justify-center gap-3">
+              <Button
+                :disabled="telemetrySaving"
+                data-testid="onboarding-wizard-telemetry-enable"
+                @click="saveTelemetry(true)"
+              >
+                {{ $t('views.OnboardingWizard.telemetry_enable') }}
+              </Button>
+              <button
+                type="button"
+                :disabled="telemetrySaving"
+                data-testid="onboarding-wizard-telemetry-skip"
+                class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                @click="nextStep"
+              >
+                {{ $t('views.OnboardingWizard.telemetry_skip') }}
+              </button>
+            </div>
+            <p class="mt-3 text-xs text-muted-foreground">
+              {{ $t('views.OnboardingWizard.telemetry_can_change_later') }}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 7: Done -->
+      <div v-if="currentStep === 7" class="space-y-6 py-4 text-center">
         <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
           <Check class="h-8 w-8 text-success" aria-hidden="true" />
         </div>
@@ -346,7 +410,7 @@
       </div>
     </div>
 
-    <div v-if="currentStep < 6" class="flex items-center justify-between">
+    <div v-if="currentStep < 7" class="flex items-center justify-between">
       <div>
         <button type="button"
           v-if="currentStep > 0"
@@ -359,7 +423,7 @@
       </div>
       <div class="flex items-center gap-3">
         <button type="button"
-          v-if="currentStep > 0 && currentStep < 5"
+          v-if="currentStep > 0 && currentStep < 6"
           data-testid="onboarding-wizard-skip-to-end"
           class="text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @click="skipToEnd"
@@ -367,7 +431,7 @@
           {{ $t('views.OnboardingWizard.skip_to_end') }}
         </button>
         <Button :disabled="!canProceed" data-testid="onboarding-wizard-next" @click="nextStep">
-          {{ currentStep === 5 ? $t('views.OnboardingWizard.finish') : $t('views.OnboardingWizard.next') }}
+          {{ currentStep === 6 ? $t('views.OnboardingWizard.finish') : $t('views.OnboardingWizard.next') }}
         </Button>
       </div>
     </div>
@@ -402,6 +466,7 @@ const steps = computed(() => [
   { title: t('views.OnboardingWizard.review_schemas'), subtitle: t('views.OnboardingWizard.review_edit_and_confirm_the_inferred_schema') },
   { title: t('views.OnboardingWizard.browse_library'), subtitle: t('views.OnboardingWizard.find_compatible_agents_and_blueprints') },
   { title: t('views.OnboardingWizard.wire_pipeline'), subtitle: t('views.OnboardingWizard.name_describe_and_create_your_pipeline') },
+  { title: t('views.OnboardingWizard.telemetry_title'), subtitle: t('views.OnboardingWizard.telemetry_subtitle') },
   { title: t('views.OnboardingWizard.done'), subtitle: t('views.OnboardingWizard.your_pipeline_is_ready_to_run') },
 ])
 
@@ -457,6 +522,12 @@ const runResult = ref<string | null>(null)
 const confirmEmptyRun = ref(false)
 const emptyRunWarning = ref<string | null>(null)
 
+// Telemetry opt-in state (FAR-1131)
+const telemetryLoading = ref(false)
+const telemetryEnabled = ref(false)
+const telemetrySaving = ref(false)
+const telemetryError = ref<string | null>(null)
+
 const canProceed = computed(() => {
   switch (currentStep.value) {
     case 0: return true
@@ -465,6 +536,7 @@ const canProceed = computed(() => {
     case 3: return !!wizardState.publishedSchemaId
     case 4: return true
     case 5: return !!wizardState.createdPipelineId
+    case 6: return true // telemetry step — always proceed
     default: return false
   }
 })
@@ -696,6 +768,44 @@ function skipToEnd() {
   currentStep.value = steps.value.length - 1
 }
 
+// Telemetry opt-in functions (FAR-1131)
+
+async function loadTelemetryStatus() {
+  telemetryLoading.value = true
+  telemetryError.value = null
+  try {
+    const { data, error: err } = await api.GET('/api/v1/admin/telemetry')
+    if (err) {
+      telemetryError.value = formatApiError(err)
+    } else if (data) {
+      telemetryEnabled.value = data.enabled
+    }
+  } catch (e: unknown) {
+    telemetryError.value = formatApiError(e)
+  } finally {
+    telemetryLoading.value = false
+  }
+}
+
+async function saveTelemetry(enabled: boolean) {
+  telemetrySaving.value = true
+  telemetryError.value = null
+  try {
+    const { data, error: err } = await api.PUT('/api/v1/admin/telemetry', {
+      body: { enabled },
+    })
+    if (err) {
+      telemetryError.value = formatApiError(err)
+    } else if (data) {
+      telemetryEnabled.value = data.enabled
+    }
+  } catch (e: unknown) {
+    telemetryError.value = formatApiError(e)
+  } finally {
+    telemetrySaving.value = false
+  }
+}
+
 watch(() => wizardState.pipelineDescription, () => {
   if (confirmEmptyRun.value) {
     confirmEmptyRun.value = false
@@ -709,6 +819,9 @@ watch(currentStep, (step) => {
   }
   if (step === 4 && libraryItems.value.length === 0 && !loadingLibrary.value) {
     loadLibrary()
+  }
+  if (step === 6 && !telemetryLoading.value) {
+    loadTelemetryStatus()
   }
 })
 

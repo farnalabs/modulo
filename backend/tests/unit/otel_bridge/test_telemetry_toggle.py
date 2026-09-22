@@ -122,3 +122,80 @@ class TestSettingsIntegration:
         """MODULO_TELEMETRY_ENABLED env var should override the default."""
         monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
         assert self._settings().modulo_telemetry_enabled is True
+
+
+class TestIsTelemetryEnabled:
+    """Tests for the is_telemetry_enabled() bridge function (FAR-1131)."""
+
+    def _settings(self, **overrides):
+        from modulo.settings import Settings
+
+        return Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key="a" * 32,
+            fernet_key="a" * 32,
+            modulo_admin_password="testpass",
+            **overrides,
+        )
+
+    def test_falls_back_to_settings_when_store_unavailable(self, monkeypatch: pytest.MonkeyPatch):
+        """When the runtime config store is not initialised, falls back to Settings."""
+        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
+        from modulo.settings import get_settings
+
+        get_settings.cache_clear()
+        with patch("modulo.core.runtime_config.store.get_runtime_config_store", side_effect=Exception("not init")):
+            assert is_telemetry_enabled() is False
+
+    def test_reads_from_store_override(self, monkeypatch: pytest.MonkeyPatch):
+        """When the store has an override, is_telemetry_enabled reads it."""
+        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        from modulo.core.runtime_config.store import RuntimeConfigStore
+        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
+        from modulo.settings import get_settings
+
+        get_settings.cache_clear()
+        store = RuntimeConfigStore()
+        store.set_override("MODULO_TELEMETRY_ENABLED", "true")
+        with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
+            assert is_telemetry_enabled() is True
+
+    def test_store_false_overrides_env_true(self, monkeypatch: pytest.MonkeyPatch):
+        """When env is true but store override is false, store wins."""
+        monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        from modulo.core.runtime_config.store import RuntimeConfigStore
+        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
+        from modulo.settings import get_settings
+
+        get_settings.cache_clear()
+        store = RuntimeConfigStore()
+        store.set_override("MODULO_TELEMETRY_ENABLED", "false")
+        with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
+            assert is_telemetry_enabled() is False
+
+    def test_store_clear_falls_back_to_env(self, monkeypatch: pytest.MonkeyPatch):
+        """When the store override is cleared, falls back to env/Settings."""
+        monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        from modulo.core.runtime_config.store import RuntimeConfigStore
+        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
+        from modulo.settings import get_settings
+
+        get_settings.cache_clear()
+        store = RuntimeConfigStore()
+        store.set_override("MODULO_TELEMETRY_ENABLED", "true")
+        store.clear_override("MODULO_TELEMETRY_ENABLED")
+        with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
+            assert is_telemetry_enabled() is True

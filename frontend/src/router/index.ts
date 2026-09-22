@@ -74,6 +74,7 @@ const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
 const AdminFeatureFlagsView = () => import('../views/AdminFeatureFlagsView.vue')
+const AdminTelemetryView = () => import('../views/AdminTelemetryView.vue')
 const AdminPluginsView = () => import('../views/AdminPluginsView.vue')
 const PipelineEditorView = () => import('../views/PipelineEditorView.vue')
 const CompositeEditorView = () => import('../views/pipeline/CompositeEditorView.vue')
@@ -426,6 +427,12 @@ const router = createRouter({
       path: '/admin/feature-flags',
       name: 'admin-feature-flags',
       component: AdminFeatureFlagsView,
+    },
+    {
+      path: '/admin/telemetry',
+      name: 'admin-telemetry',
+      component: AdminTelemetryView,
+      meta: { breadcrumb: 'Telemetry', testid: 'admin-telemetry' },
     },
     {
       path: '/admin/org',

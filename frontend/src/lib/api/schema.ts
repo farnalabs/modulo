@@ -869,6 +869,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Telemetry Status */
+        get: operations["get_telemetry_status_api_v1_admin_telemetry_get"];
+        /** Set Telemetry Status */
+        put: operations["set_telemetry_status_api_v1_admin_telemetry_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/license": {
         parameters: {
             query?: never;
@@ -18082,6 +18100,16 @@ export interface components {
             /** Enabled */
             enabled: boolean;
         };
+        /** TelemetryToggleRequest */
+        TelemetryToggleRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** TelemetryStatusResponse */
+        TelemetryStatusResponse: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** TransparencyResponse */
         TransparencyResponse: {
             /** Last Successful Dump At */
@@ -21231,6 +21259,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_telemetry_status_api_v1_admin_telemetry_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetryStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_telemetry_status_api_v1_admin_telemetry_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelemetryToggleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetryStatusResponse"];
                 };
             };
             /** @description Validation Error */

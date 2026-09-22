@@ -133,6 +133,7 @@ from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
 from modulo.core.logging_config import configure_logging
+from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 from modulo.core.seed_data.catalog import FLAGS, TIERS
 from modulo.db.capacity import StorageExhaustedError
 from modulo.db.health_checks import db_is_at_migration_head
@@ -762,7 +763,7 @@ def _configure_license_and_otel(settings: Settings) -> None:
         )
     setup_otel(
         service_name=settings.modulo_otel_service_name,
-        telemetry_enabled=settings.modulo_telemetry_enabled,
+        telemetry_enabled=is_telemetry_enabled(),
     )
 
 
