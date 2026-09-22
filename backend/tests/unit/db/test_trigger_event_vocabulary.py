@@ -36,7 +36,7 @@ from alembic.script import ScriptDirectory
 
 from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
 
-_MIGRATION_NAME = "0176_trigger_event_validation_results"
+_MIGRATION_NAME = "0255_trigger_event_value_filter_label"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
@@ -116,8 +116,10 @@ _MIGRATION_PATH = (
 # chained onto 0250_eval_policy_gate, and 0252_enforcement_daily_facts (FAR-902) chained
 # onto 0251_schema_enforcement_telemetry, and 0253_runs_enforcement_mode_outcome (FAR-902)
 # chained onto 0252_enforcement_daily_facts, and 0254_eval_backfill_cutover (FAR-1100)
-# chained onto 0253_runs_enforcement_mode_outcome as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0254_eval_backfill_cutover"
+# chained onto 0253_runs_enforcement_mode_outcome, and
+# 0255_trigger_event_value_filter_label (FAR-1144) chained onto
+# 0254_eval_backfill_cutover as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0255_trigger_event_value_filter_label"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
@@ -148,8 +150,12 @@ class TestModelVocabulary:
         assert "coalesced" in VALIDATION_RESULT_VALUES
         assert "backpressure_skipped" in VALIDATION_RESULT_VALUES
 
-    def test_model_vocabulary_is_23_values(self) -> None:
-        assert len(VALIDATION_RESULT_VALUES) == 23
+    def test_far1144_value_in_model_vocabulary(self) -> None:
+        # FAR-1144: distinct label for the value-filter gate (event_filters).
+        assert "event_value_filter_not_accepted" in VALIDATION_RESULT_VALUES
+
+    def test_model_vocabulary_is_24_values(self) -> None:
+        assert len(VALIDATION_RESULT_VALUES) == 24
         assert len(set(VALIDATION_RESULT_VALUES)) == len(VALIDATION_RESULT_VALUES)
 
     def test_orm_check_constraint_includes_auto_deactivated(self) -> None:

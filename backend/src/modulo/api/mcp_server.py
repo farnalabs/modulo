@@ -32,6 +32,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ParamSpec, cast
 from urllib.parse import quote, urlencode
 
+from fastapi import HTTPException as FastAPIHTTPException
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy import select
@@ -62,7 +63,7 @@ from modulo.api.middleware.sensitive_mask import (
 )
 from modulo.api.middleware.sensitive_mask import mask_config_json, merge_masked_config
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
-from modulo.api.routes.triggers import _streak_status_for
+from modulo.api.routes.triggers import _streak_status_for, _validate_trigger_config_keys
 from modulo.auth.api_key import (
     ApiKeyInvalidError,
     validate_api_key,
@@ -5239,6 +5240,10 @@ async def _create_trigger_impl(
     pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
     if input_err:
         return input_err
+    try:
+        _validate_trigger_config_keys(config_json)
+    except FastAPIHTTPException as exc:
+        return {"error": "validation", "detail": exc.detail}
     if pid is None:
         raise RuntimeError("_create_trigger_impl: validate returned no error and no pipeline id")
 
@@ -5611,6 +5616,21 @@ async def update_trigger(
 
             prev_max = trigger.max_concurrent_runs
             prev_active = trigger.active
+            # Validate the write-time config gate ONLY when config_json was
+            # part of the request (mirrors the REST _apply_trigger_update
+            # semantics): a legacy trigger with an unread key must stay
+            # updatable by any other field via MCP, same as via REST.
+            #
+            # Validate the MERGED config BEFORE mutating the ORM object.
+            # `_session()` wraps the body in `s.begin()`, so a clean early
+            # return COMMITS — validating after mutation would persist an
+            # invalid merged config while reporting a validation error.
+            if config_json is not None:
+                merged_config = merge_masked_config(trigger.config_json, config_json)
+                try:
+                    _validate_trigger_config_keys(merged_config, context="merged config_json")
+                except FastAPIHTTPException as exc:
+                    return {"error": "validation", "detail": exc.detail}
             await _apply_trigger_field_updates(
                 s,
                 trigger,
