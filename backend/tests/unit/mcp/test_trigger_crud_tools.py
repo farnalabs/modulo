@@ -628,11 +628,16 @@ class TestUpdateTriggerSuccess(_AuthContext):
         mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
         mock_session.return_value = _make_session_context(mock_sesh)
 
+        pre_call_config = trigger.config_json
         result = await update_trigger(trigger_id=str(trigger.id), config_json={"events": ["a", "b"]})
 
         assert result["error"] == "validation"
         assert "merged config_json" in result["detail"]
         assert "events" in result["detail"]
+        # Validation runs BEFORE the ORM mutation: the trigger must be left
+        # untouched so no invalid config is committed by the surrounding
+        # `s.begin()` transaction (an early return still commits).
+        assert trigger.config_json == pre_call_config
         assert "accepted_events" in result["detail"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

@@ -5616,6 +5616,21 @@ async def update_trigger(
 
             prev_max = trigger.max_concurrent_runs
             prev_active = trigger.active
+            # Validate the write-time config gate ONLY when config_json was
+            # part of the request (mirrors the REST _apply_trigger_update
+            # semantics): a legacy trigger with an unread key must stay
+            # updatable by any other field via MCP, same as via REST.
+            #
+            # Validate the MERGED config BEFORE mutating the ORM object.
+            # `_session()` wraps the body in `s.begin()`, so a clean early
+            # return COMMITS — validating after mutation would persist an
+            # invalid merged config while reporting a validation error.
+            if config_json is not None:
+                merged_config = merge_masked_config(trigger.config_json, config_json)
+                try:
+                    _validate_trigger_config_keys(merged_config, context="merged config_json")
+                except FastAPIHTTPException as exc:
+                    return {"error": "validation", "detail": exc.detail}
             await _apply_trigger_field_updates(
                 s,
                 trigger,
@@ -5629,15 +5644,6 @@ async def update_trigger(
                 next_fire_at,
                 prev_active,
             )
-            # Validate the write-time config gate ONLY when config_json was
-            # part of the request (mirrors the REST _apply_trigger_update
-            # semantics): a legacy trigger with an unread key must stay
-            # updatable by any other field via MCP, same as via REST.
-            if config_json is not None:
-                try:
-                    _validate_trigger_config_keys(trigger.config_json, context="merged config_json")
-                except FastAPIHTTPException as exc:
-                    return {"error": "validation", "detail": exc.detail}
 
             _recompute_ongoing_next_fire(
                 trigger, max_concurrent_runs, active, prev_max, prev_active, ongoing_scan_interval_changed
