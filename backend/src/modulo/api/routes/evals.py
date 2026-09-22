@@ -94,7 +94,8 @@ _CODE_EVALS_SUITE_ALERTING = "evals.suite_alerting"
 _CODE_EVALS_COVERAGE_GAP = "evals.coverage_gap"
 _EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
-
+# FAR-1100 chunk 3 → 3b freeze: single import point; remove when chunk 3b lands (CO-8).
+from modulo.core.eval_engine.eval_definition_freeze import raise_if_frozen  # noqa: E402
 
 _log = logging.getLogger(__name__)
 
@@ -291,6 +292,10 @@ async def create_eval_definition(
 
     Admin only. The eval definition is scoped to the caller's organisation.
     """
+    # FAR-1100 chunk 3 → 3b freeze: creation disabled between read cutover and
+    # write cutover.  Remove when chunk 3b lands (CO-8).
+    raise_if_frozen()
+
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1570,6 +1575,10 @@ async def update_eval_definition(
     principal: TenantPrincipal = require_permission("eval.definition.update"),
 ) -> dict[str, Any]:
     """Update an eval definition. Admin only."""
+    # FAR-1100 chunk 3 → 3b freeze: editing disabled between read cutover and
+    # write cutover.  Remove when chunk 3b lands (CO-8).
+    raise_if_frozen()
+
     if principal.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can update eval definitions")
 
