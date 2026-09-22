@@ -58,8 +58,8 @@ A failed output produces a new run with feedback attached; the original stays as
 **Where:** `modulo/core/feedback_manager/`.
 **Benefit:** you can trust the history while still improving the system.
 
-## 9. Self-hosted, no telemetry
-Your infra, your data, no cloud dependency. Runs on Docker Compose or Fly; no telemetry by default.
+## 9. Self-hosted, no telemetry by default
+Your infra, your data, no cloud dependency. Runs on Docker Compose or Fly; no telemetry by default. Operators can opt in via Settings > Runtime Configuration (`MODULO_TELEMETRY_ENABLED`); when enabled, only aggregate counters and error categories are exported — no personal data, pipeline content, or API keys.
 **Why:** governance without data ownership is theatre for regulated and IP-sensitive teams.
 **Where:** deployment docs, `docs/architecture.md`, brand positioning in Repos/admin.
 **Benefit:** adoption is not blocked by data-residency concerns.

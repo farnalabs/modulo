@@ -48,6 +48,7 @@ from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 
 # FAR-190 streak engine lives in its own module (extracted so cron_helpers can
 # stay focused on scheduling). Re-exported here for the dispatcher_reconcile
@@ -5924,7 +5925,7 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
 
 async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
     """D1: update the OTel runtime gauges/counters from this tick (best-effort)."""
-    if not get_settings().modulo_telemetry_enabled:
+    if not is_telemetry_enabled():
         return
     try:
         from modulo.core.error_tracking.metrics import (

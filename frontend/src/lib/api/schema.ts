@@ -745,6 +745,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Telemetry Status
+         * @description Return the current telemetry opt-in status.
+         */
+        get: operations["get_telemetry_status_api_v1_admin_telemetry_get"];
+        /**
+         * Set Telemetry Status
+         * @description Enable or disable OTel telemetry (opt-in only, no dark patterns).
+         *
+         *     The override is persisted in the process-global RuntimeConfigStore and
+         *     immediately reconfigures the OTel exporter pipeline so that a decline
+         *     tears down exporters in-flight.
+         */
+        put: operations["set_telemetry_status_api_v1_admin_telemetry_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/dev-mode": {
         parameters: {
             query?: never;
@@ -17992,6 +18020,16 @@ export interface components {
             /** Created At */
             created_at: string;
         };
+        /** TelemetryStatusResponse */
+        TelemetryStatusResponse: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** TelemetryToggleRequest */
+        TelemetryToggleRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** TemplateListResponse */
         TemplateListResponse: {
             /** Items */
@@ -20845,6 +20883,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OverdueClaimsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_telemetry_status_api_v1_admin_telemetry_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetryStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_telemetry_status_api_v1_admin_telemetry_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelemetryToggleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetryStatusResponse"];
                 };
             };
             /** @description Validation Error */
