@@ -39,7 +39,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, '|') }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
 
@@ -60,15 +60,11 @@ jobs:
           fi
 
           # Exactly one of the four labels (any label starting with
-          # "changelog:") satisfies the gate.
+          # "changelog:") satisfies the gate. Labels arrive as a JSON array
+          # (toJSON) so no separator character can split or merge a label name.
           HAS_LABEL="false"
-          if [ -n "$PR_LABELS" ]; then
-            IFS='|' read -ra LABEL_LIST <<< "$PR_LABELS"
-            for label in "${LABEL_LIST[@]}"; do
-              case "$label" in
-                changelog:*) HAS_LABEL="true" ;;
-              esac
-            done
+          if jq -e 'any(.[]; startswith("changelog:"))' >/dev/null 2>&1 <<< "$PR_LABELS_JSON"; then
+            HAS_LABEL="true"
           fi
 
           if [ "$HAS_LABEL" = "true" ]; then

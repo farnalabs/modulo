@@ -169,9 +169,15 @@ jobs:
           rc=0
           NOTES_FILE="$(mktemp)"
 
-          # 1. Previous tag: nearest tag on the GA commit's parent. First-ever
-          #    release has no predecessor — fall back to the root commit so the
-          #    initial CHANGELOG section still covers full history.
+          # 1. Previous tag: nearest tag on the GA commit's parent. Fetch tags
+          #    first: on a re-run of this step alone (the tagging step above is
+          #    not re-run) ${GA_TAG} may exist only on origin, and a missing
+          #    local tag makes `git describe` fail silently and fall back to
+          #    full history from the root commit — quietly listing the whole
+          #    project as new. First-ever release has no predecessor — fall
+          #    back to the root commit so the initial CHANGELOG section still
+          #    covers full history.
+          git fetch origin --tags 2>/dev/null || echo "::warning::Unable to fetch tags from origin; proceeding with local tags only (a missing ${GA_TAG} falls back to full history)."
           PREV="$(git describe --tags --abbrev=0 "${GA_TAG}^" 2>/dev/null || true)"
           if [ -z "$PREV" ]; then
             echo "::notice::No previous tag before ${GA_TAG}; generating the changelog from the repository root."
