@@ -607,7 +607,18 @@ def check_sha_pinning(
 
     if actual_sha.lower() == expected_sha.lower():
         return True, f"SHA-pinned: check matches head {actual_sha[:12]}"
-    return False, f"SHA mismatch: expected {expected_sha[:12]}, PR head is {actual_sha[:12]} (stale check)"
+
+    def _labelled(sha: str) -> str:
+        """Show the full SHA; when truncated, annotate so the two values are
+        distinguishable even when the caller passed a short prefix."""
+        if len(sha) < 40:
+            return f"{sha} (truncated, {len(sha)} chars)"
+        return f"{sha[:12]}…{sha[-4:]} (full)"
+
+    return (
+        False,
+        (f"SHA mismatch: expected {_labelled(expected_sha)}, PR head is {_labelled(actual_sha)} (stale check)"),
+    )
 
 
 # ---------------------------------------------------------------------------
