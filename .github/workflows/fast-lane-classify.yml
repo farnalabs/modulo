@@ -77,7 +77,15 @@ jobs:
       - name: Run fast-lane classifier
         id: classify
         env:
-          GH_TOKEN: ${{ github.token }}
+          # The suspension guardrail reads the FAST_LANE_SUSPENDED_UNTIL
+          # repository variable, which the Actions integration token
+          # (github.token) cannot read — it returns HTTP 403 "Resource not
+          # accessible by integration", fail-closing the guardrail and pinning
+          # every fast-lane PR to `neutral` (observed on PR #907/#904, blocking
+          # the fix for broken main).  The reviewer PAT can read variables
+          # (fast-lane-suspension.yml uses it to write them), so prefer it and
+          # fall back to github.token only when the secret is unavailable.
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
         run: |
           set +e
           uv run --no-build --project backend --no-sync python scripts/fast_lane_classify.py \
