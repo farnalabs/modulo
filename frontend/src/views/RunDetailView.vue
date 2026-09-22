@@ -323,6 +323,9 @@
         <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
       </div>
 
+      <!-- FAR-706: curated known-fix entries matched against the raw error detail -->
+      <KnownFixesPanel :fixes="run.known_fixes" />
+
       <!-- Guardrail Summary -->
       <section v-if="guardrailBuckets.length > 0" class="rounded-lg border bg-card p-6 mb-6" data-testid="run-detail-guardrail-summary">
         <h2 class="mb-3 text-base font-semibold tracking-tight">{{ $t('views.RunDetailGuardrailSummary.guardrail_summary_title') }}</h2>
@@ -813,6 +816,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RunErrorTag from '../components/shared/RunErrorTag.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import HitlGateCard from '../components/hitl/HitlGateCard.vue'
+import KnownFixesPanel from '../components/shared/KnownFixesPanel.vue'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'

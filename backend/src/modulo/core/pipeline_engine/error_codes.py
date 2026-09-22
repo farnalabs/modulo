@@ -83,6 +83,91 @@ _CODE_CONNECTOR_UNKNOWN = "connector.side_effect_unknown"
 _CODE_SCOPE_VIOLATION = "scope.violation"
 
 
+@dataclass(frozen=True)
+class KnownFix:
+    """One curated known-fix entry (FAR-706).
+
+    Matched over a run's RAW error text (``error_detail`` / retained stderr),
+    never on ``error_code`` alone — a generic code such as ``node.cancelled``
+    covers many distinct causes, and the whole point of this layer is to
+    surface the specific documented fix for a recurring raw signature.
+    """
+
+    fix_id: str
+    signature: str
+    title: str
+    body: str
+    link: str | None = None
+
+
+# Curated known-fixes KB (FAR-706). Static and code-driven — no DB table, no
+# migration. Start small: only signatures with a real, documented fix (the
+# dogfood AGENTS.md lessons / docs/agent-config.md). Do NOT invent entries.
+KNOWN_FIXES: tuple[KnownFix, ...] = (
+    KnownFix(
+        fix_id="heredoc_at_end_of_command",
+        signature="PYFAR647",
+        title="Here-document at the end of an agent command (missing trailing newline)",
+        body=(
+            'Bash failed at parse time with "here-document delimited by end-of-file '
+            "(wanted 'PYFAR647')\" before the agent ever started: the command ended "
+            "with a heredoc, and the run wrapper's `) > agent.log` got glued onto the "
+            "terminator line because no trailing newline followed it. Fix: never end "
+            "an agent_command with a heredoc — emit the payload as a base64 block "
+            "instead (`printf %s <b64> | base64 -d > /tmp/script.py && python3 "
+            "/tmp/script.py`), or guarantee a trailing newline after the terminator."
+        ),
+    ),
+    KnownFix(
+        fix_id="session_interrupted_no_output",
+        signature="session interrupted",
+        title="Agent session interrupted before writing output.json",
+        body=(
+            "The wrapper's fallback fired because the agent exited without writing "
+            "output.json. Check run duration and no_output_reason to tell the causes "
+            "apart: died at the node/sandbox timeout → give the task more time (raise "
+            'timeout_seconds) or shrink the task; died mid-budget with "The operation '
+            'timed out" → the model-gateway provider timeout aborted the session — '
+            "raise the provider `timeout` in the sandbox's opencode config, not the "
+            "node timeout."
+        ),
+    ),
+    KnownFix(
+        fix_id="sandbox_timeout_exceeds_e2b_cap",
+        signature="SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
+        title="Sandbox node timeout exceeds the E2B 1-hour cap",
+        body=(
+            "The node's `timeout_seconds` is above E2B's 1-hour sandbox timeout cap, "
+            "so provisioning fails. Set `timeout_seconds` to 3300 or less to keep "
+            "provisioning headroom (FAR-511)."
+        ),
+        link="https://github.com/farnalabs/modulo/blob/main/docs/agent-config.md",
+    ),
+)
+
+
+def match_known_fixes(detail: Any) -> list[KnownFix]:
+    """Return the curated known-fix entries whose signature appears in *detail*.
+
+    Matching is a case-insensitive substring test over the raw error text
+    (``error_detail`` carries retained stderr / failure summaries). Display-only
+    and fail-safe by contract (FAR-706): a missing, empty, non-string, or
+    pathological detail degrades to an empty list — never raises, so a bad
+    entry or input can never break a read surface.
+    """
+    try:
+        if detail is None:
+            return []
+        text = detail if isinstance(detail, str) else str(detail)
+        if not text:
+            return []
+        haystack = text.casefold()
+        return [fix for fix in KNOWN_FIXES if fix.signature.casefold() in haystack]
+    except Exception:
+        _log.warning("known_fixes.match_failed", exc_info=True)
+        return []
+
+
 ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
     # --- agent (work verdict) codes -------------------------------------
     "agent.failed": ErrorCodeSpec(

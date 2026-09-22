@@ -16711,6 +16711,10 @@ export interface components {
             error_detail?: string | null;
             /** Error Code */
             error_code?: string | null;
+            /** Known Fixes */
+            known_fixes?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Total Cost Usd */
             total_cost_usd?: string | null;
             /** Token Consumption */
