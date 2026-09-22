@@ -101,6 +101,7 @@ __all__ = [
     "assert_write_org",
     "dialect_insert",
     "parse_marker_node_id",
+    "persist_schema_enforcement_record",
     "read_audit_row_outputs_json",
     "read_node_output_blob_bytes",
     "read_run_blobs",
@@ -1015,6 +1016,46 @@ async def persist_artifact_pointers(
     set_: dict[str, Any] = {
         "updated_at": func.current_timestamp(),
         "artifacts_json": stmt.excluded.artifacts_json,
+    }
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["run_id", "node_id", "attempt_key"],
+        set_=set_,
+    )
+    await session.execute(stmt, [values])
+
+
+async def persist_schema_enforcement_record(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    node_id: str,
+    attempt_key: str,
+    enforcement_record: dict[str, Any],
+) -> None:
+    """Persist a schema enforcement record into ``schema_enforcement_json``.
+
+    FAR-902: targeted UPSERT on ``schema_enforcement_json`` only — never
+    touches the blob columns (outputs, telemetry, markers, artifacts).
+    Called by the node runner AFTER schema validation and BEFORE
+    ``update_run_status`` / terminalization (D3 ordering guarantee).
+
+    The ``attempt_key`` MUST NOT be ``__final__`` — the CHECK constraint
+    ``attempt_key <> '__final__' OR schema_enforcement_json IS NULL`` rejects
+    a ``__final__`` write.
+    """
+    insert_factory = dialect_insert(resolve_dialect(session))
+    values = {
+        "run_id": run_id,
+        "organisation_id": organisation_id,
+        "node_id": node_id,
+        "attempt_key": attempt_key,
+        "schema_enforcement_json": enforcement_record,
+    }
+    stmt = insert_factory(RunNodeOutput).values(**values)
+    set_: dict[str, Any] = {
+        "updated_at": func.current_timestamp(),
+        "schema_enforcement_json": stmt.excluded.schema_enforcement_json,
     }
     stmt = stmt.on_conflict_do_update(
         index_elements=["run_id", "node_id", "attempt_key"],

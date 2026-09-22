@@ -165,6 +165,21 @@ class RunDailyFact(OrgScoped):
     workspace_inputs_count: Mapped[int | None] = mapped_column(
         Integer, comment="count of managed workspace inputs resolved for this run (NULL if none)"
     )
+    # FAR-902: schema enforcement aggregate counters — aggregated from
+    # per-attempt enforcement records on run_node_outputs.  All nullable;
+    # runs without schema enforcement have NULLs.
+    enforcement_native_count: Mapped[int | None] = mapped_column(
+        Integer, comment="count of attempts with native structured output (FAR-902)"
+    )
+    enforcement_verbatim_count: Mapped[int | None] = mapped_column(
+        Integer, comment="count of attempts with verbatim output (FAR-902)"
+    )
+    enforcement_repair_count: Mapped[int | None] = mapped_column(
+        Integer, comment="total repair loop invocations across all attempts (FAR-902)"
+    )
+    enforcement_wasted_count: Mapped[int | None] = mapped_column(
+        Integer, comment="total wasted attempts (schema rejection only, FAR-902)"
+    )
 
     team: Mapped["Team | None"] = relationship(foreign_keys=[team_id])
     pipeline: Mapped["Pipeline | None"] = relationship(foreign_keys=[pipeline_id])

@@ -128,13 +128,21 @@ async function advanceToStep5() {
   return wrapper
 }
 
-// Drives the wizard to step 6 (Done) by creating the pipeline.
-async function advanceToDone() {
+// Drives the wizard to step 6 (Telemetry), creating the pipeline on the way.
+async function advanceToTelemetry() {
   const wrapper = await advanceToStep5()
   await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
   await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
   await nextTick()
-  await clickNext(wrapper) // Finish
+  await clickNext(wrapper) // -> step 6 (telemetry)
+  return wrapper
+}
+
+// Drives the wizard to step 7 (Done) by creating the pipeline and skipping telemetry.
+async function advanceToDone() {
+  const wrapper = await advanceToTelemetry()
+  // Telemetry step: click skip-to-end or next to advance to Done
+  await clickNext(wrapper) // -> step 7 (Done)
   return wrapper
 }
 
@@ -411,10 +419,10 @@ describe('OnboardingWizard — create pipeline (step 5)', () => {
       default_autonomy_level: 'balanced',
     })
 
-    // Finish (Next) becomes available after creation.
+    // Next becomes available after creation (telemetry step follows).
     const nextBtn = wrapper.find('[data-testid="onboarding-wizard-next"]')
     expect(nextBtn.attributes('disabled')).toBeUndefined()
-    expect(nextBtn.text()).toContain('Finish')
+    expect(nextBtn.text()).toContain('Next')
   })
 
   it('the pipeline creation failure surfaces the error detail (FAR-608 fix)', async () => {
@@ -505,5 +513,254 @@ describe('OnboardingWizard — done (step 6)', () => {
     await nextTick()
     expect(wrapper.text()).toContain('Failed to start pipeline')
     expect(wrapper.text()).toContain('runner unavailable')
+  })
+})
+
+describe('OnboardingWizard — telemetry step (FAR-1131)', () => {
+  it('shows telemetry step after Wire Pipeline', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    expect(wrapper.text()).toContain('Help Improve Modulo')
+    expect(wrapper.text()).toContain('Enable Telemetry')
+    expect(wrapper.text()).toContain('Skip for Now')
+  })
+
+  it('loads telemetry status when reaching the telemetry step', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await nextTick()
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/admin/telemetry')
+  })
+
+  it('enable button calls PUT with enabled=true', async () => {
+    ;(api.PUT as Mock).mockResolvedValue({ data: { enabled: true }, error: undefined })
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await nextTick()
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(api.PUT).toHaveBeenCalledWith('/api/v1/admin/telemetry', { body: { enabled: true } })
+  })
+
+  it('skip button advances to Done without calling PUT', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await nextTick()
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-skip"]').trigger('click')
+    await nextTick()
+    expect(api.PUT).not.toHaveBeenCalled()
+    // Should now be on Done step
+    expect(wrapper.text()).toContain("You're all set!")
+  })
+
+  it('telemetry step shows what-is-collected items', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await nextTick()
+    expect(wrapper.text()).toContain('pipeline run counts')
+    expect(wrapper.text()).toContain('Error category')
+    expect(wrapper.text()).toContain('features are used')
+  })
+
+  it('telemetry step shows can-change-later notice', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await nextTick()
+    expect(wrapper.text()).toContain('change this anytime')
+  })
+
+  it('surfaces the telemetry status load failure from the error envelope', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    const defaultGet = (api.GET as Mock).getMockImplementation()!
+    ;(api.GET as Mock).mockImplementation(async (url: string, opts?: unknown) => {
+      if (url === '/api/v1/admin/telemetry') return { data: undefined, error: { detail: 'telemetry offline' } }
+      return defaultGet(url, opts)
+    })
+    await clickNext(wrapper) // -> step 6 (telemetry) triggers loadTelemetryStatus
+    await flushPromises()
+    expect(wrapper.text()).toContain('telemetry offline')
+  })
+
+  it('surfaces the telemetry status load exception from the catch path', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    const defaultGet = (api.GET as Mock).getMockImplementation()!
+    ;(api.GET as Mock).mockImplementation(async (url: string, opts?: unknown) => {
+      if (url === '/api/v1/admin/telemetry') throw new Error('telemetry unreachable')
+      return defaultGet(url, opts)
+    })
+    await clickNext(wrapper) // -> step 6 (telemetry) triggers loadTelemetryStatus
+    await flushPromises()
+    expect(wrapper.text()).toContain('telemetry unreachable')
+  })
+
+  it('surfaces the telemetry save failure from the error envelope', async () => {
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    ;(api.PUT as Mock).mockResolvedValue({ data: undefined, error: { detail: 'save rejected' } })
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('save rejected')
+  })
+
+  it('surfaces the telemetry save exception from the catch path', async () => {
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    ;(api.PUT as Mock).mockRejectedValue(new Error('telemetry write exploded'))
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('telemetry write exploded')
+  })
+
+  it('renders an inline ErrorAlert with a Retry that re-loads telemetry status', async () => {
+    const wrapper = await advanceToStep5()
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    const defaultGet = (api.GET as Mock).getMockImplementation()!
+    let telemetryCalls = 0
+    ;(api.GET as Mock).mockImplementation(async (url: string, opts?: unknown) => {
+      if (url === '/api/v1/admin/telemetry') {
+        telemetryCalls += 1
+        if (telemetryCalls === 1) return { data: undefined, error: { detail: 'telemetry offline' } }
+        return { data: { enabled: false }, error: undefined }
+      }
+      return defaultGet(url, opts)
+    })
+    await clickNext(wrapper) // -> step 6 triggers loadTelemetryStatus (fails)
+    await flushPromises()
+    expect(wrapper.text()).toContain('telemetry offline')
+    const retry = wrapper.findAll('button').find((b) => b.text() === 'Retry')
+    expect(retry).toBeTruthy()
+    await retry!.trigger('click')
+    await flushPromises()
+    expect(telemetryCalls).toBe(2)
+    expect(wrapper.text()).not.toContain('telemetry offline')
+  })
+
+  it('renders an inline ErrorAlert with a Retry that re-saves telemetry', async () => {
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    let putCalls = 0
+    ;(api.PUT as Mock).mockImplementation(async () => {
+      putCalls += 1
+      if (putCalls === 1) return { data: undefined, error: { detail: 'save rejected' } }
+      return { data: { enabled: true }, error: undefined }
+    })
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('save rejected')
+    const retry = wrapper.findAll('button').find((b) => b.text() === 'Retry')
+    expect(retry).toBeTruthy()
+    await retry!.trigger('click')
+    await flushPromises()
+    expect(putCalls).toBe(2)
+    expect(wrapper.text()).not.toContain('save rejected')
+  })
+
+  it('ignores a second telemetry save while one is already in flight', async () => {
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    let resolvePut: (value: unknown) => void = () => {}
+    ;(api.PUT as Mock).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePut = resolve
+      }),
+    )
+    const vm = wrapper.vm as unknown as { saveTelemetry: (enabled: boolean) => Promise<void> }
+    const first = vm.saveTelemetry(true)
+    const second = vm.saveTelemetry(true)
+    resolvePut({ data: { enabled: true }, error: undefined })
+    await first
+    await second
+    expect(api.PUT).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the current telemetry status returned by the GET', async () => {
+    const wrapper = await advanceToStep5()
+    const defaultGet = (api.GET as Mock).getMockImplementation()!
+    ;(api.GET as Mock).mockImplementation(async (url: string, opts?: unknown) => {
+      if (url === '/api/v1/admin/telemetry') return { data: { enabled: true }, error: undefined }
+      return defaultGet(url, opts)
+    })
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry) loads status
+    await flushPromises()
+    expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-status"]').text()).toContain('currently on')
+  })
+
+  it('softens a 403 into an admin-only note and hides the enable button', async () => {
+    const wrapper = await advanceToStep5()
+    const defaultGet = (api.GET as Mock).getMockImplementation()!
+    ;(api.GET as Mock).mockImplementation(async (url: string, opts?: unknown) => {
+      if (url === '/api/v1/admin/telemetry') {
+        return { data: undefined, error: { detail: 'requires system.config.manage' }, response: { status: 403 } }
+      }
+      return defaultGet(url, opts)
+    })
+    await wrapper.find('[data-testid="onboarding-wizard-pipeline-name"]').setValue('My Pipeline')
+    await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
+    await nextTick()
+    await clickNext(wrapper) // -> step 6 (telemetry)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-forbidden"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').exists()).toBe(false)
+  })
+
+  it('confirms success after enabling telemetry', async () => {
+    ;(api.PUT as Mock).mockResolvedValue({ data: { enabled: true }, error: undefined })
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-saved"]').text()).toContain('Telemetry enabled')
+  })
+
+  it('softens a 403 on save into an admin-only note and hides the enable button', async () => {
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    ;(api.PUT as Mock).mockResolvedValue({
+      data: undefined,
+      error: { detail: 'requires system.config.manage' },
+      response: { status: 403 },
+    })
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-forbidden"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').exists()).toBe(false)
+  })
+
+  it('falls back to the requested value when the save response omits enabled', async () => {
+    ;(api.PUT as Mock).mockResolvedValue({ data: undefined, error: undefined })
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-saved"]').text()).toContain('Telemetry enabled')
   })
 })

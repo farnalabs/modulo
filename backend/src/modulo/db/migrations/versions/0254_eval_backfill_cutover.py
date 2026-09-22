@@ -27,8 +27,8 @@ closes it.  Recorded here per the doc-truth gate.
 
 The migration is a no-op on non-Postgres (SQLite relies on ORM ``create_all``).
 
-Revision ID: 0251_eval_backfill_cutover
-Revises: 0250_eval_policy_gate
+Revision ID: 0254_eval_backfill_cutover
+Revises: 0253_runs_enforcement_mode_outcome
 Create Date: 2026-09-21
 """
 
@@ -45,8 +45,8 @@ from alembic import op
 from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 
-revision = "0251_eval_backfill_cutover"
-down_revision = "0250_eval_policy_gate"
+revision = "0254_eval_backfill_cutover"
+down_revision = "0253_runs_enforcement_mode_outcome"
 branch_labels = None
 depends_on = None
 

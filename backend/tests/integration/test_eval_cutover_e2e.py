@@ -296,7 +296,7 @@ async def test_eval_suite_guard_still_reads_eval_definitions(
 
     # Suite-scoped eval_definitions (node_id NULL, suite_id + threshold set).
     # The same UUIDs are mirrored into `evals` — the post-cutover data shape
-    # 0251's backfill produces — because eval_results.eval_id now resolves
+    # 0254's backfill produces — because eval_results.eval_id now resolves
     # via evals (tenant trigger), while `_check_eval_suites` still reads
     # eval_definitions (chunk 5c switches that read).
     def_a = uuid.uuid4()

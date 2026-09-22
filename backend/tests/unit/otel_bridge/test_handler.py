@@ -73,11 +73,27 @@ def test_chain_error_finishes_span_with_error(bridge: LangGraphOtelBridge, expor
     assert len(spans) == 1
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
-    assert span.status.description is not None
-    assert "boom" in span.status.description
+    # Only the error category (exception class name) is exported — never the
+    # raw exception message or a stack trace (consent copy: "Error category
+    # frequencies (no error messages or stack traces)"; FAR-1131).
+    assert span.status.description == "ValueError"
+    assert "boom" not in (span.status.description or "")
     events = [e.name for e in span.events]
-    assert "exception" in events
+    assert "exception" not in events
     assert str(run_id) not in bridge._spans
+
+
+def test_error_status_description_excludes_message(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+    """Secret-bearing exception messages must never reach an exported span."""
+    run_id = uuid.uuid4()
+    bridge.on_chain_start(_serialized("SensitiveNode"), {}, run_id=run_id)
+    bridge.on_chain_error(RuntimeError("api_key=sk-secret-value\x00\x1f invalid"), run_id=run_id)
+
+    span = exporter.get_finished_spans()[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "RuntimeError"
+    assert "sk-secret-value" not in (span.status.description or "")
+    assert not [e for e in span.events if e.name == "exception"]
 
 
 def test_chain_attributes_set(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
@@ -224,6 +240,8 @@ def test_unknown_parent_run_id_is_handled_gracefully(
 
 
 def test_set_run_context_attributes_on_spans(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+    from modulo.otel_bridge.handler import _anonymise_id
+
     bridge.set_run_context(org_id="org-123", pipeline_id="pipe-456")
     run_id = uuid.uuid4()
 
@@ -232,14 +250,19 @@ def test_set_run_context_attributes_on_spans(bridge: LangGraphOtelBridge, export
 
     span = exporter.get_finished_spans()[0]
     assert span.attributes is not None
-    assert span.attributes.get("organisation_id") == "org-123"
-    assert span.attributes.get("pipeline_id") == "pipe-456"
+    assert span.attributes.get("organisation_id") == _anonymise_id("org-123")
+    assert span.attributes.get("pipeline_id") == _anonymise_id("pipe-456")
+    # Raw ids must never reach an exported span (FAR-1131).
+    assert span.attributes.get("organisation_id") != "org-123"
+    assert span.attributes.get("pipeline_id") != "pipe-456"
 
 
 def test_run_context_via_constructor(
     exporter: InMemorySpanExporter,
 ) -> None:
-    """The constructor's org_id/pipeline_id must seed span attributes."""
+    """The constructor's org_id/pipeline_id must seed (anonymised) span attributes."""
+    from modulo.otel_bridge.handler import _anonymise_id
+
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer("test.langgraph")
@@ -250,8 +273,8 @@ def test_run_context_via_constructor(
 
     span = exporter.get_finished_spans()[0]
     assert span.attributes is not None
-    assert span.attributes.get("organisation_id") == "org-ctor"
-    assert span.attributes.get("pipeline_id") == "pipe-ctor"
+    assert span.attributes.get("organisation_id") == _anonymise_id("org-ctor")
+    assert span.attributes.get("pipeline_id") == _anonymise_id("pipe-ctor")
 
 
 def test_run_context_not_set_leaves_no_attributes(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
@@ -266,6 +289,8 @@ def test_run_context_not_set_leaves_no_attributes(bridge: LangGraphOtelBridge, e
 
 
 def test_run_context_applies_to_new_spans_only(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+    from modulo.otel_bridge.handler import _anonymise_id
+
     early_id = uuid.uuid4()
     late_id = uuid.uuid4()
     bridge.on_chain_start(_serialized("Early"), {}, run_id=early_id)
@@ -279,7 +304,7 @@ def test_run_context_applies_to_new_spans_only(bridge: LangGraphOtelBridge, expo
     late = next(s for s in spans if "Late" in s.name)
     # Context captured at span creation — early span has no attrs, late span does.
     assert "organisation_id" not in (early.attributes or {})
-    assert (late.attributes or {}).get("organisation_id") == "org-late"
+    assert (late.attributes or {}).get("organisation_id") == _anonymise_id("org-late")
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +466,8 @@ def test_chat_model_error_records_exception(bridge: LangGraphOtelBridge, exporte
 
     span = exporter.get_finished_spans()[0]
     assert span.status.status_code == StatusCode.ERROR
-    assert "provider down" in (span.status.description or "")
+    assert span.status.description == "RuntimeError"
+    assert "provider down" not in (span.status.description or "")
     assert str(run_id) not in bridge._spans
 
 

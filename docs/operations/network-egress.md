@@ -37,8 +37,9 @@ This satisfies the "no external DNS calls in default config" requirement.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | not set | When set + telemetry enabled: HTTPS POST to configured endpoint |
 | OTel test connection (`POST /api/v1/settings/observability/test`) | – | Manual test: HTTPS POST to user-specified endpoint |
 
-✅ **Data residency OK**: Telemetry is opt-in. No telemetry data leaves the
-process without explicit operator configuration.
+✅ **Data residency OK**: Telemetry is off by default. When opted in via `MODULO_TELEMETRY_ENABLED=true` (Settings > Runtime Configuration), only aggregate counters and sanitised error categories are exported — no personal data, pipeline content, API keys, or raw error messages. Organisation ids are truncated hashes, not raw identifiers.
+
+> **Cross-process note:** the runtime-config override applies to the web process immediately. The SAQ worker is a separate process with its own store instance — for consistent cross-process behaviour, set `MODULO_TELEMETRY_ENABLED` in the deployment environment rather than relying on the runtime override.
 
 ### LangSmith
 
