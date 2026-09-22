@@ -143,6 +143,7 @@ jobs:
 
           DISPATCHED=0
           SKIPPED=0
+          FAILED=0
 
           for i in $(seq 0 $((DISPATCH_COUNT - 1))); do
             PR_NUM=$(jq -r ".[$i].number" /tmp/dispatch_prs.json)
@@ -171,18 +172,21 @@ jobs:
             fi
 
             # Dispatch via webhook (mirrors ci.yml notify-pr-failure pattern)
-            TIMESTAMP=$(date +%s)
             BODY=$(jq -n \
               --arg branchName "$BRANCH" \
               --argjson prNumber "$PR_NUM" \
               --arg failureDescription "PR conflicts with origin/main (mergeable=CONFLICTING). merge origin/main into the branch (a MERGE commit — do NOT rebase or force-push a shared/reviewed branch). Resolve conflicts by reading all three versions (base/ours/theirs) and satisfying both intents. Re-run the stages/tests for touched modules. Push — which re-arms the pull_request pipeline (CI + sonarcloud-scan)." \
               --arg repo "farnalabs/modulo" \
               '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
 
-            # Retry with exponential backoff on 429/5xx (max 5 attempts)
+            # Retry with exponential backoff on network failures (curl HTTP 000) and 429/5xx (max 5 attempts).
+            # TIMESTAMP and HMAC are recomputed per attempt: the server
+            # enforces a +/-300s replay window on X-Modulo-Timestamp.
             DISPATCH_OK=false
+            LAST_HTTP=""
             for attempt in 1 2 3 4 5; do
+              TIMESTAMP=$(date +%s)
+              HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
               RESPONSE=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
                 -H "Content-Type: application/json" \
                 -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
@@ -190,12 +194,13 @@ jobs:
                 -d "${BODY}")
               HTTP_CODE=$(echo "$RESPONSE" | tail -1)
               BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+              LAST_HTTP="$HTTP_CODE"
               if [ "$HTTP_CODE" = "202" ]; then
                 echo "Branch Fixer accepted for PR #$PR_NUM (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
                 DISPATCH_OK=true
                 DISPATCHED=$((DISPATCHED + 1))
                 break
-              elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
                 DELAY=$((2 ** (attempt - 1) * 5))
                 echo "::warning::Branch Fixer returned HTTP $HTTP_CODE for PR #$PR_NUM (attempt $attempt/5) — retrying in ${DELAY}s"
                 sleep "$DELAY"
@@ -206,12 +211,19 @@ jobs:
             done
 
             if [ "$DISPATCH_OK" = "false" ]; then
-              echo "::warning::Failed to dispatch Branch Fixer for PR #$PR_NUM after retries."
+              DETAIL=$(echo "$BODY_RESP" | jq -r '.detail // "unknown"' 2>/dev/null || echo "unknown"); DETAIL=${DETAIL:-unknown}
+              echo "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: ${DETAIL}) after retries."
+              FAILED=$((FAILED + 1))
             fi
           done
 
           echo "dispatched=$DISPATCHED" >> "${GITHUB_OUTPUT:-/dev/null}"
           echo "skipped=$SKIPPED" >> "${GITHUB_OUTPUT:-/dev/null}"
+          echo "failed=$FAILED" >> "${GITHUB_OUTPUT:-/dev/null}"
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::${FAILED} PR(s) could not be dispatched to the Branch Fixer after retries."
+            exit 1
+          fi
 
       - name: Surface manual-delivery conflicts
         if: steps.detect.outputs.api_failed == 'false'
