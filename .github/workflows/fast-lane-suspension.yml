@@ -123,7 +123,18 @@ jobs:
       - name: Set suspension variables
         if: steps.parse.outputs.severity != ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Deliberately does NOT use the secrets.X || github.token fallback
+          # pattern.  Repository variables are administrative resources: the
+          # Actions integration token (GITHUB_TOKEN) cannot manage them
+          # regardless of the actions:write permission (proven by live
+          # rehearsal — run 35689822401, "Resource not accessible by
+          # integration" 403).  Falling back to a token that provably cannot
+          # write variables only obscures the real failure; if the reviewer
+          # PAT is missing, this step must fail for the reason it actually
+          # failed.  All other steps in this workflow use GITHUB_TOKEN
+          # because their operations (gh pr comment, gh api read) are
+          # permitted by the Actions integration token.
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
           EXPIRY: ${{ steps.parse.outputs.expiry }}
           REASON: ${{ steps.parse.outputs.reason }}
         shell: bash

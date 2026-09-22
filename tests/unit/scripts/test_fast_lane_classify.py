@@ -370,6 +370,54 @@ class TestCheckShaPinningFailClosed:
         assert "fail-closed" in detail
         assert "empty head SHA" in detail
 
+    @patch("fast_lane_classify.subprocess.run")
+    def test_truncated_expected_sha_shows_length(self, mock_run: MagicMock) -> None:
+        """When the caller passes a short SHA prefix, the mismatch message
+        must label both values so they are distinguishable (FAR-1136
+        deliverable 2).  A 12-char prefix never equals a 40-char head, so
+        this is always a mismatch — but the message must be readable."""
+        full_head = "72413204ff0dabcdef0123456789abcdef012345"
+        truncated = "72413204ff0d"  # 12-char prefix of full_head
+        mock_run.return_value = MagicMock(returncode=0, stdout=full_head + "\n", stderr="")
+        eligible, detail = check_sha_pinning("farnalabs/modulo", 42, truncated)
+        assert eligible is False  # prefix != full SHA (different lengths)
+        assert "SHA mismatch" in detail
+        # The truncated expected shows its length
+        assert "truncated, 12 chars" in detail
+        # The full head shows the ellipsis format
+        assert "…" in detail
+        assert "(full)" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_mismatch_with_truncated_input_shows_distinguishable_message(self, mock_run: MagicMock) -> None:
+        """A mismatch where the expected is a short prefix of a DIFFERENT SHA
+        must produce a message where the two values are clearly different."""
+        full_head = "72413204ff0dabcdef0123456789abcdef012345"
+        wrong_prefix = "deadbeef1234"  # 12 chars, not a prefix of full_head
+        mock_run.return_value = MagicMock(returncode=0, stdout=full_head + "\n", stderr="")
+        eligible, detail = check_sha_pinning("farnalabs/modulo", 42, wrong_prefix)
+        assert eligible is False
+        assert "SHA mismatch" in detail
+        # The truncated expected shows its length
+        assert "truncated, 12 chars" in detail
+        # The full head shows the ellipsis format
+        assert "…" in detail
+        assert "(full)" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_full_sha_mismatch_shows_ellipsis(self, mock_run: MagicMock) -> None:
+        """A mismatch between two full 40-char SHAs shows the truncated
+        ellipsis format on both sides."""
+        head_sha = "aaaa1111bbbb2222cccc3333dddd4444eeee5555"
+        expected_sha = "ffff9999eeee8888dddd7777cccc6666bbbb4444"
+        mock_run.return_value = MagicMock(returncode=0, stdout=head_sha + "\n", stderr="")
+        eligible, detail = check_sha_pinning("farnalabs/modulo", 42, expected_sha)
+        assert eligible is False
+        assert "SHA mismatch" in detail
+        # Both show ellipsis format
+        assert detail.count("…") == 2
+        assert "(full)" in detail
+
 
 class TestCheckNoTestWeakeningGitFailure:
     """check_no_test_weakening must deny when git diff fails."""
