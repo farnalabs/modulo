@@ -11,17 +11,14 @@ name: "Fast Lane: Post-merge audit"
 #
 # Dependency: the audit treats "reviewer commented" as the signal of a
 # completed review.  This requires the reviewer to comment even on a
-# clean review (no findings).  That behaviour is delivered separately in
-# the private devtools repo.  Without it, a clean review would be
-# reported as unaudited.
+# clean review (no findings).  Without that wiring, a clean review
+# would be reported as unaudited.
 #
 # Trigger: workflow_dispatch plus a low-frequency schedule (~every 6h).
-# This repo has documented evidence that GitHub drops high-frequency
-# cron events on high-activity repos (lesson: "GitHub's scheduler
-# DROPS high-frequency cron events on high-activity repos" in the
-# workspace AGENTS.md, incident 2026-08-29/30).  A 6-hour cadence is
-# low enough to survive the scheduler while still catching missing
-# reviews within a single business day.
+# This repo has observed GitHub dropping high-frequency cron events on
+# high-activity repositories (incident 2026-08-29/30).  A 6-hour
+# cadence is low enough to survive the scheduler while still catching
+# missing reviews within a single business day.
 
 on:
   workflow_dispatch:
