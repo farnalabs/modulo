@@ -28,11 +28,102 @@ jobs:
           echo "::error::app.modulo.run is DOWN (uptime monitor - FAR-400)"
           exit 1
 
+      # FAR-1156: the status-code probe above only fails on non-2xx, but
+      # /healthz/ready returns HTTP 200 with top-level "status":"ok" while
+      # individual sub-checks report "degraded" (the aggregate only rolls up
+      # the six gating checks, and even those stay HTTP 200 at the "degraded"
+      # tier - only "unavailable" flips the status code to 503). Parse the
+      # BODY and fail when any non-excluded sub-check is not "ok", so this
+      # class of failure reaches the same alerting path as a full outage
+      # (the ticket step below is `if: failure()` and picks up ANY failed
+      # step in this job - one channel, no second mechanism).
+      - name: Check sub-check statuses in response body
+        id: body-check
+        shell: bash
+        run: |
+          BODY_FILE="$(mktemp)"
+
+          # Fetch the body (the probe above discarded its copy). Short retry
+          # loop so one transient read blip does not raise a false ticket
+          # immediately after the probe proved the endpoint reachable.
+          BODY_OK=false
+          for i in 1 2 3; do
+            if curl -fsS -m 10 https://app.modulo.run/healthz/ready -o "$BODY_FILE" 2>/dev/null; then
+              BODY_OK=true
+              break
+            fi
+            echo "body fetch $i failed - retrying in 5s"
+            sleep 5
+          done
+
+          if [ "$BODY_OK" != "true" ] || [ ! -s "$BODY_FILE" ]; then
+            # Missing body is itself a failure worth alerting on (2xx with no
+            # body would mean the readiness contract itself is broken), but it
+            # must not crash the workflow - fail the step cleanly so the
+            # ticket step fires with this detail.
+            echo "::error::app.modulo.run /healthz/ready body missing or unfetchable after 3 attempts (FAR-1156)"
+            echo "degraded_detail=response body missing or unfetchable after 3 attempts" >> "$GITHUB_OUTPUT"
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+
+          # Parse the body. Safe on unparseable input: jq exits non-zero on
+          # invalid JSON / missing-or-non-object .checks (via error()), which
+          # we catch below and alert on instead of crashing the workflow.
+          #
+          # Advisory exclusion - break_glass ONLY:
+          #   break_glass is a pure boot-config exposure (health.py: "ADVISORY
+          #   ... never contributes to readiness") - it re-surfaces URL/secret
+          #   presence findings that can linger as accepted config posture, so
+          #   a degraded break_glass is expected sometimes and would be noise.
+          #
+          # Deliberately NOT excluding the other checks the backend labels
+          # "ADVISORY" (stale_run_recovery, slot_reconciliation, hitl_park_sweep,
+          # runner_workspace_reconcile, runner_marker_sweep, runner_health_probe,
+          # and dispatcher_reconcile's degraded tier). In health.py "advisory"
+          # means only "does not gate HTTP status" - not "benign". For the five
+          # sweep checks a degraded status means the cron is dead or erroring
+          # (exactly the FAR-1156 blind spot: e.g. runner_marker_sweep degraded
+          # on a failing org-index query while the top level still says ok),
+          # and dispatcher_reconcile degraded means missed ticks or a failing
+          # reconcile heartbeat. Those indicate real breakage and must alert.
+          if ! DEGRADED="$(jq -er '
+            if (.checks | type) != "object" then
+              error("missing or non-object .checks")
+            else
+              [
+                .checks
+                | to_entries[]
+                | select(.key != "break_glass")
+                | select((.value.status // "unknown") != "ok")
+                | "\(.key)=\(.value.status // "unknown")"
+              ]
+              | join(", ")
+            end
+          ' "$BODY_FILE" 2>/dev/null)"; then
+            echo "::error::app.modulo.run /healthz/ready body is not parseable readiness JSON (FAR-1156)"
+            echo "degraded_detail=response body present but not parseable readiness JSON" >> "$GITHUB_OUTPUT"
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+          rm -f "$BODY_FILE"
+
+          if [ -n "$DEGRADED" ]; then
+            echo "::error::app.modulo.run /healthz/ready reports degraded sub-check(s): ${DEGRADED} (uptime monitor - FAR-1156)"
+            echo "degraded_detail=${DEGRADED}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "all non-advisory sub-checks ok"
+
       - name: Open Linear ticket on outage
         if: failure()
         shell: bash
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # Empty when the status-code probe failed (full outage path);
+          # populated by body-check when the body-level check failed.
+          DEGRADED_DETAIL: ${{ steps.body-check.outputs.degraded_detail }}
         run: |
           # Fail-open: only file a Linear ticket when a key is configured.
           if [ -z "$LINEAR_API_KEY" ]; then
@@ -40,12 +131,19 @@ jobs:
             exit 0
           fi
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          BODY=$(jq -n --arg ts "$TS" '{
+          if [ -n "$DEGRADED_DETAIL" ]; then
+            TITLE="DEGRADED: app.modulo.run health sub-check(s) not ok (FAR-1156)"
+            DESC="Automated uptime monitor detected one or more non-ok sub-checks in https://app.modulo.run/healthz/ready at ${TS} (HTTP 2xx - the status-code probe passed). Observed: ${DEGRADED_DETAIL}. Investigate the named check(s) in the readiness response (backend/src/modulo/api/routes/health.py maps each check to its sweep/cron)."
+          else
+            TITLE="OUTAGE: app.modulo.run down (uptime monitor)"
+            DESC="Automated uptime monitor detected app.modulo.run/healthz/ready failing at ${TS}. Investigate Fly app status + recent deploys (FAR-400)."
+          fi
+          BODY=$(jq -n --arg ts "$TS" --arg title "$TITLE" --arg desc "$DESC" '{
             query: "mutation($i: IssueCreateInput!){ issueCreate(input:$i){ success issue { identifier url } } }",
             variables: { i: {
               teamId: "ae855baf-6439-4980-97fb-38da80129485",
-              title: "OUTAGE: app.modulo.run down (uptime monitor)",
-              description: ("Automated uptime monitor detected app.modulo.run/healthz/ready failing at " + $ts + ". Investigate Fly app status + recent deploys (FAR-400).")
+              title: $title,
+              description: $desc
             } }
           }')
           curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
