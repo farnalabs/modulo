@@ -43,10 +43,12 @@ describe('OrgLoginView', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     vi.useFakeTimers()
+    localStorage.clear()
   })
 
   afterEach(() => {
     vi.useRealTimers()
+    vi.unstubAllGlobals()
   })
 
   function mountView(slug = 'test-org') {
@@ -359,5 +361,284 @@ describe('OrgLoginView', () => {
       expect(wrapper.find('[data-testid="org-login-sso-google"]').exists()).toBe(true)
     })
     expect(wrapper.find('[data-testid="org-login-sso-okta-saml"]').exists()).toBe(true)
+  })
+})
+
+describe('OrgLoginView - change organization', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    vi.useFakeTimers()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function mountView(slug = 'test-org') {
+    mockRoute.params.slug = slug
+    return mount(OrgLoginView, {
+      global: {
+        stubs: {
+          Button: { template: '<button><slot /></button>' },
+        },
+      },
+    })
+  }
+
+  it('clears the stored slug and returns to /login', async () => {
+    localStorage.setItem('modulo_login_last_org', 'old-org')
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        org: { slug: 'test-org', name: 'Test Org' },
+        providers: [],
+        password_enabled: true,
+      }),
+    } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-email"]').exists()).toBe(true)
+    })
+
+    const changeOrg = wrapper.find('[data-testid="org-login-change-org"]')
+    expect(changeOrg.exists()).toBe(true)
+    await changeOrg.trigger('click')
+
+    expect(localStorage.getItem('modulo_login_last_org')).toBeNull()
+    expect(mockRouter.push).toHaveBeenCalledWith('/login')
+  })
+
+  it('offers a way back to /login on the not-found path (stale stored slug)', async () => {
+    localStorage.setItem('modulo_login_last_org', 'stale-org')
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ detail: 'Not Found' }),
+    } as Response)
+
+    const wrapper = mountView('stale-org')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-not-found"]').exists()).toBe(true)
+    })
+
+    const changeOrg = wrapper.find('[data-testid="org-login-change-org"]')
+    expect(changeOrg.exists()).toBe(true)
+    await changeOrg.trigger('click')
+
+    expect(localStorage.getItem('modulo_login_last_org')).toBeNull()
+    expect(mockRouter.push).toHaveBeenCalledWith('/login')
+  })
+
+  it('still returns to /login when localStorage removal throws', async () => {
+    localStorage.setItem('modulo_login_last_org', 'old-org')
+    // Repo pattern for throwing storage (see DashboardView-branches.spec):
+    // shadow the instance method and restore it before leaving the test.
+    const origRemoveItem = localStorage.removeItem
+    localStorage.removeItem = () => {
+      throw new Error('storage disabled')
+    }
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        org: { slug: 'test-org', name: 'Test Org' },
+        providers: [],
+        password_enabled: true,
+      }),
+    } as Response)
+
+    try {
+      const wrapper = mountView()
+      await vi.waitFor(() => {
+        expect(wrapper.find('[data-testid="org-login-email"]').exists()).toBe(true)
+      })
+
+      await wrapper.find('[data-testid="org-login-change-org"]').trigger('click')
+
+      expect(mockRouter.push).toHaveBeenCalledWith('/login')
+    } finally {
+      localStorage.removeItem = origRemoveItem
+    }
+  })
+})
+
+describe('OrgLoginView - used last time tag', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    vi.useFakeTimers()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function mountView(slug = 'test-org') {
+    mockRoute.params.slug = slug
+    return mount(OrgLoginView, {
+      global: {
+        stubs: {
+          Button: { template: '<button><slot /></button>' },
+        },
+      },
+    })
+  }
+
+  function mockOrgContext(body: Record<string, unknown>) {
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(body),
+    } as Response)
+  }
+
+  it('tags the password form when password was the last-used method', async () => {
+    localStorage.setItem('modulo_login_last_method', 'password')
+    mockOrgContext({ org: { slug: 'test-org', name: 'Test Org' }, providers: [], password_enabled: true })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-email"]').exists()).toBe(true)
+    })
+    const tag = wrapper.find('[data-testid="org-login-last-used-password"]')
+    expect(tag.exists()).toBe(true)
+    expect(tag.text()).toBe('Used last time')
+  })
+
+  it('tags only the matching SSO provider button', async () => {
+    localStorage.setItem('modulo_login_last_method', 'github')
+    mockOrgContext({
+      org: { slug: 'test-org', name: 'Test Org' },
+      providers: [
+        { provider_id: 'github', display_name: 'GitHub' },
+        { provider_id: 'google', display_name: 'Google' },
+      ],
+      password_enabled: true,
+    })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-sso-section"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-testid="org-login-sso-github"]').text()).toContain('Used last time')
+    expect(wrapper.find('[data-testid="org-login-sso-google"]').text()).not.toContain('Used last time')
+    expect(wrapper.find('[data-testid="org-login-last-used-password"]').exists()).toBe(false)
+  })
+
+  it('shows no tag when the stored method is not available on this screen', async () => {
+    localStorage.setItem('modulo_login_last_method', 'okta')
+    mockOrgContext({ org: { slug: 'test-org', name: 'Test Org' }, providers: [], password_enabled: true })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-email"]').exists()).toBe(true)
+    })
+    expect(wrapper.text()).not.toContain('Used last time')
+  })
+
+  it('shows no password tag when password login is disabled even if password was used last', async () => {
+    localStorage.setItem('modulo_login_last_method', 'password')
+    mockOrgContext({
+      org: { slug: 'test-org', name: 'Test Org' },
+      providers: [{ provider_id: 'github', display_name: 'GitHub' }],
+      password_enabled: false,
+    })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-sso-section"]').exists()).toBe(true)
+    })
+    expect(wrapper.text()).not.toContain('Used last time')
+  })
+
+  it('renders without a tag when localStorage reads throw', async () => {
+    const origGetItem = localStorage.getItem
+    localStorage.getItem = () => {
+      throw new Error('storage disabled')
+    }
+    mockOrgContext({ org: { slug: 'test-org', name: 'Test Org' }, providers: [], password_enabled: true })
+
+    try {
+      const wrapper = mountView()
+      await vi.waitFor(() => {
+        expect(wrapper.find('[data-testid="org-login-email"]').exists()).toBe(true)
+      })
+      expect(wrapper.text()).not.toContain('Used last time')
+    } finally {
+      localStorage.getItem = origGetItem
+    }
+  })
+
+  it('stores slug and password method after a successful login', async () => {
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          org: { slug: 'test-org', name: 'Test Org' },
+          providers: [],
+          password_enabled: true,
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ access_token: 'tok', refresh_token: 'ref' }),
+      } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="org-login-email"]').exists()).toBe(true)
+    })
+
+    await wrapper.find('[data-testid="org-login-email"]').setValue('user@test.com')
+    await wrapper.find('[data-testid="org-login-password"]').setValue('pass')
+    await wrapper.find('form').trigger('submit.prevent')
+
+    await vi.waitFor(() => {
+      expect(localStorage.getItem('modulo_login_last_org')).toBe('test-org')
+      expect(localStorage.getItem('modulo_login_last_method')).toBe('password')
+    })
+    expect(mockRouter.push).toHaveBeenCalledWith('/')
+  })
+
+  it('completes a successful login when localStorage writes throw', async () => {
+    const origSetItem = localStorage.setItem
+    localStorage.setItem = () => {
+      throw new Error('quota exceeded')
+    }
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          org: { slug: 'test-org', name: 'Test Org' },
+          providers: [],
+          password_enabled: true,
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ access_token: 'tok', refresh_token: 'ref' }),
+      } as Response)
+
+    try {
+      const wrapper = mountView()
+      await vi.waitFor(() => {
+        expect(wrapper.find('[data-testid="org-login-email"]').exists()).toBe(true)
+      })
+
+      await wrapper.find('[data-testid="org-login-email"]').setValue('user@test.com')
+      await wrapper.find('[data-testid="org-login-password"]').setValue('pass')
+      await wrapper.find('form').trigger('submit.prevent')
+
+      await vi.waitFor(() => {
+        expect(mockRouter.push).toHaveBeenCalledWith('/')
+      })
+      expect(wrapper.find('[data-testid="org-login-error"]').exists()).toBe(false)
+    } finally {
+      localStorage.setItem = origSetItem
+    }
   })
 })

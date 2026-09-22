@@ -19,10 +19,12 @@ describe('LoginView - login-context integration', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    localStorage.clear()
   })
 
   afterEach(() => {
     vi.useRealTimers()
+    vi.unstubAllGlobals()
   })
 
   function mountView() {
@@ -229,5 +231,322 @@ describe('LoginView - login-context integration', () => {
     })
     expect(wrapper.find('[data-testid="login-sso-oidc-google"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="login-sso-saml"]').exists()).toBe(true)
+  })
+})
+
+function fakeLocation(href: string): Location {
+  return {
+    pathname: '/login',
+    href,
+  } as unknown as Location
+}
+
+describe('LoginView - remembered org slug', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function mountView() {
+    return mount(LoginView, {
+      global: {
+        stubs: {
+          Button: { template: '<button><slot /></button>' },
+        },
+      },
+    })
+  }
+
+  function mockMultiOrgContext() {
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ multi_org: true, org: null }),
+    } as Response)
+  }
+
+  it('redirects straight to the remembered org login when a slug is stored', async () => {
+    localStorage.setItem('modulo_login_last_org', 'acme')
+    const location = fakeLocation('http://localhost/login')
+    vi.stubGlobal('location', location)
+    mockMultiOrgContext()
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(location.href).toBe('/login/acme')
+    })
+    // The slug-entry form must never flash while redirecting — loading stays up.
+    expect(wrapper.find('[data-testid="login-org-slug"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="login-context-loading"]').exists()).toBe(true)
+  })
+
+  it('does not redirect when no org slug is stored', async () => {
+    const location = fakeLocation('http://localhost/login')
+    vi.stubGlobal('location', location)
+    mockMultiOrgContext()
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-org-slug"]').exists()).toBe(true)
+    })
+    expect(location.href).toBe('http://localhost/login')
+  })
+
+  it('stores the entered slug before navigating to /login/:slug', async () => {
+    const location = fakeLocation('http://localhost/login')
+    vi.stubGlobal('location', location)
+    mockMultiOrgContext()
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-org-slug"]').exists()).toBe(true)
+    })
+
+    await wrapper.find('[data-testid="login-org-slug"]').setValue('my-org')
+    await wrapper.find('form').trigger('submit.prevent')
+
+    expect(localStorage.getItem('modulo_login_last_org')).toBe('my-org')
+    expect(location.href).toBe('/login/my-org')
+  })
+
+  it('still navigates on org entry when localStorage writes throw', async () => {
+    const location = fakeLocation('http://localhost/login')
+    vi.stubGlobal('location', location)
+    // Repo pattern for throwing storage (see DashboardView-branches.spec):
+    // shadow the instance method and restore it before leaving the test.
+    const origSetItem = localStorage.setItem
+    localStorage.setItem = () => {
+      throw new Error('quota exceeded')
+    }
+    mockMultiOrgContext()
+
+    try {
+      const wrapper = mountView()
+      await vi.waitFor(() => {
+        expect(wrapper.find('[data-testid="login-org-slug"]').exists()).toBe(true)
+      })
+
+      await wrapper.find('[data-testid="login-org-slug"]').setValue('doomed-org')
+      await wrapper.find('form').trigger('submit.prevent')
+
+      expect(location.href).toBe('/login/doomed-org')
+    } finally {
+      localStorage.setItem = origSetItem
+    }
+  })
+
+  it('still shows the org entry step when localStorage reads throw', async () => {
+    const origGetItem = localStorage.getItem
+    localStorage.getItem = () => {
+      throw new Error('storage disabled')
+    }
+    mockMultiOrgContext()
+
+    try {
+      const wrapper = mountView()
+      await vi.waitFor(() => {
+        expect(wrapper.find('[data-testid="login-org-slug"]').exists()).toBe(true)
+      })
+      expect(wrapper.find('[data-testid="login-context-loading"]').exists()).toBe(false)
+    } finally {
+      localStorage.getItem = origGetItem
+    }
+  })
+})
+
+describe('LoginView - used last time tag', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function mountView() {
+    return mount(LoginView, {
+      global: {
+        stubs: {
+          Button: { template: '<button><slot /></button>' },
+        },
+      },
+    })
+  }
+
+  function mockSingleOrgContext(sso: { oidc: unknown[]; saml: boolean }) {
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          multi_org: false,
+          org: { slug: 'acme', name: 'Acme Corp' },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(sso),
+      } as Response)
+  }
+
+  it('tags the password form when password was the last-used method', async () => {
+    localStorage.setItem('modulo_login_last_method', 'password')
+    mockSingleOrgContext({ oidc: [], saml: false })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+    })
+    const tag = wrapper.find('[data-testid="login-last-used-password"]')
+    expect(tag.exists()).toBe(true)
+    expect(tag.text()).toBe('Used last time')
+  })
+
+  it('tags only the matching SSO provider button', async () => {
+    localStorage.setItem('modulo_login_last_method', 'okta')
+    mockSingleOrgContext({ oidc: [{ provider_id: 'okta' }, { provider_id: 'google' }], saml: false })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-sso-section"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-testid="login-sso-oidc-okta"]').text()).toContain('Used last time')
+    expect(wrapper.find('[data-testid="login-sso-oidc-google"]').text()).not.toContain('Used last time')
+    expect(wrapper.find('[data-testid="login-last-used-password"]').exists()).toBe(false)
+  })
+
+  it('tags the SAML button when SAML was the last-used method', async () => {
+    localStorage.setItem('modulo_login_last_method', 'saml')
+    mockSingleOrgContext({ oidc: [{ provider_id: 'okta' }], saml: true })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-sso-saml"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-testid="login-sso-saml"]').text()).toContain('Used last time')
+    expect(wrapper.find('[data-testid="login-sso-oidc-okta"]').text()).not.toContain('Used last time')
+    expect(wrapper.find('[data-testid="login-last-used-password"]').exists()).toBe(false)
+  })
+
+  it('records the SSO provider_id when an SSO button is activated', async () => {
+    mockSingleOrgContext({ oidc: [{ provider_id: 'okta' }], saml: false })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-sso-oidc-okta"]').exists()).toBe(true)
+    })
+
+    await wrapper.find('[data-testid="login-sso-oidc-okta"]').trigger('click')
+
+    expect(localStorage.getItem('modulo_login_last_method')).toBe('okta')
+  })
+
+  it('records password as the last-used method when an SSO button is activated even if storage is read-only later', async () => {
+    // Activation still updates the in-memory tag source even when a previous
+    // session stored a different method — storage write itself is best-effort.
+    localStorage.setItem('modulo_login_last_method', 'password')
+    mockSingleOrgContext({ oidc: [{ provider_id: 'okta' }], saml: false })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-sso-oidc-okta"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-testid="login-last-used-password"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="login-sso-oidc-okta"]').trigger('click')
+
+    expect(localStorage.getItem('modulo_login_last_method')).toBe('okta')
+    await nextTick()
+    expect(wrapper.find('[data-testid="login-sso-oidc-okta"]').text()).toContain('Used last time')
+    expect(wrapper.find('[data-testid="login-last-used-password"]').exists()).toBe(false)
+  })
+
+  it('shows no tag when the stored method is not available on this screen', async () => {
+    localStorage.setItem('modulo_login_last_method', 'github')
+    mockSingleOrgContext({ oidc: [], saml: false })
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+    })
+    expect(wrapper.text()).not.toContain('Used last time')
+  })
+
+  it('renders without a tag when localStorage reads throw', async () => {
+    const origGetItem = localStorage.getItem
+    localStorage.getItem = () => {
+      throw new Error('storage disabled')
+    }
+    mockSingleOrgContext({ oidc: [], saml: false })
+
+    try {
+      const wrapper = mountView()
+      await vi.waitFor(() => {
+        expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+      })
+      expect(wrapper.text()).not.toContain('Used last time')
+    } finally {
+      localStorage.getItem = origGetItem
+    }
+  })
+
+  it('records password as the last-used method after a successful login', async () => {
+    mockSingleOrgContext({ oidc: [], saml: false })
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ access_token: 'tok', refresh_token: 'ref' }),
+    } as Response)
+
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+    })
+
+    await wrapper.find('[data-testid="login-email"]').setValue('user@test.com')
+    await wrapper.find('[data-testid="login-password"]').setValue('pass')
+    await wrapper.find('form').trigger('submit.prevent')
+
+    await vi.waitFor(() => {
+      expect(localStorage.getItem('modulo_login_last_method')).toBe('password')
+    })
+  })
+
+  it('completes a successful login when localStorage writes throw', async () => {
+    const origSetItem = localStorage.setItem
+    localStorage.setItem = () => {
+      throw new Error('quota exceeded')
+    }
+    mockSingleOrgContext({ oidc: [], saml: false })
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ access_token: 'tok', refresh_token: 'ref' }),
+    } as Response)
+
+    try {
+      const wrapper = mountView()
+      await vi.waitFor(() => {
+        expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+      })
+
+      await wrapper.find('[data-testid="login-email"]').setValue('user@test.com')
+      await wrapper.find('[data-testid="login-password"]').setValue('pass')
+      await wrapper.find('form').trigger('submit.prevent')
+
+      await vi.waitFor(() => {
+        const fetchCalls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls
+        const loginCall = fetchCalls.find((call: unknown[]) => call[0] === '/api/v1/auth/login')
+        expect(loginCall).toBeDefined()
+      })
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    } finally {
+      localStorage.setItem = origSetItem
+    }
   })
 })
