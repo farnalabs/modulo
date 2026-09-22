@@ -3478,7 +3478,7 @@ async def _finalize_locked_graph_save(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from exc
-    raise exc
+    raise
 
 
 @router.post(

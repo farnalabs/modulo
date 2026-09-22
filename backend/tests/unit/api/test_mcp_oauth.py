@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -225,6 +226,27 @@ class TestRegisterOAuthClient:
         finally:
             app.dependency_overrides[get_settings] = _make_settings
 
+    def test_create_propagates_http_exception(self, admin_client: TestClient) -> None:
+        """An HTTPException raised by the save path is re-raised unchanged."""
+        with (
+            patch(
+                "modulo.api.routes.mcp_oauth.create_oauth_client",
+                side_effect=HTTPException(status_code=409, detail="duplicate"),
+            ),
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={
+                    "name": "App",
+                    "redirect_uris": ["http://localhost/cb"],
+                    "scopes": ["trigger:run"],
+                },
+            )
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "duplicate"
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/mcp/oauth/clients
@@ -273,6 +295,20 @@ class TestListOAuthClients:
         assert resp.status_code == 403
         assert "Only admin or operator users can list OAuth clients" in resp.json()["detail"]
 
+    def test_list_propagates_http_exception(self, admin_client: TestClient) -> None:
+        """An HTTPException raised by the query path is re-raised unchanged."""
+        with (
+            patch(
+                "modulo.api.routes.mcp_oauth.list_oauth_clients",
+                side_effect=HTTPException(status_code=409, detail="duplicate"),
+            ),
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.get(self.ENDPOINT)
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "duplicate"
+
 
 # ---------------------------------------------------------------------------
 # DELETE /api/v1/mcp/oauth/clients/{client_id}
@@ -306,6 +342,20 @@ class TestDeleteOAuthClient:
     def test_delete_runner_gets_403(self, runner_client: TestClient) -> None:
         resp = runner_client.delete(f"{self.ENDPOINT}/someclient")
         assert resp.status_code == 403
+
+    def test_delete_propagates_http_exception(self, admin_client: TestClient) -> None:
+        """An HTTPException raised by the delete path is re-raised unchanged."""
+        with (
+            patch(
+                "modulo.api.routes.mcp_oauth.delete_oauth_client",
+                side_effect=HTTPException(status_code=409, detail="duplicate"),
+            ),
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.delete(f"{self.ENDPOINT}/myclient123")
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "duplicate"
 
 
 # ---------------------------------------------------------------------------

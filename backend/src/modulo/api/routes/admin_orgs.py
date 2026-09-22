@@ -747,8 +747,8 @@ async def admin_set_org_triggers_paused(
             "Database error while updating org trigger pause state.",
             exc,
         )
-    except HTTPException as exc:
-        raise exc
+    except HTTPException:
+        raise
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_set_org_triggers_paused", exc)
 
@@ -802,8 +802,8 @@ async def admin_get_org_guardrails_kill_switch(
             "Database error while reading org guardrails kill-switch state.",
             exc,
         )
-    except HTTPException as exc:
-        raise exc
+    except HTTPException:
+        raise
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_get_org_guardrails_kill_switch", exc)
 
@@ -878,7 +878,7 @@ async def admin_set_org_guardrails_kill_switch(
             "Database error while updating org guardrails kill-switch state.",
             exc,
         )
-    except HTTPException as exc:
-        raise exc
+    except HTTPException:
+        raise
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_set_org_guardrails_kill_switch", exc)
