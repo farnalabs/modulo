@@ -39,6 +39,8 @@ from cryptography.x509.oid import NameOID
 
 from modulo.core.email_service import EmailSendingError, send_email
 
+pytestmark = pytest.mark.integration
+
 
 def _generate_self_signed_cert() -> tuple[bytes, bytes]:
     """Return (cert-pem, key-pem) for an ad-hoc loopback SMTP server."""

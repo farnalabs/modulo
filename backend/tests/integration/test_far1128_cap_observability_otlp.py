@@ -25,6 +25,8 @@ from opentelemetry.util._once import Once
 
 from modulo.otel_bridge.export import setup_otel, shutdown_otel
 
+pytestmark = pytest.mark.integration
+
 
 def _reset_global_provider() -> None:
     """Replace the OTel global TracerProvider, clearing the once-guard.

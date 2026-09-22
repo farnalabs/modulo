@@ -24,6 +24,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from modulo.api.routes.health import _check_database, _check_redis
 from modulo.settings import get_settings
 
+pytestmark = pytest.mark.integration
+
 
 def _unlistened_loopback_port() -> int:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
