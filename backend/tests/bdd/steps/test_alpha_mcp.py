@@ -142,8 +142,6 @@ def _call_review_hitl(request, action: str) -> dict:
 
 
 def _make_mcp_request(*, path: str = "/mcp", headers=None):
-    import asyncio
-
     from starlette.requests import Request
 
     scope = {
