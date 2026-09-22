@@ -180,4 +180,3 @@ See [`docs/upgrade-process.md`](./upgrade-process.md) for full upgrade and rollb
 | Upgrade process | [`docs/upgrade-process.md`](./upgrade-process.md) |
 | Troubleshooting | [`docs/troubleshooting.md`](./troubleshooting.md) |
 | Backup & restore | [`docs/operations/backup.md`](./operations/backup.md) |
-| Human tasks | `Repos/devtools/harness/docs/human-tasks.md` |

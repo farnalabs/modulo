@@ -95,6 +95,6 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
 - 2026-08-25: **product-map review pass** — restored this entry as part of
   rebuilding the `docs/product-map/` feature graph. This entry is the one ADR 003
   requires to carry the ShellConnector deprecation notice
-     (ADR 003 (agent-dispatch-model)). Re-verified the runtime_provider package
+  (ADR 003 (agent-dispatch-model)). Re-verified the runtime_provider package
   layout, environment-profile CRUD routes, workspace-lease model, and ShellConnector
   deprecation notice against the current tree. Status: covered.
