@@ -61,7 +61,7 @@ async def get_org_settings(
         ) from None
     except HTTPException as exc:
         _log.debug("org.get_settings HTTPException (org_id=%s) detail=%s", current_user.organisation_id, exc.detail)
-        raise exc
+        raise
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -116,7 +116,7 @@ async def get_org_guardrails_kill_switch(
             current_user.organisation_id,
             exc.detail,
         )
-        raise exc
+        raise
     except asyncio.CancelledError:
         raise
     except Exception:
