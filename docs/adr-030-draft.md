@@ -1,10 +1,11 @@
 # ADR 030 -- User-scoped MCP keys: per-user key issuance; MCP calls operate under the key owner's identity
 
-> **CONDUCTOR NOTE:** This file is a TRANSPLANT DRAFT. ADRs live in
-> `Repos/devtools/adr/` (migrated out of modulo in FAR-434, where they are
-> numbered by sequence -- this lands as `030-user-scoped-mcp-keys.md`,
-> cross-referencing ADR 014/017/018). When transplanting, also apply the
-> one-line reciprocal edit to ADR 017 named in the amendment below.
+> **CONDUCTOR NOTE:** This file is a TRANSPLANT DRAFT. ADRs are maintained
+> alongside this project's private development tooling (migrated out of modulo in
+> FAR-434, where they are numbered by sequence -- this lands as
+> `030-user-scoped-mcp-keys.md`, cross-referencing ADR 014/017/018). When
+> transplanting, also apply the one-line reciprocal edit to ADR 017 named in the
+> amendment below.
 
 **Status:** Accepted (Phase 1 mechanism shipped; FAR-620)
 **Date:** 2026-09-06

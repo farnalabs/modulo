@@ -207,8 +207,7 @@ modulo/
 │   ├── product-map/              # Feature graph entries (see product-map/README.md)
 │   ├── security/                 # Security documentation
 │   └── deployment/               # Deployment guides
-      (Architecture decision records moved to the private farnalabs/devtools repo,
-       Repos/devtools/adr/, 2026-09-02 — FAR-434)
+      (Architecture decision records migrated to private tooling repo, 2026-09-02 — FAR-434)
       (product map: frontend/src/manifest.yaml — feature registry + per-route refs, ADR 008)
 ├── deploy/
 │   ├── compose/                  # Non-default compose files: docker-compose.{prod,test}.yml
