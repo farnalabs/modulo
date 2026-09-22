@@ -94,12 +94,19 @@ _RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
 )
 
 
-def _validate_trigger_config_keys(config: dict[str, Any] | None) -> None:
+def _validate_trigger_config_keys(
+    config: dict[str, Any] | None,
+    *,
+    context: str = "config_json",
+) -> None:
     """Reject config_json keys the trigger engine does not read.
 
     Raises ``HTTPException`` 400 naming every offending key and the set of
     keys the engine recognises.  A ``None`` or empty config passes through —
     there are no keys to mis-declare.
+
+    *context* labels the source in the error message (e.g. ``"config_json"``
+    for create, ``"merged config_json"`` for update-after-merge).
     """
     if not config:
         return
@@ -108,11 +115,13 @@ def _validate_trigger_config_keys(config: dict[str, Any] | None) -> None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"config_json contains key(s) the trigger engine does not read: "
+                f"{context} contains key(s) the trigger engine does not read: "
                 f"{unrecognised}. "
                 f"Recognised keys: {sorted(_RECOGNISED_TRIGGER_CONFIG_KEYS)}. "
                 "If you intended to filter events, use 'accepted_events' "
-                "(event-type gate) or 'event_filters' (value gate)."
+                "(event-type gate) or 'event_filters' (value gate). "
+                "To remove a stale key, send it as null "
+                '(e.g. {"events": null}).'
             ),
         )
 
@@ -256,11 +265,17 @@ def _merge_trigger_config(current: dict[str, Any] | None, update: dict[str, Any]
     """MERGE config fields — never wholesale replace (drops unmanaged keys).
 
     A masked placeholder must never clobber the stored secret (read-modify-write
-    round-trip guard); an explicit ``None`` clears the key; a missing key leaves
-    it intact. Delegates to :func:`merge_masked_config_json` so nested masked
-    values (``headers.Authorization``, list elements, ``operations`` params) are
+    round-trip guard); an explicit ``None`` value **deletes** the key from the
+    merged result (e.g. ``{"events": null}`` removes the ``events`` key);
+    a missing key leaves it intact. Delegates to
+    :func:`merge_masked_config_json` so nested masked values
+    (``headers.Authorization``, list elements, ``operations`` params) are
     skipped at every depth — the trigger GET emits a recursive mask, so the
     PATCH merge must be recursive too (previously top-level exact-equality only).
+
+    Removal vs. null-setting: trigger config values are strings, lists, dicts,
+    or numbers — never JSON ``null``. A ``None``/``null`` in the update payload
+    therefore unambiguously means "remove this key", not "set the value to null".
     """
     return merge_masked_config_json(current or {}, update)
 
@@ -1091,8 +1106,8 @@ async def _apply_trigger_update(
     if "daily_spend_limit" in req.model_fields_set:
         trigger.daily_spend_limit = req.daily_spend_limit
     if req.config_json is not None:
-        _validate_trigger_config_keys(req.config_json)
         merged = _merge_trigger_config(trigger.config_json, req.config_json)
+        _validate_trigger_config_keys(merged, context="merged config_json")
         trigger.config_json = _encrypt_trigger_config_secrets(merged, settings.fernet_key)
     if req.cron_expression is not None:
         trigger.cron_expression = req.cron_expression

@@ -5590,10 +5590,6 @@ async def update_trigger(
         tid, input_err = _validate_trigger_update_inputs(trigger_id, max_concurrent_runs, daily_spend_limit)
         if input_err:
             return input_err
-        try:
-            _validate_trigger_config_keys(config_json)
-        except FastAPIHTTPException as exc:
-            return {"error": "validation", "detail": exc.detail}
         if tid is None:
             raise RuntimeError("_validate_trigger_update_inputs returned an error dict but no parsed trigger id")
 
@@ -5633,6 +5629,11 @@ async def update_trigger(
                 next_fire_at,
                 prev_active,
             )
+            if trigger.config_json is not None:
+                try:
+                    _validate_trigger_config_keys(trigger.config_json, context="merged config_json")
+                except FastAPIHTTPException as exc:
+                    return {"error": "validation", "detail": exc.detail}
 
             _recompute_ongoing_next_fire(
                 trigger, max_concurrent_runs, active, prev_max, prev_active, ongoing_scan_interval_changed
