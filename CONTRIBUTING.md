@@ -207,8 +207,7 @@ modulo/
 │   ├── product-map/              # Feature graph entries (see product-map/README.md)
 │   ├── security/                 # Security documentation
 │   └── deployment/               # Deployment guides
-      (Architecture decision records moved to the private farnalabs/devtools repo,
-       Repos/devtools/adr/, 2026-09-02 — FAR-434)
+      (Architecture decision records migrated to private tooling repo, 2026-09-02 — FAR-434)
       (product map: frontend/src/manifest.yaml — feature registry + per-route refs, ADR 008)
 ├── deploy/
 │   ├── compose/                  # Non-default compose files: docker-compose.{prod,test}.yml
@@ -449,8 +448,8 @@ concurrency groups keyed on `${{ github.ref }}`.
 Modulo uses PR-based delivery. Push your branch, open a pull request, and CI
 (`ci.yml`) validates it automatically; merging is handled by the
 `merge-queue.yml` workflow once checks pass and review approves. For
-farnalabs-internal delivery the `<push-and-create-PR>` / `<poll-PR-until-merged>` helpers
-exist in the devtools tooling repo.
+For farnalabs-internal delivery, additional automation helpers
+exist in the internal tooling repo (not part of the public contribution flow).
 
 ---
 

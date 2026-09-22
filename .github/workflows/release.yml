@@ -1,6 +1,6 @@
 name: "Release: Cut / Recut / Promote"
 
-# Alpha release process (internal release runbook).
+# Alpha release process.
 # The code freeze on main is signalled by the existence of the 'release-freeze'
 # tag; merge-queue.yml's freeze-gate job pauses merging while it exists.
 #
