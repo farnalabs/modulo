@@ -42,10 +42,12 @@ def is_telemetry_enabled() -> bool:
         if store_val is not None:
             return store_val.lower() in ("true", "1", "yes")
     except RuntimeError:
-        # Store not yet initialised (early boot / test isolation) — fall
-        # through to Settings.  Only catch RuntimeError which is what the
-        # singleton raises when the lock cannot be acquired; any other
-        # exception signals a real bug and must propagate.
+        # Defensive arm: get_runtime_config_store() normally lazily
+        # constructs the singleton and never raises, so this only covers a
+        # store that is explicitly unavailable (e.g. torn down for test
+        # isolation, or a future init failure).  Catching only RuntimeError
+        # keeps the fallback narrow — any other exception signals a real bug
+        # and must propagate.
         _log.debug("RuntimeConfigStore unavailable, falling back to Settings")
     # defence-in-depth: Settings reads the env var directly.  In normal
     # operation the store default is never None so this path is unreachable,

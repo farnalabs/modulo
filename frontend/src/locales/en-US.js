@@ -2246,6 +2246,10 @@ export default {
       "telemetry_no_pii": "No personal data, pipeline content, or API keys are ever collected. Telemetry is sent over TLS and cannot be linked to your instance.",
       "telemetry_enable": "Enable Telemetry",
       "telemetry_skip": "Skip for Now",
+      "telemetry_current_on": "Telemetry is currently on.",
+      "telemetry_current_off": "Telemetry is currently off.",
+      "telemetry_enabled_success": "Telemetry enabled. You can change this anytime.",
+      "telemetry_admin_only": "Only a system administrator can change telemetry for this instance. You can skip this step.",
       "telemetry_can_change_later": "You can change this anytime in Settings > Runtime Configuration (MODULO_TELEMETRY_ENABLED)."
     },
     "SettingsLicenseView": {

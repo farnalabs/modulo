@@ -325,6 +325,12 @@
             <p class="mt-3 text-xs text-muted-foreground">
               {{ $t('views.OnboardingWizard.telemetry_no_pii') }}
             </p>
+            <p v-if="telemetryForbidden" data-testid="onboarding-wizard-telemetry-forbidden" class="mt-3 text-xs text-muted-foreground">
+              {{ $t('views.OnboardingWizard.telemetry_admin_only') }}
+            </p>
+            <p v-else-if="telemetryEnabled !== null" data-testid="onboarding-wizard-telemetry-status" class="mt-3 text-xs text-muted-foreground">
+              {{ telemetryEnabled ? $t('views.OnboardingWizard.telemetry_current_on') : $t('views.OnboardingWizard.telemetry_current_off') }}
+            </p>
             <ErrorAlert
               v-if="telemetryError"
               class="mt-3"
@@ -333,8 +339,12 @@
               role="alert"
               aria-live="assertive"
             />
+            <div v-if="telemetrySaved" data-testid="onboarding-wizard-telemetry-saved" class="mt-3 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success" role="status">
+              {{ $t('views.OnboardingWizard.telemetry_enabled_success') }}
+            </div>
             <div class="mt-6 flex items-center justify-center gap-3">
               <Button
+                v-if="!telemetryForbidden"
                 :disabled="telemetrySaving"
                 data-testid="onboarding-wizard-telemetry-enable"
                 @click="saveTelemetry(true)"
@@ -531,6 +541,9 @@ const telemetryLoading = ref(false)
 const telemetrySaving = ref(false)
 const telemetryError = ref<string | null>(null)
 const telemetryRetry = ref<(() => void) | null>(null)
+const telemetryEnabled = ref<boolean | null>(null)
+const telemetrySaved = ref(false)
+const telemetryForbidden = ref(false)
 
 const canProceed = computed(() => {
   switch (currentStep.value) {
@@ -778,11 +791,18 @@ async function loadTelemetryStatus() {
   telemetryLoading.value = true
   telemetryError.value = null
   telemetryRetry.value = null
+  telemetryForbidden.value = false
   try {
-    const { error: err } = await api.GET('/api/v1/admin/telemetry')
-    if (err) {
+    const { data, error: err, response } = await api.GET('/api/v1/admin/telemetry')
+    if (response?.status === 403) {
+      // Non-system-admins cannot read the deployment-wide toggle; surface a
+      // softer note and hide the action instead of a raw 403 alert.
+      telemetryForbidden.value = true
+    } else if (err) {
       telemetryError.value = formatApiError(err)
       telemetryRetry.value = loadTelemetryStatus
+    } else if (data && typeof data.enabled === 'boolean') {
+      telemetryEnabled.value = data.enabled
     }
   } catch (e: unknown) {
     telemetryError.value = formatApiError(e)
@@ -797,13 +817,19 @@ async function saveTelemetry(enabled: boolean) {
   telemetrySaving.value = true
   telemetryError.value = null
   telemetryRetry.value = null
+  telemetrySaved.value = false
   try {
-    const { error: err } = await api.PUT('/api/v1/admin/telemetry', {
+    const { data, error: err, response } = await api.PUT('/api/v1/admin/telemetry', {
       body: { enabled },
     })
-    if (err) {
+    if (response?.status === 403) {
+      telemetryForbidden.value = true
+    } else if (err) {
       telemetryError.value = formatApiError(err)
       telemetryRetry.value = () => saveTelemetry(enabled)
+    } else {
+      telemetryEnabled.value = data?.enabled ?? enabled
+      telemetrySaved.value = true
     }
   } catch (e: unknown) {
     telemetryError.value = formatApiError(e)
