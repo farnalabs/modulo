@@ -567,6 +567,19 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > processor so nothing reaches the exporter. The closed gap moved to a ticked
 > behaviour in the tracker + manifest; `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-22):** closed `feat-library-collections`'s "No BDD
+> feature file" gap (`library/library-collections.md`). Registered the new
+> `library/library_collections.feature` into the executing BDD suite from the new
+> `steps/test_library_collections.py`, driving the real `/api/v1/libraries/collections`
+> install/uninstall/grant routes with only the library_service + flag/RLS seams
+> patched: installing a published collection → 201 with an `installed` record +
+> runnability verdict, a non-published collection → 400, an unresolvable pin →
+> 422, a repeat install → 400; uninstall's delete-vs-detach semantics (unmodified
+> entities deleted, a modified schema detached) + unknown-install 404; and the
+> community-sourced grant gate (200 with `agents_granted` for community installs,
+> idempotent re-grant 200, 400 for local installs, 404 for unknown installs).
+> 11 scenarios execute in CI. `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
