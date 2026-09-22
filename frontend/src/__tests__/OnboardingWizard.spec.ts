@@ -740,4 +740,27 @@ describe('OnboardingWizard — telemetry step (FAR-1131)', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-saved"]').text()).toContain('Telemetry enabled')
   })
+
+  it('softens a 403 on save into an admin-only note and hides the enable button', async () => {
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    ;(api.PUT as Mock).mockResolvedValue({
+      data: undefined,
+      error: { detail: 'requires system.config.manage' },
+      response: { status: 403 },
+    })
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-forbidden"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').exists()).toBe(false)
+  })
+
+  it('falls back to the requested value when the save response omits enabled', async () => {
+    ;(api.PUT as Mock).mockResolvedValue({ data: undefined, error: undefined })
+    const wrapper = await advanceToTelemetry()
+    await flushPromises()
+    await wrapper.find('[data-testid="onboarding-wizard-telemetry-enable"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="onboarding-wizard-telemetry-saved"]').text()).toContain('Telemetry enabled')
+  })
 })

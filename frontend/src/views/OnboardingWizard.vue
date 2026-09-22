@@ -335,7 +335,7 @@
               v-if="telemetryError"
               class="mt-3"
               :message="telemetryError"
-              :on-retry="telemetryRetry ?? undefined"
+              :on-retry="telemetryRetry"
               role="alert"
               aria-live="assertive"
             />
@@ -540,7 +540,7 @@ const emptyRunWarning = ref<string | null>(null)
 const telemetryLoading = ref(false)
 const telemetrySaving = ref(false)
 const telemetryError = ref<string | null>(null)
-const telemetryRetry = ref<(() => void) | null>(null)
+const telemetryRetry = ref<(() => void) | undefined>(undefined)
 const telemetryEnabled = ref<boolean | null>(null)
 const telemetrySaved = ref(false)
 const telemetryForbidden = ref(false)
@@ -790,7 +790,7 @@ function skipToEnd() {
 async function loadTelemetryStatus() {
   telemetryLoading.value = true
   telemetryError.value = null
-  telemetryRetry.value = null
+  telemetryRetry.value = undefined
   telemetryForbidden.value = false
   try {
     const { data, error: err, response } = await api.GET('/api/v1/admin/telemetry')
@@ -816,7 +816,7 @@ async function saveTelemetry(enabled: boolean) {
   if (telemetrySaving.value) return
   telemetrySaving.value = true
   telemetryError.value = null
-  telemetryRetry.value = null
+  telemetryRetry.value = undefined
   telemetrySaved.value = false
   try {
     const { data, error: err, response } = await api.PUT('/api/v1/admin/telemetry', {
