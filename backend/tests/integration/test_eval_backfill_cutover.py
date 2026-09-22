@@ -147,7 +147,10 @@ async def _seed_org_and_pipeline(
 
 
 async def _seed_eval_definitions(engine: AsyncEngine, seeded: dict[str, uuid.UUID]) -> dict[str, uuid.UUID]:
-    """Seed five eval_definitions rows — one per backfill population.
+    """Seed six eval_definitions rows — one per backfill population.
+
+    Population 5 (dual-scoped: node_id IS NOT NULL AND suite_id IS NOT NULL)
+    MUST produce a PolicyGate — it participates in per-node evaluation.
 
     Returns the definition ids keyed by population for targeted assertions.
     """
@@ -159,6 +162,7 @@ async def _seed_eval_definitions(engine: AsyncEngine, seeded: dict[str, uuid.UUI
     guardrail_id = uuid.uuid4()
     suite_scoped_id = uuid.uuid4()
     soft_deleted_id = uuid.uuid4()
+    dual_scoped_id = uuid.uuid4()
     rows = [
         # (id, node_id, name, eval_type, failure_behaviour, suite_id, pass_threshold, deleted)
         (ordinary_id, str(uuid.uuid4()), "ordinary-warn", "regex", "warn", None, None, False),
@@ -166,6 +170,18 @@ async def _seed_eval_definitions(engine: AsyncEngine, seeded: dict[str, uuid.UUI
         (guardrail_id, str(uuid.uuid4()), "guardrail-def", "guardrail", "warn", None, None, False),
         (suite_scoped_id, None, "suite-scoped-def", "regex", "warn", "legacy-suite", Decimal("0.5000"), False),
         (soft_deleted_id, str(uuid.uuid4()), "soft-deleted-def", "regex", "warn", None, None, True),
+        # Population 5: dual-scoped (node_id IS NOT NULL AND suite_id IS NOT NULL).
+        # This MUST produce a PolicyGate — per-node evaluation applies.
+        (
+            dual_scoped_id,
+            str(uuid.uuid4()),
+            "dual-scoped-def",
+            "regex",
+            "warn",
+            "legacy-suite",
+            Decimal("0.7500"),
+            False,
+        ),
     ]
     async with engine.begin() as conn:
         for eval_id, node_id, name, eval_type, behaviour, suite_id, threshold, deleted in rows:
@@ -198,6 +214,7 @@ async def _seed_eval_definitions(engine: AsyncEngine, seeded: dict[str, uuid.UUI
         "guardrail": guardrail_id,
         "suite_scoped": suite_scoped_id,
         "soft_deleted": soft_deleted_id,
+        "dual_scoped": dual_scoped_id,
     }
 
 
@@ -298,8 +315,8 @@ async def _assert_c1_c2_c3_c4_c5(engine: AsyncEngine, seeded: dict[str, uuid.UUI
     """Backfill completeness: row counts + anti-join + population exclusions."""
     eval_count = await _scalar(engine, "SELECT COUNT(*) FROM evals")
     ed_count = await _scalar(engine, "SELECT COUNT(*) FROM eval_definitions")
-    assert eval_count == 5, f"expected 5 Eval rows after 1:1 backfill, got {eval_count}"
-    assert ed_count == 5, f"expected 5 source eval_definitions rows, got {ed_count}"
+    assert eval_count == 6, f"expected 6 Eval rows after 1:1 backfill, got {eval_count}"
+    assert ed_count == 6, f"expected 6 source eval_definitions rows, got {ed_count}"
 
     eligible = await _scalar(
         engine,
@@ -307,10 +324,11 @@ async def _assert_c1_c2_c3_c4_c5(engine: AsyncEngine, seeded: dict[str, uuid.UUI
         "AND node_id IS NOT NULL AND eval_type != 'guardrail'",
     )
     pg_count = await _scalar(engine, "SELECT COUNT(*) FROM policy_gates")
-    assert pg_count == 2, (
-        f"expected PolicyGate only for the 2 live node-scoped non-guardrail candidates, got {pg_count}"
+    assert pg_count == 3, (
+        f"expected PolicyGate for the 3 live node-scoped non-guardrail candidates "
+        f"(ordinary-warn, ordinary-block, dual-scoped), got {pg_count}"
     )
-    assert eligible == 2, f"candidate count drifted, got {eligible}"
+    assert eligible == 3, f"candidate count drifted, got {eligible}"
 
     # Anti-join: every eligible definition produced exactly one gate (a
     # duplicate + missing pair would keep the COUNT equal but fail this).
@@ -351,6 +369,14 @@ async def _assert_c1_c2_c3_c4_c5(engine: AsyncEngine, seeded: dict[str, uuid.UUI
         )
         assert eval_exists == 1, f"Eval row for {key} population missing from evals"
         assert gate_exists == 0, f"PolicyGate must not exist for {key} population"
+
+    # Population 5 (dual-scoped): node_id IS NOT NULL AND suite_id IS NOT NULL.
+    # This MUST produce a PolicyGate — per-node evaluation applies.
+    dual_eval_id = defs["dual_scoped"]
+    dual_gate = await _scalar(
+        engine, "SELECT COUNT(*) FROM policy_gates WHERE eval_id = :eid", {"eid": str(dual_eval_id)}
+    )
+    assert dual_gate == 1, f"dual-scoped eval (node_id + suite_id both set) must produce a PolicyGate, got {dual_gate}"
 
 
 async def _assert_c6(engine: AsyncEngine) -> None:
@@ -445,7 +471,7 @@ async def test_upgrade_is_idempotent_on_existing_backfill(isolated_db_url: str) 
         assert gates_after == gates_before, "re-running the backfill must not insert or duplicate PolicyGate rows"
         assert violations_after == violations_before, "re-run must not add or remove inventory rows"
         assert violations_before == 0, "violation inventory must stay empty on a clean re-run"
-        assert ed_count == 5, f"legacy table untouched by re-run, got {ed_count}"
+        assert ed_count == 6, f"legacy table untouched by re-run, got {ed_count}"
 
         await _assert_c1_c2_c3_c4_c5(engine, seeded, defs)
         await _assert_c8(engine)
@@ -536,7 +562,7 @@ async def test_content_correctness_every_copied_field_matches_source(isolated_db
                 )
             ).fetchall()
 
-        assert len(rows) == 5, f"expected 5 joined pairs, got {len(rows)}"
+        assert len(rows) == 6, f"expected 6 joined pairs, got {len(rows)}"
         for row in rows:
             (
                 eid,
@@ -754,7 +780,7 @@ async def test_downgrade_restores_legacy_fk_and_trigger_targets(isolated_db_url:
 
         # Legacy data retained — the rollback is a pure code revert.
         ed_count = await _scalar(engine, "SELECT COUNT(*) FROM eval_definitions")
-        assert ed_count == 5, f"legacy eval_definitions data must be retained, got {ed_count}"
+        assert ed_count == 6, f"legacy eval_definitions data must be retained, got {ed_count}"
         survived = await _scalar(engine, "SELECT COUNT(*) FROM eval_results WHERE id = :rid", {"rid": str(result_id)})
         assert survived == 1, "pre-migration EvalResult row must survive the downgrade"
 

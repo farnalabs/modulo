@@ -448,7 +448,7 @@ def _backfill_policy_gates(violation_ids: set[uuid.UUID]) -> int:
             insert_sql = (
                 "INSERT INTO policy_gates (eval_id, node_id, action, organisation_id) "
                 "VALUES (:eval_id, :node_id, :action, :organisation_id) "
-                "ON CONFLICT DO NOTHING"
+                "ON CONFLICT (eval_id) WHERE deleted_at IS NULL DO NOTHING"
             )
             sp = op.get_bind().begin_nested()
             try:
@@ -503,7 +503,7 @@ def _recreate_trigger() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _verify_counts(expected_eval_count: int, expected_pg_count: int) -> None:
+def _verify_counts(expected_pg_count: int) -> None:
     """Run row-count assertions (spec §3.2 Step 6)."""
 
     # Every EvalDefinition → one Eval
@@ -674,7 +674,7 @@ def upgrade() -> None:
 
     # ---- Steps 6–7: verification ----
     logger.info("Step 6: verifying row counts …")
-    _verify_counts(expected_eval_count=eval_count, expected_pg_count=expected_pg_count)
+    _verify_counts(expected_pg_count=expected_pg_count)
     logger.info("Step 7: verifying content correctness …")
     _verify_content()
     _verify_fk_target()

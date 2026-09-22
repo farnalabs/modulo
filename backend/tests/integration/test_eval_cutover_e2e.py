@@ -317,11 +317,15 @@ async def test_eval_suite_guard_still_reads_eval_definitions(
                     "aid": str(account_id),
                 },
             )
+            # evals row uses a DIFFERENT threshold (0.8) so the test can
+            # distinguish which table _check_eval_suites reads: if it reads
+            # eval_definitions (intended, CO-3), the 0.5 threshold governs;
+            # if it reads evals (wrong), the 0.8 threshold governs.
             await conn.execute(
                 text(
                     "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, "
                     "config_json, pass_threshold, suite_id, account_id) "
-                    "VALUES (:id, :oid, :pid, NULL, :name, 'regex', '{}'::jsonb, 0.5, 'suite-17', :aid)"
+                    "VALUES (:id, :oid, :pid, NULL, :name, 'regex', '{}'::jsonb, 0.8, 'suite-17', :aid)"
                 ),
                 {
                     "id": str(eval_id),
@@ -337,14 +341,17 @@ async def test_eval_suite_guard_still_reads_eval_definitions(
     executor = PipelineExecutor(db_engine, checkpointer_conn_string=conn_string)
     session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-    # All-pass run: full set coverage, aggregate 1.0 >= 0.5 -> no raise.
+    # All-pass run: full set coverage, aggregate 0.5 >= 0.5 (eval_definitions
+    # threshold) -> no raise.  If _check_eval_suites incorrectly read evals
+    # (threshold 0.8), the 0.5 aggregate would be below threshold and the
+    # guard would raise — this is the falsifiability check (F4).
     run_pass = await _seed_run(db_engine, org_id, pipe, snap, status="running")
     async with db_engine.connect() as conn, conn.begin():
         for eval_id in (def_a, def_b):
             await conn.execute(
                 text(
                     "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, score) "
-                    "VALUES (:id, :oid, :rid, :eid, true, 1.0)"
+                    "VALUES (:id, :oid, :rid, :eid, true, 0.5)"
                 ),
                 {
                     "id": str(uuid.uuid4()),
