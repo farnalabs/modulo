@@ -1680,6 +1680,7 @@ async def test_reconcile_org_read_failure_returns(caplog):
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
         "hitl_gate_expired_terminalized": 0,
+        "hitl_gate_missing_terminalized": 0,
         "scanned": 0,
     }
     with (
@@ -1713,6 +1714,7 @@ async def test_reconcile_org_processes_rows():
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
         "hitl_gate_expired_terminalized": 0,
+        "hitl_gate_missing_terminalized": 0,
         "scanned": 0,
     }
     with (
@@ -2204,6 +2206,7 @@ async def test_reconcile_org_reraises_cancellation():
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
         "hitl_gate_expired_terminalized": 0,
+        "hitl_gate_missing_terminalized": 0,
         "scanned": 0,
     }
     with (
