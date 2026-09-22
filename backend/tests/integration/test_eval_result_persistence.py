@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
 from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
+from tests.integration.conftest import EvalMirrorDefinition, insert_evals_mirror
 
 pytestmark = pytest.mark.integration
 
@@ -63,11 +64,10 @@ async def _insert_eval_definition(
 ) -> uuid.UUID:
     """Insert an eval_definitions row (and its 1:1 evals mirror) and return its id.
 
-    FAR-1100 chunk 3 (migration 0254) repointed ``eval_results.eval_id`` to
-    ``evals`` and recreated the tenant trigger against ``evals``. Every legacy
-    ``eval_definitions`` row therefore needs its same-UUID ``evals`` mirror —
-    the data shape 0254's backfill produces — before an ``eval_results`` row can
-    reference it.
+    The same-UUID ``evals`` mirror is required because FAR-1100 chunk 3
+    (migration 0254) repointed ``eval_results.eval_id`` to ``evals`` before an
+    ``eval_results`` row can reference it; see ``insert_evals_mirror`` in the
+    integration conftest.
     """
     eval_id = uuid.uuid4()
     eval_name = name or f"test-eval-{eval_id.hex[:8]}"
@@ -90,21 +90,17 @@ async def _insert_eval_definition(
                 "fb": failure_behaviour,
             },
         )
-        await conn.execute(
-            text(
-                "INSERT INTO evals "
-                "(id, organisation_id, pipeline_id, node_id, name, eval_type, "
-                "config_json, account_id) "
-                "VALUES (:id, :oid, :pid, :nid, :name, 'regex', '{}'::jsonb, :aid)"
+        await insert_evals_mirror(
+            conn,
+            EvalMirrorDefinition(
+                id=eval_id,
+                organisation_id=org_id,
+                pipeline_id=pipeline_id,
+                name=eval_name,
+                eval_type="regex",
+                account_id=account_id,
+                node_id=node_id,
             ),
-            {
-                "id": str(eval_id),
-                "oid": str(org_id),
-                "pid": str(pipeline_id),
-                "nid": str(node_id) if node_id else None,
-                "name": eval_name,
-                "aid": str(account_id),
-            },
         )
     return eval_id
 

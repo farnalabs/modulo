@@ -37,6 +37,7 @@ from modulo.core.trigger_engine.pre_guardrail import (
     run_pre_trigger_guardrail_pass,
 )
 from modulo.db.rls import set_rls_org
+from tests.integration.conftest import EvalMirrorDefinition, insert_evals_mirror
 
 pytestmark = pytest.mark.integration
 
@@ -155,20 +156,17 @@ async def _seed_guardrail(
         # eval_definitions row needs its same-UUID evals mirror (the shape
         # 0254's backfill produces) before the intake seam can persist the
         # guardrail's eval_result.
-        await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, NULL, :name, 'guardrail', (:cfg)::jsonb, :aid)"
+        await insert_evals_mirror(
+            conn,
+            EvalMirrorDefinition(
+                id=guardrail_id,
+                organisation_id=org_id,
+                pipeline_id=pipeline_id,
+                name=name,
+                eval_type="guardrail",
+                account_id=account_id,
+                config=cfg,
             ),
-            {
-                "id": str(guardrail_id),
-                "oid": str(org_id),
-                "pid": str(pipeline_id),
-                "name": name,
-                "cfg": json.dumps(cfg),
-                "aid": str(account_id),
-            },
         )
 
 

@@ -43,6 +43,7 @@ from modulo.core.trigger_engine import is_guardrail_blocked_run
 from modulo.db.crud.run import create_run
 from modulo.db.crud.run_node_outputs import replace_run_node_outputs
 from modulo.db.rls import set_rls_org
+from tests.integration.conftest import EvalMirrorDefinition, insert_evals_mirror
 
 pytestmark = pytest.mark.integration
 
@@ -170,19 +171,17 @@ async def comp_rig(
         # eval_definitions row needs its same-UUID evals mirror (the shape
         # 0254's backfill produces) before the run-creation seam can persist the
         # guardrail's eval_result.
-        await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, NULL, 'no-secrets', 'guardrail', (:cfg)::jsonb, :aid)",
+        await insert_evals_mirror(
+            conn,
+            EvalMirrorDefinition(
+                id=guardrail_id,
+                organisation_id=test_org,
+                pipeline_id=pipeline_id,
+                name="no-secrets",
+                eval_type="guardrail",
+                account_id=test_user,
+                config=guardrail_cfg,
             ),
-            {
-                "id": str(guardrail_id),
-                "oid": str(test_org),
-                "pid": str(pipeline_id),
-                "cfg": json.dumps(guardrail_cfg),
-                "aid": str(test_user),
-            },
         )
     return {
         "org_id": test_org,
