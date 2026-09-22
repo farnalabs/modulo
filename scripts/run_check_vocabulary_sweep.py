@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """TEMPORARY vocabulary-sweep guard (FAR-588, D3 of the Agent Execution Tiers
-delivery, ADR 029 in Repos/devtools/adr/).
+delivery, ADR 029).
 
 Forbids the retired user-facing terms "sandbox agent" / "external agent"
 (space or hyphen forms, case-insensitive) in user-facing surfaces:

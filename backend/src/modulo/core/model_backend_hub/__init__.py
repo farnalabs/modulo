@@ -520,15 +520,28 @@ def _build_backend(
     default_base_url = _OPENAI_COMPATIBLE_BACKENDS.get(provider)
     if default_base_url is not None or provider == "openai":
         base_url = creds.get("base_url", default_base_url) if default_base_url is not None else None
-        from modulo.model_backends.module import OpenAICompatibleBackend
 
-        backend = OpenAICompatibleBackend(
-            api_key=creds.get("api_key"),
-            model_id=model_id,
-            base_url=base_url,
-            provider=provider,
-            **default_params,
-        )
+        # FAR-1139: the opencode provider needs custom headers (session ID +
+        # User-Agent) that only OpenCodeBackend sends. All other OpenAI-
+        # compatible providers use the plain base class.
+        if provider == "opencode":
+            from modulo.model_backends.opencode import OpenCodeBackend
+
+            backend: ModelBackendBase = OpenCodeBackend(
+                api_key=creds.get("api_key") or "",
+                model_id=model_id,
+                **default_params,
+            )
+        else:
+            from modulo.model_backends.module import OpenAICompatibleBackend
+
+            backend = OpenAICompatibleBackend(
+                api_key=creds.get("api_key"),
+                model_id=model_id,
+                base_url=base_url,
+                provider=provider,
+                **default_params,
+            )
         # FIX 3 (FAR-898): disable native structured output for providers
         # that do not support OpenAI-style response_format json_schema.
         if provider in _NO_NATIVE_STRUCTURED_OUTPUT_PROVIDERS:

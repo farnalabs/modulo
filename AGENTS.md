@@ -40,7 +40,7 @@ modulo/
 ## Where to look first
 
 - **Product requirements / behaviour:** `docs/architecture.md`, `docs/core-principles.md`
-- **Architecture decisions:** `Repos/devtools/adr/` in the private `farnalabs/devtools` repo (migrated out of this repo 2026-09-02, FAR-434; previously `docs/adr/`)
+- **Architecture decisions:** ADRs (migrated out of this repo 2026-09-02, FAR-434; previously in `docs/adr/`)
 - **Product map:** `frontend/src/manifest.yaml`
 
 ## Working-directory rules (non-negotiable)
@@ -56,7 +56,7 @@ modulo/
 > tooling that runs against the code. Lessons about **deployments**, the
 > **dogfood / autonomous SDLC pipeline**, or **developer environments** (machine
 > setup, OS quirks, worktrees, CI infrastructure) do **not** belong here; those
-> live in the workspace-level `AGENTS.md` and `Repos/devtools/`.
+> live in the workspace-level `AGENTS.md`.
 >
 > Relocated out of this file to the workspace-level `AGENTS.md` on 2026-09-17
 > ([PR #686](https://github.com/farnalabs/modulo/pull/686)):

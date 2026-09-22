@@ -20,6 +20,8 @@ import json
 import logging
 import uuid
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 from modulo.core.eval_engine import (
@@ -28,15 +30,43 @@ from modulo.core.eval_engine import (
     LLMJudgeCallable,
 )
 from modulo.core.eval_engine import (
-    EvalDefinition as EvalDefDTO,
-)
-from modulo.core.eval_engine import (
     EvalResult as EngineEvalResult,
 )
 from modulo.db.models.eval_result import EvalResult as EvalResultModel
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 
+
+@dataclass
+class EvalDefDTO:
+    """Per-eval DTO consumed by EvalEngine.evaluate() and run_evals_persist_before_decide.
+
+    After the FAR-1100 cutover this is built from ``Eval`` + ``PolicyGate``
+    (not from ``EvalDefinition``).  The ``failure_behaviour`` field is populated
+    from ``PolicyGate.action`` when a gate exists, defaulting to ``"warn"``
+    when no gate is present (guardrail-typed Evals and any eval whose binding
+    was rejected during backfill).
+
+    Attribute names are identical to the previous Pydantic ``EvalDefinition``
+    alias so that existing tests (which construct ``EvalDefinition`` ORM
+    instances or Pydantic DTOs as the DTO) continue to work by duck-typing —
+    the engine and helpers only read attributes by name.
+    """
+
+    id: uuid.UUID
+    org_id: uuid.UUID
+    pipeline_id: uuid.UUID | None = None
+    node_id: str | None = None
+    name: str = ""
+    eval_type: str = "regex"
+    config: dict[str, Any] = field(default_factory=dict)
+    failure_behaviour: str = "warn"
+    pass_threshold: Decimal | float | None = None
+    suite_id: str | None = None
+    version: int = 1
+
+
 _log = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Metrics — OTel counters for persistence failures and suite completeness
@@ -197,7 +227,7 @@ async def run_evals_persist_before_decide(
         eval_target = resolve_eval_target(eval_def)
         eval_result = engine.evaluate_result(
             eval_target,
-            eval_def,
+            eval_def,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
             run_id=compute_run_id,
             llm_judge_callable=judge,
         )

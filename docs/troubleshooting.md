@@ -145,8 +145,7 @@ The `never_dispatched` and `worker_lost` sweep writers stamp a synthetic
 `error_detail` ("Run was not dispatched within the stale threshold." /
 "Worker lost heartbeat for this run.") so the runs list / detail view always
 has something to show for these genuinely detail-less failures. This is safe
-for the daily-watcher **hang-death detector**
-(`Repos/devtools/dogfood/pipeline-scripts/_hang_deaths.py`): it keys on
+for the daily-watcher **hang-death detector**: it keys on
 `error_code == "node_cancelled"` ONLY – `worker_lost` / `never_dispatched` are
 never `node_cancelled`, so adding a string detail to them can never be
 miscounted as a hang death. Do NOT "fix" the detector to count these codes –

@@ -34,7 +34,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import jinja2
-from jinja2.sandbox import SandboxedEnvironment
 
 from modulo.core.bundled_runner.profile import (
     is_placeholder_bundled_runner_image_ref,
@@ -643,7 +642,12 @@ async def _render_agent_template(
     """
     if sandbox_mode == "script":
         return ("", agent_command, json.dumps(raw_input))
-    env = SandboxedEnvironment()
+    # FAR-226: route through the shared sandbox Jinja helper (single source of
+    # truth with the save-time validator + the E2B node-runner path). Imported
+    # lazily so this dependency-light module does not drag in pipeline_engine.
+    from modulo.core.pipeline_engine.sandbox_mode import sandbox_jinja_environment
+
+    env = sandbox_jinja_environment()
     scoped_state = dict(state)
     scoped_state["run_context"] = scoped_run_context
     template_vars: dict[str, Any] = {

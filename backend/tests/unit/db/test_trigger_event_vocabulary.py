@@ -115,8 +115,9 @@ _MIGRATION_PATH = (
 # chained onto 0249_validation_level, and 0251_schema_enforcement_telemetry (FAR-902)
 # chained onto 0250_eval_policy_gate, and 0252_enforcement_daily_facts (FAR-902) chained
 # onto 0251_schema_enforcement_telemetry, and 0253_runs_enforcement_mode_outcome (FAR-902)
-# chained onto 0252_enforcement_daily_facts as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0253_runs_enforcement_mode_outcome"
+# chained onto 0252_enforcement_daily_facts, and 0254_eval_backfill_cutover (FAR-1100)
+# chained onto 0253_runs_enforcement_mode_outcome as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0254_eval_backfill_cutover"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

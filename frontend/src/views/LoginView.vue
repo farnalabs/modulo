@@ -25,7 +25,7 @@
         <p class="mt-1 text-muted-foreground">{{ $t('views.LoginView.agent_governance_for_your_agentic_sdlc') }}</p>
       </div>
 
-      <div v-if="contextLoading" class="text-center text-muted-foreground" data-testid="login-context-loading">
+      <div v-if="contextLoading || redirectingToOrg" class="text-center text-muted-foreground" data-testid="login-context-loading">
         {{ $t('common.loading') }}
       </div>
 
@@ -70,7 +70,14 @@
             />
           </div>
           <div class="space-y-2">
-            <label for="loginview-field-1" class="text-sm font-medium">{{ $t('common.password') }}</label>
+            <div class="flex items-center justify-between gap-2">
+              <label for="loginview-field-1" class="text-sm font-medium">{{ $t('common.password') }}</label>
+              <span
+                v-if="lastUsedMethod === 'password'"
+                class="inline-flex shrink-0 items-center rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+                data-testid="login-last-used-password"
+              >{{ $t('views.LoginView.used_last_time') }}</span>
+            </div>
             <input id="loginview-field-1"
               v-model="password"
               type="password"
@@ -98,17 +105,29 @@
               :href="`/api/v1/auth/oidc/${provider.provider_id}/login`"
               class="flex w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
               :data-testid="`login-sso-oidc-${provider.provider_id}`"
+              @click="rememberSsoMethod(provider.provider_id)"
             >
               <SsoBrandMark :preset="provider.preset ?? 'custom'" />
               {{ $t('views.LoginView.sign_in_with', { provider: provider.display_name || provider.provider_id }) }}
+              <span
+                v-if="lastUsedMethod === provider.provider_id"
+                class="inline-flex shrink-0 items-center rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+                data-testid="login-last-used-sso"
+              >{{ $t('views.LoginView.used_last_time') }}</span>
             </a>
             <a
               v-if="samlEnabled"
               href="/api/v1/auth/saml/login"
               class="flex w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
               data-testid="login-sso-saml"
+              @click="rememberSsoMethod('saml')"
             >
               SAML
+              <span
+                v-if="lastUsedMethod === 'saml'"
+                class="inline-flex shrink-0 items-center rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+                data-testid="login-last-used-sso"
+              >{{ $t('views.LoginView.used_last_time') }}</span>
             </a>
           </div>
         </div>
@@ -122,6 +141,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import { useMutation } from '../composables/useMutation'
+import { useLoginPrefs } from '../composables/useLoginPrefs'
 import { setAccessToken, setRefreshToken } from '../lib/api/client'
 import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
@@ -140,10 +160,17 @@ interface SsoProvidersResponse {
 
 type OrgInfo = components['schemas']['OrgInfo']
 
+// --- Login preferences (last org slug + last-used method) ---
+const loginPrefs = useLoginPrefs()
+const lastUsedMethod = ref<string | null>(loginPrefs.getLastMethod())
+
 // --- Login context state ---
 const contextLoading = ref(true)
 const multiOrg = ref(false)
 const singleOrg = ref<OrgInfo | null>(null)
+// True while auto-redirecting to a remembered /login/:slug — keeps the
+// loading state up (never flashes the slug-entry form) until navigation.
+const redirectingToOrg = ref(false)
 
 // --- Org entry state (multi-org path) ---
 const orgSlugInput = ref('')
@@ -177,7 +204,14 @@ async function fetchLoginContext() {
       // as a fallback. The org-login endpoint is used for /login/:slug.
       await discoverSsoProviders()
     } else {
-      // Multiple orgs: show slug entry step
+      // Multiple orgs: jump straight to a previously-used org's login when
+      // one is remembered; otherwise show the slug entry step.
+      const rememberedSlug = loginPrefs.getLastOrgSlug()
+      if (rememberedSlug) {
+        redirectingToOrg.value = true
+        window.location.href = `/login/${encodeURIComponent(rememberedSlug)}`
+        return
+      }
       multiOrg.value = true
       singleOrg.value = null
     }
@@ -212,10 +246,26 @@ onMounted(fetchLoginContext)
 function handleOrgEntry() {
   const slug = orgSlugInput.value.trim()
   if (!slug) return
+  // Remember the slug so the next multi-org /login visit skips the entry
+  // step. Best-effort: a storage failure must never block navigation.
+  loginPrefs.setLastOrgSlug(slug)
   // Navigate to /login/:slug — the OrgLoginView will fetch the org's data.
   // If the slug is invalid, OrgLoginView shows a generic not-found error
   // (never reveals whether the org exists — tenancy boundary).
   window.location.href = `/login/${encodeURIComponent(slug)}`
+}
+
+/**
+ * Record the SSO method the user is activating so the next visit can tag it
+ * as "used last time". The actual success handoff happens at /auth/callback
+ * (outside this view); recording at activation is the closest observable
+ * point here — a failed SSO attempt leaves the previous successful method
+ * untouched only if the user never reaches the provider, so this is
+ * best-effort. Storage failures are swallowed by useLoginPrefs.
+ */
+function rememberSsoMethod(method: string) {
+  loginPrefs.setLastMethod(method)
+  lastUsedMethod.value = method
 }
 
 const router = useRouter()
@@ -243,6 +293,10 @@ const { loading, error, mutate: login } = useMutation(async () => {
   // response — true forces the full-screen change-password view; false clears
   // any stale flag so a different account is never trapped behind the gate.
   setMustChangePassword(data.must_change_password === true)
+  // Successful password login — remember the method for the next visit's
+  // "used last time" tag. Best-effort (storage failures are swallowed).
+  loginPrefs.setLastMethod('password')
+  lastUsedMethod.value = 'password'
   router.push('/')
   return data
 })

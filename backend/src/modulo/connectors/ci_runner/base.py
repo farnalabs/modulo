@@ -22,9 +22,10 @@ class ConnectorTypeError(TypeError):
 class CIRunnerBase(ConnectorBase):
     """Abstract base for CI system connectors (GitHub Actions, GitLab CI, etc.).
 
-    All CI runners expose the same capability contract (trigger_run, get_run_status,
-    get_run_logs, list_runs) so pipeline nodes bind to the ``ci-runner`` connector
-    type rather than a specific provider.
+    The four abstract methods below (trigger_run, get_run_status, get_run_logs,
+    list_runs) form the capability contract that CI-runners implement.  They are
+    **not** reachable from the pipeline engine — the engine dispatches only
+    ``query`` / ``write`` — so connector bindings cannot route to them yet.
     """
 
     @property

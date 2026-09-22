@@ -30,7 +30,7 @@
 # *.test.ts / conftest.py) is LOW-RISK even if it deletes tests or adds skip/xfail
 # markers; a MIXED diff (any non-test file) still triggers the full rules, including
 # the test-coverage-defeated rule.
-# The test-only-diff exemption's operative home is the policy-router prompt (devtools: dogfood/pipeline-scripts/pr-reviewer-policy-router-prompt.md, Step 4).
+# The test-only-diff exemption's operative home is the policy-router prompt (Step 4).
 # 2026-09-06 validation follow-up: second comment-only touch to force a fresh review run against the working autonomy flag.
 
 high_risk_paths:
