@@ -30,6 +30,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.library_service.grant import (
     InstallNotFoundError as GrantInstallNotFoundError,
+)
+from modulo.core.library_service.grant import (
     NotCommunitySourcedError,
 )
 from modulo.core.library_service.install import (
@@ -115,9 +117,7 @@ def _start_route_patches(
     patches.append(patch(f"{_ROUTE}._require_library_collection_flag", new=AsyncMock()))
     patches.append(patch(f"{_ROUTE}._set_rls_context", new=AsyncMock()))
     patches.append(patch(f"{_ROUTE}.install_collection", new=install_collection))
-    patches.append(
-        patch(f"{_ROUTE}.compute_runnable", new=compute_runnable or AsyncMock(return_value=True))
-    )
+    patches.append(patch(f"{_ROUTE}.compute_runnable", new=compute_runnable or AsyncMock(return_value=True)))
     if uninstall_collection is not None:
         patches.append(patch(f"{_ROUTE}.uninstall_collection", new=uninstall_collection))
     if grant_collection_agents is not None:
@@ -175,9 +175,7 @@ def _collection_installed(ctx: dict[str, Any]) -> None:
 
 @given("the install is unknown")
 def _install_unknown(ctx: dict[str, Any]) -> None:
-    ctx["grant_error"] = GrantInstallNotFoundError(
-        f"Install {ctx['install_id']} not found"
-    )
+    ctx["grant_error"] = GrantInstallNotFoundError(f"Install {ctx['install_id']} not found")
 
 
 @given("no installed entity has been modified")
@@ -206,8 +204,7 @@ def _collection_installed_community(ctx: dict[str, Any]) -> None:
 @given("the collection is installed from a local source")
 def _collection_installed_local(ctx: dict[str, Any]) -> None:
     ctx["grant_error"] = NotCommunitySourcedError(
-        "Install is not community-sourced; grant is only available for "
-        "community-sourced collection installs"
+        "Install is not community-sourced; grant is only available for community-sourced collection installs"
     )
 
 
@@ -256,9 +253,7 @@ def _uninstall_collection_unknown(ctx: dict[str, Any], request: pytest.FixtureRe
         patches,
         install_collection=AsyncMock(return_value=ctx["install"]),
         uninstall_collection=AsyncMock(
-            side_effect=UninstallInstallNotFoundError(
-                f"Install {unknown_id} not found for organisation {ORG_ID}"
-            )
+            side_effect=UninstallInstallNotFoundError(f"Install {unknown_id} not found for organisation {ORG_ID}")
         ),
     )
     resp = client.post(
@@ -272,17 +267,13 @@ def _uninstall_collection_unknown(ctx: dict[str, Any], request: pytest.FixtureRe
 def _grant_collection_agents(ctx: dict[str, Any], request: pytest.FixtureRequest, patches: list[Any]) -> None:
     client = _active_client(request)
     error = ctx.get("grant_error")
-    grant = (
-        AsyncMock(side_effect=error) if error else AsyncMock(return_value=ctx["install"])
-    )
+    grant = AsyncMock(side_effect=error) if error else AsyncMock(return_value=ctx["install"])
     _start_route_patches(
         patches,
         install_collection=AsyncMock(return_value=ctx["install"]),
         grant_collection_agents=grant,
     )
-    resp = client.post(
-        f"/api/v1/libraries/collections/{ctx['collection_id']}/installs/{ctx['install_id']}/grant"
-    )
+    resp = client.post(f"/api/v1/libraries/collections/{ctx['collection_id']}/installs/{ctx['install_id']}/grant")
     _store_response(request, ctx, resp)
 
 
@@ -294,9 +285,7 @@ def _grant_collection_agents(ctx: dict[str, Any], request: pytest.FixtureRequest
 @then(parsers.parse('the install response has status "{expected}"'))
 def _install_response_has_status(ctx: dict[str, Any], expected: str) -> None:
     data = ctx["response"].json()
-    assert data.get("status") == expected, (
-        f"Expected install status '{expected}', got {data.get('status')!r}"
-    )
+    assert data.get("status") == expected, f"Expected install status '{expected}', got {data.get('status')!r}"
 
 
 @then("the install response is runnable")
@@ -322,7 +311,7 @@ def _uninstall_response_deleted(ctx: dict[str, Any]) -> None:
 @then("the uninstall response detaches no entities")
 def _uninstall_response_no_detached(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
-    assert data.get("detached") == [], f"Expected no detached entities, got {data.get('detached')!r}"
+    assert not data.get("detached"), f"Expected no detached entities, got {data.get('detached')!r}"
 
 
 @then("the uninstall response detaches the modified entity")
@@ -332,3 +321,11 @@ def _uninstall_response_detached(ctx: dict[str, Any]) -> None:
     assert any(item.get("entity_type") == "schema" for item in detached), (
         f"Expected the modified schema to be detached, got {detached!r}"
     )
+
+
+@then(parsers.parse('the error mentions "{text}"'))
+def _error_mentions(ctx: dict[str, Any], text: str) -> None:
+    """Assert the response error detail mentions ``text`` (case-insensitive)."""
+    body = ctx["response"].json()
+    detail = body.get("detail", "") if isinstance(body, dict) else str(body)
+    assert text.lower() in str(detail).lower(), f"Expected error to mention {text!r}, got {detail!r}"
