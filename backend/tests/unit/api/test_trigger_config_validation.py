@@ -14,6 +14,9 @@ Covers:
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 from fastapi import HTTPException
 
@@ -23,6 +26,44 @@ from modulo.api.routes.triggers import (
     _validate_trigger_config_keys,
 )
 from modulo.core.trigger_engine import _RECOGNISED_TRIGGER_CONFIG_KEYS as _ENGINE_KEYS
+
+_ENGINE_SOURCE_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo"
+
+#: Source files whose ``cfg``/``config`` locals hold a trigger's ``config_json``.
+#: ``polling.py`` and ``pre_guardrail.py`` also call ``.get()`` but on a
+#: *connector* config and a *guardrail-definition* config respectively — not the
+#: trigger ``config_json`` — so they are deliberately excluded.
+_TRIGGER_CONFIG_SOURCES: tuple[str, ...] = (
+    "core/trigger_engine/__init__.py",
+    "core/cron_helpers.py",
+    "core/trigger_engine/agent_signal.py",
+    "core/trigger_engine/slack_app_mention.py",
+)
+
+#: Local variable names bound to a trigger's ``config_json`` at the read sites.
+_CONFIG_VAR_NAMES: frozenset[str] = frozenset({"cfg", "config"})
+
+
+def _trigger_config_read_site_keys() -> set[str]:
+    """Statically collect every ``cfg.get("<key>")`` / ``config.get("<key>")``
+    string-literal read across the trigger-config source files.
+    """
+    keys: set[str] = set()
+    for rel in _TRIGGER_CONFIG_SOURCES:
+        tree = ast.parse((_ENGINE_SOURCE_DIR / rel).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute) or func.attr != "get":
+                continue
+            target = func.value
+            if not isinstance(target, ast.Name) or target.id not in _CONFIG_VAR_NAMES:
+                continue
+            first = node.args[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                keys.add(first.value)
+    return keys
 
 
 class TestValidateTriggerConfigKeys:
@@ -169,3 +210,20 @@ class TestRecognisedKeysSync:
         or the engine silently ignores a key the write-time gate accepted.
         """
         assert _RECOGNISED_TRIGGER_CONFIG_KEYS == _ENGINE_KEYS
+
+    def test_engine_keys_match_actual_read_sites(self) -> None:
+        """``_RECOGNISED_TRIGGER_CONFIG_KEYS`` matches the engine's *actual*
+        ``cfg.get()`` read sites, not just the route-side mirror.
+
+        The equality test above only proves the two hard-coded sets agree with
+        each other; this static scan over the trigger-config source files closes
+        the drift window in both directions: a key the engine reads but the set
+        omits (the write-time gate would reject a legitimate config), and a
+        stale key the set keeps but no read site ever touches.
+        """
+        read_sites = _trigger_config_read_site_keys()
+        engine_keys = set(_ENGINE_KEYS)
+        assert read_sites == engine_keys, (
+            f"engine reads keys missing from _RECOGNISED_TRIGGER_CONFIG_KEYS: {sorted(read_sites - engine_keys)}; "
+            f"_RECOGNISED_TRIGGER_CONFIG_KEYS lists keys the engine never reads: {sorted(engine_keys - read_sites)}"
+        )
