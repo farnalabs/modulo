@@ -19,6 +19,27 @@ documented.
 | Runner workspaces | `modulo-runner:opencode` (first-party, digest-pinned per minor) | Untrusted: runs agent-authored commands/LLM sessions |
 | Workspace network | `modulo-runner-workspace` (compose-declared bridge) | The ONLY network a workspace joins — validated at CRUD, dispatch, and provider boundary (FAR-1020) |
 
+## Execution-tier model (where T1 sits)
+
+The execution tiers form a convenience↔control spectrum: Tiers 1–3 are all
+"Modulo provisions a workspace and runs the agent in it", differing only in
+WHERE the compute lives. Tier 4 is a variant with a different payload (whose
+agent runs).
+
+| Tier | Shape | Status |
+| -- | -- | -- |
+| **T1** Bundled Runner (self-hosted Docker) — this document | simplest, self-contained; **deliberately permissive networking** — bounded egress is the customer's cluster's job, not a bespoke module of ours | shipped + hardened |
+| **T2a** Managed sandbox (E2B, and the adapter pattern for Daytona et al.) | zero-setup external compute | E2B shipped |
+| **T2b** Bundled Runner on rented compute (Hetzner/Ubicloud/any Docker host) | *not a new tier* — T1 on rented metal, works via `MODULO_DOCKER_HOST`; needs validation + docs, not an adapter | doc/validation |
+| **T3** Modulo runner on Kubernetes | **most recommended shape** — inherits the customer's RBAC, admission policy, NetworkPolicy and workload identity; bounded by *their* controls | to build |
+| **T4** Bring-your-own agent image | Modulo provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
+| **Dispatch** | govern an agent you already run — external CI triggers and customer-hosted agent endpoints | separate spike; connectors story, not a runner tier |
+
+**T3 is the bounded-egress answer.** When an operator needs the workspace's
+egress bounded to an allowlist, the supported path is T3: the customer's own
+NetworkPolicy on their Kubernetes cluster enforces the bound. There is no
+bounded middle tier in Docker (T1/T2b), by decision.
+
 ## Workspace egress surface (what an agent can reach)
 
 A workspace container is created attached to the dedicated
@@ -36,11 +57,21 @@ DOCKER-ISOLATION ruleset). Operators on engines without bridge isolation
 must firewall the proxy endpoint (or the workspace subnet) at the host for
 the containment claim to hold.
 
-**Egress default: permitted.** The tier's purpose is an agent with network
-access (git, package registries, model APIs). A per-profile opt-in sets
+**Egress default: permitted — by design.** The tier's purpose is an agent
+with network access (git, package registries, model APIs), so workspace
+egress is unrestricted by design. A per-profile opt-in sets
 `network_policy: none`, which provisions the workspace with
-`--network=none` (loopback only). Per-profile egress allowlists are deferred
-(tracked as FAR-1039).
+`--network=none` (loopback only).
+
+**Accepted gap: no bounded egress in the Docker tier.** There is no egress
+allowlist in this tier. This is a DECISION, not an omission: a vendor-built
+egress gateway (an nftables or proxy middlebox owning enforcement) would be
+the same criticised shape as the socket proxy — a bespoke module owning a
+control the operator should own. The bounded answer is the Kubernetes tier
+(T3, in the model above): run Modulo's runner on your cluster and bound the
+workspace with YOUR NetworkPolicy, RBAC, and admission policy. There will be
+NO bespoke egress gateway. This decision supersedes FAR-1039 (the earlier
+per-profile allowlist plan is dropped, not deferred).
 
 **workspace_network validation (FAR-1020).** The `workspace_network` value in
 an environment profile's `config_json` is validated at three layers:
@@ -283,8 +314,11 @@ mechanically guarded here:
   network/pid/ipc, no unrestricted `cap_add` in overlay services; no host
   ports for the proxy) — the overlay conforms today; the CI job that
   enforces it is the same GA/CI item.
-- **Egress allowlists per profile** — deferred (the `none` opt-in IS
-  enforced at provision; allowlists tracked as FAR-1039).
+- **Bounded egress allowlists per profile** — deliberately NOT built for
+  this tier; this is an ACCEPTED GAP (see "Accepted gap" above), not an
+  omission. The `none` opt-in IS enforced at provision. The bounded answer
+  is the Kubernetes tier (T3) with the customer's own NetworkPolicy; no
+  bespoke egress gateway will be added (decision supersedes FAR-1039).
 
 ### Enforced
 
