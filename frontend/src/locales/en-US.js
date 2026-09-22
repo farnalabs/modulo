@@ -1464,21 +1464,6 @@ export default {
       "force_disabled": "Force disabled",
       "locked_requires_team": "Requires team licence"
     },
-    "AdminTelemetryView": {
-      "telemetry": "Telemetry",
-      "telemetry_page_subtitle": "Configure anonymous usage telemetry to help us improve Modulo",
-      "usage_telemetry": "Usage Telemetry",
-      "telemetry_toggle_description": "Send anonymous, aggregated usage data to help us understand how Modulo is used. No personal data, pipeline content, or API keys are ever collected.",
-      "loading": "Loading...",
-      "what_is_collected": "What is collected",
-      "telemetry_item_pipeline_runs": "Aggregate pipeline run counts and durations (no payloads or outputs)",
-      "telemetry_item_error_rates": "Error category frequencies (no error messages or stack traces)",
-      "telemetry_item_feature_usage": "Which features are used (e.g. HITL, triggers, schemas) and how often",
-      "telemetry_no_pii": "No personal data, pipeline content, or API keys are ever collected. Telemetry is sent over TLS and cannot be linked to your instance.",
-      "telemetry_default_off": "Telemetry is off by default. You can enable or disable it at any time.",
-      "telemetry_enabled_success": "Telemetry enabled. Thank you for helping us improve Modulo!",
-      "telemetry_disabled_success": "Telemetry disabled. No usage data will be sent."
-    },
     "EvalEditorView": {
       "eval_system_is_not_available_on_your_current_plan": "Eval system is not available on your current plan.",
       "eval_editor": "Eval Editor",
@@ -3774,7 +3759,6 @@ export default {
       "item_model_backends": "Model Backends",
       "item_node_categories": "Node Categories",
       "item_feature_flags": "Feature Flags",
-      "item_telemetry": "Telemetry",
       "item_runners": "Runners",
       "item_run_retention": "Run Retention",
       "item_saved_views": "Saved Views",

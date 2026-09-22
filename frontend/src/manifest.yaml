@@ -603,16 +603,6 @@ routes:
         deprecated: false
 
         <<: *team
-    /admin/telemetry:
-        name: admin-telemetry
-        breadcrumb: Telemetry
-        parent: /
-        product_map: [feat-runtime]
-        sidebar_group: system
-        sidebar_order: 4.5
-        type: page
-        <<: *community
-        deprecated: false
     /admin/housekeeping:
         name: admin-housekeeping
         breadcrumb: Housekeeping
