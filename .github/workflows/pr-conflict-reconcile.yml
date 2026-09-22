@@ -200,6 +200,16 @@ jobs:
                 DISPATCH_OK=true
                 DISPATCHED=$((DISPATCHED + 1))
                 break
+              elif [ "$HTTP_CODE" = "400" ] && echo "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
+                # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
+                # engine's byte-level idempotency guard (DuplicateWebhookError) —
+                # this PR's identical conflict payload was already ACCEPTED within
+                # the ~5-min dedup window (e.g. a previous run of this reconciler).
+                # A handled no-op, NOT a dispatch failure.
+                echo "::notice::Branch Fixer duplicate delivery suppressed for PR #$PR_NUM (identical payload already accepted within the dedup window)"
+                DISPATCH_OK=true
+                DISPATCHED=$((DISPATCHED + 1))
+                break
               elif [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
                 DELAY=$((2 ** (attempt - 1) * 5))
                 echo "::warning::Branch Fixer returned HTTP $HTTP_CODE for PR #$PR_NUM (attempt $attempt/5) — retrying in ${DELAY}s"
