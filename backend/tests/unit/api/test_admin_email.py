@@ -709,64 +709,52 @@ class TestOrgAdminAllowed:
     scopes to the target org) is the sole gate — and an org admin passes it.
     """
 
-    async def test_get_email_settings_allowed(self, client_non_sys_admin, mock_session):
+    async def test_get_email_settings_allowed(self, client_non_sys_admin, monkeypatch):
         from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID, name="Test", slug="test", settings_json={"email": {"smtp_host": "smtp.example.com"}}
         )
-        original = admin_email.get_organisation
-        admin_email.get_organisation = AsyncMock(return_value=org)
-        try:
-            resp = await client_non_sys_admin.get(f"/api/v1/admin/org/{ORG_ID}/email-settings")
-            assert resp.status_code == 200
-        finally:
-            admin_email.get_organisation = original
+        monkeypatch.setattr(admin_email, "get_organisation", AsyncMock(return_value=org))
+        resp = await client_non_sys_admin.get(f"/api/v1/admin/org/{ORG_ID}/email-settings")
+        assert resp.status_code == 200
 
-    async def test_put_email_settings_allowed(self, client_non_sys_admin, mock_session):
+    async def test_put_email_settings_allowed(self, client_non_sys_admin, monkeypatch):
         from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
-        original_get = admin_email.get_organisation
-        admin_email.get_organisation = AsyncMock(return_value=org)
-        original_update = admin_email.update_organisation
-        admin_email.update_organisation = AsyncMock(return_value=org)
-        try:
-            resp = await client_non_sys_admin.put(
-                f"/api/v1/admin/org/{ORG_ID}/email-settings",
-                json={
-                    "smtp_host": "smtp.new.com",
-                    "smtp_port": 587,
-                    "smtp_username": "",
-                    "smtp_password": "",
-                    "email_from": "",
-                },
-            )
-            assert resp.status_code == 200
-        finally:
-            admin_email.get_organisation = original_get
-            admin_email.update_organisation = original_update
+        monkeypatch.setattr(admin_email, "get_organisation", AsyncMock(return_value=org))
+        monkeypatch.setattr(admin_email, "update_organisation", AsyncMock(return_value=org))
+        resp = await client_non_sys_admin.put(
+            f"/api/v1/admin/org/{ORG_ID}/email-settings",
+            json={
+                "smtp_host": "smtp.new.com",
+                "smtp_port": 587,
+                "smtp_username": "",
+                "smtp_password": "",
+                "email_from": "",
+            },
+        )
+        assert resp.status_code == 200
 
-    async def test_test_email_allowed(self, client_non_sys_admin, mock_session):
+    async def test_test_email_allowed(self, client_non_sys_admin, monkeypatch):
         from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID, name="Test", slug="test", settings_json={"email": {"smtp_host": "smtp.example.com"}}
         )
-        original = admin_email.get_organisation
-        admin_email.get_organisation = AsyncMock(return_value=org)
-        try:
-            resp = await client_non_sys_admin.post(
-                f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
-                json={"to": "admin@example.com"},
-            )
-            # 200 or 422 (no SMTP configured) — either means the authz gate passed
-            assert resp.status_code != 403
-        finally:
-            admin_email.get_organisation = original
+        monkeypatch.setattr(admin_email, "get_organisation", AsyncMock(return_value=org))
+        resp = await client_non_sys_admin.post(
+            f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
+            json={"to": "admin@example.com"},
+        )
+        # The authz gate passed (the request reached the send path): 200 when
+        # SMTP is configured, 422 when it is not. A 403 would mean the removed
+        # system-admin gate still blocked the org admin.
+        assert resp.status_code in {200, 422}
 
 
 class TestCrossOrgForbidden:
