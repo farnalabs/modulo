@@ -629,6 +629,7 @@ def test_unmapped_fallback_signal_skips_empty_codes(caplog):
     with caplog.at_level("WARNING"):
         assert map_legacy_code(None) == "harness.unknown"
         assert map_legacy_code("") == "harness.unknown"
+    assert "harness.unknown.fallback" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
