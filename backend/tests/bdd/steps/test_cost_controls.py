@@ -491,7 +491,12 @@ def admin_reenables_pipeline(pipeline_name: str, ctx: dict[str, Any]) -> None:
 
 @then("the circuit breaker is reset")
 def circuit_breaker_reset(ctx: dict[str, Any]) -> None:
-    assert ctx.get("cb_reset") is True, "reset_pipeline_circuit_breaker returned False"
+    # FAR-1186: reset_pipeline_circuit_breaker now returns the re-activated
+    # trigger count (int), or None when the pipeline is missing. The bare
+    # MagicMock UPDATE result yields zero RETURNING ids, so the count is 0.
+    reset = ctx.get("cb_reset")
+    assert reset is not None, "reset_pipeline_circuit_breaker returned None (pipeline not found)"
+    assert reset == 0, f"expected 0 re-activated trigger ids from the mock UPDATE result, got {reset!r}"
     assert ctx.get("cb_pipeline").circuit_breaker_tripped is False
     from modulo.db.models.trigger import Trigger
 
