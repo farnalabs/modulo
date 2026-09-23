@@ -285,6 +285,10 @@ def apply_pipelines(
                         "name": entity.name,
                         "description": entity.description,
                         "max_concurrent_runs": entity.max_concurrent_runs,
+                        # Always sent: managed_view unconditionally compares
+                        # this key, so the create path must carry the
+                        # declared value (explicit null = no override).
+                        "stdout_retention_config": entity.stdout_retention_config,
                         "max_autonomy_level": entity.max_autonomy_level,
                         "business_owner_id": business_owner_id,
                         "reliability_owner_id": reliability_owner_id,
@@ -307,6 +311,12 @@ def apply_pipelines(
                 patch_payload: dict[str, Any] = {
                     "description": entity.description,
                     "max_concurrent_runs": entity.max_concurrent_runs,
+                    # Always sent (including explicit null): the drift hash
+                    # compares this key unconditionally, so the write path
+                    # must be able to set AND clear it (PipelineUpdate
+                    # accepts null; the PATCH route uses exclude_unset so an
+                    # explicit null clears the stored override).
+                    "stdout_retention_config": entity.stdout_retention_config,
                     "business_owner_id": business_owner_id,
                     "reliability_owner_id": reliability_owner_id,
                 }
