@@ -92,6 +92,47 @@ class TestEgressMetricsRecords:
         assert egress_metrics._rejected_total is None
 
 
+# ── emission failures are swallowed (the "never raises" contract) ────────────
+
+
+def _emission_failing_meter() -> MagicMock:
+    """A meter whose counters raise on ``add`` (an exploding exporter/SDK)."""
+    meter = MagicMock()
+
+    def mk_counter(name: str, *, description: str = "", unit: str = "1") -> MagicMock:
+        handle = MagicMock()
+        handle.name = name
+        handle.add.side_effect = RuntimeError("emission failed")
+        return handle
+
+    meter.create_counter.side_effect = mk_counter
+    meter.create_histogram.side_effect = MagicMock
+    return meter
+
+
+class TestEgressMetricsNeverRaises:
+    """A metric emission failure must never surface as an egress failure.
+
+    Regression for the module docstring's "every call is exception-swallowed"
+    contract: ``_get_meter``/``_init`` were already exception-safe, so
+    ``Counter.add`` was the only unswallowed path on the egress hot path.
+    """
+
+    def test_record_pinned_swallows_add_failure(self) -> None:
+        meter = _emission_failing_meter()
+        with patch.object(egress_metrics, "_get_meter", return_value=meter):
+            egress_metrics.record_pinned("github", "api.github.com")
+        assert egress_metrics._pinned_total is not None
+        egress_metrics._pinned_total.add.assert_called_once()
+
+    def test_record_rejected_swallows_add_failure(self) -> None:
+        meter = _emission_failing_meter()
+        with patch.object(egress_metrics, "_get_meter", return_value=meter):
+            egress_metrics.record_rejected("rest", "169.254.169.254", egress_metrics.REASON_BLOCKED)
+        assert egress_metrics._rejected_total is not None
+        egress_metrics._rejected_total.add.assert_called_once()
+
+
 # ── egress factory wiring: success + reject emit the exact metrics ──────────
 
 
