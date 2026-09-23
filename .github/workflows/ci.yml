@@ -572,17 +572,80 @@ jobs:
         # 2-vCPU runner) plus coverage: v8 provider, lcov reporter →
         # frontend/coverage/lcov.info for sonar.javascript.lcov.reportPaths.
         run: pnpm exec vitest run src --pool=threads --maxWorkers=2 --coverage --coverage.provider=v8 --coverage.reporter=lcov
+      - name: Install SonarScanner CLI
+        # The pinned SonarSource/sonarqube-scan-action is NOT used for the scan
+        # itself: its work would run before any retry could wrap it, and the
+        # repo's .semgrep/continue-on-error-in-ci.yaml rule bans the
+        # continue-on-error setting as a way to keep a step going. So the CLI
+        # is installed here exactly as the action does — pinned version, GPG
+        # signature verified against the SonarSource key — and the scan step
+        # below runs it with a bounded retry for the known transient
+        # `.git/.probe-*` race (see that step's comment).
+        #
+        # The version pin matters and is retained from the action config: 8.1.0
+        # is the scanner SonarCloud accepts. The previous 7.2.0.5079 failed
+        # against SonarCloud with "Error 500 on .../batch/project.protobuf"
+        # (all earlier API calls succeed), taking the required check red on every
+        # branch; v8.2.2 of the action shipped exactly 8.1.0.6389. Keep
+        # SONAR_SCANNER_VERSION in sync with the upstream
+        # SonarSource/sonarqube-scan-action `sonar-scanner-version` file when
+        # upgrading.
+        env:
+          SONAR_SCANNER_VERSION: "8.1.0.6389"
+          SONAR_SCANNER_BINARIES_URL: https://binaries.sonarsource.com/Distribution/sonar-scanner-cli
+        run: |
+          set -euo pipefail
+          ZIP_URL="${SONAR_SCANNER_BINARIES_URL}/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux-x64.zip"
+          INSTALL_DIR="${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}/sonar-scanner-cli/manual"
+          mkdir -p "$INSTALL_DIR"
+          curl -sSL --retry 3 --retry-delay 5 --max-time 300 -o /tmp/sonar-cli.zip "$ZIP_URL"
+          curl -sSL --retry 3 --retry-delay 5 --max-time 60 -o /tmp/sonar-cli.zip.asc "${ZIP_URL}.asc"
+          # Fail closed if GPG is unavailable; never fall back to an unverified
+          # download of a binary that will execute on this runner.
+          gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys 679F1EE92B19609DE816FDE81DB198F93525EC1A
+          gpg --batch --verify /tmp/sonar-cli.zip.asc /tmp/sonar-cli.zip
+          unzip -q -o /tmp/sonar-cli.zip -d "$INSTALL_DIR"
+          SCANNER="$INSTALL_DIR/sonar-scanner-${SONAR_SCANNER_VERSION}-linux-x64/bin/sonar-scanner"
+          test -x "$SCANNER"
+          echo "SCANNER=$SCANNER" >> "$GITHUB_ENV"
+          "$SCANNER" --version
       - name: SonarCloud scan
-        # Pinned to v8.2.2 (latest). v5.3.2 is EOL: the action warns it
-        # carries a command-injection vulnerability, and its bundled
-        # SonarScanner CLI 7.2.0.5079 now fails against SonarCloud with
-        # "Error 500 on .../batch/project.protobuf" (all earlier API calls in
-        # the scan succeed), taking the required check red on every branch.
-        # v8.2.2 ships SonarScanner CLI 8.1.0.6389, which SonarCloud accepts.
-        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+        # Transient race in SonarCloud's Python sensor: PackageRootResolver's
+        # unconditional Files.walk(baseDir) in FileProvider descends into `.git/`
+        # and races with the SCM provider's short-lived `.git/.probe-*` files,
+        # crashing the scan with `java.nio.file.NoSuchFileException:
+        # .../.git/.probe-<uuid>` (upstream SONARPY-2120; `.git/**` in
+        # sonar.exclusions cannot prevent it because FileProvider walks the
+        # filesystem, not the file index, and sonar.scm.disabled=true cannot be
+        # used because the new-code quality gate needs SCM blame). The failure is
+        # environment-only and intermittent, so retry it — but ONLY when the log
+        # shows exactly that signature, never a quality-gate failure or any other
+        # error, so a genuine red check is never masked.
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            LOG="$(mktemp)"
+            set +e
+            "$SCANNER" -Dsonar.projectBaseDir=. 2>&1 | tee "$LOG"
+            RC=${PIPESTATUS[0]}
+            set -e
+            if [ "$RC" -eq 0 ]; then
+              echo "::notice::SonarCloud scan succeeded on attempt ${attempt}/3."
+              exit 0
+            fi
+            if grep -qE "NoSuchFileException: .*\.git/\.probe-" "$LOG"; then
+              echo "::warning::SonarCloud scan hit the known transient .git/.probe-* race (attempt ${attempt}/3); retrying."
+              sleep $((attempt * 15))
+              continue
+            fi
+            echo "::error::SonarCloud scan failed with a non-transient error (not the .git/.probe-* race); not retrying."
+            exit "$RC"
+          done
+          echo "::error::SonarCloud scan still hit the .git/.probe-* race after 3 attempts; failing the required check (upstream SONARPY-2120)."
+          exit 1
 
   coverage-gate:
     # Enforces a coverage threshold on the lines each PR actually changes
