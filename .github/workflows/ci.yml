@@ -598,8 +598,8 @@ jobs:
           ZIP_URL="${SONAR_SCANNER_BINARIES_URL}/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux-x64.zip"
           INSTALL_DIR="${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}/sonar-scanner-cli/manual"
           mkdir -p "$INSTALL_DIR"
-          curl -sSL --retry 3 --retry-delay 5 --max-time 300 -o /tmp/sonar-cli.zip "$ZIP_URL"
-          curl -sSL --retry 3 --retry-delay 5 --max-time 60 -o /tmp/sonar-cli.zip.asc "${ZIP_URL}.asc"
+          curl -sSL --proto '=https' --proto-redir '=https' --retry 3 --retry-delay 5 --max-time 300 -o /tmp/sonar-cli.zip "$ZIP_URL"
+          curl -sSL --proto '=https' --proto-redir '=https' --retry 3 --retry-delay 5 --max-time 60 -o /tmp/sonar-cli.zip.asc "${ZIP_URL}.asc"
           # Fail closed if GPG is unavailable; never fall back to an unverified
           # download of a binary that will execute on this runner.
           gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys 679F1EE92B19609DE816FDE81DB198F93525EC1A
