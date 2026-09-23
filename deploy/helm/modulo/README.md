@@ -20,7 +20,9 @@ helm install modulo ./deploy/helm/modulo \
   --set postgres.adminUsername=modulo \
   --set backend.env.SECRET_KEY=$(openssl rand -hex 32) \
   --set backend.env.FERNET_KEY=$(openssl rand -hex 32) \
-  --set backend.env.MODULO_USERS="admin:$(openssl passwd -6 your-admin-password)"
+  --set backend.env.MODULO_USERS="admin:$(openssl passwd -6 your-admin-password)" \
+  --set backend.env.SAQ_AUTH_USERNAME=admin \
+  --set backend.env.SAQ_AUTH_PASSWORD=$(openssl rand -hex 16)
 ```
 
 ## Configuration
@@ -34,7 +36,7 @@ The chart does NOT deploy Postgres by default. Modulo requires **two distinct Po
 | `modulo_app` | Restricted runtime role — DML only, no superuser, no BYPASSRLS | `DATABASE_URL` (backend, SAQ workers) |
 | `modulo` | Admin/superuser role — migrations, role bootstrap, DDL | `DATABASE_ADMIN_URL` (entrypoint only) |
 
-The `modulo_app` role is **created automatically** by `bootstrap_role` on startup — the operator only needs to provision the admin role with sufficient privileges (superuser or CREATEROLE + CREATEDB).
+The `modulo_app` role is **created automatically** by `bootstrap_role` on startup — the operator only needs to provision the admin role with sufficient privileges (superuser or CREATEROLE + CREATEDB). A third role, `modulo_system` (LOGIN, BYPASSRLS — see `postgres.systemUsername`), is created by the same bootstrap with the shared password; the chart wires it into `MODULO_SYSTEM_DATABASE_URL`, without which the `dispatcher_reconcile` system cron refuses to run and backend readiness stays 503 forever.
 
 Set these values:
 
@@ -82,15 +84,15 @@ The chart **fails at `helm install`** if these values are not supplied (Helm's `
 |---|---|---|
 | `backend.env.SECRET_KEY` | JWT signing key — all API tokens are signed with this | Any string >= 32 bytes. Generate with: `openssl rand -base64 32` |
 | `backend.env.FERNET_KEY` | Connector credential encryption — stored secrets are encrypted at rest with this | URL-safe base64 Fernet key, >= 32 bytes. Generate with: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| `backend.env.SAQ_AUTH_USERNAME` / `SAQ_AUTH_PASSWORD` | SAQ system worker web-UI auth. **The saq-system worker fail-closes without them** — it crash-loops, `dispatcher_reconcile` never runs, and backend `/healthz/ready` stays 503 forever (the backend pod never becomes Ready). | Any strings. Generate with: `openssl rand -hex 16` |
 
-Both are validated at runtime by Pydantic (`_MIN_KEY_LEN = 32` in `settings.py`). The chart renders them into the Kubernetes Secret and all workloads (`backend`, `saq-runner`, `saq-system`) consume them from there.
+Both keys in the first two rows are validated at runtime by Pydantic (`_MIN_KEY_LEN = 32` in `settings.py`). The chart renders them into the Kubernetes Secret and all workloads (`backend`, `saq-runner`, `saq-system`) consume them from there.
 
 **Optional but recommended:**
 
 | Value | Purpose |
 |---|---|
 | `backend.env.MODULO_USERS` | Admin user credentials (`user:password` format). Without this, no login is possible — the app warns at boot but does not crash. |
-| `backend.env.SAQ_AUTH_USERNAME` / `SAQ_AUTH_PASSWORD` | SAQ system worker auth. Only needed if `saq-system` is exposed externally. |
 
 ### Secrets Management
 
@@ -150,12 +152,14 @@ Public images would remove the need for this.
 See `values.eks.example.yaml` for a validated EKS configuration using AWS managed services (RDS, ElastiCache, ALB).
 
 ```bash
-# Deploy (SECRET_KEY and FERNET_KEY are mandatory — helm install fails without them)
+# Deploy (SECRET_KEY, FERNET_KEY and SAQ auth are mandatory — see Required Values)
 helm install modulo ./deploy/helm/modulo \
   -f deploy/helm/modulo/values.eks.example.yaml \
   --set postgres.password=<rds-password> \
   --set backend.env.SECRET_KEY=$(openssl rand -base64 32) \
-  --set backend.env.FERNET_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+  --set backend.env.FERNET_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())") \
+  --set backend.env.SAQ_AUTH_USERNAME=admin \
+  --set backend.env.SAQ_AUTH_PASSWORD=<saq-auth-password>
 ```
 
 ## Local Development (kind)
@@ -173,7 +177,9 @@ helm install modulo ./deploy/helm/modulo \
   --set postgres.adminUsername=modulo \
   --set backend.env.SECRET_KEY=dev-secret-key-not-for-production-32b! \
   --set backend.env.FERNET_KEY=dev-fernet-key-not-for-production-32b!! \
-  --set backend.env.MODULO_USERS="admin:admin"
+  --set backend.env.MODULO_USERS="admin:admin" \
+  --set backend.env.SAQ_AUTH_USERNAME=admin \
+  --set backend.env.SAQ_AUTH_PASSWORD=admin
 ```
 
 ## Upgrade
@@ -220,11 +226,23 @@ kubectl delete namespace modulo  # If namespace.create=true
 - [x] `helm lint` passes with default values
 - [x] `helm lint` passes with EKS example values
 - [x] `helm template` renders without errors
-- [ ] Live cluster validation (FAR-1053)
+- [x] **Live EKS validation (FAR-1052, 2026-09-23):** deployed end-to-end on a
+  real EKS cluster (`modulo-validation`, EKS 1.34, 2× `m7i-flex.large` managed
+  nodes, in-cluster embedded Redis, Postgres external in a sibling namespace,
+  images `365370368472.dkr.ecr.us-east-1.amazonaws.com/modulo/{backend,frontend}:dev-20260923`).
+  All workloads became Ready with backend/worker pods spread across **both**
+  nodes (no co-location); backend `/healthz/ready` returned 200 with
+  `dispatcher_reconcile` and the full gate list green — proving the FAR-1158
+  readiness split (liveness `/healthz`, readiness `/healthz/ready`) holds on
+  multi-node Kubernetes. Two gaps found and fixed during this run: SAQ system
+  auth was documented as optional (it is fail-closed required — see Required
+  Values), and `MODULO_SYSTEM_DATABASE_URL` was not wired by the chart (without
+  it `dispatcher_reconcile` never runs and readiness never passes).
+- [ ] Live kind validation (FAR-1053)
 
 ## Follow-ups
 
-- **FAR-1053:** Live cluster validation (kind + EKS)
+- **FAR-1053:** Live kind validation (EKS done — see Validation Status)
 - CI `helm lint` job (requires `workflow`-scoped token)
 - Redis persistence (PVC) for embedded mode
 - NetworkPolicy templates

@@ -136,6 +136,39 @@ When postgres.host is unset, falls back to backend.env.DATABASE_ADMIN_URL.
 {{- end }}
 
 {{/*
+Construct MODULO_SYSTEM_DATABASE_URL from Postgres config.
+The modulo_system role (LOGIN, BYPASSRLS) is required by cross-org system
+crons — dispatcher_reconcile REFUSES to run without this URL, and
+dispatcher_reconcile gates /healthz/ready (a missing URL therefore means
+the backend pod NEVER becomes Ready). bootstrap_role creates the role with
+the password parsed from this URL, so it shares postgres.password just like
+modulo_app does. The chart's saq-runner/saq-system commands bypass
+entrypoint.sh, so the URL cannot be derived at runtime — it must be wired
+here. Falls back to backend.env.MODULO_SYSTEM_DATABASE_URL when postgres.host
+is unset (mirrors modulo.databaseUrl).
+*/}}
+{{- define "modulo.systemDatabaseUrl" -}}
+{{- if .Values.postgres.host }}
+{{- $host := .Values.postgres.host }}
+{{- $port := .Values.postgres.port | int }}
+{{- $db := .Values.postgres.database }}
+{{- $user := .Values.postgres.systemUsername | default "modulo_system" }}
+{{- $pass := "" }}
+{{- if .Values.postgres.existingSecret }}
+{{- $secret := lookup "v1" "Secret" (include "modulo.namespace" .) .Values.postgres.existingSecret }}
+{{- if $secret }}
+{{- $pass = index $secret.data "password" | b64dec }}
+{{- end }}
+{{- else }}
+{{- $pass = .Values.postgres.password }}
+{{- end }}
+{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user (urlquery $pass | replace "+" "%20") $host $port $db }}
+{{- else }}
+{{- .Values.backend.env.MODULO_SYSTEM_DATABASE_URL | default "" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Resolve the effective Redis password.
 Precedence: redis.password, then the "password" key of redis.existingSecret.
 Returns "" when neither yields a value (no auth). Shared by REDIS_URL and the
