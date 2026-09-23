@@ -53,13 +53,20 @@ async def test_local_close_logs_destroy_error(monkeypatch: pytest.MonkeyPatch) -
     """A destroy failure is logged and never masks the remaining teardown."""
     provider = LocalRuntimeProvider()
     provider._workspaces["ws1"] = "/tmp/ws1"
+    provider._workspaces["ws2"] = "/tmp/ws2"
+
+    destroyed: list[str] = []
 
     async def _destroy(ref: str) -> None:
-        raise RuntimeError("boom")
+        destroyed.append(ref)
+        if ref == "ws1":
+            raise RuntimeError("boom")
 
     monkeypatch.setattr(provider, "destroy_workspace", _destroy)
-    # Must not raise.
+    # Must not raise, and teardown must continue past the failing workspace.
     await provider.close()
+
+    assert destroyed == ["ws1", "ws2"]
 
 
 # ---------------------------------------------------------------------------
@@ -182,12 +189,20 @@ async def test_e2b_close_logs_destroy_error(monkeypatch: pytest.MonkeyPatch) -> 
     """A destroy failure is logged and never masks the remaining teardown."""
     provider = E2BRuntimeProvider(api_key="test-key")
     provider._sandboxes["sb1"] = SimpleNamespace()
+    provider._sandboxes["sb2"] = SimpleNamespace()
+
+    destroyed: list[str] = []
 
     async def _destroy(ref: str) -> None:
-        raise RuntimeError("boom")
+        destroyed.append(ref)
+        if ref == "sb1":
+            raise RuntimeError("boom")
 
     monkeypatch.setattr(provider, "destroy_workspace", _destroy)
+    # Must not raise, and teardown must continue past the failing sandbox.
     await provider.close()
+
+    assert destroyed == ["sb1", "sb2"]
 
 
 # ---------------------------------------------------------------------------

@@ -840,16 +840,22 @@ class TestUserKeyQuota:
 
     @pytest.mark.asyncio
     async def test_under_quota_passes(self) -> None:
-        """9 active keys < the 10 quota ⇒ the quota gate raises nothing."""
+        """9 active keys < the 10 quota ⇒ the quota gate raises nothing.
+
+        Also proves the gate actually ran its quota count: a regression that
+        dropped the check entirely would still raise nothing here, so the
+        count query must be observed to make the pass meaningful.
+        """
         from fastapi import HTTPException
 
         from modulo.api.routes.api_keys import _enforce_user_key_quota
 
-        session, _executed = self._session(9)
+        session, executed = self._session(9)
         try:
             await _enforce_user_key_quota(session, self._principal())
         except HTTPException as exc:  # pragma: no cover — the assertion path
             raise AssertionError(f"quota gate must not fire under quota: {exc.status_code}") from exc
+        assert len(executed) == 1
 
     @pytest.mark.asyncio
     async def test_at_quota_rejected_429(self) -> None:
