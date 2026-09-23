@@ -183,14 +183,14 @@ def apply_pipelines(
                 assert isinstance(entity, PipelineEntity)
                 graph = resolve_graph(entity, agents) if entity.graph is not None else None
                 if status == "created":
-                    response = executor._post(
-                        "/pipelines",
-                        {
-                            "name": entity.name,
-                            "description": entity.description,
-                            "max_concurrent_runs": entity.max_concurrent_runs,
-                        },
-                    )
+                    create_payload: dict[str, Any] = {
+                        "name": entity.name,
+                        "description": entity.description,
+                        "max_concurrent_runs": entity.max_concurrent_runs,
+                    }
+                    if entity.manages_circuit_breaker:
+                        create_payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
+                    response = executor._post("/pipelines", create_payload)
                     pipeline_id = str(response["id"])
                     graph_differs = entity.graph is not None
                 else:
@@ -207,6 +207,8 @@ def apply_pipelines(
                     "description": entity.description,
                     "max_concurrent_runs": entity.max_concurrent_runs,
                 }
+                if status == "updated" and entity.manages_circuit_breaker:
+                    patch_payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
                 if entity.graph is not None and graph is not None and graph_differs:
                     patch_payload["graph_json"] = graph
                 if status == "updated" or entity.graph is not None:

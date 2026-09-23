@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -86,6 +87,7 @@ from modulo.db.crud.hitl_gate_guard import (
     denial_http_status,
 )
 from modulo.db.crud.pipeline import (
+    CIRCUIT_BREAKER_THRESHOLD_MAX,
     PipelineHasActiveRunsError,
     archive_pipeline,
     check_pipeline_name_available,
@@ -94,6 +96,7 @@ from modulo.db.crud.pipeline import (
     get_pipeline,
     get_pipeline_graph,
     list_pipelines,
+    normalize_circuit_breaker_threshold,
     replace_pipeline_graph,
     restore_pipeline,
     soft_delete_pipeline,
@@ -406,6 +409,28 @@ async def _handle_graph_write_denials(
     ) from None
 
 
+_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION = (
+    "Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a "
+    "run's cost would exceed this value, the breaker trips: the run is rejected, every "
+    "trigger of the pipeline is paused, and admins are notified. An org admin resets it via "
+    "POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; "
+    "must be > 0 when set. Available on every plan (Community included)."
+)
+
+
+def _reject_boolean_threshold(value: Any) -> Any:
+    """Pydantic's lax float coerces JSON ``true`` to 1.0; a boolean is never a USD amount."""
+    if isinstance(value, bool):
+        raise ValueError("circuit_breaker_threshold must be a number (USD) or null")
+    return value
+
+
+def _validate_circuit_breaker_threshold(value: float | None) -> float | None:
+    """Shared request-model validator: same rule as the CRUD writer (FAR-1182)."""
+    normalized = normalize_circuit_breaker_threshold(value)
+    return float(normalized) if normalized is not None else None
+
+
 def _validate_retry_policy(value: dict[str, Any] | None) -> dict[str, Any] | None:
     """Validate a ``retry_policy`` payload, returning it canonicalised.
 
@@ -507,6 +532,22 @@ class PipelineCreate(TeamVisibilityMixin):
             "the pipeline default is inherited; node-explicit settings always win."
         ),
     )
+    circuit_breaker_threshold: float | None = Field(
+        None,
+        gt=0,
+        le=float(CIRCUIT_BREAKER_THRESHOLD_MAX),
+        description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION,
+    )
+
+    @field_validator("circuit_breaker_threshold", mode="before")
+    @classmethod
+    def _reject_boolean_threshold_field(cls, value: Any) -> Any:
+        return _reject_boolean_threshold(value)
+
+    @field_validator("circuit_breaker_threshold")
+    @classmethod
+    def _validate_circuit_breaker_threshold_field(cls, value: float | None) -> float | None:
+        return _validate_circuit_breaker_threshold(value)
 
     @field_validator("retry_policy")
     @classmethod
@@ -578,6 +619,22 @@ class PipelineUpdate(TeamVisibilityMixin):
             "Set to {} to clear (no pipeline override)."
         ),
     )
+    circuit_breaker_threshold: float | None = Field(
+        None,
+        gt=0,
+        le=float(CIRCUIT_BREAKER_THRESHOLD_MAX),
+        description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION + " Send null to disable; omit to leave unchanged.",
+    )
+
+    @field_validator("circuit_breaker_threshold", mode="before")
+    @classmethod
+    def _reject_boolean_threshold_field(cls, value: Any) -> Any:
+        return _reject_boolean_threshold(value)
+
+    @field_validator("circuit_breaker_threshold")
+    @classmethod
+    def _validate_circuit_breaker_threshold_field(cls, value: float | None) -> float | None:
+        return _validate_circuit_breaker_threshold(value)
 
     @field_validator("retry_policy", mode="before")
     @classmethod
@@ -633,6 +690,10 @@ class PipelineResponse(BaseModel):
     rate_limit_config: dict[str, Any] | None = None
     retry_policy: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"default": {}})
     stdout_retention_config: dict[str, Any] | None = None
+    # FAR-1182: monthly spend circuit breaker. Additive, backward-compatible.
+    circuit_breaker_threshold: float | None = Field(None, description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION)
+    circuit_breaker_tripped: bool = False
+    circuit_breaker_tripped_at: datetime | None = None
     snapshot_count: int = 0
     # Additive, backward-compatible: every response builder derives node_count
     # from the row's stored graph via _pipeline_response, so detail/create/
@@ -661,6 +722,27 @@ class PipelineResponse(BaseModel):
     @classmethod
     def _coerce_stdout_retention_config(cls, value: Any) -> dict[str, Any] | None:
         return value if isinstance(value, dict) else None
+
+    # The breaker columns are read defensively (like the fields above): partial
+    # ORM stand-ins may expose non-column attributes, which serialise as the
+    # "disabled / not tripped" defaults. The Numeric column serialises as a
+    # JSON number (USD), matching the other money fields in the API.
+    @field_validator("circuit_breaker_threshold", mode="before")
+    @classmethod
+    def _coerce_circuit_breaker_threshold(cls, value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, Decimal | int | float):
+            return None
+        return float(value)
+
+    @field_validator("circuit_breaker_tripped", mode="before")
+    @classmethod
+    def _coerce_circuit_breaker_tripped(cls, value: Any) -> bool:
+        return value if isinstance(value, bool) else False
+
+    @field_validator("circuit_breaker_tripped_at", mode="before")
+    @classmethod
+    def _coerce_circuit_breaker_tripped_at(cls, value: Any) -> datetime | None:
+        return value if isinstance(value, datetime) else None
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -2005,6 +2087,8 @@ async def create_pipeline_endpoint(
                 max_duration_seconds=req.max_duration_seconds,
                 stale_run_timeout_minutes=req.stale_run_timeout_minutes,
                 folder_id=req.folder_id,
+                circuit_breaker_threshold=req.circuit_breaker_threshold,
+                request_id=getattr(principal, "request_id", None),
             )
             if req.retry_policy is not None:
                 # The model default ({}) applies when omitted; an explicit value

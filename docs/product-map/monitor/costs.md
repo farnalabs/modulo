@@ -69,6 +69,20 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 - [x] Pipeline cost circuit breaker (§8.10): a pipeline crossing its monthly spend
       threshold trips the breaker and permanently pauses triggers until an admin
       re-enables it via `POST /circuit-breaker/{pipeline_id}/reset`
+- [x] The breaker threshold is user-configurable and Community-tier (FAR-1182):
+      `circuit_breaker_threshold` (USD, `null` = disabled, `> 0` when set) is
+      settable on pipeline create / `PATCH /api/v1/pipelines/{id}` and read back on
+      `GET` (with `circuit_breaker_tripped` / `circuit_breaker_tripped_at`), via the
+      MCP `create_pipeline` + `set_pipeline_circuit_breaker` tools, in `modulo
+      apply` (managed only when declared), and in the pipeline editor toolbar
+      ("Monthly spend circuit breaker (USD)" + a tripped badge with an admin-only
+      Reset). Neither setting nor resetting it has a plan gate; the reset keeps the
+      org-admin `cost.manage` permission. Every threshold change is audited as
+      `pipeline.circuit_breaker_threshold_changed` (previous / new / actor) and every
+      reset as `pipeline.circuit_breaker_reset`. Enforcement reads the live
+      pipeline row (not the run snapshot), so a change applies to the next run.
+      The org-level "Auto-stop on budget exceeded" (`circuit_breaker_enabled`)
+      cost-control toggle is a separate, currently inert setting (FAR-1183).
 - [x] `GET /export?period=this_month|last_month|7d|30d|90d&group_by=team|pipeline|model`
       streams a CSV attachment with a `costs-export-{period}.csv` disposition;
       `team` reuses the daily-ledger grouping (historical shape), `pipeline`

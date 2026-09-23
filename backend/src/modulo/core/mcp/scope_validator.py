@@ -95,6 +95,9 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "create_pipeline": "pipeline.create",
     "update_pipeline_graph": "pipeline.graph.update",
     "bind_connector_to_node": "pipeline.bind_connector",
+    # FAR-1182: pipeline monthly spend circuit breaker threshold - same
+    # permission key as the REST PATCH /pipelines/{id} that also sets it.
+    "set_pipeline_circuit_breaker": "pipeline.update",
     "create_model_backend": "model_backend.create",
     "list_runs": "run.list",
     "get_run_evals": "run.evals",

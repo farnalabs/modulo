@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
 
 from sqlalchemy import ColumnElement, Connection, delete, func, select, update
@@ -78,6 +79,79 @@ def validate_max_concurrent_runs(value: int) -> int:
     return value
 
 
+# FAR-1182: ``pipelines.circuit_breaker_threshold`` is Numeric(14, 6) with a
+# ``> 0`` CHECK (migration 0186). NULL = breaker disabled.
+CIRCUIT_BREAKER_THRESHOLD_MAX = Decimal("99999999.999999")
+_CIRCUIT_BREAKER_QUANTUM = Decimal("0.000001")
+CIRCUIT_BREAKER_THRESHOLD_CHANGED_EVENT = "pipeline.circuit_breaker_threshold_changed"
+_MSG_THRESHOLD_NOT_A_NUMBER = "circuit_breaker_threshold must be a number (USD) or null"
+
+
+def normalize_circuit_breaker_threshold(value: Decimal | float | str | None) -> Decimal | None:
+    """Validate + quantize a monthly spend circuit-breaker threshold (USD).
+
+    ``None`` disables the breaker. Any set value must be a finite number
+    ``> 0`` that fits the column (<= ``CIRCUIT_BREAKER_THRESHOLD_MAX`` at 6dp);
+    anything else raises ``ValueError`` with a caller-facing message. Shared by
+    the REST models, the CRUD writers, the MCP tools and ``modulo apply`` so
+    every surface enforces the same rule the DB CHECK constraint backs.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(_MSG_THRESHOLD_NOT_A_NUMBER)
+    try:
+        dec = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise ValueError(_MSG_THRESHOLD_NOT_A_NUMBER) from None
+    if not dec.is_finite():
+        raise ValueError(_MSG_THRESHOLD_NOT_A_NUMBER)
+    quantized = dec.quantize(_CIRCUIT_BREAKER_QUANTUM, rounding=ROUND_HALF_UP)
+    if quantized <= 0:
+        raise ValueError("circuit_breaker_threshold must be greater than 0 (USD); use null to disable the breaker")
+    if quantized > CIRCUIT_BREAKER_THRESHOLD_MAX:
+        raise ValueError(f"circuit_breaker_threshold must be at most {CIRCUIT_BREAKER_THRESHOLD_MAX} (USD)")
+    return quantized
+
+
+def _threshold_as_float(value: Decimal | None) -> float | None:
+    return float(value) if value is not None else None
+
+
+async def audit_circuit_breaker_threshold_change(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None,
+    previous: Decimal | None,
+    new: Decimal | None,
+    request_id: str | None = None,
+) -> bool:
+    """Append ``pipeline.circuit_breaker_threshold_changed`` when the value changed.
+
+    Returns ``True`` when an event was written. A no-op write (same value)
+    records nothing, mirroring the autonomy-level audit.
+    """
+    if previous == new:
+        return False
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type=CIRCUIT_BREAKER_THRESHOLD_CHANGED_EVENT,
+        actor_user_id=actor_user_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json={
+            "previous_threshold_usd": _threshold_as_float(previous),
+            "new_threshold_usd": _threshold_as_float(new),
+            "changed_by": str(actor_user_id) if actor_user_id is not None else None,
+        },
+        request_id=request_id,
+    )
+    return True
+
+
 async def create_pipeline(
     session: AsyncSession,
     *,
@@ -95,6 +169,8 @@ async def create_pipeline(
     max_duration_seconds: int | None = None,
     stale_run_timeout_minutes: int = 30,
     folder_id: uuid.UUID | None = None,
+    circuit_breaker_threshold: Decimal | float | None = None,
+    request_id: str | None = None,
 ) -> Pipeline:
     if folder_id is not None:
         from modulo.db.models.pipeline_folder import PipelineFolder
@@ -108,6 +184,7 @@ async def create_pipeline(
         if folder.scalar_one_or_none() is None:
             raise ValueError(f"Folder not found in this organisation: {folder_id}")
     max_concurrent_runs = validate_max_concurrent_runs(max_concurrent_runs)
+    threshold = normalize_circuit_breaker_threshold(circuit_breaker_threshold)
     pipeline = Pipeline(
         organisation_id=org_id,
         name=name,
@@ -123,9 +200,20 @@ async def create_pipeline(
         max_duration_seconds=max_duration_seconds,
         stale_run_timeout_minutes=stale_run_timeout_minutes,
         folder_id=folder_id,
+        circuit_breaker_threshold=threshold,
     )
     session.add(pipeline)
     await session.flush()
+    if threshold is not None:
+        await audit_circuit_breaker_threshold_change(
+            session,
+            org_id=org_id,
+            pipeline_id=pipeline.id,
+            actor_user_id=account_id,
+            previous=None,
+            new=threshold,
+            request_id=request_id,
+        )
     return pipeline
 
 
@@ -249,14 +337,37 @@ async def update_pipeline(
     is blocked while any non-terminal run exists (``PipelineHasActiveRunsError``)
     and a ``resource_team_ownership_changed`` audit event is recorded. Callers
     that pass no audit context (internal tooling, MCP) are not affected.
+
+    A ``circuit_breaker_threshold`` key (FAR-1182) is validated/quantized and,
+    when the value actually changes, recorded as a
+    ``pipeline.circuit_breaker_threshold_changed`` audit event on EVERY path
+    (the actor is ``account_id`` when supplied). ``None`` disables the breaker.
     """
     pipeline = await get_pipeline(session, pipeline_id)
     if pipeline is None:
         return None
     if updates.get("max_concurrent_runs") is not None:
         validate_max_concurrent_runs(updates["max_concurrent_runs"])
+    threshold_changing = "circuit_breaker_threshold" in updates
+    previous_threshold: Decimal | None = None
+    if threshold_changing:
+        previous_threshold = pipeline.circuit_breaker_threshold
+        updates = {
+            **updates,
+            "circuit_breaker_threshold": normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]),
+        }
     old_team_id = pipeline.owner_team_id
     apply_updates(pipeline, updates)
+    if threshold_changing:
+        await audit_circuit_breaker_threshold_change(
+            session,
+            org_id=org_id if org_id is not None else pipeline.organisation_id,
+            pipeline_id=pipeline_id,
+            actor_user_id=account_id,
+            previous=previous_threshold,
+            new=updates["circuit_breaker_threshold"],
+            request_id=request_id,
+        )
     new_team_id = pipeline.owner_team_id
     if org_id is not None and account_id is not None and new_team_id != old_team_id:
         active_runs = await count_active_runs_for_pipeline(session, pipeline_id, include_pending=True)
@@ -390,6 +501,9 @@ class _CloneSourceSnapshot:
     stdout_retention_config: dict[str, Any] | None
     edges: list[dict[str, Any]]
     snapshots: list[dict[str, Any]]
+    # FAR-1182: a copy keeps the source's spend safety limit (never its
+    # tripped state - the clone starts with a fresh, untripped breaker).
+    circuit_breaker_threshold: Decimal | None = None
 
 
 async def clone_pipeline(
@@ -526,6 +640,7 @@ async def _clone_pipeline_config(
         default_autonomy_level=snapshot.default_autonomy_level,
         stale_run_timeout_minutes=snapshot.stale_run_timeout_minutes,
         stdout_retention_config=copy.deepcopy(snapshot.stdout_retention_config),
+        circuit_breaker_threshold=snapshot.circuit_breaker_threshold,
     )
     session.add(cloned)
     await session.flush()
@@ -811,6 +926,9 @@ async def _read_clone_source_snapshot(
                 stdout_retention_config=copy.deepcopy(source.stdout_retention_config),
                 edges=edges,
                 snapshots=snapshots,
+                # getattr: tolerate partial row stand-ins (the real source is
+                # a full ORM row); a missing value copies as "disabled".
+                circuit_breaker_threshold=getattr(source, "circuit_breaker_threshold", None),
             )
     finally:
         if read_engine is not None:

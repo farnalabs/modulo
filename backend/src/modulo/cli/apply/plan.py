@@ -79,10 +79,16 @@ def _pipeline_current_view(current: dict[str, Any], desired_view: dict[str, Any]
     A graph-less config does not manage the graph at all (the key is absent
     from the desired view), so a UI-authored graph never causes drift.
     """
+    from modulo.cli.apply.models import quantize_circuit_breaker_threshold
+
     view: dict[str, Any] = {}
     for key in desired_view:
         if key == "graph":
             view[key] = current.get("graph") or {"nodes": [], "edges": []}
+        elif key == "circuit_breaker_threshold":
+            # The API serialises the Numeric(14, 6) column as a float;
+            # canonicalise both sides to 6dp so no false drift is reported.
+            view[key] = quantize_circuit_breaker_threshold(current.get(key))
         else:
             view[key] = current.get(key)
     return view

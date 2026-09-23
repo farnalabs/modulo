@@ -1691,7 +1691,12 @@ async def list_pipelines_tool(
         return _tool_error("Failed to list pipelines")
 
 
-@mcp.tool(description="Create a new pipeline in the organisation. Returns the created pipeline details.")
+@mcp.tool(
+    description="Create a new pipeline in the organisation. Returns the created pipeline details. "
+    "Optional circuit_breaker_threshold (USD, > 0) sets a monthly spend circuit breaker: when the "
+    "pipeline's calendar-month spend would exceed it, runs are rejected and the pipeline's triggers "
+    "pause until an org admin resets it. Omit or pass null for no breaker."
+)
 @_RETRY_DB
 async def create_pipeline(
     name: str,
@@ -1702,6 +1707,7 @@ async def create_pipeline(
     node_timeout_seconds: int = 300,
     default_autonomy_level: str = "manual_approval",
     folder_id: str | None = None,
+    circuit_breaker_threshold: float | None = None,
 ) -> dict[str, Any]:
     parsed_folder_id: uuid.UUID | None = None
     if folder_id is not None:
@@ -1709,6 +1715,9 @@ async def create_pipeline(
             parsed_folder_id = uuid.UUID(folder_id)
         except ValueError:
             return {"error": "invalid_folder_id", "detail": f"Invalid folder_id UUID: {folder_id}"}
+    threshold_error = _circuit_breaker_threshold_error(circuit_breaker_threshold)
+    if threshold_error is not None:
+        return threshold_error
 
     try:
         if not await validate_current_auth():
@@ -1732,6 +1741,7 @@ async def create_pipeline(
                 node_timeout_seconds=node_timeout_seconds,
                 default_autonomy_level=default_autonomy_level,
                 folder_id=parsed_folder_id,
+                circuit_breaker_threshold=circuit_breaker_threshold,
             )
 
         return {
@@ -1741,6 +1751,7 @@ async def create_pipeline(
             "visibility": pipeline.visibility,
             "max_concurrent_runs": pipeline.max_concurrent_runs,
             "default_autonomy_level": pipeline.default_autonomy_level,
+            "circuit_breaker_threshold": _threshold_float(pipeline.circuit_breaker_threshold),
             "created_at": pipeline.created_at.isoformat() if pipeline.created_at else None,
         }
     except MCPAuthorizationError as exc:
@@ -1751,6 +1762,84 @@ async def create_pipeline(
     except Exception:
         _log.exception("create_pipeline failed")
         return _tool_error("Failed to create pipeline")
+
+
+def _circuit_breaker_threshold_error(value: float | None) -> dict[str, Any] | None:
+    """Validate a circuit_breaker_threshold argument (FAR-1182); error dict or None."""
+    from modulo.db.crud.pipeline import normalize_circuit_breaker_threshold
+
+    try:
+        normalize_circuit_breaker_threshold(value)
+    except ValueError as exc:
+        return {"error": "validation_failed", "field": "circuit_breaker_threshold", "detail": str(exc)}
+    return None
+
+
+def _threshold_float(value: Any) -> float | None:
+    """Serialise the Numeric threshold column as a JSON number (None = disabled)."""
+    if isinstance(value, bool) or not isinstance(value, Decimal | int | float):
+        return None
+    return float(value)
+
+
+@mcp.tool(
+    description="Set or clear a pipeline's monthly spend circuit breaker (USD). "
+    "circuit_breaker_threshold > 0 enables it: when the pipeline's calendar-month spend plus a run's "
+    "cost would exceed the threshold, the run is rejected, all of the pipeline's triggers pause and "
+    "admins are notified; an org admin resets it via POST "
+    "/api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. Pass null to disable. "
+    "Every change is audited (pipeline.circuit_breaker_threshold_changed). Available on every plan."
+)
+@_RETRY_DB
+async def set_pipeline_circuit_breaker(
+    pipeline_id: str,
+    circuit_breaker_threshold: float | None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("set_pipeline_circuit_breaker")
+
+        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+        if pid_err:
+            return pid_err
+        if pid is None:
+            return {"error": "invalid_id", "detail": _MSG_UUID_PARSE_FAILED}
+        threshold_error = _circuit_breaker_threshold_error(circuit_breaker_threshold)
+        if threshold_error is not None:
+            return threshold_error
+
+        from modulo.db.crud.pipeline import update_pipeline
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+        async with _session(org_id) as s:
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
+            pipeline = await update_pipeline(
+                s,
+                pid,
+                {"circuit_breaker_threshold": circuit_breaker_threshold},
+                org_id=org_id,
+                account_id=account_id,
+            )
+            if pipeline is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            # Built inside the session (commits on exit) so no expired attribute is read.
+            return {
+                "pipeline_id": pipeline_id,
+                "circuit_breaker_threshold": _threshold_float(pipeline.circuit_breaker_threshold),
+                "circuit_breaker_tripped": bool(pipeline.circuit_breaker_tripped),
+            }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("set_pipeline_circuit_breaker failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("set_pipeline_circuit_breaker failed")
+        return _tool_error("Failed to set pipeline circuit breaker")
 
 
 def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:

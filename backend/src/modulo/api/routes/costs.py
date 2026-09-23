@@ -20,6 +20,7 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.cost_controller import (
     build_cost_report_buckets,
     get_cost_export_rows,
@@ -50,6 +51,7 @@ from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_COST_MANAGE = "cost.manage"
+CIRCUIT_BREAKER_RESET_EVENT = "pipeline.circuit_breaker_reset"
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try again."
 
 
@@ -774,7 +776,10 @@ class CircuitBreakerResetResponse(BaseModel):
 @handle_db_errors("costs.reset_circuit_breaker")
 async def reset_circuit_breaker(
     pipeline_id: uuid.UUID,
-    _: object = require_feature("admin_cost_controls"),
+    # FAR-1182: NO plan gate. The pipeline spend circuit breaker is basic
+    # safety and available on every tier (Community included) - Modulo never
+    # paywalls safety. Authorization stays the org-admin ``cost.manage``
+    # permission, the same RBAC gate as every sibling admin cost route.
     current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> CircuitBreakerResetResponse:
@@ -783,6 +788,8 @@ async def reset_circuit_breaker(
     Sets ``circuit_breaker_tripped = False`` on the pipeline and re-activates
     all of its (non-deleted) triggers so new runs are allowed again (spec §8.10
     ``circuit_breaker``: "Permanently pauses trigger until admin re-enables").
+    Records a ``pipeline.circuit_breaker_reset`` audit event in the same
+    transaction. Available on every plan (no feature gate, FAR-1182).
     """
     try:
         async with session.begin():
@@ -795,6 +802,16 @@ async def reset_circuit_breaker(
             )
             if not reset:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type=CIRCUIT_BREAKER_RESET_EVENT,
+                actor_user_id=current_user.account_id,
+                resource_type="pipeline",
+                resource_id=pipeline_id,
+                payload_json={"pipeline_id": str(pipeline_id), "reset_by": str(current_user.account_id)},
+                request_id=getattr(current_user, "request_id", None),
+            )
     except ProgrammingError:
         _log.exception("reset_circuit_breaker ProgrammingError (pipeline_id=%s)", pipeline_id)
         raise HTTPException(
