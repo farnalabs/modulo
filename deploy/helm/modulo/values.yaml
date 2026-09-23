@@ -75,12 +75,17 @@ postgres:
   database: modulo
   # The RESTRICTED runtime role used for application queries (DATABASE_URL).
   # bootstrap_role creates/modifies this role on startup with DML-only grants.
+  # (postgres.systemUsername below is the third role — system crons.)
   username: modulo_app
   # The admin/superuser role used for migrations and role bootstrap
   # (DATABASE_ADMIN_URL). The operator must provision this role with
   # superuser (or at minimum CREATEROLE + CREATEDB) rights so
   # bootstrap_role can create/alter the app role.
   adminUsername: modulo
+  # The cross-org system-cron role (LOGIN, BYPASSRLS) used by
+  # MODULO_SYSTEM_DATABASE_URL; created by bootstrap_role with the shared
+  # postgres.password. See README "Required Values" for why it is mandatory.
+  systemUsername: modulo_system
   # Password reference: use existingSecret or set password (rendered into Secret).
   # Shared between app and admin roles; split if your setup requires it.
   existingSecret: ""

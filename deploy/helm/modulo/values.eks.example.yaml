@@ -90,6 +90,11 @@ backend:
     MODULO_MAX_LOCAL_CONCURRENCY: "4"
     SAQ_WORKER_CONCURRENCY: "20"
     SAQ_REDIS_POOL_SIZE: "50"
+    # REQUIRED: the saq-system worker fail-closes without non-empty values
+    # (saq_worker._assert_system_auth_configured is truthiness-only).
+    # See README "Required Values" for the full failure mode.
+    SAQ_AUTH_USERNAME: "admin"
+    SAQ_AUTH_PASSWORD: "change-me-saq-web-auth"
 
 # -- SAQ Runner (2 replicas for HA) ----------------------------------------
 saqRunner:

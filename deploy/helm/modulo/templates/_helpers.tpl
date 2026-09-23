@@ -81,26 +81,45 @@ Usage: {{ include "modulo.image" (dict "image" .Values.backend.image) }}
 {{- end }}
 
 {{/*
+Resolve the effective Postgres password.
+Precedence: postgres.password, then the "password" key of postgres.existingSecret
+(resolved via lookup). Returns "" when neither yields a value. Shared by
+DATABASE_URL, DATABASE_ADMIN_URL and MODULO_SYSTEM_DATABASE_URL so the three
+roles can never diverge on credentials.
+*/}}
+{{- define "modulo.postgresPassword" -}}
+{{- if .Values.postgres.existingSecret -}}
+{{- $secret := lookup "v1" "Secret" (include "modulo.namespace" .) .Values.postgres.existingSecret -}}
+{{- if $secret -}}
+{{- index $secret.data "password" | b64dec -}}
+{{- end -}}
+{{- else -}}
+{{- .Values.postgres.password -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Format a Postgres connection URL for one role. Usage:
+{{ include "modulo.postgresUrl" (dict "user" $user "password" $pass "host" $host "port" $port "database" $db) }}
+*/}}
+{{- define "modulo.postgresUrl" -}}
+{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" .user (urlquery .password | replace "+" "%20") .host (.port | int) .database -}}
+{{- end }}
+
+{{/*
 Construct DATABASE_URL from Postgres config.
-When postgres.host is set, builds the URL from individual fields.
-Otherwise falls back to backend.env.DATABASE_URL.
+When postgres.host is set, builds the URL from individual fields (shared
+password resolution + URL formatting via modulo.postgresPassword /
+modulo.postgresUrl). Otherwise falls back to backend.env.DATABASE_URL.
 */}}
 {{- define "modulo.databaseUrl" -}}
 {{- if .Values.postgres.host }}
-{{- $host := .Values.postgres.host }}
-{{- $port := .Values.postgres.port | int }}
-{{- $db := .Values.postgres.database }}
-{{- $user := .Values.postgres.username }}
-{{- $pass := "" }}
-{{- if .Values.postgres.existingSecret }}
-{{- $secret := lookup "v1" "Secret" (include "modulo.namespace" .) .Values.postgres.existingSecret }}
-{{- if $secret }}
-{{- $pass = index $secret.data "password" | b64dec }}
-{{- end }}
-{{- else }}
-{{- $pass = .Values.postgres.password }}
-{{- end }}
-{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user (urlquery $pass | replace "+" "%20") $host $port $db }}
+{{- include "modulo.postgresUrl" (dict
+      "user" .Values.postgres.username
+      "password" (include "modulo.postgresPassword" .)
+      "host" .Values.postgres.host
+      "port" .Values.postgres.port
+      "database" .Values.postgres.database) }}
 {{- else }}
 {{- .Values.backend.env.DATABASE_URL | default "" }}
 {{- end }}
@@ -116,22 +135,39 @@ When postgres.host is unset, falls back to backend.env.DATABASE_ADMIN_URL.
 */}}
 {{- define "modulo.databaseAdminUrl" -}}
 {{- if .Values.postgres.host }}
-{{- $host := .Values.postgres.host }}
-{{- $port := .Values.postgres.port | int }}
-{{- $db := .Values.postgres.database }}
-{{- $user := .Values.postgres.adminUsername | default "modulo" }}
-{{- $pass := "" }}
-{{- if .Values.postgres.existingSecret }}
-{{- $secret := lookup "v1" "Secret" (include "modulo.namespace" .) .Values.postgres.existingSecret }}
-{{- if $secret }}
-{{- $pass = index $secret.data "password" | b64dec }}
-{{- end }}
-{{- else }}
-{{- $pass = .Values.postgres.password }}
-{{- end }}
-{{- printf "postgresql+asyncpg://%s:%s@%s:%d/%s" $user (urlquery $pass | replace "+" "%20") $host $port $db }}
+{{- include "modulo.postgresUrl" (dict
+      "user" (.Values.postgres.adminUsername | default "modulo")
+      "password" (include "modulo.postgresPassword" .)
+      "host" .Values.postgres.host
+      "port" .Values.postgres.port
+      "database" .Values.postgres.database) }}
 {{- else }}
 {{- .Values.backend.env.DATABASE_ADMIN_URL | default "" }}
+{{- end }}
+{{- end }}
+
+{{/*
+Construct MODULO_SYSTEM_DATABASE_URL from Postgres config.
+The modulo_system role (LOGIN, BYPASSRLS) is required by cross-org system
+crons — dispatcher_reconcile REFUSES to run without this URL, and
+dispatcher_reconcile gates /healthz/ready (a missing URL therefore means
+the backend pod NEVER becomes Ready). bootstrap_role creates the role with
+the password parsed from this URL, so it shares postgres.password just like
+modulo_app does. The chart's saq-runner/saq-system commands bypass
+entrypoint.sh, so the URL cannot be derived at runtime — it must be wired
+here. Falls back to backend.env.MODULO_SYSTEM_DATABASE_URL when postgres.host
+is unset (mirrors modulo.databaseUrl).
+*/}}
+{{- define "modulo.systemDatabaseUrl" -}}
+{{- if .Values.postgres.host }}
+{{- include "modulo.postgresUrl" (dict
+      "user" (.Values.postgres.systemUsername | default "modulo_system")
+      "password" (include "modulo.postgresPassword" .)
+      "host" .Values.postgres.host
+      "port" .Values.postgres.port
+      "database" .Values.postgres.database) }}
+{{- else }}
+{{- .Values.backend.env.MODULO_SYSTEM_DATABASE_URL | default "" }}
 {{- end }}
 {{- end }}
 
