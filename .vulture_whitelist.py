@@ -411,6 +411,9 @@ __all__ = [
     #     production callers wired in chunk 3) ---
     "resolve_policy_gate",  # policy gate resolution (unwired until chunk 3)
     "validate_binding",  # policy gate binding validation (unwired until chunk 3)
+    # --- FAR-737 PR badge enrichment (test-referenced cache-isolation helper;
+    #     production code only reads/writes the cache internally) ---
+    "clear_enrichment_cache",
     # --- FAR-720 dispatcher_reconcile declarative terminalizer registry
     #     (cron_helpers.py). The per-org batch coroutines are registered by
     #     NAME in _TERMINALIZERS[*].coroutine_name and resolved lazily via

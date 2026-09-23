@@ -4246,6 +4246,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/work-items/enrichment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Work Item Enrichment
+         * @description Live GitHub enrichment for the run's PR work-item badges (FAR-737).
+         *
+         *     Display-time, connector-mediated lookup through the run's ORG-scoped
+         *     GitHub connector, served through a TTL cache. Non-negotiable fallback:
+         *     every enrichment failure class (no connector configured, credential
+         *     decrypt error, GitHub unreachable, PR 404) degrades to an empty/partial
+         *     ``items`` list — this endpoint exists to make the badge RICHER, never to
+         *     gate the run view, which renders the existing plain linked badge on any
+         *     error or empty result.
+         */
+        get: operations["get_run_work_item_enrichment_api_v1_runs__run_id__work_items_enrichment_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/export-fixture": {
         parameters: {
             query?: never;
@@ -18969,6 +18997,37 @@ export interface components {
              */
             work_item_agent_minting_enabled: boolean;
         };
+        /**
+         * WorkItemEnrichmentItem
+         * @description Live GitHub facts for one PR work-item badge (FAR-737).
+         */
+        WorkItemEnrichmentItem: {
+            /** Ref */
+            ref: string;
+            /** Repo */
+            repo: string;
+            /** Number */
+            number: number;
+            /** Title */
+            title?: string | null;
+            /** State */
+            state?: ("open" | "closed") | null;
+            /** Merged */
+            merged?: boolean | null;
+            /** Html Url */
+            html_url?: string | null;
+        };
+        /**
+         * WorkItemEnrichmentResponse
+         * @description Enrichment payload for the Run Detail PR badges.
+         *
+         *     Always 200-on-success: missing / failed lookups are simply absent from
+         *     ``items`` so the view falls back to the plain linked badge.
+         */
+        WorkItemEnrichmentResponse: {
+            /** Items */
+            items?: components["schemas"]["WorkItemEnrichmentItem"][];
+        };
         /** WsTokenResponse */
         WsTokenResponse: {
             /** Ws Token */
@@ -29140,6 +29199,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunIOResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_work_item_enrichment_api_v1_runs__run_id__work_items_enrichment_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkItemEnrichmentResponse"];
                 };
             };
             /** @description Validation Error */
