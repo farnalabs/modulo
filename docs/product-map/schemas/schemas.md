@@ -23,7 +23,9 @@ bdd:
   - backend/tests/bdd/features/schemas/deletion_protection.feature
   - backend/tests/bdd/features/schemas/schema_inference.feature
   - backend/tests/bdd/features/schemas/schema_migration.feature
+  - backend/tests/bdd/features/agents/schema_assignment.feature
   - backend/tests/bdd/steps/test_alpha_schemas.py
+  - backend/tests/bdd/steps/test_alpha_agents.py
   - backend/tests/bdd/steps/test_schema_inference.py
   - backend/tests/bdd/steps/test_schema_migration.py
   - backend/tests/bdd/steps/test_schemas.py
@@ -68,6 +70,13 @@ applied migration between versions (`core/schema_registry/*`).
 - [x] Runtime input/output validation and sanitisation of schema definitions live in
       `core/schema_registry/validation.py` / `sanitize.py` and are unit-covered
       (`test_schema_validation.py`, `test_schema_sanitize.py`)
+- [x] Agent input/output schema bindings are (re)assignable and detachable via
+      `PATCH /api/v1/agents/{id}`: an omitted version resolves to the org's
+      `latest` placeholder version, an explicit `null` clears both id and version,
+      a version sent without an id is dropped, and a `(id, version)` pair that does
+      not resolve to an org-owned schema version is a 422
+      (`schema_assignment.feature`, `test_update_agent_reassigns_input_output_schemas`,
+      `test_update_agent_detaches_output_schema`)
 - [x] Parameter-schema CRUD for pipeline parameters is an admin surface under the same
       feature (`api/routes/parameter_schemas.py`, `test_parameter_schemas_endpoint.py`)
 
@@ -77,6 +86,19 @@ applied migration between versions (`core/schema_registry/*`).
   model-assisted; there is no purely heuristic fallback inference path.
 
 ## QA History
+- 2026-09-23: **product-map review pass** — implemented agent input/output
+  schema (re)assignment and detachment on `PATCH /api/v1/agents/{id}` and closed
+  the `schema_assignment.feature` "Remove schema assignment"
+  `@awaiting-implementation` pin. `AgentUpdate` now exposes
+  `input_schema_id`/`output_schema_id` (+ version fields); an omitted version
+  resolves to the org's `latest` placeholder version (create parity), an explicit
+  `null` detaches both id and version, a version-only entry is dropped, and a
+  non-resolvable `(id, version)` pair is a 422 (`_resolve_schema_binding` /
+  `_normalise_schema_updates`). BDD step `remove_input_schema` now drives the
+  real PATCH route and `PINNED_AWAITING_IMPLEMENTATION` shipped that scenario;
+  unit `test_update_agent_reassigns_input_output_schemas` /
+  `test_update_agent_detaches_output_schema` pin the semantics (the former
+  immutable-schema test asserted the now-shipped gap).
 - 2026-09-20: **product-map review pass** — closed the
   `deletion_protection.feature` naming drift: the scenario title "Schema used only
   by unpinned pipeline can be deleted" contradicted its own 409 assertion (an

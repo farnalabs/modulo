@@ -9842,6 +9842,14 @@ export interface components {
             agent_commands?: string[] | null;
             /** Schema Profile */
             schema_profile?: ("verbatim" | "provider-strict" | "runtime-sdk") | null;
+            /** Input Schema Id */
+            input_schema_id?: string | null;
+            /** Input Schema Version */
+            input_schema_version?: string | null;
+            /** Output Schema Id */
+            output_schema_id?: string | null;
+            /** Output Schema Version */
+            output_schema_version?: string | null;
         };
         /** AnalyseBundleRequest */
         AnalyseBundleRequest: {
