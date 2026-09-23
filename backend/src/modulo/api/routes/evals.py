@@ -145,20 +145,33 @@ class EvalDefinitionResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _eval_def_to_dict(eval_def: EvalDefinition) -> dict[str, Any]:
+def _eval_def_to_dict(
+    eval_row: Eval,
+    *,
+    policy_gate: PolicyGate | None = None,
+) -> dict[str, Any]:
+    """Convert an ``Eval`` row (and optional ``PolicyGate``) to the legacy response shape.
+
+    ``failure_behaviour`` is populated from ``PolicyGate.action`` for
+    node-scoped evals with a gate, else defaults to ``"warn"`` (guardrail-
+    typed or suite-scoped evals without a gate).  The field name
+    ``failure_behaviour`` is retained for backward compatibility — its
+    retirement is chunk 5a's concern.
+    """
+    failure_behaviour = policy_gate.action if policy_gate is not None else "warn"
     return {
-        "id": str(eval_def.id),
-        "pipeline_id": str(eval_def.pipeline_id),
-        "node_id": str(eval_def.node_id) if eval_def.node_id else None,
-        "name": eval_def.name,
-        "eval_type": eval_def.eval_type,
-        "config_json": eval_def.config_json,
-        "failure_behaviour": eval_def.failure_behaviour,
-        "pass_threshold": eval_def.pass_threshold,
-        "suite_id": eval_def.suite_id,
-        "account_id": str(eval_def.account_id),
-        "version": getattr(eval_def, "version", 1),
-        "pre_version_raw": getattr(eval_def, "pre_version_raw", None),
+        "id": str(eval_row.id),
+        "pipeline_id": str(eval_row.pipeline_id),
+        "node_id": str(eval_row.node_id) if eval_row.node_id else None,
+        "name": eval_row.name,
+        "eval_type": eval_row.eval_type,
+        "config_json": eval_row.config_json,
+        "failure_behaviour": failure_behaviour,
+        "pass_threshold": float(eval_row.pass_threshold) if eval_row.pass_threshold is not None else None,
+        "suite_id": eval_row.suite_id,
+        "account_id": str(eval_row.account_id),
+        "version": getattr(eval_row, "version", 1),
+        "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
     }
 
 
@@ -184,19 +197,6 @@ def _eval_row_to_legacy_dict(eval_row: Any, *, failure_behaviour: str = "warn") 
         "version": getattr(eval_row, "version", 1),
         "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
     }
-
-
-def _stamp_eval_definition_version(eval_def: EvalDefinition) -> None:
-    """Bump the eval-definition version and snapshot the pre-edit config.
-
-    FAR-382: an edit to an eval definition is a version-scoped event. The prior
-    config is captured into ``pre_version_raw`` before mutation so a reversal is
-    reconstructable, then ``version`` is incremented. A v1->v2 rubric change is
-    therefore explicit — an ``EvalResult`` stamped with v1 never looks like a
-    regression against a v2-scoped result.
-    """
-    eval_def.pre_version_raw = {"config_json": eval_def.config_json}
-    eval_def.version = (eval_def.version or 1) + 1
 
 
 def _validate_guardrail_request(
@@ -380,34 +380,59 @@ async def list_eval_definitions(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
 ) -> EvalDefinitionListResponse:
-    """List eval definitions for the caller's organisation."""
+    """List eval definitions for the caller's organisation.
+
+    Reads from the ``evals`` table (chunk 3b cutover).  Each row's
+    ``failure_behaviour`` response field is populated from the associated
+    ``PolicyGate.action`` (node-scoped evals with a gate) or defaults to
+    ``"warn"`` (guardrail-typed / suite-scoped).
+    """
     from sqlalchemy import func as sa_func
 
     conditions = [
-        EvalDefinition.organisation_id == principal.organisation_id,
-        EvalDefinition.deleted_at.is_(None),
+        Eval.organisation_id == principal.organisation_id,
+        Eval.deleted_at.is_(None),
     ]
     if pipeline_id:
-        conditions.append(EvalDefinition.pipeline_id == pipeline_id)
+        conditions.append(Eval.pipeline_id == pipeline_id)
     if eval_type:
-        conditions.append(EvalDefinition.eval_type == eval_type)
+        conditions.append(Eval.eval_type == eval_type)
 
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            total_q = select(sa_func.count(EvalDefinition.id)).where(*conditions)
+            total_q = select(sa_func.count(Eval.id)).where(*conditions)
             total = (await session.execute(total_q)).scalar() or 0
 
             q = (
-                select(EvalDefinition)
+                select(Eval)
                 .where(*conditions)
-                .order_by(EvalDefinition.created_at.desc())
+                .order_by(Eval.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             )
             rows = (await session.execute(q)).scalars().all()
+
+            # Batch-load PolicyGates for the page (one query, not N+1).
+            gate_map: dict[uuid.UUID, PolicyGate] = {}
+            if rows:
+                eval_ids = [r.id for r in rows]
+                gates = (
+                    (
+                        await session.execute(
+                            select(PolicyGate).where(
+                                PolicyGate.eval_id.in_(eval_ids),
+                                PolicyGate.organisation_id == principal.organisation_id,
+                                PolicyGate.deleted_at.is_(None),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                gate_map = {g.eval_id: g for g in gates}
     except HTTPException:
         raise
     except IntegrityError:
@@ -437,7 +462,7 @@ async def list_eval_definitions(
         ) from None
 
     return EvalDefinitionListResponse(
-        items=[EvalDefinitionResponse(**_eval_def_to_dict(d)) for d in rows],
+        items=[EvalDefinitionResponse(**_eval_def_to_dict(d, policy_gate=gate_map.get(d.id))) for d in rows],
         total=total,
         page=page,
         page_size=page_size,
@@ -1515,20 +1540,38 @@ async def get_eval_definition(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
 ) -> dict[str, Any]:
-    """Get a single eval definition by ID."""
+    """Get a single eval definition by ID.
+
+    Reads from the ``evals`` table (chunk 3b cutover).  Includes
+    soft-deleted rows for historical lookups.  The associated
+    ``PolicyGate`` (if any) is loaded for the response mapping.
+    """
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await session.execute(
                 include_soft_deleted(
-                    select(EvalDefinition).where(
-                        EvalDefinition.id == eval_id,
-                        EvalDefinition.organisation_id == principal.organisation_id,
+                    select(Eval).where(
+                        Eval.id == eval_id,
+                        Eval.organisation_id == principal.organisation_id,
                     )
                 )
             )
-            eval_def = result.scalar_one_or_none()
+            eval_row = result.scalar_one_or_none()
+
+            # Load the associated PolicyGate (if any) for the response mapping.
+            policy_gate: PolicyGate | None = None
+            if eval_row is not None:
+                gate_result = await session.execute(
+                    include_soft_deleted(
+                        select(PolicyGate).where(
+                            PolicyGate.eval_id == eval_row.id,
+                            PolicyGate.organisation_id == principal.organisation_id,
+                        )
+                    )
+                )
+                policy_gate = gate_result.scalar_one_or_none()
     except HTTPException:
         raise
     except IntegrityError:
@@ -1556,9 +1599,9 @@ async def get_eval_definition(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching the eval definition.",
         ) from None
-    if eval_def is None:
+    if eval_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
-    return _eval_def_to_dict(eval_def)
+    return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
 
 
 @router.put("/evals/{eval_id}", dependencies=[Depends(deny_break_glass_mint)])
@@ -1569,7 +1612,12 @@ async def update_eval_definition(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("eval.definition.update"),
 ) -> dict[str, Any]:
-    """Update an eval definition. Admin only."""
+    """Update an eval definition. Admin only.
+
+    Reads from the ``evals`` table (chunk 3b cutover).  The update is
+    persisted via ``create_or_update_eval`` which handles version stamping
+    and PolicyGate management internally.
+    """
     if principal.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can update eval definitions")
 
@@ -1579,57 +1627,74 @@ async def update_eval_definition(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await session.execute(
                 include_soft_deleted(
-                    select(EvalDefinition).where(
-                        EvalDefinition.id == eval_id,
-                        EvalDefinition.organisation_id == principal.organisation_id,
+                    select(Eval).where(
+                        Eval.id == eval_id,
+                        Eval.organisation_id == principal.organisation_id,
                     )
                 )
             )
-            eval_def = result.scalar_one_or_none()
-            if eval_def is None:
+            eval_row = result.scalar_one_or_none()
+            if eval_row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
 
             updates = req.model_dump(exclude_unset=True)
-            new_type = updates.get("eval_type", eval_def.eval_type)
+            new_type = updates.get("eval_type", eval_row.eval_type)
+
+            # Resolve current failure_behaviour from the PolicyGate (if any),
+            # falling back to "warn" for guardrail-typed / suite-scoped evals.
+            current_gate_result = await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_row.id,
+                    PolicyGate.organisation_id == principal.organisation_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+            current_gate = current_gate_result.scalar_one_or_none()
+            current_failure_behaviour = current_gate.action if current_gate is not None else "warn"
+
             new_behaviour = updates.get("failure_behaviour")
             if new_behaviour is None:
-                new_behaviour = eval_def.failure_behaviour
-            new_config = updates.get("config_json", eval_def.config_json)
+                new_behaviour = current_failure_behaviour
+            new_config = updates.get("config_json", eval_row.config_json)
             _validate_guardrail_request(
                 eval_type=new_type,
                 failure_behaviour=new_behaviour,
                 config_json=new_config,
             )
-            # FAR-382 versioning: snapshot the raw pre-edit config so a reversal
-            # is reconstructable, then bump the version — a rubric/config change
-            # is an explicitly version-scoped event, never a silent regression.
-            _stamp_eval_definition_version(eval_def)
-            for key, value in updates.items():
-                setattr(eval_def, key, value)
-            await session.flush()
-
-            # Also redirect to Eval+PolicyGate via the helper
+            # Redirect to Eval+PolicyGate via the shared helper — version
+            # stamping and PolicyGate management are handled internally.
             try:
-                await create_or_update_eval(
+                eval_row = await create_or_update_eval(
                     session,
                     org_id=principal.organisation_id,
                     account_id=principal.account_id,
-                    pipeline_id=eval_def.pipeline_id,
-                    node_id=updates.get("node_id", eval_def.node_id),
-                    name=updates.get("name", eval_def.name),
+                    pipeline_id=eval_row.pipeline_id,
+                    node_id=updates.get("node_id", eval_row.node_id),
+                    name=updates.get("name") or eval_row.name or "",
                     eval_type=new_type,
                     config_json=new_config,
                     failure_behaviour=new_behaviour,
-                    pass_threshold=updates.get("pass_threshold", eval_def.pass_threshold),
-                    suite_id=updates.get("suite_id", eval_def.suite_id),
-                    eval_suite_id=updates.get("eval_suite_id", getattr(eval_def, "eval_suite_id", None)),
-                    existing_eval_id=eval_def.id,
+                    pass_threshold=updates.get("pass_threshold", eval_row.pass_threshold),
+                    suite_id=updates.get("suite_id", eval_row.suite_id),
+                    eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
+                    existing_eval_id=eval_row.id,
                 )
             except PolicyGateBindingViolationError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"PolicyGate binding violation: {exc}",
                 ) from exc
+
+            # Reload the PolicyGate for the response mapping (it may have
+            # been created/updated by the helper).
+            gate_result = await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_row.id,
+                    PolicyGate.organisation_id == principal.organisation_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+            policy_gate = gate_result.scalar_one_or_none()
     except HTTPException:
         raise
     except IntegrityError:
@@ -1658,7 +1723,7 @@ async def update_eval_definition(
             detail="An unexpected error occurred while updating the eval definition.",
         ) from None
 
-    return _eval_def_to_dict(eval_def)
+    return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
 
 
 @router.delete(

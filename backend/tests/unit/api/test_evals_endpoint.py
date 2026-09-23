@@ -313,6 +313,7 @@ class TestListEvalDefinitions:
                     _make_eval_def(id=uuid.uuid4(), name="Eval 2"),
                 ]
             ),
+            _make_result(all_value=[]),  # PolicyGate batch query (chunk 3b)
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -374,13 +375,11 @@ class TestListEvalDefinitions:
         assert resp.status_code == 200
 
         # The two real queries (count + select) both carry the org filter. We
-        # restrict the scan to the count/list Selects on EvalDefinition: the RLS
+        # restrict the scan to the count/list Selects on Eval: the RLS
         # setup (`set_config('app.organisation_id', ...)`) is also executed on
         # this session and always contains the literal "organisation_id", so a
         # blanket substring scan could never fail even if the filter regressed.
-        eval_selects = [
-            stmt for stmt in captured_stmts if isinstance(stmt, Select) and "eval_definitions" in str(stmt.compile())
-        ]
+        eval_selects = [stmt for stmt in captured_stmts if isinstance(stmt, Select) and "evals" in str(stmt.compile())]
         assert len(eval_selects) == 2, f"expected count + list queries, got {len(eval_selects)}"
         for stmt in eval_selects:
             where_sql = str(stmt.whereclause) if stmt.whereclause is not None else ""
@@ -399,6 +398,7 @@ class TestListEvalDefinitions:
                     _make_eval_def(name="Filtered Eval"),
                 ]
             ),
+            _make_result(all_value=[]),  # PolicyGate batch query (chunk 3b)
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -435,9 +435,7 @@ class TestListEvalDefinitions:
         assert resp.json()["total"] == 1
 
         # The count + list queries must both carry the eval_type filter.
-        eval_selects = [
-            stmt for stmt in captured_stmts if isinstance(stmt, Select) and "eval_definitions" in str(stmt.compile())
-        ]
+        eval_selects = [stmt for stmt in captured_stmts if isinstance(stmt, Select) and "evals" in str(stmt.compile())]
         assert len(eval_selects) == 2, f"expected count + list queries, got {len(eval_selects)}"
         for stmt in eval_selects:
             where_sql = str(stmt.whereclause) if stmt.whereclause is not None else ""
@@ -467,9 +465,7 @@ class TestListEvalDefinitions:
         assert resp.status_code == 200
 
         # The count + list queries must both carry the deleted_at IS NULL filter.
-        eval_selects = [
-            stmt for stmt in captured_stmts if isinstance(stmt, Select) and "eval_definitions" in str(stmt.compile())
-        ]
+        eval_selects = [stmt for stmt in captured_stmts if isinstance(stmt, Select) and "evals" in str(stmt.compile())]
         assert len(eval_selects) == 2, f"expected count + list queries, got {len(eval_selects)}"
         for stmt in eval_selects:
             where_sql = str(stmt.whereclause) if stmt.whereclause is not None else ""
@@ -498,6 +494,7 @@ class TestGetEvalDefinition:
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=_make_eval_def(name="My Eval")),
+            _make_result(scalar_one_value=None),  # PolicyGate query (chunk 3b, no gate)
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -544,8 +541,12 @@ class TestUpdateEvalDefinition:
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=eval_def),  # EvalDefinition lookup
-            _make_result(scalar_one_value=None),  # Eval lookup (no existing Eval row yet — first-time redirect)
+            _make_result(scalar_one_value=eval_def),  # Eval lookup (chunk 3b: reads from evals)
+            _make_result(scalar_one_value=None),  # PolicyGate lookup for current failure_behaviour
+            _make_result(scalar_one_value=eval_def),  # create_or_update_eval: existing Eval lookup
+            _make_result(scalar_one_value=None),  # create_or_update_eval: PolicyGate lookup
+            _make_result(scalar_one_value=None),  # create_or_update_eval: flush
+            _make_result(scalar_one_value=None),  # PolicyGate reload for response mapping
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
