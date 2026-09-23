@@ -30,6 +30,7 @@ REASON TAXONOMY (stable, closed)
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -113,14 +114,18 @@ def record_pinned(connector_type: str, host: str) -> None:
 
     ``connector_type`` defaults to :data:`DEFAULT_CONNECTOR_TYPE` at the call
     site when a connector has not yet been labelled (see the staged rollout).
+
+    Never raises: emission failures are suppressed so metrics can never
+    surface as an egress failure.
     """
     if _pinned_total is None:
         _init()
     if _pinned_total is not None:
-        _pinned_total.add(
-            1,
-            attributes={"host": host, "connector_type": connector_type or DEFAULT_CONNECTOR_TYPE},
-        )
+        with contextlib.suppress(Exception):
+            _pinned_total.add(
+                1,
+                attributes={"host": host, "connector_type": connector_type or DEFAULT_CONNECTOR_TYPE},
+            )
 
 
 def record_rejected(connector_type: str, host: str, reason: str) -> None:
@@ -129,15 +134,19 @@ def record_rejected(connector_type: str, host: str, reason: str) -> None:
     ``reason`` must be one of :data:`_REASONS`; callers should pass the matching
     module constant. Labels make the rejection attributable to the destination
     host, the connector (or ``unknown`` pre-rollout) and the reason.
+
+    Never raises: emission failures are suppressed so metrics can never
+    surface as an egress failure.
     """
     if _rejected_total is None:
         _init()
     if _rejected_total is not None:
-        _rejected_total.add(
-            1,
-            attributes={
-                "host": host,
-                "connector_type": connector_type or DEFAULT_CONNECTOR_TYPE,
-                "reason": reason,
-            },
-        )
+        with contextlib.suppress(Exception):
+            _rejected_total.add(
+                1,
+                attributes={
+                    "host": host,
+                    "connector_type": connector_type or DEFAULT_CONNECTOR_TYPE,
+                    "reason": reason,
+                },
+            )
