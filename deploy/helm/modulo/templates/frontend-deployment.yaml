@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "modulo.fullname" . }}-frontend
+  namespace: {{ include "modulo.namespace" . }}
+  labels:
+    {{- include "modulo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "modulo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "modulo.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+      {{- with .Values.frontend.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      # The Modulo workloads never call the Kubernetes API, and the chart's
+      # ServiceAccount carries no RBAC bindings, so mounting a token only
+      # widens the blast radius of a compromised pod (kubernetes:S6865).
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: {{ include "modulo.image" (dict "image" .Values.frontend.image) | quote }}
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          # Skip the nginx docker-entrypoint.sh which writes into /etc/nginx/conf.d/
+          # (incompatible with readOnlyRootFilesystem). Our ConfigMap provides the
+          # full nginx config, so the entrypoint's template processing is unnecessary.
+          command: ["nginx", "-g", "daemon off;"]
+          ports:
+            - name: http-frontend
+              containerPort: 8080
+              protocol: TCP
+          {{- with .Values.frontend.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.frontend.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            limits:
+              cpu: {{ .Values.frontend.resources.limits.cpu | quote }}
+              memory: {{ .Values.frontend.resources.limits.memory | quote }}
+              ephemeral-storage: {{ .Values.frontend.resources.limits.ephemeralStorage | quote }}
+            requests:
+              cpu: {{ .Values.frontend.resources.requests.cpu | quote }}
+              memory: {{ .Values.frontend.resources.requests.memory | quote }}
+              ephemeral-storage: {{ .Values.frontend.resources.requests.ephemeralStorage | quote }}
+          securityContext:
+            # readOnlyRootFilesystem is safe for the nginx frontend: the entrypoint
+            # is skipped (command override), /var/cache/nginx and /var/run are
+            # writable emptyDirs, and the nginx config comes from a ConfigMap mount.
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              # Keep NET_BIND_SERVICE (Kubernetes grants it to non-root containers by
+              # default) and drop only the genuinely dangerous capabilities. The nginx
+              # binary in the upstream image carries a file capability; under no_new_privs
+              # (set by allowPrivilegeEscalation: false) the kernel refuses to exec a
+              # binary whose file capability is not a subset of the process's permitted
+              # set, yielding EPERM. Keeping NET_BIND_SERVICE makes the exec check pass
+              # without granting anything new (--add-cap). The frontend still listens
+              # on 8080 (unprivileged) — this cap is not for port binding.
+              drop:
+                - DAC_OVERRIDE
+                - KILL
+                - MKNOD
+                - SETFCAP
+                - SETGID
+                - SETPCAP
+                - SETUID
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: nginx-config
+          configMap:
+            name: {{ include "modulo.fullname" . }}-frontend-nginx
+      {{- with .Values.frontend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
