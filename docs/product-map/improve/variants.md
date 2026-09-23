@@ -65,6 +65,15 @@ than left as false coverage promises.
 
 ## QA History
 
+- 2026-09-23: **product-map review pass** — removed the stale
+  `pipelines/run_variants.feature` "Coverage gaps are reported for a variant
+  group" scenario (`@awaiting-implementation`, deselected) and its dead step
+  definitions. It was a duplicate draft of the real `get_coverage_gaps` seam
+  already locked by `variants/variant_groups.feature` (the `variant_groups.feature`
+  eval-coverage scenario drives the same route/seam); the redundant copy and
+  `PINNED_AWAITING_IMPLEMENTATION` entry for `pipelines/run_variants.feature`
+  were archived. Coverage for this entry is unchanged.
+
 - 2026-09-20: **product-map review pass** — closed the
   "BDD scenarios tagged `@awaiting-implementation`" gap
   (`variant_groups.feature`). The sequential-order scenario now drives the REAL
