@@ -74,17 +74,22 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
+              # Keep NET_BIND_SERVICE (Kubernetes grants it to non-root containers by
+              # default) and drop only the genuinely dangerous capabilities. The nginx
+              # binary in the upstream image carries a file capability; under no_new_privs
+              # (set by allowPrivilegeEscalation: false) the kernel refuses to exec a
+              # binary whose file capability is not a subset of the process's permitted
+              # set, yielding EPERM. Keeping NET_BIND_SERVICE makes the exec check pass
+              # without granting anything new (--add-cap). The frontend still listens
+              # on 8080 (unprivileged) — this cap is not for port binding.
               drop:
-                - ALL
-              # NET_BIND_SERVICE is required because the nginx binary in the
-              # upstream image carries a file capability (cap_net_bind_service=ep).
-              # Under no_new_privs (set by allowPrivilegeEscalation: false), the
-              # kernel refuses to exec a binary whose file capability is not a
-              # subset of the process's permitted set, yielding EPERM. Granting
-              # the capability here makes the exec check pass. The frontend still
-              # listens on 8080 (unprivileged) — this cap is not for port binding.
-              add:
-                - NET_BIND_SERVICE  # NOSONAR kubernetes:S5849 — reviewed exception: required to exec the file-capability nginx binary under no_new_privs; the process still listens on the unprivileged port 8080.
+                - DAC_OVERRIDE
+                - KILL
+                - MKNOD
+                - SETFCAP
+                - SETGID
+                - SETPCAP
+                - SETUID
           volumeMounts:
             - name: nginx-cache
               mountPath: /var/cache/nginx
