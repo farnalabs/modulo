@@ -1376,6 +1376,40 @@ describe('PipelineEditorView — run dialog', () => {
     expect(wrapper.find('[data-testid="pipeline-editor-save-error"]').text()).toContain('duration_rejected')
     wrapper.unmount()
   })
+
+  it('renders the autonomy ceiling control with the current value and PATCHes on change', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    // Seed the loaded pipeline with an explicit ceiling so the control has a
+    // non-inherit value to render (the default GET mock omits the field).
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementationOnce((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}') && !url.includes('/graph') && !url.includes('/snapshots')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline', max_autonomy_level: 'notify_on_complete' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    await vm.loadPipeline()
+    await flushPromises()
+    await nextTick()
+
+    const select = wrapper.find('[data-testid="pipeline-editor-max-autonomy"]')
+    expect(select.exists()).toBe(true)
+    expect((select.element as HTMLSelectElement).value).toBe('notify_on_complete')
+
+    // setValue on a SELECT sets the value and dispatches change — the handler runs here.
+    await select.setValue('fully_autonomous')
+    await flushPromises()
+
+    const patch = vi.mocked(api.PATCH).mock.calls.find((c) => 'max_autonomy_level' in ((c[1] as any).body ?? {}))
+    expect(patch).toBeTruthy()
+    expect((patch as unknown[] | undefined)![1]).toEqual(expect.objectContaining({
+      body: { max_autonomy_level: 'fully_autonomous' },
+    }))
+    wrapper.unmount()
+  })
 })
 
 describe('PipelineEditorView — edge properties panel', () => {

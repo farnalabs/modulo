@@ -134,6 +134,26 @@
                 {{ resettingCircuitBreaker ? $t('views.PipelineEditorView.circuit_breaker_resetting') : $t('views.PipelineEditorView.circuit_breaker_reset') }}
               </button>
             </div>
+            <div class="flex items-center gap-1">
+              <label
+                for="pipeline-max-autonomy"
+                class="whitespace-nowrap text-[10px] text-muted-foreground"
+                :title="$t('views.PipelineEditorView.max_autonomy_level_hint')"
+              >{{ $t('views.PipelineEditorView.max_autonomy_level') }}:</label>
+              <select
+                id="pipeline-max-autonomy"
+                :value="maxAutonomyInput ?? ''"
+                class="w-44 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                :title="$t('views.PipelineEditorView.max_autonomy_level_hint')"
+                @change="updateMaxAutonomyLevel"
+                data-testid="pipeline-editor-max-autonomy"
+              >
+                <option value="">{{ $t('views.PipelineEditorView.max_autonomy_level_inherit') }}</option>
+                <option value="manual_approval">{{ $t('views.PipelineEditorView.autonomy_manual_approval') }}</option>
+                <option value="notify_on_complete">{{ $t('views.PipelineEditorView.autonomy_notify_on_complete') }}</option>
+                <option value="fully_autonomous">{{ $t('views.PipelineEditorView.autonomy_fully_autonomous') }}</option>
+              </select>
+            </div>
             <div class="relative">
               <button
                 type="button"
@@ -1468,6 +1488,9 @@ watch(runPrompt, () => {
 })
 
 const maxDurationInput = ref<number | undefined>(undefined)
+// FAR-1163: pipeline autonomy ceiling. null = inherit (effective ceiling is
+// the pipeline's default_autonomy_level).
+const maxAutonomyInput = ref<string | null>(null)
 
 // FAR-1182: monthly spend circuit breaker. '' = disabled (null on the API).
 const circuitBreakerInput = ref<string | number>('')
@@ -2466,6 +2489,7 @@ async function loadPipeline() {
     pipeline.value = data as any
     maxDurationInput.value = (data as any)?.max_duration_seconds ?? undefined
     circuitBreakerInput.value = data?.circuit_breaker_threshold ?? ''
+    maxAutonomyInput.value = (data as any)?.max_autonomy_level ?? null
     syncRetryPolicyFromPipeline()
   } catch (e) {
     pageError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(e) })
@@ -2579,6 +2603,30 @@ async function resetCircuitBreaker() {
     saveGraphError.value = t('views.PipelineEditorView.failed_to_reset_circuit_breaker', { error: formatApiError(e) })
   } finally {
     resettingCircuitBreaker.value = false
+  }
+}
+
+async function updateMaxAutonomyLevel(event: Event) {
+  const raw = (event.target as HTMLSelectElement).value
+  const val = raw === '' ? null : raw
+  maxAutonomyInput.value = val
+  try {
+    const { error, response } = await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { max_autonomy_level: val },
+      signal,
+    }))
+    if (error) {
+      // A 422 means the ceiling is below the pipeline's default level.
+      saveGraphError.value = response?.status === 422
+        ? t('views.PipelineEditorView.max_autonomy_below_default', { error: formatApiError(error) })
+        : t('views.PipelineEditorView.failed_to_update_max_autonomy', { error: formatApiError(error) })
+      return
+    }
+    if (pipeline.value) pipeline.value.max_autonomy_level = val
+    saveGraphError.value = null
+  } catch (e: unknown) {
+    saveGraphError.value = t('views.PipelineEditorView.failed_to_update_max_autonomy', { error: formatApiError(e) })
   }
 }
 
