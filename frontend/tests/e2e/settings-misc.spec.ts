@@ -34,6 +34,7 @@ test.describe('Settings Rate Limits', { tag: "@regression" }, () => {
 
 test.describe('Settings Remy Skills', { tag: "@regression" }, () => {
   test('renders the Remy Skills page', { tag: "@regression" }, async ({ page, env }) => {
+    test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
     await loginAsAdmin(page, env)
     await page.goto('/settings/remy')
     await expect(page.locator('h1')).toContainText('My Remy Skills')
