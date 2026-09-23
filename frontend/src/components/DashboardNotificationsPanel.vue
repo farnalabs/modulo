@@ -92,6 +92,7 @@ import { useStorage } from '@vueuse/core';
 import type { NotificationResponse } from "../lib/api/notifications";
 import { fetchNotifications, reviewLater, fetchUnreadCount } from "../lib/api/notifications";
 import { registerHandler } from "../stores/syncRegistry";
+import { eventBus } from "../composables/useEventStream";
 import NotificationCard from "./NotificationCard.vue";
 import { formatApiError } from "../lib/api/formatError";
 import LoadingSpinner from "./shared/LoadingSpinner.vue";
@@ -167,16 +168,23 @@ function nextPage() {
 }
 
 let unsubHandler: (() => void) | null = null;
+let unsubReconnect: (() => void) | null = null;
 
 onMounted(async () => {
   await loadPage();
   unsubHandler = registerHandler("notification", () => {
     void loadPage();
   });
+  // FAR-250: after a successful SSE reconnect, REST-backfill the list (the
+  // stream has no replay buffer). Debounced centrally in useEventStream.
+  unsubReconnect = eventBus.onReconnect(() => {
+    void loadPage();
+  });
 });
 
 onUnmounted(() => {
   if (unsubHandler) unsubHandler();
+  if (unsubReconnect) unsubReconnect();
 });
 
 async function loadPage() {

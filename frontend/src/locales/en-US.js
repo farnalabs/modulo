@@ -3841,7 +3841,9 @@ export default {
       "leave_blank_to_keep_existing": "(leave blank to keep existing)"
     },
     "NotificationBell": {
-      "notifications": "Notifications"
+      "notifications": "Notifications",
+      "reconnect_banner": "Live updates stopped. Reconnect with a fresh sign-in to resume them.",
+      "reconnect_action": "Reconnect"
     },
     "PageTabs": {
       "section_navigation": "Section navigation"
