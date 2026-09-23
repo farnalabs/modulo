@@ -130,7 +130,9 @@ jobs:
           # (verified against live flyctl output: fields id, state,
           # updated_at, config.metadata.fly_process_group, checks[].name /
           # .status / .output). We select the process-local app_liveness check
-          # (fly.toml top-level [checks.app_liveness], port 8080 /healthz -
+          # by exact name match (never a substring, so a future check merely
+          # mentioning app_liveness cannot be picked up); it is fly.toml's
+          # top-level [checks.app_liveness], port 8080 /healthz -
           # ADR 043 Decision 4) and NEVER the servicecheck-* entries, which
           # probe deployment-scoped /healthz/ready (FAR-1158) and would make
           # a single dead queue storm-restart every app machine. A
@@ -155,7 +157,7 @@ jobs:
             | select((((.config.metadata.fly_process_group // .config.env.FLY_PROCESS_GROUP // "") | tostring)) == "app")
             | . as $m
             | (($m.checks // [])[])
-            | select((((.name // "") | tostring) | contains("app_liveness")) and ((((.status // "") | tostring)) == "critical"))
+            | select((((.name // "") | tostring) == "app_liveness") and ((((.status // "") | tostring)) == "critical"))
             | {machine_id: ($m.id // "?"), check_name: (.name // "?"), output: ((.output // "") | tostring), updated_at: ($m.updated_at // "")}
           ]
           | unique_by(.machine_id)
