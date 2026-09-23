@@ -282,7 +282,7 @@ async def approve_consent(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ConsentApproveResponse:
-    """Approve a pending OAuth consent (ADR 017 DECISION 1 — the approve POST IS the consent).
+    """Approve a pending OAuth consent (ADR 047 DECISION 1 — the approve POST IS the consent).
 
     The authenticated approve POST is the human approval: the Bearer principal
     IS the consenting account. There is deliberately NO consent page / deny

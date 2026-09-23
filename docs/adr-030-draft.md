@@ -3,17 +3,17 @@
 > **CONDUCTOR NOTE:** This file is a TRANSPLANT DRAFT. ADRs are maintained
 > alongside this project's private development tooling (migrated out of modulo in
 > FAR-434, where they are numbered by sequence -- this lands as
-> `030-user-scoped-mcp-keys.md`, cross-referencing ADR 014/017/018). When
-> transplanting, also apply the one-line reciprocal edit to ADR 017 named in the
+> `030-user-scoped-mcp-keys.md`, cross-referencing ADR 014/047/018). When
+> transplanting, also apply the one-line reciprocal edit to ADR 047 named in the
 > amendment below.
 
 **Status:** Accepted (Phase 1 mechanism shipped; FAR-620)
 **Date:** 2026-09-06
-**Related:** ADR 014 (MCP server as agents), ADR 017 (centralized authorization, Founder Decision 1), ADR 018 (duplicate numbering noted; the room's ADR sequence has two 018s; this file does not renumber), FAR-602 (HITL email alerts), FAR-614 (user-scoped MCP preference tools)
+**Related:** ADR 014 (MCP server as agents), ADR 047 (centralized authorization, Founder Decision 1), ADR 018 (duplicate numbering noted; the room's ADR sequence has two 018s; this file does not renumber), FAR-602 (HITL email alerts), FAR-614 (user-scoped MCP preference tools)
 
 ## Context
 
-Modulo's MCP server (ADR 014/017) is the control plane for external agents,
+Modulo's MCP server (ADR 014/047) is the control plane for external agents,
 Claude Code, IDE agents, Remy sessions, CI automation. Today every MCP API
 key is an ORG-LEVEL credential: it carries an org role (operator/runner), a
 team boundary, and optionally a run binding (sandbox keys), but it has no
@@ -98,7 +98,7 @@ creation is the DEFAULT posture; org-wide is the deliberate opt-in
 
 ## The ceiling is REUSE, not amendment
 
-ADR-017's mint ceiling is unchanged: `min(minted role, live role)` per
+ADR-047's mint ceiling is unchanged: `min(minted role, live role)` per
 call, resolved from live membership. User-scoped keys never exceed
 operator. Runner key + live viewer DEGRADES to viewer (min(1,0), degraded,
 not dead); death happens only on missing/deactivated membership. The
@@ -111,9 +111,9 @@ a stale key cannot out-live its owner's live role.
 | runner | viewer | **degrades to viewer** (test-pinned cell) |
 | any | None (removed/deactivated) | dies (401) |
 
-## ADR 017 Founder Decision 1 -- amendment
+## ADR 047 Founder Decision 1 -- amendment
 
-ADR 017 DECISION 1 reads "Machine clients use org API keys". This ADR
+ADR 047 DECISION 1 reads "Machine clients use org API keys". This ADR
 amends it to:
 
 > *Machine clients use org API keys by default; user-scoped keys extend the
@@ -121,7 +121,7 @@ amends it to:
 > agents, per-user automations). Org-wide remains the deliberate opt-in for
 > shared service identities.*
 
-**Reciprocal edit for ADR 017 (co-located with this
+**Reciprocal edit for ADR 047 (co-located with this
 ADR):** append to DECISION 1, "Amended by ADR 030: user-scoped MCP keys add
 a per-user credential class for identity-bound machine clients; org API keys
 remain the default for shared machine identities."

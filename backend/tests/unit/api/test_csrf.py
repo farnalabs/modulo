@@ -234,7 +234,7 @@ class TestExemptPaths:
 
     def test_oauth_token_hardcoded_exempt(self):
         """/mcp/oauth/token authenticates via client_secret — CSRF-exempt by
-        hardcoded exact path (ADR 017 A1b), independent of env config."""
+        hardcoded exact path (ADR 047 A1b), independent of env config."""
         app = _make_app()
         with TestClient(app) as client:
             resp = client.post("/mcp/oauth/token")

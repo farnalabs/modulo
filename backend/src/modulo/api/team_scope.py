@@ -161,7 +161,7 @@ async def resolve_trigger_run_team_scope(
     return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
 
 
-# The team-scoped resource set (ADR 017 DECISION 2, extended by ADR 038).
+# The team-scoped resource set (ADR 047 DECISION 2, extended by ADR 038).
 # ``runs`` is deliberately absent from the path-param resolvers: it has
 # ``owner_team_id`` but no ``visibility`` column and strict org RLS, so it
 # stays on the org-role floor only (RLS parity). ``eval_suite_run`` and

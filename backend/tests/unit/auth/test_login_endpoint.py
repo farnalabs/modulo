@@ -250,7 +250,7 @@ def _login(client: TestClient) -> str:
 
 
 def test_me_removed_member_returns_401(client: TestClient) -> None:
-    """ADR 017: a removed/deactivated member gets 401 from /me, not a stale role."""
+    """ADR 047: a removed/deactivated member gets 401 from /me, not a stale role."""
     from datetime import UTC, datetime
 
     mock_user = _make_mock_user()

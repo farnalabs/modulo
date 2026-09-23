@@ -6,7 +6,7 @@ Feature: Runner Role
   Background:
     Given I am authenticated as an admin in org "acme"
 
-  # ADR 017 reconciliation (PR B):
+  # ADR 047 reconciliation (PR B):
   # - REST never accepts `mk_` API keys on the run-trigger route, so "Runner
   #   can trigger a pipeline run" now uses a runner JWT principal.
   # - Team-private pipelines require membership in the owning team (FAR-946).

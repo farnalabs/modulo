@@ -42,7 +42,7 @@ The Organisation entity is the root tenant entity in Modulo's multi-tenant archi
 Every resource belongs to an organisation (route `feat-org` / `/admin/org`). Postgres
 Row-Level Security (RLS) enforces tenant isolation at the database layer, and
 `OrgMembership` scopes users (`admin | operator | runner | viewer`) to organisations.
-Referenced by ADR 017/018 as the product-map entry updated during centralized
+Referenced by ADR 047/018 as the product-map entry updated during centralized
 authorization cleanup.
 
 ## Behaviours
@@ -94,7 +94,7 @@ authorization cleanup.
   ``tests/bdd/conftest.py`` (shared by every BDD module) and reused by the
   library and remy feature files.
 - 2026-08-25: **product-map review pass** — restored this entry as part of
-  rebuilding the `docs/product-map/` feature graph. The entry is referenced by ADR 017/018
+  rebuilding the `docs/product-map/` feature graph. The entry is referenced by ADR 047/018
   (centralized-authorization cleanup). Re-verified model columns, the RLS exclusion, the
   org deletion workflow, and member role constraints against the current tree. Status:
   covered.

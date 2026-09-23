@@ -1,4 +1,4 @@
-"""BDD-mirror unit tests: MCP OAuth 2.0 authorization code flow (ADR 017 A1b).
+"""BDD-mirror unit tests: MCP OAuth 2.0 authorization code flow (ADR 047 A1b).
 
 Each test maps to a Gherkin scenario in tests/bdd/features/mcp/mcp_oauth.feature.
 These cover the authorize (GET 302), consent approve, token and refresh

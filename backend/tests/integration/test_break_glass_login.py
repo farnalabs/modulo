@@ -196,7 +196,7 @@ async def test_deactivated_break_glass_login_401(client: AsyncClient, db_engine:
 
 async def test_refresh_denied_after_break_glass_deactivation(client: AsyncClient, db_engine: AsyncEngine) -> None:
     """A break-glass session cannot refresh once the credential is deactivated:
-    the ADR 017 live-role re-read folds the membership to None and refresh
+    the ADR 047 live-role re-read folds the membership to None and refresh
     denies 401 before any family write."""
     org_id = await _create_org(db_engine)
     email = f"refresh-{uuid.uuid4().hex[:12]}@example.com"

@@ -257,7 +257,7 @@ class TestAuthEndpointSchemas:
         validate_shape(resp.json(), MeResponse)
 
     def test_ws_token_schema(self, client: TestClient) -> None:
-        # ws-token is swept via require_permission("run.status") (ADR 017), which
+        # ws-token is swept via require_permission("run.status") (ADR 047), which
         # resolves the authz-enforce kill switch through the DI session. Provide a
         # session whose execute returns a scalar (enforce=True) plus a tenant
         # principal override so the test does not touch a real database.

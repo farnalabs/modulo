@@ -5,7 +5,7 @@ from unittest.mock import DEFAULT, AsyncMock, MagicMock
 
 from sqlalchemy.sql import Select
 
-# require_permission's per-request kill-switch read (ADR 017 DECISION 3). The
+# require_permission's per-request kill-switch read (ADR 047 DECISION 3). The
 # strict mock raises on un-stubbed queries, so this SELECT on the organisations
 # authz_enforce column is stubbed by default to the enforce=True default.
 _AUTHZ_ENFORCE_SNIPPET = "authz_enforce"

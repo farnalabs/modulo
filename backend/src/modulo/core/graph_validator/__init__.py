@@ -1029,7 +1029,7 @@ def _check_sandbox_loop_intercept(node: dict[str, Any], nid: str, result: Valida
     """Sandbox check 8: loop_intercept config shape (FAR-211).
 
     The ``loop_intercept`` config enables the agent-loop interior tool-call
-    interception bridge (ADR 003 amendment). A malformed config is a hard
+    interception bridge (ADR 044 amendment). A malformed config is a hard
     ERROR — a declared control must never silently no-op because its shape was
     invalid. Absent config (the default) passes.
     """

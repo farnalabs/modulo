@@ -1,7 +1,7 @@
 """OAuth 2.0 authorization codes, consent states and token families.
 
 Authorization codes are short-lived, one-time-use, and bound to the account
-that approved the browser consent (ADR 017 A1b). PKCE S256 challenges are
+that approved the browser consent (ADR 047 A1b). PKCE S256 challenges are
 stored alongside the code and verified at token exchange (RFC 7636).
 
 ``oauth_consent_states`` is the single-use handoff created by the anonymous
@@ -53,7 +53,7 @@ class OAuthAuthorizationCode(Base):
         ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
-        comment="Account that approved the consent (ADR 017 — approve POST is the consent)",
+        comment="Account that approved the consent (ADR 047 — approve POST is the consent)",
     )
     scopes: Mapped[str] = mapped_column(Text, nullable=False, comment="Space-separated requested scopes")
     redirect_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
@@ -69,7 +69,7 @@ class OAuthAuthorizationCode(Base):
 
 
 class OAuthConsentState(Base):
-    """Single-use, TTL-bounded browser consent handoff (ADR 017 A1b).
+    """Single-use, TTL-bounded browser consent handoff (ADR 047 A1b).
 
     Created by the anonymous authorize 302 (account_id NULL — the browser is
     not yet authenticated against the SPA). The authenticated approve POST

@@ -60,7 +60,7 @@ from modulo.connectors.trello import TrelloConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core.connector_hub import _build_connector
 
-# ShellConnector is deprecated (ADR 003) and warns on construction.
+# ShellConnector is deprecated (ADR 044) and warns on construction.
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 # ── Known-type matrix ──────────────────────────────────────────────────────

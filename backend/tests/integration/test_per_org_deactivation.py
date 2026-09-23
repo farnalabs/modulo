@@ -237,7 +237,7 @@ async def test_org_a_deactivation_leaves_org_b_and_account_active(
     assert login.status_code == 200, login.text
     assert _login_org_of(login.json()["access_token"]) == org_b
 
-    # Role resolution honours the tombstone per-org (ADR 017 read path).
+    # Role resolution honours the tombstone per-org (ADR 047 read path).
     factory = async_sessionmaker(app_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
         await session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_a)})

@@ -954,7 +954,7 @@ async def _advance_refresh_sequence(
     claims: _RefreshClaims,
     settings: Settings,
 ) -> tuple[str | None, int, bool, bool]:
-    """Re-check live account status + org role (ADR 017), then advance the family.
+    """Re-check live account status + org role (ADR 047), then advance the family.
 
     Returns (live_org_role, new_sequence, theft_detected, reuse_replay).
     """
@@ -975,7 +975,7 @@ async def _advance_refresh_sequence(
         # authenticate by account too).
         #
         # Ordered BEFORE the membership read: equally decisive, cheaper (single
-        # PK lookup), and ADR-017 membership-not-found semantics stay intact
+        # PK lookup), and ADR-047 membership-not-found semantics stay intact
         # for removed members whose accounts remain active.
         account = await get_account_by_id(session, claims.account_uuid)
         # getattr with a falsy default: a row shape that cannot report its
@@ -1005,7 +1005,7 @@ async def _advance_refresh_sequence(
             # later reactivation cannot resurrect pre-deactivation tokens.
             account_denied = True
         else:
-            # ADR 017: check live membership BEFORE advancing the token-family
+            # ADR 047: check live membership BEFORE advancing the token-family
             # sequence - a removed member's repeated refresh attempts must not
             # keep advancing sequences needlessly.
             if claims.org_id:
@@ -1230,7 +1230,7 @@ async def logout(
 
 
 # ---------------------------------------------------------------------------
-# WS token / me (ADR 017 live-role resolution)
+# WS token / me (ADR 047 live-role resolution)
 # ---------------------------------------------------------------------------
 
 
@@ -1241,7 +1241,7 @@ async def _resolve_live_org_role(
     org_id: str | None,
     username: str,
 ) -> str | None:
-    """ADR 017: re-read the LIVE org role; deny removed/deactivated members."""
+    """ADR 047: re-read the LIVE org role; deny removed/deactivated members."""
     if org_id is None:
         return None
     try:
@@ -1254,7 +1254,7 @@ async def _resolve_live_org_role(
             detail="Role verification temporarily unavailable. Please try again.",
         ) from None
     if live_org_role is None:
-        # ADR 017: missing/deactivated membership → deny. A removed user must
+        # ADR 047: missing/deactivated membership → deny. A removed user must
         # not mint a WS token or keep the claimed role.
         _log.warning(
             "permission.membership_not_found",
@@ -1272,7 +1272,7 @@ async def ws_token(
     session: AsyncSession = Depends(get_db_session),
 ) -> WsTokenResponse:
     try:
-        # ADR 017: embed the LIVE org role (not the claim) so a demoted admin's
+        # ADR 047: embed the LIVE org role (not the claim) so a demoted admin's
         # WS token carries the reduced role.
         live_org_role = await _resolve_live_org_role(
             session,
@@ -1352,7 +1352,7 @@ async def me(
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    # ADR 017: return the LIVE org role (not the claim) so the frontend stops
+    # ADR 047: return the LIVE org role (not the claim) so the frontend stops
     # rendering admin controls for demoted/removed users.
     live_org_role = await _resolve_live_org_role(
         session,

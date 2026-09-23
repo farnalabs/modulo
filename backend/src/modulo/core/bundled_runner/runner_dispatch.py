@@ -1541,7 +1541,7 @@ async def _maybe_start_loop_bridge(
     """Best-effort loop-intercept bridge (Docker packaging) — fail-open.
 
     The bridge server binds on the SAQ host; workspaces reach it via
-    ``host.docker.internal`` on Docker (ADR 003 amendment: a setup failure
+    ``host.docker.internal`` on Docker (ADR 044 amendment: a setup failure
     disables the bridge for this node and NEVER blocks the dispatch).
     Returns the bridge-wrapped command, or None (no bridge).
     """

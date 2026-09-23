@@ -1,6 +1,6 @@
 """Unit tests for POST /api/v1/triggers/{id}/webhook/replay/{event_id}.
 
-Covers replay success, missing event (404), and the ADR 017 replay auth
+Covers replay success, missing event (404), and the ADR 047 replay auth
 contract: a principal must hold the ``run.trigger`` (runner) permission, and
 an unauthenticated caller must present a valid HMAC signature over the stored
 payload. Unauthenticated replay without HMAC is rejected (401).
@@ -222,7 +222,7 @@ def test_replay_webhook_not_found_returns_404(client: TestClient) -> None:
 def test_replay_webhook_unauthenticated_without_hmac_returns_401(client: TestClient) -> None:
     """An unauthenticated caller without a valid HMAC signature is rejected.
 
-    This was the ADR 017 vulnerability: anyone who knew a trigger_id + event_id
+    This was the ADR 047 vulnerability: anyone who knew a trigger_id + event_id
     could re-create a run. Now the unauthenticated path requires valid HMAC.
     """
     event_id = uuid.uuid4()

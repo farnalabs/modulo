@@ -59,7 +59,7 @@ class OrganisationNotFound(HTTPException):
 
 class OrganisationMembershipNotFound(HTTPException):
     """401 for a principal with no active membership (removed/deactivated).
-    ADR 017: a user removed from the org loses access immediately - the JWT
+    ADR 047: a user removed from the org loses access immediately - the JWT
     claim alone is not sufficient.
     """
 
@@ -222,7 +222,7 @@ async def get_current_tenant_user_or_api_key(
                 await set_rls_org(session, org_id)
                 key = await validate_api_key(session, token, org_id=org_id)
 
-                # ADR 017 live-role re-read: clamp the minted role to the
+                # ADR 047 live-role re-read: clamp the minted role to the
                 # account's current membership role, matching the MCP auth
                 # path (api/mcp_server.py:770-790). A demoted or removed
                 # member's key must not retain elevated privileges.
@@ -298,7 +298,7 @@ async def resolve_role_from_membership(session: AsyncSession, account_id: str, o
     """Return the LIVE org role for the account in the org, or None if no active membership.
 
     Filters ``deactivated_at IS NULL`` — a soft-deactivated membership must not
-    resolve a role (ADR 017). The canonical implementation lives in the db
+    resolve a role (ADR 047). The canonical implementation lives in the db
     layer (``db.crud.org_membership``) so the service-layer HITL backstop can
     reuse it without reaching through the api layer; this re-export keeps the
     ``auth.dependencies`` surface stable for existing callers.
@@ -314,13 +314,13 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
     Uses lazy imports to avoid a circular dependency:
     ``auth.dependencies → api.dependencies → auth.dependencies``.
 
-    ADR 017 live-role re-read: after the existence checks, the account's live
+    ADR 047 live-role re-read: after the existence checks, the account's live
     org role is read from ``org_memberships`` (deactivated rows excluded).
 
         Failure modes:
     - missing/deactivated membership -> raise 401 (removed users lose access immediately)
     - SQLAlchemyError during the read -> raise 503 (fail-closed; a DB blip must
-      not restore a removed user's stale role - ADR 017 review decision)
+      not restore a removed user's stale role - ADR 047 review decision)
     - any other exception -> propagate (500)
     """
     try:

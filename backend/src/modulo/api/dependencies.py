@@ -73,7 +73,7 @@ async def _assert_tenant_permission(
                     enforce = await resolve_authz_enforce(session, principal.organisation_id)
             except SQLAlchemyError:
                 # Kill-switch read failure defaults to ENFORCE (fail-closed,
-                # ADR 017 DECISION 3): a DB blip must not fail-open the
+                # ADR 047 DECISION 3): a DB blip must not fail-open the
                 # org-role gate.
                 logger.exception("permission.kill_switch_read_failed")
                 enforce = True
@@ -156,7 +156,7 @@ def require_in_dev_operator(principal: TenantPrincipal, permission: str) -> None
     permissions remain viewer-level so ordinary listing is unchanged; only the
     In-Dev reveal is gated (``*.list.in_dev`` resolves to ``operator``).
 
-    Fail-closed and NEVER lifted by the org authz kill switch (ADR 017 DECISION
+    Fail-closed and NEVER lifted by the org authz kill switch (ADR 047 DECISION
     3 scope pin): the In-Dev disclosure control is deliberately
     ``kill_switch_eligible=False`` so an org that disables authz enforcement
     still cannot expose pre-release items to viewers/runners.
@@ -259,7 +259,7 @@ def require_system_or_org_admin(permission: str) -> Any:
             return principal
         try:
             # Destructive operations are NEVER lifted by the kill switch
-            # (ADR 017 DECISION 3 scope pin): org deletion stays gated on the
+            # (ADR 047 DECISION 3 scope pin): org deletion stays gated on the
             # org-admin role even when authz.enforce is off.
             assert_org_role(principal.org_role, "admin", permission, kill_switch_eligible=False)
         except PermissionDenied as exc:
@@ -288,7 +288,7 @@ async def _resolve_live_org_role(
     """Return the caller's live org role in the target org, or `None`.
 
     Delegates to the single membership lookup in `auth.dependencies`
-    (ADR 017 live-role re-read); keeps the name for existing callers.
+    (ADR 047 live-role re-read); keeps the name for existing callers.
     """
     from modulo.auth.dependencies import resolve_role_from_membership
 
@@ -420,7 +420,7 @@ def require_team_membership_or_admin(resource_team_id_provider: TeamScopeProvide
     ``resource_team_id_provider`` resolves the target row's ``owner_team_id``
     and ``visibility`` from the request (path params + a DB lookup); see
     ``modulo.api.team_scope``. ``runs`` is intentionally not team-gated — it has
-    no ``visibility`` column (org-role floor only, ADR 017 iteration-7 special).
+    no ``visibility`` column (org-role floor only, ADR 047 iteration-7 special).
 
     .. code-block:: python
 

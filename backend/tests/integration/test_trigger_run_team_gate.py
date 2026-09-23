@@ -456,7 +456,7 @@ class TestTriggerRunTeamGateWiring:
 
     Instead assert the route function declares the gate dependency tagged
     ``permission='team.membership_or_admin'`` (the tag ``_tagged_dep`` attaches
-    and the ADR 017 route-introspection sweep reads). Removing the
+    and the ADR 047 route-introspection sweep reads). Removing the
     ``require_team_membership_or_admin_any_credential(...)`` line from
     ``trigger_run`` makes this test fail.
     """

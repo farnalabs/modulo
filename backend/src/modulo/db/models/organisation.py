@@ -79,7 +79,7 @@ class Organisation(SoftDeleteMixin, Base):
     settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     otel_config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     plan_id: Mapped[str | None] = mapped_column(String(255))
-    # Tenancy-bounded authorization kill-switch (ADR 017 DECISION 3). Dedicated
+    # Tenancy-bounded authorization kill-switch (ADR 047 DECISION 3). Dedicated
     # boolean column — NOT settings_json — atomic at statement level and
     # multi-backend safe. Default TRUE: enforcement is on unless explicitly off.
     authz_enforce: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))

@@ -4916,7 +4916,7 @@ export interface paths {
          *     Requires X-Modulo-Timestamp header (Unix seconds, ±300s window).
          *     Requires X-Modulo-Webhook-Secret header if trigger has hmac_secret configured.
          *
-         *     ADR 017 exempt-channel: this route is CSRF-exempt via the audited
+         *     ADR 047 exempt-channel: this route is CSRF-exempt via the audited
          *     ``/api/v1/triggers/`` prefix and exempt from the org-role sweep because it
          *     authenticates via the trigger's shared-secret HMAC (or is public run
          *     creation for HMAC-less triggers by design). Replay and cleanup-expired are
@@ -4949,7 +4949,7 @@ export interface paths {
          *     Replays the original raw payload through the trigger pipeline, skipping
          *     HMAC and timestamp validation but preserving dedup and flood protection.
          *
-         *     ADR 017: replay is a mutating run-creation channel and is NOT exempt. A
+         *     ADR 047: replay is a mutating run-creation channel and is NOT exempt. A
          *     principal (if present) must hold the ``run.trigger`` permission (``runner``
          *     minimum). An unauthenticated caller must present a valid HMAC signature
          *     (``X-Modulo-Webhook-Secret`` + ``X-Modulo-Timestamp``) over the stored
@@ -4978,7 +4978,7 @@ export interface paths {
          *     Acquires a Postgres advisory lock to prevent concurrent cleanup across workers.
          *     Safe to call from cron every 5 minutes (with a ``runner`` credential).
          *
-         *     ADR 017: swept with ``trigger.cleanup`` (``runner`` minimum) — this route
+         *     ADR 047: swept with ``trigger.cleanup`` (``runner`` minimum) — this route
          *     mutates state and resolves a user principal, so it is no longer exempt.
          */
         post: operations["cleanup_expired_api_v1_triggers_cleanup_expired_post"];
@@ -6170,7 +6170,7 @@ export interface paths {
         put?: never;
         /**
          * Approve Consent
-         * @description Approve a pending OAuth consent (ADR 017 DECISION 1 — the approve POST IS the consent).
+         * @description Approve a pending OAuth consent (ADR 047 DECISION 1 — the approve POST IS the consent).
          *
          *     The authenticated approve POST is the human approval: the Bearer principal
          *     IS the consenting account. There is deliberately NO consent page / deny
@@ -9288,7 +9288,7 @@ export interface paths {
          * Ingest Web Vitals
          * @description Ingest a batch of Web Vitals measurements from the frontend.
          *
-         *     ADR 017: swept with ``metrics.ingest`` (``viewer`` minimum) — telemetry
+         *     ADR 047: swept with ``metrics.ingest`` (``viewer`` minimum) — telemetry
          *     ingestion must keep working for viewers, so the minimum role is the lowest.
          */
         post: operations["ingest_web_vitals_api_v1_metrics_web_vitals_post"];

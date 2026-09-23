@@ -73,7 +73,7 @@ _WEBHOOK_ORG_ID = uuid.uuid4()
 
 
 def _replay_auth_headers() -> dict[str, str]:
-    """Bearer JWT for the replay route (ADR 017: runner-or-HMAC).
+    """Bearer JWT for the replay route (ADR 047: runner-or-HMAC).
 
     The route uses ``get_current_tenant_user_optional``, which decodes the
     Bearer directly — a token signed with the test secret_key is enough. The

@@ -359,7 +359,7 @@ async def run_loop_interception(
     if not config.enabled or not definitions:
         return _pass(), []
     if not tool_matches_patterns(tool_name, config.intercepted_tool_patterns):
-        # Read-only/local-only calls pass through (ADR 003 amendment).
+        # Read-only/local-only calls pass through (ADR 044 amendment).
         return _pass(), []
     if direction == "after" and not config.intercept_tool_results:
         return _pass(), []
@@ -620,7 +620,7 @@ class LoopInterceptCallbackServer:
     The endpoint the sandbox bridge reaches must be reachable FROM the sandbox
     (in production this is the Modulo sandbox-agent process's loopback, exposed
     into the sandbox; in tests it binds 127.0.0.1 and the stub agent runs on
-    the same host). See the ADR 003 amendment for the deployment model.
+    the same host). See the ADR 044 amendment for the deployment model.
     """
 
     def __init__(

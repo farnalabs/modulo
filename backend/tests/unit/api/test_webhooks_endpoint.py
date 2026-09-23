@@ -673,7 +673,7 @@ def test_webhook_unauthenticated_returns_4xx(client: TestClient) -> None:
     assert resp.status_code in (401, 403)
 
 
-# ── cleanup-expired (ADR 017: swept @ runner via trigger.cleanup) ─────────────
+# ── cleanup-expired (ADR 047: swept @ runner via trigger.cleanup) ─────────────
 
 
 def _cleanup_client(role: str) -> TestClient:

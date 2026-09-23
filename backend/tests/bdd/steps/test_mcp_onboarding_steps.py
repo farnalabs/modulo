@@ -1,4 +1,4 @@
-"""BDD step definitions: MCP onboarding — discoverable tool surface (ADR 017).
+"""BDD step definitions: MCP onboarding — discoverable tool surface (ADR 047).
 
 The onboarding surface is two contracts:
 
