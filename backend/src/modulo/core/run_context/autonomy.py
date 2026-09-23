@@ -161,7 +161,10 @@ def resolve_autonomy(
         # Raising is capped at the ceiling; the clamp is audited by the caller.
         effective = _min_level(rec, ceiling)
 
-    clamped = rec is not None and autonomy_level_rank(rec) > autonomy_level_rank(base) and effective != rec
+    # ``effective != rec`` already implies rec > base (the lowering branch
+    # sets effective = rec, the equal branch too), so the rank conjunct is
+    # redundant — kept to the two necessary terms.
+    clamped = rec is not None and effective != rec
     return AutonomyResolution(effective=effective, requested=rec, ceiling=ceiling, clamped=clamped)
 
 
@@ -192,6 +195,16 @@ def validate_autonomy_ceiling(
     back in that case) — used for values read back from storage. An
     unparseable *default* is ranked as ``manual_approval``, the same fallback
     resolution applies, so it can never fail this check by itself.
+
+    A non-canonical case-variant spelling (e.g. ``"MANUAL_APPROVAL"``) raises:
+    ``AutonomyLevel._missing_`` matches case-insensitively, but the DB CHECK
+    constraint (``ck_pipelines_max_autonomy_level``) is case-sensitive. This
+    function's contract is raise-or-return-``None`` (it cannot hand a
+    normalised value back), so it REJECTS the variant — the REST field
+    validators normalise to canonical before reaching here, and a caller that
+    passes the raw string through (e.g. an MCP tool) gets a clean ValueError
+    instead of a stored value that would fail the CHECK with an IntegrityError
+    (500) rather than the promised 422.
     """
     if ceiling is None or (lenient and not isinstance(ceiling, str)):
         return
@@ -200,6 +213,11 @@ def validate_autonomy_ceiling(
         if lenient:
             return
         raise ValueError(f"Invalid max_autonomy_level: {ceiling!r}")
+    if ceiling != ceiling_level.value:
+        # FAR-1163: reject any non-canonical spelling (accepted-and-normalised
+        # at the Pydantic layer; rejected here for raw-string callers).
+        msg = f"max_autonomy_level must be the canonical value {ceiling_level.value!r}: {ceiling!r}"
+        raise ValueError(msg)
     default_level = _try_autonomy(default if isinstance(default, str) else None, "default_autonomy_level")
     effective_default = default_level or AutonomyLevel.default()
     if autonomy_level_rank(ceiling_level) < autonomy_level_rank(effective_default):
@@ -210,7 +228,12 @@ def validate_autonomy_ceiling(
 
 
 def should_skip_hitl_gate(autonomy: AutonomyLevel) -> bool:
-    """Return True if the HITL gate should be bypassed at graph-build time."""
+    """Return True if the HITL gate should be bypassed at runtime.
+
+    Resolution happens per-gate at RUNTIME (each gate re-reads the current
+    run_context), not at graph-build time — the graph always contains the
+    gate node; the autonomy level decides whether it interrupts.
+    """
     return autonomy == AutonomyLevel.FULLY_AUTONOMOUS
 
 

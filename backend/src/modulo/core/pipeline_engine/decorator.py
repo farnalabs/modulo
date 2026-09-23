@@ -40,6 +40,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
+from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
 from modulo.db.lifecycle_refs import notify_refs_shadow_strip_hit
 
 _log = logging.getLogger(__name__)
@@ -104,7 +105,7 @@ _RESERVED_RUN_CONTEXT_KEYS = frozenset(
         # from the snapshot's max_autonomy_level. A context-setter must never
         # overwrite it — raising the ceiling would let the same agent that
         # writes autonomy_recommendation also lift the cap on itself.
-        "_pipeline_max_autonomy",
+        PIPELINE_MAX_AUTONOMY_KEY,
         "_run_context_write_log",
         "_work_item_refs",
     }

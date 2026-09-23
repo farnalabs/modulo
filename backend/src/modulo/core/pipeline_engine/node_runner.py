@@ -4734,6 +4734,11 @@ def make_hitl_gate_fn(
                 requested=resolution.requested.value,
                 effective=autonomy.value,
                 ceiling=resolution.ceiling.value,
+                # FAR-1163: carry the pipeline id (seeded into state by the
+                # executor alongside _run_id/_org_id) — without it every
+                # production clamp event had pipeline_id: null while the unit
+                # test passed it explicitly.
+                pipeline_id=state.get("_pipeline_id"),
             )
         if autonomy_result is not None:
             # skipped (fully_autonomous) or auto_approved (notify_on_complete):

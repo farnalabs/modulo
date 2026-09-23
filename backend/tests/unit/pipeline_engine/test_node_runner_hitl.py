@@ -1614,6 +1614,10 @@ async def test_hitl_gate_emits_clamp_telemetry_on_auto_approve_path(
     result = await node_fn(
         {
             "artifacts": [],
+            # The executor seeds _pipeline_id alongside _run_id/_org_id — the
+            # production call path must pass it through to the clamp event
+            # (asserted here so a regression to pipeline_id=None fails).
+            "_pipeline_id": "pipe-1",
             "run_context": {
                 "_pipeline_default_autonomy": "manual_approval",
                 "_pipeline_max_autonomy": "notify_on_complete",
@@ -1629,6 +1633,7 @@ async def test_hitl_gate_emits_clamp_telemetry_on_auto_approve_path(
     assert kwargs["requested"] == "fully_autonomous"
     assert kwargs["effective"] == "notify_on_complete"
     assert kwargs["ceiling"] == "notify_on_complete"
+    assert kwargs["pipeline_id"] == "pipe-1"
 
 
 async def test_hitl_gate_emits_clamp_telemetry_on_fired_path(
@@ -1648,6 +1653,7 @@ async def test_hitl_gate_emits_clamp_telemetry_on_fired_path(
             {
                 "artifacts": [],
                 "_hitl_gates": [],
+                "_pipeline_id": "pipe-1",
                 "run_context": {
                     "_pipeline_default_autonomy": "manual_approval",
                     "autonomy_recommendation": "fully_autonomous",
@@ -1661,6 +1667,7 @@ async def test_hitl_gate_emits_clamp_telemetry_on_fired_path(
     assert kwargs["requested"] == "fully_autonomous"
     assert kwargs["effective"] == "manual_approval"
     assert kwargs["ceiling"] == "manual_approval"
+    assert kwargs["pipeline_id"] == "pipe-1"
 
 
 async def test_hitl_gate_no_clamp_emits_no_clamp_telemetry(

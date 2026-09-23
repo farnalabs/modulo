@@ -967,6 +967,43 @@ def test_seed_state_skips_max_autonomy_when_snapshot_has_none():
     assert "_pipeline_max_autonomy" not in state["run_context"]
 
 
+def test_seed_state_run_context_defaults_cannot_smuggle_reserved_autonomy_keys():
+    """FAR-1163: reserved autonomy keys are engine-managed, never caller-writable.
+
+    ``run_context_defaults`` is unfiltered caller-controlled JSON (it travels
+    through snapshot/clone/workflow-import), so a planted
+    ``_pipeline_max_autonomy`` must NOT survive the seed on a pipeline whose
+    ceiling column is NULL — otherwise a caller bypasses
+    ``validate_autonomy_ceiling``, the ``pipeline.max_autonomy_level_changed``
+    audit, and the UI display. Fails without the seed-time pop: the planted
+    ``fully_autonomous`` would remain in ``run_context``.
+    """
+    snap = _make_snapshot()
+    snap.default_autonomy_level = None
+    snap.max_autonomy_level = None
+    snap.run_context_defaults = {
+        "_pipeline_max_autonomy": "fully_autonomous",
+        "_pipeline_default_autonomy": "fully_autonomous",
+        "env": "prod",
+    }
+    state = _seed_state(snap, {})
+    assert "_pipeline_max_autonomy" not in state["run_context"]
+    assert "_pipeline_default_autonomy" not in state["run_context"]
+    # Non-reserved defaults still seed normally.
+    assert state["run_context"]["env"] == "prod"
+
+
+def test_seed_state_engine_ceiling_overrides_smuggled_default():
+    """When the snapshot DOES pin a ceiling, the engine value wins over a
+    caller-supplied run_context_defaults entry (snapshot is authoritative)."""
+    snap = _make_snapshot()
+    snap.default_autonomy_level = "manual_approval"
+    snap.max_autonomy_level = "notify_on_complete"
+    snap.run_context_defaults = {"_pipeline_max_autonomy": "fully_autonomous"}
+    state = _seed_state(snap, {})
+    assert state["run_context"]["_pipeline_max_autonomy"] == "notify_on_complete"
+
+
 def test_seed_state_seeds_iteration_counts():
     """The loop-edge counter must be seeded so router mutations persist.
 

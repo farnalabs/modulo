@@ -484,6 +484,27 @@ def _validate_retry_policy(value: dict[str, Any] | None) -> dict[str, Any] | Non
     return value
 
 
+def _validate_max_autonomy_level_field(v: str | None) -> str | None:
+    """Validate the ``max_autonomy_level`` ceiling field (FAR-1163).
+
+    ONE shared implementation for ``PipelineCreate`` and ``PipelineUpdate``
+    (the two field validators were byte-for-byte identical). The ceiling must
+    be a real autonomy level when provided, and the value is normalised to
+    the canonical lowercase spelling: ``AutonomyLevel._missing_`` matches
+    case-insensitively, so ``"MANUAL_APPROVAL"`` would otherwise be stored
+    raw and die against the case-sensitive ``ck_pipelines_max_autonomy_level``
+    CHECK constraint with an IntegrityError (500) instead of a 422. The
+    ceiling >= default ordering check runs in the create/update routes (it
+    needs both fields).
+    """
+    if v is None:
+        return v
+    try:
+        return AutonomyLevel(v).value
+    except ValueError as exc:
+        raise ValueError(f"Invalid max_autonomy_level: {v!r}") from exc
+
+
 class PipelineCreate(TeamVisibilityMixin):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -568,16 +589,10 @@ class PipelineCreate(TeamVisibilityMixin):
     @field_validator("max_autonomy_level")
     @classmethod
     def _validate_max_autonomy_level(cls, v: str | None) -> str | None:
-        # FAR-1163: the ceiling must be a real level when provided; the
+        # FAR-1163: shared helper validates + normalises to canonical; the
         # ceiling >= default ordering check runs in the create route (it
         # needs both fields).
-        if v is None:
-            return v
-        try:
-            AutonomyLevel(v)
-        except ValueError as exc:
-            raise ValueError(f"Invalid max_autonomy_level: {v!r}") from exc
-        return v
+        return _validate_max_autonomy_level_field(v)
 
     @field_validator("stdout_retention_config", mode="before")
     @classmethod
@@ -701,15 +716,10 @@ class PipelineUpdate(TeamVisibilityMixin):
     @field_validator("max_autonomy_level")
     @classmethod
     def _validate_max_autonomy_level(cls, v: str | None) -> str | None:
-        # FAR-1163: reject an unparseable ceiling here (422); the ordering
-        # check against the merged default runs in the update route.
-        if v is None:
-            return v
-        try:
-            AutonomyLevel(v)
-        except ValueError as exc:
-            raise ValueError(f"Invalid max_autonomy_level: {v!r}") from exc
-        return v
+        # FAR-1163: shared helper validates + normalises to canonical (422 on
+        # an unparseable ceiling); the ordering check against the merged
+        # default runs in the update route.
+        return _validate_max_autonomy_level_field(v)
 
 
 class PipelineResponse(BaseModel):

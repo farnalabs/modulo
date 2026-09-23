@@ -503,6 +503,70 @@ def test_update_pipeline_rejects_invalid_ceiling_level(client: TestClient) -> No
     assert resp.status_code == 422
 
 
+def test_create_pipeline_normalises_mixed_case_ceiling(client: TestClient) -> None:
+    """FAR-1163: a case-variant ceiling is accepted AND stored canonical.
+
+    ``AutonomyLevel._missing_`` matches case-insensitively but the
+    ``ck_pipelines_max_autonomy_level`` CHECK is case-sensitive — storing the
+    raw spelling would die with an IntegrityError (500) instead of a clean
+    response. The field validator must normalise before the value reaches
+    ``create_pipeline``.
+    """
+    pipeline = _make_pipeline()
+    pipeline.default_autonomy_level = "manual_approval"
+    pipeline.max_autonomy_level = "fully_autonomous"
+
+    with (
+        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={
+                "name": "Pipeline",
+                "default_autonomy_level": "manual_approval",
+                "max_autonomy_level": "FULLY_AUTONOMOUS",
+            },
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["max_autonomy_level"] == "fully_autonomous"
+    assert create.await_args.kwargs["max_autonomy_level"] == "fully_autonomous"
+
+
+def test_update_pipeline_normalises_mixed_case_ceiling(client: TestClient) -> None:
+    """PATCH runs through the SAME shared field validator — the value handed
+    to ``update_pipeline`` (and therefore the DB row) is canonical."""
+    current = _make_pipeline()
+    current.default_autonomy_level = "manual_approval"
+    current.max_autonomy_level = None
+    updated = _make_pipeline()
+    updated.default_autonomy_level = "manual_approval"
+    updated.max_autonomy_level = "notify_on_complete"
+
+    with (
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=updated) as update,
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event") as mock_audit,
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"max_autonomy_level": "Notify_On_Complete"},
+        )
+
+    assert resp.status_code == 200
+    # update_pipeline(session, pipeline_id, updates, ...) — the updates dict
+    # is the third positional argument.
+    assert update.await_args.args[2]["max_autonomy_level"] == "notify_on_complete"
+    mock_audit.assert_awaited_once()
+    audit_kwargs = mock_audit.await_args.kwargs
+    assert audit_kwargs["event_type"] == "pipeline.max_autonomy_level_changed"
+    assert audit_kwargs["payload_json"]["new_level"] == "notify_on_complete"
+
+
 def test_create_pipeline_passes_stale_run_timeout_minutes(client: TestClient) -> None:
     pipeline = _make_pipeline()
     pipeline.stale_run_timeout_minutes = 45

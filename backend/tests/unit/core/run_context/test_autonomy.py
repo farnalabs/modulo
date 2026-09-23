@@ -333,6 +333,23 @@ class TestValidateAutonomyCeiling:
         # check by itself.
         assert validate_autonomy_ceiling("autonomous", "manual_approval") is None
 
+    def test_mixed_case_ceiling_is_rejected_not_stored(self) -> None:
+        """FAR-1163: case-variants must never reach the case-sensitive DB CHECK.
+
+        ``AutonomyLevel._missing_`` parses ``"FULLY_AUTONOMOUS"`` fine, so
+        without this the value would be stored raw and the INSERT would die
+        with an IntegrityError (500) instead of a clean rejection. This
+        function cannot return a normalised value (raise-or-return-None
+        contract), so it rejects; the REST field validators normalise before
+        reaching here (see the endpoint tests).
+        """
+        with pytest.raises(ValueError, match="canonical"):
+            validate_autonomy_ceiling("manual_approval", "FULLY_AUTONOMOUS")
+
+    def test_canonical_ceiling_still_passes(self) -> None:
+        # The canonical spelling is unaffected by the rejection above.
+        assert validate_autonomy_ceiling("manual_approval", "fully_autonomous") is None
+
 
 class TestMaxAutonomyReservedKey:
     def test_pipeline_max_autonomy_is_reserved(self) -> None:

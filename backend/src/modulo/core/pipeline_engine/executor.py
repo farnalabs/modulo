@@ -123,6 +123,7 @@ from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, CompensationFailedError
+from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
@@ -753,6 +754,15 @@ def _seed_state(
         "cancelled": False,
         "input": payload,
     }
+    # FAR-1163: reserved keys are engine-managed — a caller-supplied
+    # run_context_defaults must never smuggle them into the run (the defaults
+    # are unfiltered arbitrary JSON that travels through snapshot/clone/
+    # workflow-import). Pop AFTER the spread and BEFORE pinning engine-owned
+    # values so the snapshot values below are authoritative; with a NULL
+    # ceiling/default the key stays absent and resolution falls back exactly
+    # as designed. Mirrors the unconditional `cancelled`/`input` overwrite.
+    run_context.pop(PIPELINE_MAX_AUTONOMY_KEY, None)
+    run_context.pop("_pipeline_default_autonomy", None)
     # Promote feedback_correction from input_payload to run_context
     # so the entire graph can access rejection metadata.
     feedback_correction = payload.pop("_feedback_correction", None)
@@ -766,7 +776,7 @@ def _seed_state(
     # ceiling). isinstance-str guards non-string stand-ins (test mocks).
     max_autonomy = getattr(snapshot, "max_autonomy_level", None)
     if isinstance(max_autonomy, str) and max_autonomy:
-        run_context["_pipeline_max_autonomy"] = max_autonomy
+        run_context[PIPELINE_MAX_AUTONOMY_KEY] = max_autonomy
     # Seed the system-reserved override namespace from the run's FROZEN variant
     # config only. This is the ONLY path that populates it — a caller-supplied
     # ``_run_overrides`` in the input payload is never promoted here.
@@ -4579,6 +4589,12 @@ class PipelineExecutor:
             {
                 "_run_id": scope.run_id,
                 "_org_id": scope.org_id,
+                # FAR-1163: seed the pipeline id alongside the other run
+                # identity scalars so node-time readers (gate clamp telemetry,
+                # _run_identity_strs -> MODULO_PIPELINE_ID, loop-intercept
+                # guardrail binding) find it at gate/dispatch time. The state
+                # key was READ in those paths but never written before this.
+                "_pipeline_id": scope.pipeline_id,
                 "_claim_lease": self._claim_token,
                 # FAR-764: community-gated agent IDs seeded into state so
                 # node functions can enforce default-deny without DB access.

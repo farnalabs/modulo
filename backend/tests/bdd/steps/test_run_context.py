@@ -454,17 +454,20 @@ def _pin_pipeline_ceiling(ctx: dict[str, Any]) -> None:
 
     The isinstance-str guard matches the production seed path — MagicMock
     attribute stand-ins on BDD pipeline mocks are ignored, exactly as the
-    executor ignores non-string snapshot values. An already-pinned key wins
-    (a Given that seeded it explicitly is never overwritten).
+    executor ignores non-string snapshot values. Production OVERWRITES the
+    key from the snapshot (reserved keys are engine-managed, never
+    caller-writable — a seed-time pop runs before the pin), so this helper
+    does too: an already-pinned key does NOT win, and an absent/NULL ceiling
+    pops it, matching the executor's pop-then-pin precedence.
     """
     from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
 
     rc = ctx.setdefault("run_context", {})
-    if PIPELINE_MAX_AUTONOMY_KEY in rc:
-        return
     ceiling = getattr(ctx.get("pipeline"), "max_autonomy_level", None)
     if isinstance(ceiling, str) and ceiling:
         rc[PIPELINE_MAX_AUTONOMY_KEY] = ceiling
+    else:
+        rc.pop(PIPELINE_MAX_AUTONOMY_KEY, None)
 
 
 @given(parsers.parse('pipeline "{pipeline_name}" has autonomy default "{level}"'))
