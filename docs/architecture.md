@@ -538,7 +538,7 @@ The posture for injected values (distinguish from the FAR-296 per-run minted key
 
 | Method | Status | Use case |
 |--------|--------|----------|
-| JWT (access + refresh) | Alpha | Browser UI sessions – 15-min access, 7-day refresh |
+| JWT (access + refresh) | Alpha | Browser UI sessions – 15-min access, sliding 24-h refresh (idle-logout window; configurable 1–168h via `MODULO_REFRESH_TOKEN_TTL_HOURS`) |
 | API key (bearer token) | Alpha | CI/CD, MCP clients – role-scoped (operator/runner) + caller-scoped (`org`/`user` scope axis, ADR 030) |
 | Basic Auth | Alpha | Multi-user alpha (`MODULO_USERS` env var) |
 | OAuth 2.0 (authlib) | V1 | MCP clients (PKCE, exact redirect_uri) |
@@ -547,7 +547,7 @@ The posture for injected values (distinguish from the FAR-296 per-run minted key
 ### JWT Security
 
 - Access tokens: 15-min expiry
-- Refresh tokens: 7-day expiry, rotated on use
+- Refresh tokens: sliding 24-h expiry by default (configurable 1–168h via `MODULO_REFRESH_TOKEN_TTL_HOURS`), rotated on use — each rotation mints a fresh token with the full lifetime, so this IS the idle-logout window: a session abandoned longer than the TTL cannot refresh and is logged out
 - Algorithm pinning: `HS256` only – `none` and other algs rejected
 - SECRET_KEY: minimum 32 bytes (256 bits) – refused at startup if insufficient
 - Token family invalidation on revocation

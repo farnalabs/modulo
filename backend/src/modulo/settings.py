@@ -123,6 +123,13 @@ class Settings(BaseSettings):
     redis_url: str = Field("redis://localhost:6379/0")
     modulo_ws_token_ttl_seconds: int = Field(60)
     modulo_access_token_minutes: int = Field(default=15, ge=5, le=1440)
+    # Sliding idle-logout window (FAR-1170): every refresh rotation mints a
+    # FRESH refresh token with this lifetime and the frontend refreshes on
+    # demand, so this value IS the de-facto idle-logout timeout — a session
+    # abandoned for longer than this cannot refresh and is logged out.
+    # Env var MODULO_REFRESH_TOKEN_TTL_HOURS (pydantic-settings uppercases the
+    # field name). Bounds: 1h (min) .. 168h (max = the old fixed 7-day value).
+    modulo_refresh_token_ttl_hours: int = Field(default=24, ge=1, le=168)
     debug: bool = Field(False)
 
     # Alpha auth — at least one of these must be non-empty for login to work.
@@ -753,9 +760,6 @@ class Settings(BaseSettings):
     modulo_auth_rate_limit_enabled: bool = Field(True)
     modulo_auth_max_attempts: int = Field(10, ge=1)
     modulo_auth_window_seconds: int = Field(60)
-
-    # Inactivity timeout in minutes (default 480 = 8h). Set to 0 to disable.
-    inactivity_timeout_minutes: int = Field(480)
 
     # Structured logging level (default: INFO). Per-module override via MODULO_LOG_LEVEL_<MODULE>.
     modulo_log_level: str = Field("INFO")

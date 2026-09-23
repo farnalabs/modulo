@@ -458,6 +458,7 @@ def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse
         is_system_admin=ctx.account.is_system_admin,
         token_family=str(ctx.family.family_id),
         token_sequence=0,
+        ttl_hours=settings.modulo_refresh_token_ttl_hours,
         client_kind=CLIENT_KIND_BROWSER,
     )
     requires_bootstrap = not ctx.memberships and ctx.account.is_system_admin
@@ -1084,6 +1085,7 @@ def _mint_refresh_response(
         org_role=str(minted_org_role),
         token_family=claims.family_id,
         token_sequence=new_sequence,
+        ttl_hours=settings.modulo_refresh_token_ttl_hours,
         client_kind=claims.client_kind,
     )
     content = RefreshResponse(access_token=new_access, refresh_token=new_refresh).model_dump()

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.routes.auth import router as auth_router
-from modulo.auth.jwt import create_refresh_token
+from modulo.auth.jwt import create_refresh_token, decode_refresh_token_claims
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -33,6 +33,18 @@ def _make_settings() -> Settings:
         modulo_admin_password="testpass",
         modulo_auth_rate_limit_enabled=False,
         redis_url="",
+    )
+
+
+def _make_settings_with_refresh_ttl(ttl_hours: int) -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+        modulo_auth_rate_limit_enabled=False,
+        redis_url="",
+        modulo_refresh_token_ttl_hours=ttl_hours,
     )
 
 
@@ -223,3 +235,21 @@ def test_refresh_reuse_within_window_mints_tokens(client: TestClient, mock_sessi
     advance.assert_awaited_once()
     # Must NOT blacklist on a reuse replay
     assert not _blacklist_update_sqls(mock_session)
+
+
+def test_refresh_rotation_mints_configured_lifetime(client: TestClient, app: FastAPI, mock_session: AsyncMock) -> None:
+    """FAR-1170: a non-default modulo_refresh_token_ttl_hours is stamped on
+    the rotated refresh token — exp - iat equals the configured TTL."""
+    app.dependency_overrides[get_settings] = lambda: _make_settings_with_refresh_ttl(6)
+    advance = AsyncMock(return_value=(2, False, False))
+    resolve_role = AsyncMock(return_value="admin")
+    with (
+        _patch_account(_make_account(True)),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=resolve_role),
+        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+    ):
+        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _make_refresh_token(str(_ORG_ID))})
+    assert resp.status_code == 200, resp.text
+    payload = decode_refresh_token_claims(resp.json()["refresh_token"], _VALID_32)
+    lifetime_seconds = float(payload["exp"]) - float(payload["iat"])
+    assert abs(lifetime_seconds - 6 * 3600) <= 1
