@@ -272,6 +272,23 @@ def test_drift_renders_git_content_line() -> None:
     assert _PINNED_PROMPT_B in rendered
 
 
+def test_diff_git_content_renders_absent_side_as_placeholder() -> None:
+    """An absent side renders as ``(none)``, never the literal ``None`` (Minor 5)."""
+    from modulo.cli.apply.drift import _diff_git_content
+
+    desired = {"nodes": [{"id": _NODE_ID, "agent_prompt": _PINNED_PROMPT_A}], "edges": []}
+    current = {"nodes": [{"id": _NODE_ID}], "edges": []}
+    entries = _diff_git_content(desired, current)
+    assert entries == [
+        {
+            "node": _NODE_ID,
+            "field": "agent_prompt",
+            "desired": _PINNED_PROMPT_A,
+            "current": "(none)",
+        }
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Write path — the PATCH payload carries the pin (respx, real API models)
 # ---------------------------------------------------------------------------

@@ -404,7 +404,7 @@ async def resolve_git_content_field(
         msg = (
             f"{field or 'content field'} of sandbox_agent node {node_id!r} carries an unpinned "
             f"git content ref {value.strip()!r} — stored graphs must pin the commit "
-            f"({GIT_CONTENT_PREFIX}<repo>@<40-hex-sha>#<path>; 'modulo apply' resolves and pins "
+            f"({GIT_CONTENT_PREFIX}<repo>@<40-hex-sha>#<path>); 'modulo apply' resolves and pins "
             "movable refs automatically, otherwise resolve the ref and pin it manually"
         )
         raise GitContentRefError(msg)
@@ -454,7 +454,16 @@ def pin_git_content_node_fields(
     managed view, the PATCH payload, and therefore the stored graph / run
     snapshot all carry the same pinned SHA. Resolver failures propagate as
     :class:`GitContentRefError` (CLI: blocked/failed entity — fail closed).
+
+    Only ``sandbox_agent`` nodes are pinned (Minor 2): the run-time resolver
+    fires exclusively for sandbox configs, so pinning a ref on any other node
+    type would rewrite a raw ref into a literal prompt nothing ever fetches —
+    no content substitution and no drift signal. Non-sandbox nodes are
+    returned unchanged (same discriminator as the executor / graph cache:
+    ``str(node_type).strip() == "sandbox_agent"``).
     """
+    if str(node_data.get("node_type", "")).strip() != "sandbox_agent":
+        return node_data
     resolve = resolver if resolver is not None else default_git_content_resolver
 
     def _pinned(value: str) -> str:

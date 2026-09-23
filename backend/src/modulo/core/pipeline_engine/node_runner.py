@@ -7238,23 +7238,49 @@ async def _resolve_sandbox_git_content_config(config: _SandboxNodeConfig) -> _Sa
     * an UNPINNED ref or a fetch failure raises a typed
       :class:`GitContentRefError` / :class:`GitContentFetchError` — fail
       closed: the node errors with an observed message instead of dispatching
-      the raw ref string to the agent.
+      the raw ref string to the agent;
+    * a command that is NOT itself a ref but CONTAINS a ``git+`` token raises
+      :class:`GitContentRefError` (M1 fail-closed) — the joined string of a
+      mixed ``agent_commands`` list would otherwise dispatch the raw ref
+      literal to the shell. Defence in depth for save-gate bypasses (e.g. MCP
+      ``update_pipeline_graph``). A prompt that merely MENTIONS ``git+``
+      mid-string is legitimate inline text and is not affected: only the
+      command field (the string executed by the shell) carries this check.
 
     The resolved pin (repo/sha/path) is logged by the resolver for audit; the
     pinned SHA itself is already resident in the run snapshot (graph-save
     validation rejects unpinned refs, and ``modulo apply`` pins before write).
     """
-    from modulo.core.pipeline_engine.git_content import is_git_content_ref, resolve_git_content_field
+    from modulo.core.pipeline_engine.git_content import (
+        GIT_CONTENT_PREFIX,
+        GitContentRefError,
+        is_git_content_ref,
+        resolve_git_content_field,
+    )
 
-    if not (is_git_content_ref(config.agent_prompt_template) or is_git_content_ref(config.agent_command)):
+    prompt = config.agent_prompt_template
+    command = config.agent_command
+    # M1 fail-closed: a raw git+ token anywhere in the command that is not a
+    # whole-field ref means a mixed/embedded ref would reach the shell as a
+    # literal. Raise BEFORE any fetch so the error names the field without a
+    # network round-trip.
+    if GIT_CONTENT_PREFIX in command and not is_git_content_ref(command):
+        msg = (
+            f"agent_command of sandbox_agent node {config.node_id!r} carries a "
+            f"{GIT_CONTENT_PREFIX} git content token but is not a whole-field git content "
+            "ref — git content refs must be the whole field, not one command of several "
+            f"(got {command.strip()[:160]!r})"
+        )
+        raise GitContentRefError(msg)
+    if not (is_git_content_ref(prompt) or is_git_content_ref(command)):
         return config
     resolved_prompt = await resolve_git_content_field(
-        config.agent_prompt_template,
+        prompt,
         node_id=config.node_id,
         field="agent_prompt",
     )
     resolved_command = await resolve_git_content_field(
-        config.agent_command,
+        command,
         node_id=config.node_id,
         field="agent_command",
     )

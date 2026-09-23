@@ -84,6 +84,10 @@ def _diff_git_content(
     def _pick(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
         return {str(element.get("id")): element for element in (graph.get("nodes") or [])}
 
+    def _render(value: Any) -> str:
+        """Absent side renders as ``(none)`` — never the literal ``None`` (Minor 5)."""
+        return "(none)" if value is None else str(value)
+
     desired_nodes = _pick(desired_graph)
     current_nodes = _pick(current_graph)
     entries: list[dict[str, str]] = []
@@ -101,8 +105,8 @@ def _diff_git_content(
                 {
                     "node": node_id,
                     "field": field,
-                    "desired": str(desired_value),
-                    "current": str(current_value),
+                    "desired": _render(desired_value),
+                    "current": _render(current_value),
                 }
             )
         desired_commands = desired_node.get("agent_commands")
@@ -119,8 +123,8 @@ def _diff_git_content(
                     {
                         "node": node_id,
                         "field": f"agent_commands[{index}]",
-                        "desired": str(desired_item),
-                        "current": str(current_item),
+                        "desired": _render(desired_item),
+                        "current": _render(current_item),
                     }
                 )
     return entries

@@ -251,6 +251,7 @@ def test_pin_node_fields_pins_movable_via_resolver() -> None:
         return _SHA_A
 
     node = {
+        "node_type": "sandbox_agent",
         "agent_prompt": f"git+{_REPO}@main#prompts/x.md",
         "script_command": None,
         "agent_commands": ["opencode run"],
@@ -264,6 +265,7 @@ def test_pin_node_fields_pinned_skips_resolver() -> None:
         raise AssertionError("resolver must not run for a pinned ref")
 
     node = {
+        "node_type": "sandbox_agent",
         "agent_prompt": f"git+{_REPO}@{_SHA_B}#prompts/x.md",
         "agent_commands": [f"git+{_REPO}@{_SHA_A}#drivers/run.py"],
     }
@@ -273,14 +275,14 @@ def test_pin_node_fields_pinned_skips_resolver() -> None:
 
 
 def test_pin_node_fields_lowercases_uppercase_sha() -> None:
-    node = {"agent_prompt": f"git+{_REPO}@{_SHA_B}#prompts/x.md"}
+    node = {"node_type": "sandbox_agent", "agent_prompt": f"git+{_REPO}@{_SHA_B}#prompts/x.md"}
     pin_git_content_node_fields(node, resolver=None)
     # Default resolver is identity for pins — no network — via its pinned fast path.
     assert node["agent_prompt"] == f"git+{_REPO}@{_SHA_B.lower()}#prompts/x.md"
 
 
 def test_pin_node_fields_malformed_ref_raises() -> None:
-    node = {"agent_prompt": "git+https://github.com/example/repo"}
+    node = {"node_type": "sandbox_agent", "agent_prompt": "git+https://github.com/example/repo"}
     with pytest.raises(GitContentRefError, match="#<path>"):
         pin_git_content_node_fields(node, resolver=lambda _ref: _SHA_A)
 
@@ -289,16 +291,33 @@ def test_pin_node_fields_resolution_failure_propagates() -> None:
     def _resolver(_ref) -> str:
         raise GitContentRefError("remote unreachable")
 
-    node = {"agent_prompt": f"git+{_REPO}@main#prompts/x.md"}
+    node = {"node_type": "sandbox_agent", "agent_prompt": f"git+{_REPO}@main#prompts/x.md"}
     with pytest.raises(GitContentRefError, match="remote unreachable"):
         pin_git_content_node_fields(node, resolver=_resolver)
 
 
 def test_pin_node_fields_inline_content_untouched() -> None:
-    node = {"agent_prompt": "inline prompt", "agent_commands": ["opencode run"]}
+    node = {"node_type": "sandbox_agent", "agent_prompt": "inline prompt", "agent_commands": ["opencode run"]}
     pin_git_content_node_fields(node, resolver=lambda _ref: _SHA_A)
     assert node["agent_prompt"] == "inline prompt"
     assert node["agent_commands"] == ["opencode run"]
+
+
+def test_pin_node_fields_skips_non_sandbox_nodes() -> None:
+    """Only sandbox_agent nodes resolve git content refs at run time (Minor 2).
+
+    Pinning a ref on any other node type would rewrite a movable ref into a
+    literal prompt that nothing ever resolves — no fetch, no drift signal — so
+    non-sandbox nodes are skipped entirely and the resolver never runs.
+    """
+
+    def _boom(_ref) -> str:
+        raise AssertionError("resolver must not run for non-sandbox nodes")
+
+    node = {"node_type": "agent", "agent_prompt": f"git+{_REPO}@main#prompts/x.md"}
+    result = pin_git_content_node_fields(node, resolver=_boom)
+    assert result is node
+    assert node["agent_prompt"] == f"git+{_REPO}@main#prompts/x.md"
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +356,13 @@ async def test_resolve_field_unpinned_is_typed_error(monkeypatch: pytest.MonkeyP
     with pytest.raises(GitContentRefError, match="unpinned"):
         await resolve_git_content_field(f"git+{_REPO}@main#prompts/x.md", field="agent_prompt")
     assert not fetched
+
+
+async def test_resolve_field_unpinned_error_message_closes_paren() -> None:
+    """The pinned-form example in the unpinned error is a closed parenthetical (Minor 6)."""
+    with pytest.raises(GitContentRefError) as excinfo:
+        await resolve_git_content_field(f"git+{_REPO}@main#prompts/x.md", field="agent_prompt")
+    assert "#<path>)" in str(excinfo.value)
 
 
 async def test_resolve_field_fetch_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -476,13 +476,11 @@ def _check_composite_sandbox_sub_node(
             node_id=node_id,
         )
     # FAR-220: git-sourced content refs expand into run snapshots verbatim, so
-    # a composite sub-node's refs must satisfy the same parse + pin gate as a
-    # top-level sandbox node (an unpinned sub-node ref would reach a snapshot
-    # without ever passing the top-level check).
-    from modulo.core.pipeline_engine.git_content import git_content_values
-
+    # a composite sub-node's refs must satisfy the same whole-field + parse +
+    # pin gate as a top-level sandbox node (an unpinned or mixed-list sub-node
+    # ref would reach a snapshot without ever passing the top-level check).
     _check_sandbox_git_content_values(
-        git_content_values(sub),
+        sub,
         node_id,
         result,
         f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}'",
@@ -1016,17 +1014,24 @@ def _check_sandbox_wallclock_budget(node: dict[str, Any], nid: str, result: Vali
 
 
 def _check_sandbox_git_content_values(
-    values: list[tuple[str, str]],
+    node: dict[str, Any],
     nid: str,
     result: ValidationResult,
     context: str,
 ) -> None:
-    """Git-sourced content refs (FAR-220): must parse and be SHA-pinned.
+    """Git-sourced content refs (FAR-220): whole-field rule + parse + pin.
 
     Shared by top-level sandbox nodes and composite template sub-nodes.
     ``context`` prefixes the message (e.g. the node id, or the owning
-    composite template). Two fail-closed errors:
+    composite template). Three fail-closed errors:
 
+    - ``GIT_CONTENT_REF_NOT_WHOLE_FIELD`` — a list content field
+      (``agent_commands``) has MORE THAN ONE item and any item carries a
+      ``git+`` token. List items are joined into a single shell string before
+      dispatch, so a ref can only be honoured as the SOLE item of the field
+      (whole-field semantics): among several commands the raw ref would reach
+      the shell unresolved, or — ref-first — the joined string would parse as
+      one ref whose path swallows the join operator and the remaining commands.
     - ``GIT_CONTENT_REF_INVALID`` — the value starts with ``git+`` but is not
       a well-formed ``git+<repo>[@<ref>]#<path>`` ref (there is no partial
       accept: a misparsed declarative ref would dispatch the raw ref string).
@@ -1036,12 +1041,31 @@ def _check_sandbox_git_content_values(
       and pins movable refs at plan time before writing.
     """
     from modulo.core.pipeline_engine.git_content import (
+        GIT_CONTENT_LIST_FIELDS,
+        GIT_CONTENT_PREFIX,
         GitContentRefError,
+        git_content_values,
         is_git_content_ref,
         parse_git_content_ref,
     )
 
-    for label, value in values:
+    for key in GIT_CONTENT_LIST_FIELDS:
+        items = node.get(key)
+        if not isinstance(items, list) or len(items) <= 1:
+            continue
+        for index, item in enumerate(items):
+            if isinstance(item, str) and GIT_CONTENT_PREFIX in item:
+                result.error(
+                    "GIT_CONTENT_REF_NOT_WHOLE_FIELD",
+                    f"{context} {key}[{index}] contains a git content ref among "
+                    f"{len(items)} commands — git content refs must be the whole "
+                    f"field, not one command of several (use a single-item {key} "
+                    "list whose only entry is the ref, or inline the content)",
+                    node_id=nid,
+                )
+                break
+
+    for label, value in git_content_values(node):
         if not is_git_content_ref(value):
             continue
         try:
@@ -1065,15 +1089,14 @@ def _check_sandbox_git_content_values(
 
 
 def _check_sandbox_git_content(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
-    """Sandbox check 16 (FAR-220): git-sourced content refs parse + are pinned.
+    """Sandbox check 16 (FAR-220): git-sourced content refs are whole-field, parse, pinned.
 
     Covers the three content fields a ``sandbox_agent`` node may reference git
-    content through: ``agent_prompt``, ``script_command``, and each
-    ``agent_commands`` item. Inline (non-``git+``) content is untouched.
+    content through: ``agent_prompt``, ``script_command``, and
+    ``agent_commands`` (which must carry a ref, if any, as its sole item).
+    Inline (non-``git+``) content is untouched.
     """
-    from modulo.core.pipeline_engine.git_content import git_content_values
-
-    _check_sandbox_git_content_values(git_content_values(node), nid, result, f"Sandbox agent node '{nid}'")
+    _check_sandbox_git_content_values(node, nid, result, f"Sandbox agent node '{nid}'")
 
 
 def _check_sandbox_managed_inputs(node: dict[str, Any], nid: str, result: ValidationResult) -> None:

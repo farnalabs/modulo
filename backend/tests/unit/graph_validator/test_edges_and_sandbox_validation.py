@@ -971,3 +971,26 @@ def test_sandbox_inline_content_mentioning_git_plus_is_untouched():
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config({"nodes": [node], "edges": []}, result)
     assert not _git_content_codes(result)
+
+
+def test_sandbox_mixed_list_git_content_ref_rejected():
+    """A git content ref must be the WHOLE agent_commands field (M1).
+
+    The renderer substitutes whole joined fields, so a ref sitting among
+    several commands would dispatch the raw ref literal to the shell (or, when
+    ref-first, swallow the join operator into the ref path) — rejected at save
+    in either list position.
+    """
+    ref = f"git+{_GIT_REPO}@{_GIT_SHA}#drivers/run.py"
+
+    ref_second = _sandbox_node(agent_commands=["cd /workspace", ref])
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [ref_second], "edges": []}, result)
+    assert "GIT_CONTENT_REF_NOT_WHOLE_FIELD" in _git_content_codes(result)
+    assert not result.is_valid
+
+    ref_first = _sandbox_node(agent_commands=[ref, "cd /workspace"])
+    result2 = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [ref_first], "edges": []}, result2)
+    assert "GIT_CONTENT_REF_NOT_WHOLE_FIELD" in _git_content_codes(result2)
+    assert not result2.is_valid

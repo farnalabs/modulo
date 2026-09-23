@@ -115,6 +115,21 @@ async def test_resolve_config_fetch_failure_propagates(monkeypatch: pytest.Monke
         await _resolve_sandbox_git_content_config(config)
 
 
+async def test_resolve_config_mixed_command_list_fails_closed() -> None:
+    """A joined non-ref command containing git+ never dispatches (M1).
+
+    The 2-item list joins to ``cd /workspace && git+...`` — not itself a ref,
+    but carrying a raw ref token that would reach the shell verbatim. The
+    render point must fail closed with the typed error (defence in depth for
+    save-gate bypasses such as MCP ``update_pipeline_graph``).
+    """
+    config = _llm_config(
+        agent_commands=["cd /workspace", f"git+{_REPO}@{_SHA}#drivers/run.py"],
+    )
+    with pytest.raises(GitContentRefError, match="whole field"):
+        await _resolve_sandbox_git_content_config(config)
+
+
 async def test_sandbox_impl_resolves_git_content_before_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Wiring proof: ``_sandbox_agent_impl`` invokes the resolver FIRST.
 
