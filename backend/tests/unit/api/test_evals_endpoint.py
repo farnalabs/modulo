@@ -666,7 +666,8 @@ class TestDeleteEvalDefinitionTwoStep:
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=eval_def),
+            _make_result(scalar_one_value=eval_def),  # select(Eval)
+            _make_result(scalar_one_value=None),  # select(PolicyGate) — no live gate
         ]
         mock_session.delete = AsyncMock()
 
@@ -716,7 +717,8 @@ class TestDeleteEvalDefinitionTwoStep:
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=eval_def),
+            _make_result(scalar_one_value=eval_def),  # select(Eval)
+            _make_result(scalar_one_value=None),  # select(PolicyGate) — no live gate
         ]
         mock_session.delete = AsyncMock()
 

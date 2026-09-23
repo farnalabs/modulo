@@ -3330,6 +3330,27 @@ async def _load_eval_def(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> 
     ).scalar_one_or_none()
 
 
+async def _load_eval(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> Any:
+    """Load an org-scoped Eval row; None when the row does not exist.
+
+    Chunk 3b cutover: reads from the ``evals`` table instead of
+    ``eval_definitions``. Used by the delete impl (W9).
+    """
+    from modulo.db.models.eval import Eval
+    from modulo.db.soft_delete import include_soft_deleted
+
+    return (
+        await s.execute(
+            include_soft_deleted(
+                select(Eval).where(
+                    Eval.id == eid,
+                    Eval.organisation_id == org_id,
+                )
+            )
+        )
+    ).scalar_one_or_none()
+
+
 def _assert_create_eval_definition_params(
     name: str,
     eval_type: str,
@@ -3689,7 +3710,15 @@ async def _audit_eval_def_delete(
 
 
 async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, Any]:
-    """Soft-delete or purge an EvalDefinition; shared with the MCP tool wrapper."""
+    """Soft-delete or purge an Eval; shared with the MCP tool wrapper.
+
+    Reads from the ``evals`` table (chunk 3b cutover). Soft-delete stamps
+    ``deleted_at``/``deleted_by`` on the ``Eval`` and its live ``PolicyGate``
+    (if any) in the same transaction. Hard-delete removes the ``Eval`` row
+    (``PolicyGate`` cascades via ``ON DELETE CASCADE``); ``PolicyGateDecision``
+    rows block hard-delete via RESTRICT — both keys checked (``eval_id``
+    direct and ``policy_gate_id`` cascade).
+    """
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("delete_eval_definition")
@@ -3707,20 +3736,49 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
     assert eid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
     async with _session(org_id) as s:
-        eval_def = await _load_eval_def(s, org_id, eid)
-        if eval_def is None:
+        eval_row = await _load_eval(s, org_id, eid)
+        if eval_row is None:
             return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
 
-        is_guardrail = eval_def.eval_type == "guardrail"
+        is_guardrail = eval_row.eval_type == "guardrail"
         soft = is_guardrail and not hard
-        eval_name = eval_def.name
+        eval_name = eval_row.name
         if soft:
-            eval_def.deleted_at = datetime.now(UTC)
-            eval_def.deleted_by = account_id
+            now = datetime.now(UTC)
+            eval_row.deleted_at = now
+            eval_row.deleted_by = account_id
+            # Soft-delete the live PolicyGate (if any) in the same
+            # transaction — no orphaned gate enforcing silently.
+            from modulo.db.models.policy_gate import PolicyGate
+
+            gate_result = await s.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_row.id,
+                    PolicyGate.organisation_id == org_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+            gate = gate_result.scalar_one_or_none()
+            if gate is not None:
+                gate.deleted_at = now
+                gate.deleted_by = account_id
         else:
-            await s.delete(eval_def)
+            # Hard-delete: PolicyGate cascades via ON DELETE CASCADE;
+            # PolicyGateDecision rows block via RESTRICT (both keys:
+            # eval_id direct + policy_gate_id cascade).
+            try:
+                await s.delete(eval_row)
+                await s.flush()
+            except IntegrityError:
+                return {
+                    "error": "delete_blocked_by_decisions",
+                    "detail": (
+                        "Cannot hard-delete eval: existing decision rows prevent"
+                        " removal (RESTRICT on eval_id and/or policy_gate_id)"
+                    ),
+                }
         if is_guardrail:
-            await _audit_eval_def_delete(s, org_id, account_id, eid, hard, soft, eval_name)
+            await _audit_eval_def_delete(s, org_id, account_id, eid, hard, soft, eval_name or "")
     return {"id": str(eid), "soft_deleted": soft, "hard_deleted": not soft}
 
 
