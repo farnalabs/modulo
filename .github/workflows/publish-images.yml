@@ -1,11 +1,20 @@
-# Publish backend and frontend container images to GHCR.
+# Publish the container images that Modulo deployments consume to GHCR.
 #
-# This workflow builds and publishes the Docker images that the Helm chart
-# (deploy/helm/modulo) references. Before this existed, the :latest images
-# on GHCR were stale (from 2026-07-06) and did not contain the `modulo`
-# Python package at all — `import modulo` raised ModuleNotFoundError and the
-# backend crash-looped on any cluster. The smoke checks below exist to
-# prevent that regression from shipping again.
+# Two deployment paths are served here:
+#   * The self-hosted compose stack (deploy/compose/docker-compose.prod.yml)
+#     pulls the all-in-one image `ghcr.io/farnalabs/modulo:${TAG:-latest}`,
+#     which bundles the backend + frontend + nginx + supervisor
+#     (deploy/docker/Dockerfile.all-in-one). This is the image the docs
+#     reference (docs/deployment-security.md, docs/upgrade-process.md,
+#     docs/public-launch-checklist.md).
+#   * The Helm chart (FAR-1052, landing in a stacked PR) consumes the split
+#     `ghcr.io/farnalabs/modulo/backend` and `/frontend` images.
+#
+# Before this existed the :latest image on GHCR was stale (from 2026-07-06)
+# and did not contain the `modulo` Python package at all — `import modulo`
+# raised ModuleNotFoundError and the backend crash-looped on any cluster.
+# The smoke checks below exist to prevent that regression from shipping
+# again.
 
 name: "Publish: Container images to GHCR"
 
@@ -18,25 +27,30 @@ on:
 
 concurrency:
   group: publish-images-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded branch builds, but never cancel a tag-driven release
+  # mid-push.
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Backend image
+  # All-in-one image — the artifact the self-hosted compose stack pulls as
+  # `ghcr.io/farnalabs/modulo:${TAG:-latest}`.
   # ---------------------------------------------------------------------------
-  backend:
-    name: Build & publish backend
+  all-in-one:
+    name: Build & publish all-in-one
     runs-on: ubicloud-standard-2
-    timeout-minutes: 30
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v7
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -44,7 +58,76 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            # Always tag with the short git SHA for traceability.
+            type=sha,prefix=
+            # Tag :latest only on pushes to main — never on PRs or other branches.
+            type=raw,value=latest,enable={{is_default_branch}}
+            # On tag pushes (v*), tag with the version (e.g. v1.2.3 → 1.2.3).
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and push all-in-one image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.all-in-one
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=all-in-one
+          cache-to: type=gha,mode=max,scope=all-in-one
+
+      # -----------------------------------------------------------------
+      # Smoke checks: the all-in-one image must (a) contain the `modulo`
+      # Python package and (b) have a valid nginx config. The 2026-07-06
+      # :latest shipped without the package, causing crash-loops on every
+      # cluster. These checks must never be removed — they are the
+      # regression gate for that specific failure.
+      # -----------------------------------------------------------------
+      - name: Smoke check — import modulo
+        shell: bash
+        run: |
+          IMAGE="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
+          echo "Checking image: $IMAGE"
+          docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+
+      - name: Smoke check — nginx -t
+        shell: bash
+        run: |
+          IMAGE="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
+          echo "Checking image: $IMAGE"
+          docker run --rm --entrypoint nginx "$IMAGE" -t
+
+  # ---------------------------------------------------------------------------
+  # Backend image — consumed by the Helm chart (FAR-1052, stacked PR).
+  # ---------------------------------------------------------------------------
+  backend:
+    name: Build & publish backend
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/${{ github.repository }}/backend
           tags: |
@@ -57,10 +140,10 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build and push backend image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: backend
           file: backend/Dockerfile
@@ -84,17 +167,20 @@ jobs:
           docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
 
   # ---------------------------------------------------------------------------
-  # Frontend image
+  # Frontend image — consumed by the Helm chart (FAR-1052, stacked PR).
   # ---------------------------------------------------------------------------
   frontend:
     name: Build & publish frontend
     runs-on: ubicloud-standard-2
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v7
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -102,7 +188,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/${{ github.repository }}/frontend
           tags: |
@@ -112,10 +198,10 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build and push frontend image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: frontend
           file: frontend/Dockerfile.prod
