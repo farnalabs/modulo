@@ -357,6 +357,37 @@ def test_update_agent_detaches_output_schema(client: TestClient) -> None:
     assert updates["input_schema_version"] is None
 
 
+def test_update_agent_rejects_unresolvable_schema_reference(client: TestClient) -> None:
+    """A schema id that resolves to no org-owned version is refused with 422.
+
+    Exercises the ``_resolve_schema_binding`` refusal path: the (id, version,
+    org) lookup returns nothing, so the PATCH is rejected before the write
+    rather than surfacing as a 409 FK collision.
+    """
+    agent = _make_agent()
+    mock_session = _make_mock_session()
+    empty_result = MagicMock()
+    empty_result.scalar_one_or_none.return_value = None
+    mock_session.execute = AsyncMock(return_value=empty_result)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_db_session] = override_session
+    with (
+        patch(f"{_AGENT_PATCH_PREFIX}get_agent", return_value=agent),
+        patch(f"{_AGENT_PATCH_PREFIX}update_agent", return_value=agent) as mock_update,
+        patch(f"{_AGENT_PATCH_PREFIX}set_rls_org"),
+    ):
+        resp = client.patch(
+            f"/api/v1/agents/{_AGENT_ID}",
+            json={**_UPDATE_BODY, "input_schema_id": str(uuid.uuid4())},
+        )
+    assert resp.status_code == 422, resp.text
+    assert "Referenced schema version not found" in resp.json()["detail"]
+    mock_update.assert_not_called()
+
+
 def test_update_agent_patch_returns_200_and_reflects_update(client: TestClient) -> None:
     """Regression: PATCH with a valid body must return 200, not 500.
 
