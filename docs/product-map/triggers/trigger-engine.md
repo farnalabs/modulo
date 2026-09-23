@@ -99,6 +99,16 @@ rate-limited by the `TriggerEngine`.
   operation (audited), not per-trigger.
 
 ## QA History
+- 2026-09-23: **product-map review pass** — absorbed the last two
+  `@awaiting-implementation` trigger drafts that lived under the pipelines
+  directory. `pipelines/webhook_trigger.feature` (deleted) duplicated this
+  entry's executing `triggers/webhook_hmac.feature` / `triggers/flood_protection.feature`
+  surfaces, and `pipelines/scheduling.feature`'s cron-fire + polling scenarios
+  duplicated `triggers/cron.feature` / `triggers/polling.feature` (the file now
+  ships only its cron-CRUD scenarios). The webhook expired-timestamp rejection
+  (`TimestampExpiredError` → 400, ±300s replay window) remains unit-pinned by
+  `test_trigger_engine.py`. All trigger-delivery behaviour stays cited from this
+  entry; `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-17: **product-map review pass** — closed the
   "Slack app-mention triggering is unit-tested only" gap: registered
   ``triggers/slack_app_mention.feature`` into the executing BDD suite from the

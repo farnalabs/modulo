@@ -597,6 +597,26 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > Removed the five scenarios from `PINNED_AWAITING_IMPLEMENTATION`.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-23):** closed the four stale pipeline-level BDD
+> drafts tracked as `@awaiting-implementation` gaps under the feature graph —
+> every one was a placeholder whose behaviour was already shipped and covered by
+> the executing `feat-triggers` suite or unit coverage, so the duplicates were
+> archived, not re-wired: `pipelines/webhook_trigger.feature` (deleted; HMAC
+> valid/invalid, duplicate and flood scenarios live in
+> `triggers/webhook_hmac.feature` / `triggers/flood_protection.feature`, expired
+> timestamp unit-pinned), `pipelines/scheduling.feature` (cron-fire + three
+> polling scenarios live in `triggers/cron.feature` / `triggers/polling.feature`;
+> the file keeps its executing cron-CRUD scenarios), `pipelines/concurrency.feature`
+> (deleted; targeted the dead per-pipeline runs endpoint, admission coverage
+> lives in the `max_concurrent_runs` 429 path + `tests/unit/pipeline_engine`),
+> and `pipelines/run_variants.feature` (its coverage-gaps draft duplicated
+> `variants/variant_groups.feature`'s real `get_coverage_gaps` seam). Dead step
+> definitions were dropped from `steps/test_pipelines.py` /
+> `steps/test_alpha_pipelines.py` and `PINNED_AWAITING_IMPLEMENTATION` shrank by
+> four entries. Trackers updated: `pipelines/pipelines.md`,
+> `triggers/trigger-engine.md`, `improve/variants.md`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

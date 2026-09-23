@@ -17,14 +17,6 @@ Feature: Pipeline Run Variants (A/B Testing)
     Then the response status is 200
     And the response contains a variant_name and run_id
 
-  @awaiting-implementation
-  Scenario: Coverage gaps are reported for a variant group
-    Given a variant group "ab-test-1" exists for pipeline "deploy-service"
-    And I am authenticated in org "acme"
-    When I GET /api/v1/variant-groups/ab-test-1/coverage-gaps
-    Then the response status is 200
-    And the response lists missing eval definitions per variant
-
   Scenario: Non-existent variant group returns 404
     Given I am authenticated in org "acme"
     When I GET /api/v1/variant-groups/00000000-0000-0000-0000-000000000999

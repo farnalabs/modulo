@@ -100,28 +100,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Priya's HITL rejections grow the eval suite automatically",
         }
     ),
-    "tests/bdd/features/pipelines/run_variants.feature": frozenset(
-        {
-            "Coverage gaps are reported for a variant group",
-        }
-    ),
-    "tests/bdd/features/pipelines/scheduling.feature": frozenset(
-        {
-            "Cron trigger fires and creates a run",
-            "Polling trigger fires when condition is met",
-            "Polling trigger does not fire when condition not met",
-            "Polling trigger logs error when connector fails",
-        }
-    ),
-    "tests/bdd/features/pipelines/webhook_trigger.feature": frozenset(
-        {
-            "Webhook with valid HMAC creates a run",
-            "Webhook with invalid HMAC is rejected",
-            "Webhook with expired timestamp is rejected",
-            "Duplicate webhook payload is rejected",
-            "Flood protection rejects when at max concurrent runs",
-        }
-    ),
     "tests/bdd/features/workflows/import.feature": frozenset(
         {
             "Import valid pipeline bundle",
@@ -176,15 +154,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "MCP lists pending gates",
             "MCP rejects a gate",
             "MCP without hitl:review scope is blocked",
-        }
-    ),
-    "tests/bdd/features/pipelines/concurrency.feature": frozenset(
-        {
-            "Completed run frees concurrency slot",
-            "Concurrency limit is enforced per-org",
-            "Concurrent runs exceeding limit are rejected",
-            "Concurrent runs within limit are allowed",
-            "Different pipelines do not affect each others concurrency",
         }
     ),
     "tests/bdd/features/ui/eval_dashboard.feature": frozenset(

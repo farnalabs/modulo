@@ -1,7 +1,7 @@
 """Step definitions for pipeline feature files.
 
 Covers the feature files registered below: crud, snapshot_versioning,
-error_recovery, run_variants, scheduling, webhook_trigger, checkpoint_resume,
+error_recovery, run_variants, scheduling, checkpoint_resume,
 run_lifecycle, run_sequential.
 """
 
@@ -26,8 +26,6 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/run_variants.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/scheduling.feature")
-with contextlib.suppress(FileNotFoundError, OSError):
-    scenarios("../../bdd/features/pipelines/webhook_trigger.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/checkpoint_resume.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -1495,37 +1493,6 @@ def run_variant_group(name: str, client, request: pytest.FixtureRequest, patches
     _store_response(request, resp)
 
 
-@when(parsers.parse("I GET /api/v1/variant-groups/{name}/coverage-gaps"))
-def get_variant_coverage_gaps(name: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    group_id = getattr(request.node, "_variant_group_id", uuid.uuid5(uuid.NAMESPACE_DNS, name))
-    mock_group = MagicMock()
-    mock_group.id = group_id
-    mock_gaps = [
-        {"variant": {"name": "control"}, "missing_evals": ["sentiment-check"]},
-        {"variant": {"name": "experiment"}, "missing_evals": ["sentiment-check", "toxicity-check"]},
-    ]
-
-    _patch_set_rls(patches, "modulo.api.routes.variants.set_rls_org")
-    patcher = patch(
-        "modulo.api.routes.variants.get_variant_group",
-        new_callable=AsyncMock,
-        return_value=mock_group,
-    )
-    patcher.start()
-    patches.append(patcher)
-
-    patcher2 = patch(
-        "modulo.api.routes.variants.get_coverage_gaps",
-        new_callable=AsyncMock,
-        return_value=mock_gaps,
-    )
-    patcher2.start()
-    patches.append(patcher2)
-
-    resp = client.get(f"/api/v1/variant-groups/{group_id}/coverage-gaps")
-    _store_response(request, resp)
-
-
 @when(parsers.parse("I GET /api/v1/variant-groups/{group_id}"))
 def get_variant_group_by_id(group_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     _patch_set_rls(patches, "modulo.api.routes.variants.set_rls_org")
@@ -1551,16 +1518,6 @@ def check_variant_response(request: pytest.FixtureRequest) -> None:
     assert isinstance(body, dict), f"Response body is not a dict: {body!r}"
     assert "run_id" in body, f"Response missing 'run_id': {body}"
     assert "variant_name" in body, f"Response missing 'variant_name': {body}"
-
-
-@then("the response lists missing eval definitions per variant")
-def check_coverage_gaps_response(request: pytest.FixtureRequest) -> None:
-    body = request.node._resp_body
-    assert isinstance(body, list), f"Expected list, got {type(body)}: {body!r}"
-    assert len(body) > 0, "Expected at least one coverage gap entry"
-    for entry in body:
-        assert "variant" in entry, f"Coverage gap entry missing 'variant': {entry}"
-        assert "missing_evals" in entry, f"Coverage gap entry missing 'missing_evals': {entry}"
 
 
 # ===================================================================
@@ -1591,7 +1548,6 @@ def cron_trigger_with_expression(expression: str, request: pytest.FixtureRequest
     request.node._trigger_active = True
     request.node._cron_expression = expression
 
-
 @when(parsers.parse('I create a cron trigger for pipeline "{pipeline_name}" with expression "{expression}"'))
 def create_cron_trigger(
     pipeline_name: str, expression: str, client, request: pytest.FixtureRequest, patches: list[Any]
@@ -1617,15 +1573,8 @@ def create_cron_trigger(
         },
     )
     _store_response(request, resp)
+
     request.node._created_cron_expression = expression
-
-
-@when("the cron scheduler fires the trigger")
-def cron_trigger_fires(request: pytest.FixtureRequest) -> None:
-    request.node._trigger_fired = True
-    request.node._mock_run_cron = MagicMock()
-    request.node._mock_run_cron.id = uuid.uuid4()
-    request.node._mock_run_cron.status = "pending"
 
 
 @when("I toggle the trigger active state")
@@ -1706,135 +1655,6 @@ def check_future_fire_times(request: pytest.FixtureRequest, count: int) -> None:
     assert isinstance(body, dict), f"Response body is not a dict: {body!r}"
     times = body.get("next_fire_times", [])
     assert len(times) == count, f"Expected {count} fire times, got {len(times)}: {times}"
-
-
-# ===================================================================
-#  Webhook trigger (webhook_trigger.feature)
-# ===================================================================
-
-
-@given(parsers.parse('org "{org}" has pipeline "{pipeline_name}" with webhook secret "{secret}"'))
-def pipeline_with_webhook_secret(org: str, pipeline_name: str, secret: str, request: pytest.FixtureRequest) -> None:
-    from tests.bdd.conftest import make_mock_pipeline
-
-    request.node._mock_pipeline = make_mock_pipeline(name=pipeline_name)
-    request.node._webhook_secret = secret
-
-
-@given("the pipeline is at max concurrent runs")
-def pipeline_at_max_concurrent(request: pytest.FixtureRequest) -> None:
-    request.node._webhook_flood = True
-
-
-@when(parsers.parse("I POST a webhook with valid HMAC and timestamp to trigger {trigger_id}"))
-def webhook_valid_hmac(trigger_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    from modulo.core.trigger_engine import ConcurrentRunLimitError
-
-    _patch_set_rls(patches, "modulo.api.routes.webhooks.set_rls_org")
-
-    mock_run = MagicMock()
-    mock_run.id = uuid.uuid4()
-    tid = getattr(request.node, "_webhook_trigger_id", uuid.UUID(trigger_id))
-
-    if getattr(request.node, "_webhook_flood", False):
-        mock_handler = AsyncMock(side_effect=ConcurrentRunLimitError(tid, limit=1))
-    else:
-        mock_handler = AsyncMock(return_value=(mock_run, {}, {}))
-
-    patcher = patch(
-        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
-        mock_handler,
-    )
-    patcher.start()
-    patches.append(patcher)
-
-    resp = client.post(
-        f"/api/v1/triggers/{tid}/webhook",
-        json={"event": "push", "ref": "refs/heads/main"},
-        headers={
-            "X-Modulo-Webhook-Secret": getattr(request.node, "_webhook_secret", "s3cr3t"),
-            "X-Modulo-Timestamp": "1700000000",
-        },
-    )
-    _store_response(request, resp)
-
-
-@when(parsers.parse("I POST a webhook with invalid HMAC to trigger {trigger_id}"))
-def webhook_invalid_hmac(trigger_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    from modulo.core.trigger_engine import HmacValidationError
-
-    _patch_set_rls(patches, "modulo.api.routes.webhooks.set_rls_org")
-    tid = getattr(request.node, "_webhook_trigger_id", uuid.UUID(trigger_id))
-
-    mock_handler = AsyncMock(side_effect=HmacValidationError())
-    patcher = patch(
-        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
-        mock_handler,
-    )
-    patcher.start()
-    patches.append(patcher)
-
-    resp = client.post(
-        f"/api/v1/triggers/{tid}/webhook",
-        json={"event": "push"},
-        headers={
-            "X-Modulo-Webhook-Secret": "bad_secret",
-            "X-Modulo-Timestamp": "1700000000",
-        },
-    )
-    _store_response(request, resp)
-
-
-@when(parsers.parse("I POST a webhook with expired timestamp to trigger {trigger_id}"))
-def webhook_expired_timestamp(trigger_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    from modulo.core.trigger_engine import TimestampExpiredError
-
-    _patch_set_rls(patches, "modulo.api.routes.webhooks.set_rls_org")
-    tid = getattr(request.node, "_webhook_trigger_id", uuid.UUID(trigger_id))
-
-    mock_handler = AsyncMock(side_effect=TimestampExpiredError())
-    patcher = patch(
-        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
-        mock_handler,
-    )
-    patcher.start()
-    patches.append(patcher)
-
-    resp = client.post(
-        f"/api/v1/triggers/{tid}/webhook",
-        json={"event": "push"},
-        headers={
-            "X-Modulo-Webhook-Secret": getattr(request.node, "_webhook_secret", "s3cr3t"),
-            "X-Modulo-Timestamp": "1500000000",
-        },
-    )
-    _store_response(request, resp)
-
-
-@when(parsers.parse("I POST a duplicate webhook payload to trigger {trigger_id}"))
-def webhook_duplicate(trigger_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    from modulo.core.trigger_engine import DuplicateWebhookError
-
-    _patch_set_rls(patches, "modulo.api.routes.webhooks.set_rls_org")
-    tid = getattr(request.node, "_webhook_trigger_id", uuid.UUID(trigger_id))
-
-    mock_handler = AsyncMock(side_effect=DuplicateWebhookError(payload_hash="abc123"))
-    patcher = patch(
-        "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
-        mock_handler,
-    )
-    patcher.start()
-    patches.append(patcher)
-
-    resp = client.post(
-        f"/api/v1/triggers/{tid}/webhook",
-        json={"event": "push"},
-        headers={
-            "X-Modulo-Webhook-Secret": getattr(request.node, "_webhook_secret", "s3cr3t"),
-            "X-Modulo-Timestamp": "1700000000",
-        },
-    )
-    _store_response(request, resp)
 
 
 # ---------------------------------------------------------------------------
