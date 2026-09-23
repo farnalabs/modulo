@@ -1814,6 +1814,21 @@ class TestTriggerPipelinePaths(_AuthContext):
 
 
 class TestEvalDefinitionTools(_AdminContext):
+    @pytest.fixture(autouse=True)
+    def _bypass_eval_definition_freeze(self):
+        """Bypass the FAR-1100 chunk 3 → 3b eval-definition create/edit freeze.
+
+        This class verifies the still-live MCP create/update validation, auth,
+        scope, guardrail and DB-error-envelope paths.  The freeze guard runs
+        before all of them, so without this bypass every case would collapse to
+        a single ``definition_frozen`` assertion and the production paths would
+        lose coverage.  The freeze itself is verified directly in
+        tests/unit/api/test_eval_definition_freeze.py.  Remove when chunk 3b
+        lands (CO-8).
+        """
+        with patch.object(ms, "definition_frozen_response", return_value=None):
+            yield
+
     def test_assert_failure_behaviour_rejects_unknown(self) -> None:
         assert _assert_failure_behaviour("retry") is not None
 

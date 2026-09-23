@@ -55,6 +55,7 @@ from modulo.core.eval_engine.coverage_gap import (
     DEFAULT_MIN_RUNS,
     compute_coverage_gap,
 )
+from modulo.core.eval_engine.eval_definition_freeze import raise_if_frozen
 from modulo.core.eval_engine.suite_run import (
     EVAL_LEADERBOARD_DEFAULT_DAYS,
     EVAL_LEADERBOARD_MAX_DAYS,
@@ -94,8 +95,6 @@ _CODE_EVALS_SUITE_ALERTING = "evals.suite_alerting"
 _CODE_EVALS_COVERAGE_GAP = "evals.coverage_gap"
 _EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
-
-
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["evals"])
@@ -291,6 +290,10 @@ async def create_eval_definition(
 
     Admin only. The eval definition is scoped to the caller's organisation.
     """
+    # FAR-1100 chunk 3 → 3b freeze: creation disabled between read cutover and
+    # write cutover.  Remove when chunk 3b lands (CO-8).
+    raise_if_frozen()
+
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1570,6 +1573,10 @@ async def update_eval_definition(
     principal: TenantPrincipal = require_permission("eval.definition.update"),
 ) -> dict[str, Any]:
     """Update an eval definition. Admin only."""
+    # FAR-1100 chunk 3 → 3b freeze: editing disabled between read cutover and
+    # write cutover.  Remove when chunk 3b lands (CO-8).
+    raise_if_frozen()
+
     if principal.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can update eval definitions")
 

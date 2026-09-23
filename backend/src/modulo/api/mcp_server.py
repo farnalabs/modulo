@@ -108,6 +108,8 @@ from modulo.core.cron_helpers import (
     compute_next_fire,
     validate_cron_expression,
 )
+from modulo.core.dispatch import dispatch_run
+from modulo.core.documentation_indexer import DocumentationIndex
 
 # ContextVars populated by McpAuthMiddleware before each request.
 # Propagation: this server runs FastMCP in stateless HTTP mode, where each request
@@ -119,8 +121,7 @@ from modulo.core.cron_helpers import (
 # CLOSED (auth error) — there must never be a process-global fallback, because
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
-from modulo.core.dispatch import dispatch_run
-from modulo.core.documentation_indexer import DocumentationIndex
+from modulo.core.eval_engine.eval_definition_freeze import definition_frozen_response
 from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import get_registry, resolve_plan_context
 from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
@@ -3260,6 +3261,11 @@ async def _create_eval_definition_impl(
     suite_id: str | None,
 ) -> dict[str, Any]:
     """Persist a new EvalDefinition; shared with the MCP tool wrapper."""
+    # FAR-1100 chunk 3 → 3b freeze: creation disabled between read cutover and
+    # write cutover.  Remove when chunk 3b lands (CO-8).
+    if (err := definition_frozen_response()) is not None:
+        return err
+
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("create_eval_definition")
@@ -3434,6 +3440,11 @@ async def _update_eval_definition_impl(
     suite_id: str | None,
 ) -> dict[str, Any]:
     """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper."""
+    # FAR-1100 chunk 3 → 3b freeze: editing disabled between read cutover and
+    # write cutover.  Remove when chunk 3b lands (CO-8).
+    if (err := definition_frozen_response()) is not None:
+        return err
+
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("update_eval_definition")

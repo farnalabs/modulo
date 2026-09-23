@@ -127,6 +127,21 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _bypass_eval_definition_freeze():
+    """Bypass the FAR-1100 chunk 3 → 3b eval-definition create/edit freeze.
+
+    This module verifies DB-error → status mapping.  The freeze guard runs
+    before any DB work, so without this the eval create/update cases would
+    return 409 instead of the mapped 501/503 and the mapping assertions would
+    be vacuous.  The freeze itself is verified in
+    tests/unit/api/test_eval_definition_freeze.py.  Remove when chunk 3b lands
+    (CO-8).
+    """
+    with patch("modulo.api.routes.evals.raise_if_frozen"):
+        yield
+
+
 def _raise_session(exc: Exception) -> AsyncMock:
     session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()

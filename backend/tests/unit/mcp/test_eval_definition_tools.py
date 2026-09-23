@@ -9,6 +9,8 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from modulo.api.mcp_server import (
     create_eval_definition,
     delete_eval_definition,
@@ -87,6 +89,22 @@ def _clear_context() -> None:
     _ctx_role.set(None)
     _ctx_auth_token.set(None)
     _ctx_auth_type.set(None)
+
+
+@pytest.fixture(autouse=True)
+def _bypass_eval_definition_freeze():
+    """Bypass the FAR-1100 chunk 3 → 3b eval-definition create/edit freeze.
+
+    These tests verify the still-live MCP create/update production paths
+    (persistence, version bump / pre-version snapshot, scope and validation
+    errors).  The freeze guard runs before all of them, so without this bypass
+    every case would collapse to a single ``definition_frozen`` assertion.  The
+    freeze itself is verified directly in
+    tests/unit/api/test_eval_definition_freeze.py.  Remove when chunk 3b lands
+    (CO-8).
+    """
+    with patch("modulo.api.mcp_server.definition_frozen_response", return_value=None):
+        yield
 
 
 # ---------------------------------------------------------------------------
