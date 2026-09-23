@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -691,6 +692,7 @@ class TestBuildProvisioningScripts:
         path.chmod(0o700)
         return path
 
+    @pytest.mark.skipif(shutil.which("sh") is None, reason="requires a POSIX shell (sh); absent on this platform")
     def test_scripts_are_valid_posix(self) -> None:
         """The generated scripts must parse as POSIX sh (catches the original
         unterminated-quote / broken-pipe regressions)."""
@@ -721,6 +723,10 @@ class TestBuildProvisioningScripts:
             setup_path.unlink(missing_ok=True)
             teardown_path.unlink(missing_ok=True)
 
+    @pytest.mark.skipif(
+        shutil.which("sh") is None or not Path("/dev/shm").is_dir(),
+        reason="requires a POSIX shell (sh) and /dev/shm (the setup script's mktemp template); absent on this platform",
+    )
     def test_setup_executes_and_askpass_returns_secret(self) -> None:
         """End-to-end: run the setup script, confirm the askpass helper yields
         the username and password (via the exported credential-file path), then

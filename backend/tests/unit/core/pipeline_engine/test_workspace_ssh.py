@@ -613,6 +613,7 @@ class TestHostKeyFingerprints:
         import shutil
         import subprocess
         import tempfile
+        from pathlib import Path
 
         ssh_keygen = shutil.which("ssh-keygen")
         if ssh_keygen is None:
@@ -623,17 +624,23 @@ class TestHostKeyFingerprints:
 
         for hostname, keys in KNOWN_HOSTS_BY_HOSTNAME.items():
             for entry in keys:
-                with tempfile.NamedTemporaryFile("w", suffix=".pub") as fh:
+                # Close the temp file BEFORE invoking ssh-keygen: on Windows an
+                # open NamedTemporaryFile handle is exclusively locked, so the
+                # child process would get "Permission denied".
+                with tempfile.NamedTemporaryFile("w", suffix=".pub", delete=False) as fh:
                     fh.write(entry + "\n")
-                    fh.flush()
+                    pub_path = fh.name
+                try:
                     result = subprocess.run(  # noqa: S603
-                        [ssh_keygen, "-lf", fh.name],
+                        [ssh_keygen, "-lf", pub_path],
                         capture_output=True,
                         text=True,
                         check=False,
                         timeout=30,
                     )
-                assert result.returncode == 0, f"{hostname} key did not parse: {result.stderr.strip()}"
+                    assert result.returncode == 0, f"{hostname} key did not parse: {result.stderr.strip()}"
+                finally:
+                    Path(pub_path).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
