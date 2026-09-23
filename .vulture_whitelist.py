@@ -411,4 +411,21 @@ __all__ = [
     #     production callers wired in chunk 3) ---
     "resolve_policy_gate",  # policy gate resolution (unwired until chunk 3)
     "validate_binding",  # policy gate binding validation (unwired until chunk 3)
+    # --- FAR-720 dispatcher_reconcile declarative terminalizer registry
+    #     (cron_helpers.py). The per-org batch coroutines are registered by
+    #     NAME in _TERMINALIZERS[*].coroutine_name and resolved lazily via
+    #     _resolve_terminalizer -> globals().get(name) so the existing
+    #     patch.object(ch, "_terminalize_...", fake) tests keep intercepting
+    #     them. They are live (invoked by _reconcile_org's
+    #     _BATCH_TERMINALIZER_SPECS loop), but vulture cannot follow the
+    #     string-keyed lookup, so it reports them as unused.
+    "_terminalize_mid_graph_wedges",
+    "_terminalize_claim_cap_exhausted",
+    "_terminalize_expired_hitl_gates",
+    "_terminalize_hitl_gate_missing",
+    # FAR-720 declarative registry dataclasses: referenced only in type
+    # annotations (``tuple[ReconcileTerminalizer, ...]``, ``tuning:
+    # ReconcileTuning``), which vulture does not credit as uses.
+    "ReconcileTerminalizer",
+    "ReconcileTuning",
 ]
