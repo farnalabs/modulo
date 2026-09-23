@@ -500,22 +500,29 @@ async def test_claim_recovery_failure_returns_none_and_retries_next_tick(
 # ---------------------------------------------------------------------------
 
 
-def test_hostname_prefers_fly_machine_id(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hostname_ignores_platform_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR 043 / FAR-1194: FLY_MACHINE_ID is NOT an identity source — the
+    platform-neutral resolver prefers the generic HOSTNAME env var."""
     monkeypatch.setenv("FLY_MACHINE_ID", "fly-abc")
-    monkeypatch.delenv("HOSTNAME", raising=False)
-    assert wl._hostname() == "fly-abc"
-
-
-def test_hostname_falls_back_to_hostname_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("FLY_MACHINE_ID", raising=False)
     monkeypatch.setenv("HOSTNAME", "box-1")
     assert wl._hostname() == "box-1"
+    assert wl._hostname() != "fly-abc"
 
 
-def test_hostname_defaults_to_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hostname_falls_back_to_socket_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No HOSTNAME env -> socket.gethostname() (never the platform var)."""
+    import socket
+
     monkeypatch.delenv("FLY_MACHINE_ID", raising=False)
     monkeypatch.delenv("HOSTNAME", raising=False)
-    assert wl._hostname() == "unknown"
+    assert wl._hostname() == socket.gethostname()
+
+
+def test_hostname_defaults_to_unknown_when_socket_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing declared and an empty socket hostname -> the "unknown" last resort."""
+    monkeypatch.delenv("HOSTNAME", raising=False)
+    with patch("modulo.settings.socket.gethostname", return_value=""):
+        assert wl._hostname() == "unknown"
 
 
 class TestMultiChannelAlertFanout:

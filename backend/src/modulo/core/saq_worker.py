@@ -69,7 +69,7 @@ from saq.queue.redis import RedisQueue
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.core.cron_helpers import CRON_LIVENESS_STATS_TTL_SECONDS, SAQ_TASK_FIRE_SUITE_RUN
-from modulo.settings import get_settings
+from modulo.settings import get_settings, resolve_instance_identity
 
 _log = logging.getLogger(__name__)
 
@@ -1694,8 +1694,6 @@ async def connector_health_checks(_ctx: dict[str, Any]) -> dict[str, Any]:
 # Worker settings
 # ---------------------------------------------------------------------------
 
-_HOSTNAME = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
-
 
 def _runs_queue_name() -> str:
     """Runs worker queue — derives from ``SAQ_RUNS_QUEUE`` (settings).
@@ -1729,8 +1727,9 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
         "dequeue_timeout": _DEQUEUE_TIMEOUT,
         "timers": dict(_TIMERS),
         "after_process": _after_process_hook,
-        # Machine-scoped worker metadata for /healthz/ready (plan F7).
-        "metadata": {"hostname": _HOSTNAME},
+        # Instance identity for worker metadata shared with the health gate —
+        # platform-neutral resolver at call time (ADR 043 / FAR-1194).
+        "metadata": {"hostname": resolve_instance_identity()},
     }
 
 

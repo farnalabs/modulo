@@ -43,7 +43,6 @@ import contextlib
 import html
 import json
 import logging
-import os
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -53,7 +52,7 @@ import httpx
 import redis.asyncio as aioredis
 
 from modulo.core.email_service import EmailSendingError, send_email
-from modulo.settings import Settings, get_settings
+from modulo.settings import Settings, get_settings, resolve_instance_identity
 
 _log = logging.getLogger("modulo.watchdog")
 
@@ -95,8 +94,8 @@ _WEBHOOK_TIMEOUT_SECONDS = 10.0
 
 
 def _hostname() -> str:
-    """Machine identity shared with the health gate (FLY_MACHINE_ID or hostname)."""
-    return os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
+    """Instance identity shared with the health gate (platform-neutral, ADR 043)."""
+    return resolve_instance_identity()
 
 
 def _configured_queues(settings: Settings) -> list[str]:
