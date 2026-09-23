@@ -19,13 +19,27 @@ COPY pyproject.toml uv.lock ./
 # every reconcile tick fails with "No module named 'aiodocker'" and the
 # advisory runner_workspace_reconcile check on /healthz/ready is permanently
 # degraded (matches backend/Dockerfile.fly, which already passes the extra).
+#
+# --no-build (docker:S8541): never execute sdist setup scripts during
+# installation. ibm-cos-sdk (a langchain-ibm dependency) publishes sdist-only,
+# so `--no-build` alone hard-fails; the three hash-pinned ibm-cos-sdk
+# distributions are re-allowed individually with --no-binary-package. Every
+# other dependency must install from a pre-built wheel. NOSONAR comments are
+# not supported in Dockerfiles, hence the explicit flags.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --extra docker --no-install-project
+    uv sync --frozen --no-dev --extra docker --no-install-project --no-build \
+    --no-binary-package ibm-cos-sdk \
+    --no-binary-package ibm-cos-sdk-core \
+    --no-binary-package ibm-cos-sdk-s3transfer
 
 COPY alembic.ini entrypoint.sh ./
 COPY src/ src/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --extra docker && \
+    uv sync --frozen --no-dev --extra docker --no-build \
+    --no-binary-package ibm-cos-sdk \
+    --no-binary-package ibm-cos-sdk-core \
+    --no-binary-package ibm-cos-sdk-s3transfer \
+    --no-binary-package farnalabs-modulo && \
     uv pip install --only-binary :all: psycopg2-binary==2.9.12 && \
     chmod +x entrypoint.sh
 
