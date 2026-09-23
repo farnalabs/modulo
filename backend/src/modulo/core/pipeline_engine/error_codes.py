@@ -115,7 +115,7 @@ KNOWN_FIXES: tuple[KnownFix, ...] = (
             "terminator line because no trailing newline followed it. Fix: never end "
             "an agent_command with a heredoc — emit the payload as a base64 block "
             "instead (`printf %s <b64> | base64 -d > /tmp/script.py && python3 "
-            "/tmp/script.py`), or guarantee a trailing newline after the terminator."
+            "/tmp/script.py`), or guarantee a trailing newline after the terminator."  # NOSONAR S5443 - guidance text
         ),
     ),
     KnownFix(
