@@ -761,6 +761,12 @@ def _seed_state(
     # Seed autonomy from snapshot-level default so gate nodes can resolve it.
     if snapshot.default_autonomy_level:
         run_context["_pipeline_default_autonomy"] = snapshot.default_autonomy_level
+    # FAR-1163 S0: pin the autonomy CEILING from the snapshot (nullable —
+    # NULL means resolution falls back to the default as the effective
+    # ceiling). isinstance-str guards non-string stand-ins (test mocks).
+    max_autonomy = getattr(snapshot, "max_autonomy_level", None)
+    if isinstance(max_autonomy, str) and max_autonomy:
+        run_context["_pipeline_max_autonomy"] = max_autonomy
     # Seed the system-reserved override namespace from the run's FROZEN variant
     # config only. This is the ONLY path that populates it — a caller-supplied
     # ``_run_overrides`` in the input payload is never promoted here.

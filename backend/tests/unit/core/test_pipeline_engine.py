@@ -86,6 +86,28 @@ class TestSeedState:
         state = _seed_state(snapshot, {})
         assert "_pipeline_default_autonomy" not in state["run_context"]
 
+    def test_max_autonomy_ceiling_seeded_from_snapshot(self) -> None:
+        """FAR-1163: the ceiling rides into run_context as the reserved
+        ``_pipeline_max_autonomy`` key so gate resolution can clamp to it."""
+        snapshot = _make_snapshot(run_context_defaults={})
+        snapshot.max_autonomy_level = "fully_autonomous"
+        state = _seed_state(snapshot, {})
+        assert state["run_context"]["_pipeline_max_autonomy"] == "fully_autonomous"
+
+    def test_no_max_autonomy_when_snapshot_ceiling_is_none(self) -> None:
+        """NULL ceiling stays unset — resolution falls back to the default."""
+        snapshot = _make_snapshot(run_context_defaults={})
+        snapshot.max_autonomy_level = None
+        state = _seed_state(snapshot, {})
+        assert "_pipeline_max_autonomy" not in state["run_context"]
+
+    def test_no_max_autonomy_when_snapshot_lacks_the_attribute(self) -> None:
+        """Stand-in snapshots without the column (legacy/test doubles) seed
+        nothing rather than raising."""
+        snapshot = _make_snapshot(run_context_defaults={})
+        state = _seed_state(snapshot, {})
+        assert "_pipeline_max_autonomy" not in state["run_context"]
+
 
 class TestRunawayGuard:
     def test_no_limits_never_raises(self) -> None:

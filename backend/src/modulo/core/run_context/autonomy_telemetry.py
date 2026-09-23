@@ -64,6 +64,10 @@ _log = logging.getLogger(__name__)
 # Canonical event type emitted by this module.
 AUTONOMY_LEVEL_APPLIED = "run.autonomy_level_applied"
 
+# Emitted whenever a context-setter's autonomy_recommendation is clamped down
+# to the pipeline's max_autonomy_level ceiling (FAR-1163 S0).
+AUTONOMY_RECOMMENDATION_CLAMPED = "run.autonomy_recommendation_clamped"
+
 # Gate outcomes recorded in the payload.
 GATE_OUTCOME_SKIPPED = "skipped"  # fully_autonomous — gate bypassed
 GATE_OUTCOME_AUTO_APPROVED = "auto_approved"  # notify_on_complete
@@ -145,3 +149,82 @@ async def emit_autonomy_telemetry(
         raise
     except Exception:  # pragma: no cover - fail-open telemetry
         _log.exception("autonomy_telemetry: failed to record event (ignored)")
+
+
+async def emit_autonomy_clamp_telemetry(
+    session_factory: Callable[..., Any] | None,
+    *,
+    org_id: uuid.UUID | None,
+    run_id: uuid.UUID | str | None,
+    gate_id: str,
+    requested: str | None,
+    effective: str,
+    ceiling: str,
+    pipeline_id: uuid.UUID | str | None = None,
+) -> None:
+    """Append a ``run.autonomy_recommendation_clamped`` audit event (fail-open).
+
+    Records that a context-setter's ``autonomy_recommendation`` was clamped to
+    the pipeline ceiling at a HITL gate. Mirrors :func:`emit_autonomy_telemetry`
+    exactly: no-op without a session factory or org id, RLS org +
+    execution-context established inside the transaction before the
+    tamper-evident ``audit_events`` append, ``asyncio.CancelledError``
+    re-raised, every other failure logged and swallowed (telemetry must never
+    break a run).
+
+    Parameters
+    ----------
+    session_factory:
+        Async session factory (``lambda: SessionLocal()`` style); ``None`` is
+        a no-op.
+    org_id:
+        Organisation the run belongs to; ``None`` skips the write.
+    run_id, gate_id:
+        The run and gate the clamp occurred on.
+    requested:
+        The autonomy level the recommendation asked for.
+    effective:
+        The autonomy level actually applied after the clamp.
+    ceiling:
+        The ceiling the recommendation was clamped against.
+    pipeline_id:
+        Optional pipeline id, carried in the payload for joins.
+    """
+    if session_factory is None or org_id is None:
+        return
+    try:
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
+        from modulo.db.rls import set_rls_execution_context, set_rls_org
+
+        async with session_factory() as session, session.begin():
+            # STRICT RLS guards audit_events — same transaction shape as
+            # emit_autonomy_telemetry (see the note there).
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type=AUTONOMY_RECOMMENDATION_CLAMPED,
+                actor_user_id=None,
+                resource_type="run",
+                resource_id=uuid.UUID(str(run_id)) if run_id else None,
+                payload_json={
+                    "actor": SYSTEM_ACTOR,
+                    "summary": (
+                        f'Autonomy recommendation "{requested}" clamped to "{effective}" '
+                        f'(ceiling "{ceiling}") on run {short_id(run_id) or "unknown"} '
+                        f"(gate {gate_id})"
+                    ),
+                    "gate_id": gate_id,
+                    "requested": requested,
+                    "effective": effective,
+                    "ceiling": ceiling,
+                    "pipeline_id": str(pipeline_id) if pipeline_id else None,
+                },
+                request_id=None,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # pragma: no cover - fail-open telemetry
+        _log.exception("autonomy_telemetry: failed to record clamp event (ignored)")

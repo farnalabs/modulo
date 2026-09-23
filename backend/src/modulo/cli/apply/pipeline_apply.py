@@ -187,6 +187,7 @@ def apply_pipelines(
                         "name": entity.name,
                         "description": entity.description,
                         "max_concurrent_runs": entity.max_concurrent_runs,
+                        "max_autonomy_level": entity.max_autonomy_level,
                     }
                     if entity.manages_circuit_breaker:
                         create_payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
@@ -209,6 +210,11 @@ def apply_pipelines(
                 }
                 if status == "updated" and entity.manages_circuit_breaker:
                     patch_payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
+                # FAR-1163: send the ceiling only when DECLARED — an omitted
+                # ceiling must never clear a UI-set one as a side effect
+                # (mirrors the managed-view omission above).
+                if entity.max_autonomy_level is not None:
+                    patch_payload["max_autonomy_level"] = entity.max_autonomy_level
                 if entity.graph is not None and graph is not None and graph_differs:
                     patch_payload["graph_json"] = graph
                 if status == "updated" or entity.graph is not None:

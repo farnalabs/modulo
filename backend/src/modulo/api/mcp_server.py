@@ -1706,6 +1706,7 @@ async def create_pipeline(
     lock_wait_timeout_seconds: int = 300,
     node_timeout_seconds: int = 300,
     default_autonomy_level: str = "manual_approval",
+    max_autonomy_level: str | None = None,
     folder_id: str | None = None,
     circuit_breaker_threshold: float | None = None,
 ) -> dict[str, Any]:
@@ -1718,6 +1719,16 @@ async def create_pipeline(
     threshold_error = _circuit_breaker_threshold_error(circuit_breaker_threshold)
     if threshold_error is not None:
         return threshold_error
+
+    # FAR-1163: the autonomy ceiling must be a valid level and sit at or
+    # above the default (same rule as the REST create route).
+    if max_autonomy_level is not None:
+        from modulo.core.run_context.autonomy import validate_autonomy_ceiling
+
+        try:
+            validate_autonomy_ceiling(default_autonomy_level, max_autonomy_level)
+        except ValueError as exc:
+            return {"error": "invalid_max_autonomy_level", "detail": str(exc)}
 
     try:
         if not await validate_current_auth():
@@ -1740,6 +1751,7 @@ async def create_pipeline(
                 lock_wait_timeout_seconds=lock_wait_timeout_seconds,
                 node_timeout_seconds=node_timeout_seconds,
                 default_autonomy_level=default_autonomy_level,
+                max_autonomy_level=max_autonomy_level,
                 folder_id=parsed_folder_id,
                 circuit_breaker_threshold=circuit_breaker_threshold,
             )
@@ -1752,6 +1764,7 @@ async def create_pipeline(
             "max_concurrent_runs": pipeline.max_concurrent_runs,
             "default_autonomy_level": pipeline.default_autonomy_level,
             "circuit_breaker_threshold": _threshold_float(pipeline.circuit_breaker_threshold),
+            "max_autonomy_level": pipeline.max_autonomy_level,
             "created_at": pipeline.created_at.isoformat() if pipeline.created_at else None,
         }
     except MCPAuthorizationError as exc:

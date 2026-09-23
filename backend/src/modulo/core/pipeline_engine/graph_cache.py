@@ -437,7 +437,8 @@ def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> 
       applies only the keys it carries onto the current ``run_context``; when
       two parallel context-setters write the SAME key, the write whose reducer
       application lands last (superstep completion order) wins. This preserves
-      seeded keys (``cancelled``, ``input``, ``_pipeline_default_autonomy``)
+      seeded keys (``cancelled``, ``input``, ``_pipeline_default_autonomy``,
+      ``_pipeline_max_autonomy``)
       and parallel writes to DISJOINT keys both land. The outcome is
       deterministic for a given run but order-dependent, which is why
       same-key parallel writes are flagged as a pipeline validation warning at

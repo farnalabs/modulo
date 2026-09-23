@@ -335,6 +335,174 @@ def test_create_pipeline_default_autonomy_default_value(client: TestClient) -> N
     assert create.await_args.kwargs["default_autonomy_level"] == "manual_approval"
 
 
+# ---------------------------------------------------------------------------
+# max_autonomy_level ceiling (FAR-1163 S0)
+# ---------------------------------------------------------------------------
+
+
+def test_create_pipeline_passes_max_autonomy_level(client: TestClient) -> None:
+    pipeline = _make_pipeline()
+    pipeline.default_autonomy_level = "manual_approval"
+    pipeline.max_autonomy_level = "fully_autonomous"
+
+    with (
+        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={
+                "name": "Pipeline",
+                "default_autonomy_level": "manual_approval",
+                "max_autonomy_level": "fully_autonomous",
+            },
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["max_autonomy_level"] == "fully_autonomous"
+    assert create.await_args.kwargs["max_autonomy_level"] == "fully_autonomous"
+
+
+def test_create_pipeline_rejects_ceiling_below_default(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.pipelines.create_pipeline") as create,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={
+                "name": "Pipeline",
+                "default_autonomy_level": "fully_autonomous",
+                "max_autonomy_level": "manual_approval",
+            },
+        )
+
+    assert resp.status_code == 422
+    assert "must be >=" in resp.json()["detail"]
+    create.assert_not_awaited()
+
+
+def test_create_pipeline_rejects_invalid_ceiling_level(client: TestClient) -> None:
+    with patch("modulo.api.routes.pipelines.create_pipeline") as create:
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={"name": "Pipeline", "max_autonomy_level": "banana"},
+        )
+
+    assert resp.status_code == 422
+    create.assert_not_awaited()
+
+
+def test_create_pipeline_allows_ceiling_equal_to_default(client: TestClient) -> None:
+    pipeline = _make_pipeline()
+    pipeline.max_autonomy_level = "notify_on_complete"
+
+    with (
+        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={
+                "name": "Pipeline",
+                "default_autonomy_level": "notify_on_complete",
+                "max_autonomy_level": "notify_on_complete",
+            },
+        )
+
+    assert resp.status_code == 201
+    assert create.await_args.kwargs["max_autonomy_level"] == "notify_on_complete"
+
+
+def test_update_pipeline_rejects_ceiling_below_existing_default(client: TestClient) -> None:
+    """A PATCH that sets ONLY the ceiling is validated against the EXISTING
+    default row value (a PATCH may set one side alone)."""
+    current = _make_pipeline()
+    current.default_autonomy_level = "fully_autonomous"
+    current.max_autonomy_level = None
+
+    with (
+        patch("modulo.api.routes.pipelines.update_pipeline") as update,
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"max_autonomy_level": "notify_on_complete"},
+        )
+
+    assert resp.status_code == 422
+    assert "must be >=" in resp.json()["detail"]
+    update.assert_not_awaited()
+
+
+def test_update_pipeline_rejects_default_above_existing_ceiling(client: TestClient) -> None:
+    """A PATCH that raises ONLY the default must not slip past an existing
+    lower ceiling."""
+    current = _make_pipeline()
+    current.default_autonomy_level = "manual_approval"
+    current.max_autonomy_level = "notify_on_complete"
+
+    with (
+        patch("modulo.api.routes.pipelines.update_pipeline") as update,
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"default_autonomy_level": "fully_autonomous"},
+        )
+
+    assert resp.status_code == 422
+    assert "must be >=" in resp.json()["detail"]
+    update.assert_not_awaited()
+
+
+def test_update_pipeline_accepts_valid_ceiling_and_emits_audit(client: TestClient) -> None:
+    current = _make_pipeline()
+    current.default_autonomy_level = "manual_approval"
+    current.max_autonomy_level = None
+    updated = _make_pipeline()
+    updated.default_autonomy_level = "manual_approval"
+    updated.max_autonomy_level = "fully_autonomous"
+
+    with (
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=updated),
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event") as mock_audit,
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"max_autonomy_level": "fully_autonomous"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["max_autonomy_level"] == "fully_autonomous"
+    mock_audit.assert_awaited_once()
+    audit_kwargs = mock_audit.await_args.kwargs
+    assert audit_kwargs["event_type"] == "pipeline.max_autonomy_level_changed"
+    assert audit_kwargs["payload_json"]["previous_level"] is None
+    assert audit_kwargs["payload_json"]["new_level"] == "fully_autonomous"
+
+
+def test_update_pipeline_rejects_invalid_ceiling_level(client: TestClient) -> None:
+    resp = client.patch(
+        f"/api/v1/pipelines/{_PIPELINE_ID}",
+        json={"max_autonomy_level": "banana"},
+    )
+
+    assert resp.status_code == 422
+
+
 def test_create_pipeline_passes_stale_run_timeout_minutes(client: TestClient) -> None:
     pipeline = _make_pipeline()
     pipeline.stale_run_timeout_minutes = 45

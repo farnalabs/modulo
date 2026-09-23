@@ -412,6 +412,14 @@ class PipelineEntity(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
     max_concurrent_runs: int = Field(default=5, ge=1)
+    max_autonomy_level: str | None = Field(
+        default=None,
+        description=(
+            "Hard ceiling on the autonomy level any HITL-gate resolution may "
+            "reach. NULL/omitted = effective ceiling is the pipeline default. "
+            "The server validates ceiling >= default_autonomy_level."
+        ),
+    )
     graph: ApplyGraph | None = None
     stdout_retention_config: dict[str, Any] | None = Field(
         default=None,
@@ -471,6 +479,11 @@ class PipelineEntity(BaseModel):
         }
         if self.manages_circuit_breaker:
             view["circuit_breaker_threshold"] = quantize_circuit_breaker_threshold(self.circuit_breaker_threshold)
+        # FAR-1163: the autonomy ceiling is managed ONLY when declared — an
+        # omitted ceiling leaves a UI-set ceiling untouched, exactly like the
+        # graph-optional precedent above (declare = manage, omit = don't).
+        if self.max_autonomy_level is not None:
+            view["max_autonomy_level"] = self.max_autonomy_level
         if self.graph is not None:
             view["graph"] = {"nodes": [], "edges": []} if graph is None else graph
         return view

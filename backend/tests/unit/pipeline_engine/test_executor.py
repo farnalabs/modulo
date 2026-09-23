@@ -947,6 +947,26 @@ def test_seed_state_skips_autonomy_when_snapshot_has_none():
     assert "_pipeline_default_autonomy" not in state["run_context"]
 
 
+def test_seed_state_injects_max_autonomy_ceiling():
+    """FAR-1163: a non-null snapshot ceiling is pinned as the reserved
+    ``_pipeline_max_autonomy`` run_context key."""
+    snap = _make_snapshot()
+    snap.default_autonomy_level = "manual_approval"
+    snap.max_autonomy_level = "fully_autonomous"
+    state = _seed_state(snap, {})
+    assert state["run_context"]["_pipeline_max_autonomy"] == "fully_autonomous"
+
+
+def test_seed_state_skips_max_autonomy_when_snapshot_has_none():
+    """NULL ceiling stays unset — resolution then falls back to the default
+    as the effective ceiling (no escalation possible)."""
+    snap = _make_snapshot()
+    snap.default_autonomy_level = "manual_approval"
+    snap.max_autonomy_level = None
+    state = _seed_state(snap, {})
+    assert "_pipeline_max_autonomy" not in state["run_context"]
+
+
 def test_seed_state_seeds_iteration_counts():
     """The loop-edge counter must be seeded so router mutations persist.
 

@@ -68,7 +68,9 @@ from modulo.core.reports.quality_report import (
     generate_quality_report,
 )
 from modulo.core.run_context.autonomy import (
+    AutonomyLevel,
     autonomy_change_payload,
+    validate_autonomy_ceiling,
 )
 from modulo.core.schema_registry.rendering import SchemaProfile
 from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
@@ -492,6 +494,15 @@ class PipelineCreate(TeamVisibilityMixin):
     node_timeout_seconds: int = Field(default=300, ge=1)
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
+    max_autonomy_level: str | None = Field(
+        None,
+        description=(
+            "Hard ceiling on the autonomy level any HITL-gate resolution may "
+            "reach. NULL = effective ceiling is default_autonomy_level (a "
+            "context-setter recommendation can then only LOWER autonomy). "
+            "Must be >= default_autonomy_level."
+        ),
+    )
     max_duration_seconds: int = Field(3600, ge=1)
     stale_run_timeout_minutes: int = Field(
         30,
@@ -554,6 +565,20 @@ class PipelineCreate(TeamVisibilityMixin):
     def _validate_retry_policy_field(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
         return _validate_retry_policy(value)
 
+    @field_validator("max_autonomy_level")
+    @classmethod
+    def _validate_max_autonomy_level(cls, v: str | None) -> str | None:
+        # FAR-1163: the ceiling must be a real level when provided; the
+        # ceiling >= default ordering check runs in the create route (it
+        # needs both fields).
+        if v is None:
+            return v
+        try:
+            AutonomyLevel(v)
+        except ValueError as exc:
+            raise ValueError(f"Invalid max_autonomy_level: {v!r}") from exc
+        return v
+
     @field_validator("stdout_retention_config", mode="before")
     @classmethod
     def _validate_stdout_retention_config(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -572,6 +597,9 @@ class PipelineUpdate(TeamVisibilityMixin):
     node_timeout_seconds: int | None = Field(None, ge=1)
     run_context_defaults: dict[str, Any] | None = None
     default_autonomy_level: str | None = None
+    # FAR-1163: PATCH merges with the EXISTING row for the ceiling >= default
+    # check (either side may be set alone), validated in the update route.
+    max_autonomy_level: str | None = None
     max_duration_seconds: int | None = Field(None, ge=1)
     stale_run_timeout_minutes: Annotated[
         int | None,
@@ -670,6 +698,19 @@ class PipelineUpdate(TeamVisibilityMixin):
 
         return validate_stdout_retention_config(v)
 
+    @field_validator("max_autonomy_level")
+    @classmethod
+    def _validate_max_autonomy_level(cls, v: str | None) -> str | None:
+        # FAR-1163: reject an unparseable ceiling here (422); the ordering
+        # check against the merged default runs in the update route.
+        if v is None:
+            return v
+        try:
+            AutonomyLevel(v)
+        except ValueError as exc:
+            raise ValueError(f"Invalid max_autonomy_level: {v!r}") from exc
+        return v
+
 
 class PipelineResponse(BaseModel):
     id: uuid.UUID
@@ -682,6 +723,8 @@ class PipelineResponse(BaseModel):
     node_timeout_seconds: int
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
+    # FAR-1163: nullable ceiling (NULL = effective ceiling is the default).
+    max_autonomy_level: str | None = None
     # Intentionally nullable: legacy rows and rollbacks of pre-migration data
     # can still expose a NULL value until the max_duration pipeline migration
     # has run on all production DBs.
@@ -717,6 +760,14 @@ class PipelineResponse(BaseModel):
         # The column is non-nullable with a {} default, but legacy rows and
         # partial ORM objects may expose None — the no-policy default is {}.
         return value if isinstance(value, dict) else {}
+
+    @field_validator("max_autonomy_level", mode="before")
+    @classmethod
+    def _coerce_max_autonomy_level(cls, value: Any) -> str | None:
+        # Legacy rows are NULL; partial ORM stand-ins / test doubles may
+        # expose a non-string — coerce to None (mirrors the stdout_retention
+        # coercion below).
+        return value if isinstance(value, str) or value is None else None
 
     @field_validator("stdout_retention_config", mode="before")
     @classmethod
@@ -2068,6 +2119,13 @@ async def create_pipeline_endpoint(
     principal: TenantPrincipal = require_permission_any_credential("pipeline.create"),
 ) -> PipelineResponse:
     try:
+        # FAR-1163: ceiling >= default must hold for the CREATE-time values.
+        # Pydantic already rejected an unparseable ceiling (422), so only the
+        # ordering can fail here.
+        validate_autonomy_ceiling(req.default_autonomy_level, req.max_autonomy_level)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    try:
         async with session.begin():
             await _set_rls_context(session, principal)
             await validate_owner_team_for_create(session, principal, req.owner_team_id)
@@ -2084,6 +2142,7 @@ async def create_pipeline_endpoint(
                 node_timeout_seconds=req.node_timeout_seconds,
                 run_context_defaults=req.run_context_defaults,
                 default_autonomy_level=req.default_autonomy_level,
+                max_autonomy_level=req.max_autonomy_level,
                 max_duration_seconds=req.max_duration_seconds,
                 stale_run_timeout_minutes=req.stale_run_timeout_minutes,
                 folder_id=req.folder_id,
@@ -2497,6 +2556,9 @@ async def _assert_team_transition_allowed(
         )
 
 
+_AUTONOMY_LEVEL_FIELDS = ("default_autonomy_level", "max_autonomy_level")
+
+
 async def _maybe_audit_autonomy_change(
     session: AsyncSession,
     *,
@@ -2504,26 +2566,39 @@ async def _maybe_audit_autonomy_change(
     pipeline_id: uuid.UUID,
     updates: dict[str, Any],
 ) -> None:
-    """Append the autonomy-level-change audit event when the level changed."""
-    if "default_autonomy_level" not in updates:
+    """Append autonomy level/ceiling change audit events when a value changed.
+
+    ``default_autonomy_level`` changes emit the existing
+    ``pipeline.autonomy_level_changed`` event (payload shape unchanged).
+    ``max_autonomy_level`` (FAR-1163) changes emit the sibling
+    ``pipeline.max_autonomy_level_changed`` event with the same
+    ``autonomy_change_payload`` shape plus a ``field`` discriminator.
+    """
+    fields = [f for f in _AUTONOMY_LEVEL_FIELDS if f in updates]
+    if not fields:
         return
     previous = await get_pipeline(session, pipeline_id)
-    prev_level = previous.default_autonomy_level if previous else None
-    if prev_level == updates["default_autonomy_level"]:
-        return
-    await append_audit_event(
-        session,
-        org_id=principal.organisation_id,
-        event_type="pipeline.autonomy_level_changed",
-        actor_user_id=principal.account_id,
-        resource_type="pipeline",
-        resource_id=pipeline_id,
-        payload_json=autonomy_change_payload(
-            previous=prev_level,
-            current=updates["default_autonomy_level"],
-        ),
-        request_id=getattr(principal, "request_id", None),
-    )
+    for field in fields:
+        # getattr with a default: stand-in rows may lack the newer column.
+        prev_value = getattr(previous, field, None) if previous is not None else None
+        if prev_value == updates[field]:
+            continue
+        payload = autonomy_change_payload(previous=prev_value, current=updates[field])
+        if field == "max_autonomy_level":
+            payload = {**payload, "field": field}
+            event_type = "pipeline.max_autonomy_level_changed"
+        else:
+            event_type = "pipeline.autonomy_level_changed"
+        await append_audit_event(
+            session,
+            org_id=principal.organisation_id,
+            event_type=event_type,
+            actor_user_id=principal.account_id,
+            resource_type="pipeline",
+            resource_id=pipeline_id,
+            payload_json=payload,
+            request_id=getattr(principal, "request_id", None),
+        )
 
 
 async def _apply_graph_update(
@@ -2616,6 +2691,25 @@ async def update_pipeline_endpoint(
             current = await _get_pipeline_or_404(session, pipeline_id)
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             await _assert_team_transition_allowed(session, principal, current, updates)
+            # FAR-1163: a PATCH may set only one of default/max — validate the
+            # MERGED effective values (ceiling NULL = effective ceiling is the
+            # default, so it never violates on its own).
+            if "default_autonomy_level" in updates or "max_autonomy_level" in updates:
+                merged_default = updates.get("default_autonomy_level", current.default_autonomy_level)
+                merged_ceiling = (
+                    updates["max_autonomy_level"]
+                    if "max_autonomy_level" in updates
+                    else getattr(current, "max_autonomy_level", None)
+                )
+                try:
+                    # Lenient: a stored non-string/unparseable ceiling does not
+                    # constrain resolution either (it falls back to default).
+                    validate_autonomy_ceiling(merged_default, merged_ceiling, lenient=True)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail=str(exc),
+                    ) from None
             ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
             await _maybe_audit_autonomy_change(
                 session,
@@ -3122,7 +3216,15 @@ class SnapshotDetailResponse(SnapshotResponse):
     prompt_pins_json: list[dict[str, Any]] | None = None
     model_backend_pins_json: list[dict[str, Any]] | None = None
     default_autonomy_level: str | None = None
+    max_autonomy_level: str | None = None
     run_context_defaults: dict[str, Any] | None = None
+
+    @field_validator("max_autonomy_level", mode="before")
+    @classmethod
+    def _coerce_max_autonomy_level(cls, value: Any) -> str | None:
+        # Legacy snapshots are NULL; partial test stand-ins may expose a
+        # non-string — coerce to None (same pattern as PipelineResponse).
+        return value if isinstance(value, str) or value is None else None
 
 
 class SnapshotTagUpdate(BaseModel):
@@ -3201,6 +3303,7 @@ def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
         prompt_pins_json=s.prompt_pins_json,
         model_backend_pins_json=s.model_backend_pins_json,
         default_autonomy_level=s.default_autonomy_level,
+        max_autonomy_level=getattr(s, "max_autonomy_level", None),
         run_context_defaults=s.run_context_defaults,
     )
 

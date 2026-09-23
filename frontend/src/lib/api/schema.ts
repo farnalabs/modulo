@@ -15056,6 +15056,11 @@ export interface components {
              */
             default_autonomy_level: string;
             /**
+             * Max Autonomy Level
+             * @description Hard ceiling on the autonomy level any HITL-gate resolution may reach. NULL = effective ceiling is default_autonomy_level (a context-setter recommendation can then only LOWER autonomy). Must be >= default_autonomy_level.
+             */
+            max_autonomy_level?: string | null;
+            /**
              * Max Duration Seconds
              * @default 3600
              */
@@ -15477,6 +15482,8 @@ export interface components {
             };
             /** Default Autonomy Level */
             default_autonomy_level?: string | null;
+            /** Max Autonomy Level */
+            max_autonomy_level?: string | null;
             /** Max Duration Seconds */
             max_duration_seconds?: number | null;
             /**
@@ -15587,6 +15594,8 @@ export interface components {
             } | null;
             /** Default Autonomy Level */
             default_autonomy_level?: string | null;
+            /** Max Autonomy Level */
+            max_autonomy_level?: string | null;
             /** Max Duration Seconds */
             max_duration_seconds?: number | null;
             /**
@@ -17717,6 +17726,8 @@ export interface components {
             }[] | null;
             /** Default Autonomy Level */
             default_autonomy_level?: string | null;
+            /** Max Autonomy Level */
+            max_autonomy_level?: string | null;
             /** Run Context Defaults */
             run_context_defaults?: {
                 [key: string]: unknown;

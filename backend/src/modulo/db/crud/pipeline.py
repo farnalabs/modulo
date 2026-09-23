@@ -166,6 +166,7 @@ async def create_pipeline(
     node_timeout_seconds: int = 300,
     run_context_defaults: dict[str, Any] | None = None,
     default_autonomy_level: str = "manual_approval",
+    max_autonomy_level: str | None = None,
     max_duration_seconds: int | None = None,
     stale_run_timeout_minutes: int = 30,
     folder_id: uuid.UUID | None = None,
@@ -197,6 +198,7 @@ async def create_pipeline(
         node_timeout_seconds=node_timeout_seconds,
         run_context_defaults=run_context_defaults or {},
         default_autonomy_level=default_autonomy_level,
+        max_autonomy_level=max_autonomy_level,
         max_duration_seconds=max_duration_seconds,
         stale_run_timeout_minutes=stale_run_timeout_minutes,
         folder_id=folder_id,
@@ -497,6 +499,7 @@ class _CloneSourceSnapshot:
     run_context_defaults: dict[str, Any]
     graph_nodes_json: list[dict[str, Any]]
     default_autonomy_level: str
+    max_autonomy_level: str | None
     stale_run_timeout_minutes: int
     stdout_retention_config: dict[str, Any] | None
     edges: list[dict[str, Any]]
@@ -638,6 +641,7 @@ async def _clone_pipeline_config(
         # enforce_manual_node_output_schemas; new graphs are guarded on write.
         graph_nodes_json=copy.deepcopy(snapshot.graph_nodes_json),
         default_autonomy_level=snapshot.default_autonomy_level,
+        max_autonomy_level=snapshot.max_autonomy_level,
         stale_run_timeout_minutes=snapshot.stale_run_timeout_minutes,
         stdout_retention_config=copy.deepcopy(snapshot.stdout_retention_config),
         circuit_breaker_threshold=snapshot.circuit_breaker_threshold,
@@ -726,6 +730,7 @@ async def _clone_snapshots(
             tag=snap["tag"],
             notes=snap["notes"],
             default_autonomy_level=snap["default_autonomy_level"],
+            max_autonomy_level=snap.get("max_autonomy_level"),
             config_json=copy.deepcopy(snap["config_json"]),
             run_context_defaults=copy.deepcopy(snap["run_context_defaults"]),
             stdout_retention_config=copy.deepcopy(snap.get("stdout_retention_config")),
@@ -789,6 +794,7 @@ def _snapshot_to_dict(snap: PipelineSnapshot, pins: list[dict[str, Any]]) -> dic
         "tag": snap.tag,
         "notes": snap.notes,
         "default_autonomy_level": snap.default_autonomy_level,
+        "max_autonomy_level": getattr(snap, "max_autonomy_level", None),
         "config_json": copy.deepcopy(snap.config_json),
         "run_context_defaults": copy.deepcopy(snap.run_context_defaults),
         "stdout_retention_config": copy.deepcopy(snap.stdout_retention_config),
@@ -922,6 +928,9 @@ async def _read_clone_source_snapshot(
                 # new-node entry point.
                 graph_nodes_json=copy.deepcopy(list(source.graph_nodes_json or [])),
                 default_autonomy_level=str(source.default_autonomy_level or "manual_approval"),
+                # getattr: stand-in rows built by tests (and any pre-0256
+                # materialisation) may lack the column — treat as NULL ceiling.
+                max_autonomy_level=getattr(source, "max_autonomy_level", None),
                 stale_run_timeout_minutes=source.stale_run_timeout_minutes,
                 stdout_retention_config=copy.deepcopy(source.stdout_retention_config),
                 edges=edges,

@@ -18,8 +18,8 @@ six invariants:
    This prevents agents from overwriting each other's run context.
 
 4. Reserved-key protection: context-setter agents may not write to internal reserved
-   keys (cancelled, input, _pipeline_default_autonomy, _run_context_write_log,
-   _work_item_refs).
+   keys (cancelled, input, _pipeline_default_autonomy, _pipeline_max_autonomy,
+   _run_context_write_log, _work_item_refs).
    Attempts are silently stripped and logged as warnings.
 
 5. Run-context write log: every context-setter write to run_context is recorded in
@@ -100,6 +100,11 @@ _RESERVED_RUN_CONTEXT_KEYS = frozenset(
         "cancelled",
         "input",
         "_pipeline_default_autonomy",
+        # FAR-1163 S0: the pipeline's autonomy CEILING, pinned at run start
+        # from the snapshot's max_autonomy_level. A context-setter must never
+        # overwrite it — raising the ceiling would let the same agent that
+        # writes autonomy_recommendation also lift the cap on itself.
+        "_pipeline_max_autonomy",
         "_run_context_write_log",
         "_work_item_refs",
     }

@@ -276,7 +276,36 @@ async def test_hitl_gate_notify_on_complete_auto_approves():
     assert result["artifacts"][0]["autonomy"] == "notify_on_complete"
 
 
-async def test_hitl_gate_run_context_recommendation_overrides_pipeline_default():
+async def test_hitl_gate_run_context_recommendation_cannot_escalate_without_ceiling():
+    """FAR-1163 S0 — prove-the-fix: a context-setter writing
+    ``fully_autonomous`` on a ``manual_approval`` pipeline with NO ceiling
+    clamps to ``manual_approval`` and the gate FIRES. The old behaviour
+    (gate skipped) was the escalation hole."""
+    gate_config = {"gate_id": "rec-gate", "human_only": False}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    with pytest.raises(GraphInterrupt) as exc_info:
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "run_context": {
+                    "_pipeline_default_autonomy": "manual_approval",
+                    "autonomy_recommendation": "fully_autonomous",
+                },
+            }
+        )
+
+    payload = exc_info.value.args[0][0].value
+    assert payload["gate_id"] == "rec-gate"
+    assert payload["autonomy_level"] == "manual_approval"
+    assert payload["human_only"] is False
+
+
+async def test_hitl_gate_ceiling_allows_recommendation_to_raise():
+    """With ``_pipeline_max_autonomy`` pinned at ``fully_autonomous``, the
+    same recommendation is allowed to raise and the gate skips — the ceiling,
+    not the default, is now the limit on escalation."""
     gate_config = {"gate_id": "rec-gate", "human_only": False}
     node_fn = make_hitl_gate_fn(gate_config)
 
@@ -285,6 +314,7 @@ async def test_hitl_gate_run_context_recommendation_overrides_pipeline_default()
             "artifacts": [],
             "run_context": {
                 "_pipeline_default_autonomy": "manual_approval",
+                "_pipeline_max_autonomy": "fully_autonomous",
                 "autonomy_recommendation": "fully_autonomous",
             },
         }
@@ -1508,28 +1538,151 @@ class TestHitlGateConditionEvaluate:
 class TestHitlGateAutonomyResult:
     def test_fully_autonomous_returns_skipped_artifact(self) -> None:
         state = {"run_context": {"_pipeline_default_autonomy": "fully_autonomous"}}
-        autonomy, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
-        assert autonomy.value == "fully_autonomous"
+        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        assert resolution.effective.value == "fully_autonomous"
+        assert resolution.clamped is False
         assert result == {"artifacts": [{"node_id": "g1", "status": "skipped", "autonomy": "fully_autonomous"}]}
 
     def test_notify_on_complete_returns_auto_approved_artifact(self) -> None:
         state = {"run_context": {"_pipeline_default_autonomy": "notify_on_complete"}}
-        autonomy, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
-        assert autonomy.value == "notify_on_complete"
+        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        assert resolution.effective.value == "notify_on_complete"
         assert result == {"artifacts": [{"node_id": "g1", "status": "auto_approved", "autonomy": "notify_on_complete"}]}
 
     def test_manual_approval_returns_no_artifact(self) -> None:
         state = {"run_context": {"_pipeline_default_autonomy": "manual_approval"}}
-        autonomy, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
-        assert autonomy.value == "manual_approval"
+        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        assert resolution.effective.value == "manual_approval"
         assert result is None
 
     def test_human_only_overrides_autonomy_skip(self) -> None:
         """human_only gates always interrupt even at fully_autonomous."""
         state = {"run_context": {"_pipeline_default_autonomy": "fully_autonomous"}}
-        autonomy, result = _hitl_gate_autonomy_result("g1", state, human_only=True)
-        assert autonomy.value == "fully_autonomous"
+        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=True)
+        assert resolution.effective.value == "fully_autonomous"
         assert result is None
+
+    def test_human_only_still_fires_when_recommendation_is_clamped(self) -> None:
+        """FAR-1163: the ceiling clamp never changes human_only behaviour —
+        the gate still fires, and the clamp is still reported."""
+        state = {
+            "run_context": {
+                "_pipeline_default_autonomy": "manual_approval",
+                "autonomy_recommendation": "fully_autonomous",
+            }
+        }
+        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=True)
+        assert resolution.effective.value == "manual_approval"
+        assert resolution.clamped is True
+        assert result is None
+
+    def test_clamped_recommendation_reports_requested_and_ceiling(self) -> None:
+        state = {
+            "run_context": {
+                "_pipeline_default_autonomy": "manual_approval",
+                "_pipeline_max_autonomy": "notify_on_complete",
+                "autonomy_recommendation": "fully_autonomous",
+            }
+        }
+        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        assert resolution.effective.value == "notify_on_complete"
+        assert resolution.requested is not None
+        assert resolution.requested.value == "fully_autonomous"
+        assert resolution.ceiling.value == "notify_on_complete"
+        assert resolution.clamped is True
+        assert result is not None
+        assert result["artifacts"][0]["status"] == "auto_approved"
+
+
+# ---------------------------------------------------------------------------
+# Clamp telemetry (FAR-1163 S0) — run.autonomy_recommendation_clamped
+# ---------------------------------------------------------------------------
+
+
+async def test_hitl_gate_emits_clamp_telemetry_on_auto_approve_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Clamped raise that lands on the auto_approved path still records the
+    clamp with requested/effective/ceiling/gate_id."""
+    clamp_mock = AsyncMock()
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
+        clamp_mock,
+    )
+    node_fn = make_hitl_gate_fn({"gate_id": "clamp-notify", "human_only": False})
+
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "run_context": {
+                "_pipeline_default_autonomy": "manual_approval",
+                "_pipeline_max_autonomy": "notify_on_complete",
+                "autonomy_recommendation": "fully_autonomous",
+            },
+        }
+    )
+
+    assert result["artifacts"][0]["status"] == "auto_approved"
+    clamp_mock.assert_awaited_once()
+    kwargs = clamp_mock.await_args.kwargs
+    assert kwargs["gate_id"] == "clamp-notify"
+    assert kwargs["requested"] == "fully_autonomous"
+    assert kwargs["effective"] == "notify_on_complete"
+    assert kwargs["ceiling"] == "notify_on_complete"
+
+
+async def test_hitl_gate_emits_clamp_telemetry_on_fired_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The fired (interrupt) path records the clamp in ADDITION to the
+    normal level-applied telemetry."""
+    clamp_mock = AsyncMock()
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
+        clamp_mock,
+    )
+    node_fn = make_hitl_gate_fn({"gate_id": "clamp-fired", "human_only": False})
+
+    with pytest.raises(GraphInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "run_context": {
+                    "_pipeline_default_autonomy": "manual_approval",
+                    "autonomy_recommendation": "fully_autonomous",
+                },
+            }
+        )
+
+    clamp_mock.assert_awaited_once()
+    kwargs = clamp_mock.await_args.kwargs
+    assert kwargs["gate_id"] == "clamp-fired"
+    assert kwargs["requested"] == "fully_autonomous"
+    assert kwargs["effective"] == "manual_approval"
+    assert kwargs["ceiling"] == "manual_approval"
+
+
+async def test_hitl_gate_no_clamp_emits_no_clamp_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """No recommendation (or a lowering one) means no clamp event."""
+    clamp_mock = AsyncMock()
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
+        clamp_mock,
+    )
+    node_fn = make_hitl_gate_fn({"gate_id": "no-clamp", "human_only": False})
+
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "run_context": {"_pipeline_default_autonomy": "fully_autonomous"},
+        }
+    )
+
+    assert result["artifacts"][0]["status"] == "skipped"
+    clamp_mock.assert_not_awaited()
 
 
 class TestResolveSubjectParentAndKey:
