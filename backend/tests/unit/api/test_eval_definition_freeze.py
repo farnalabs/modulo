@@ -18,6 +18,7 @@ from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -69,7 +70,7 @@ def _make_mock_session() -> AsyncMock:
 
 class TestFreezeGuardModule:
     def test_raise_if_frozen_always_raises(self) -> None:
-        with pytest.raises(Exception, match="chunk 3b"):
+        with pytest.raises(HTTPException, match="chunk 3b"):
             raise_if_frozen()
 
     def test_definition_frozen_response_returns_error_dict(self) -> None:

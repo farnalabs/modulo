@@ -101,20 +101,11 @@ class TestCreateEvalDefinition:
     def teardown_method(self) -> None:
         _clear_context()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.db.models.eval_definition.EvalDefinition")
-    @patch("modulo.api.mcp_server._session")
-    async def test_create_persists_and_returns_dict(
-        self,
-        mock_session: AsyncMock,
-        mock_eval_def_cls: MagicMock,
-        mock_validate_auth: AsyncMock,
-    ) -> None:
-        created = _make_eval_def(name="my-eval", eval_type="regex", config_json={"k": "v"})
-        mock_eval_def_cls.side_effect = lambda **kw: created
-        # pipeline existence check must resolve to a truthy pipeline
-        mock_session.return_value = _make_session_cm(object())
-
+    async def test_create_persists_and_returns_dict(self) -> None:
+        # FAR-1100 chunk 3 → 3b freeze: creation is frozen — the guard fires
+        # before auth/validation/DB work, so the tool returns the typed freeze
+        # error instead of persisting.  Revert to the original success
+        # assertion when chunk 3b lands (CO-8).
         result = await create_eval_definition(
             pipeline_id=str(uuid.uuid4()),
             name="my-eval",
@@ -122,21 +113,14 @@ class TestCreateEvalDefinition:
             config_json={"k": "v"},
         )
 
-        assert "error" not in result, result
-        assert result["name"] == "my-eval"
-        assert result["eval_type"] == "regex"
-        assert result["config_json"] == {"k": "v"}
-        assert result["version"] == 1
+        assert result["error"] == "definition_frozen"
+        assert "chunk 3b" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    async def test_operator_gets_insufficient_scope(
-        self,
-        mock_session: AsyncMock,
-        mock_validate_auth: AsyncMock,
-    ) -> None:
+    async def test_operator_gets_insufficient_scope(self) -> None:
+        # FAR-1100 chunk 3 → 3b freeze: the guard fires before the scope check,
+        # so an operator now receives definition_frozen rather than
+        # insufficient_scope.  Revert when chunk 3b lands (CO-8).
         _set_context("operator")
-        mock_session.return_value = _make_session_cm(object())
 
         result = await create_eval_definition(
             pipeline_id=str(uuid.uuid4()),
@@ -144,78 +128,61 @@ class TestCreateEvalDefinition:
             eval_type="regex",
         )
 
-        assert result["error"] == "insufficient_scope"
+        assert result["error"] == "definition_frozen"
+        assert "chunk 3b" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    async def test_invalid_eval_type_rejected(
-        self,
-        mock_session: AsyncMock,
-        mock_validate_auth: AsyncMock,
-    ) -> None:
-        mock_session.return_value = _make_session_cm(object())
-
+    async def test_invalid_eval_type_rejected(self) -> None:
+        # FAR-1100 chunk 3 → 3b freeze: the guard fires before validation, so
+        # this returns definition_frozen instead of invalid_eval_type.  Revert
+        # when chunk 3b lands (CO-8).
         result = await create_eval_definition(
             pipeline_id=str(uuid.uuid4()),
             name="my-eval",
             eval_type="not_a_type",
         )
 
-        assert result["error"] == "invalid_eval_type"
+        assert result["error"] == "definition_frozen"
+        assert "chunk 3b" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    async def test_unknown_pipeline_returns_not_found(
-        self,
-        mock_session: AsyncMock,
-        mock_validate_auth: AsyncMock,
-    ) -> None:
-        # pipeline existence check returns None -> not found
-        mock_session.return_value = _make_session_cm(None)
-
+    async def test_unknown_pipeline_returns_not_found(self) -> None:
+        # FAR-1100 chunk 3 → 3b freeze: the guard fires before the pipeline
+        # lookup, so this returns definition_frozen instead of
+        # pipeline_not_found.  Revert when chunk 3b lands (CO-8).
         result = await create_eval_definition(
             pipeline_id=str(uuid.uuid4()),
             name="my-eval",
             eval_type="regex",
         )
 
-        assert result["error"] == "pipeline_not_found"
+        assert result["error"] == "definition_frozen"
+        assert "chunk 3b" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    async def test_eval_type_trailing_newline_rejected(
-        self,
-        mock_session: AsyncMock,
-        mock_validate_auth: AsyncMock,
-    ) -> None:
+    async def test_eval_type_trailing_newline_rejected(self) -> None:
         # Pins re.fullmatch semantics: a trailing newline would be accepted by
-        # re.match/$ anchors but must be rejected here.
-        mock_session.return_value = _make_session_cm(object())
-
+        # re.match/$ anchors but must be rejected here.  FAR-1100 chunk 3 → 3b
+        # freeze: the guard fires before validation, so this now returns
+        # definition_frozen.  Revert when chunk 3b lands (CO-8).
         result = await create_eval_definition(
             pipeline_id=str(uuid.uuid4()),
             name="my-eval",
             eval_type="regex\n",
         )
 
-        assert result["error"] == "invalid_eval_type"
+        assert result["error"] == "definition_frozen"
+        assert "chunk 3b" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    async def test_oversized_name_rejected(
-        self,
-        mock_session: AsyncMock,
-        mock_validate_auth: AsyncMock,
-    ) -> None:
-        mock_session.return_value = _make_session_cm(object())
-
+    async def test_oversized_name_rejected(self) -> None:
+        # FAR-1100 chunk 3 → 3b freeze: the guard fires before validation, so
+        # this returns definition_frozen instead of invalid_name.  Revert when
+        # chunk 3b lands (CO-8).
         result = await create_eval_definition(
             pipeline_id=str(uuid.uuid4()),
             name="x" * 256,
             eval_type="regex",
         )
 
-        assert result["error"] == "invalid_name"
+        assert result["error"] == "definition_frozen"
+        assert "chunk 3b" in result["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -230,41 +197,29 @@ class TestUpdateEvalDefinition:
     def teardown_method(self) -> None:
         _clear_context()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    async def test_update_bumps_version_and_snapshots_pre_version_raw(
-        self,
-        mock_session: AsyncMock,
-        mock_validate_auth: AsyncMock,
-    ) -> None:
-        existing = _make_eval_def(name="old", version=1, config_json={"foo": "bar"})
-        mock_session.return_value = _make_session_cm(existing)
-
+    async def test_update_bumps_version_and_snapshots_pre_version_raw(self) -> None:
+        # FAR-1100 chunk 3 → 3b freeze: editing is frozen — the guard fires
+        # before the DB load/version bump, so the tool returns the typed freeze
+        # error.  Revert to the original success assertion when chunk 3b lands
+        # (CO-8).
         result = await update_eval_definition(
-            eval_id=str(existing.id),
+            eval_id=str(uuid.uuid4()),
             name="new",
         )
 
-        assert "error" not in result, result
-        assert result["name"] == "new"
-        assert result["version"] == 2
-        assert result["pre_version_raw"] == {"config_json": {"foo": "bar"}}
-        # the persisted object was mutated in place
-        assert existing.version == 2
+        assert result["error"] == "definition_frozen"
+        assert "chunk 3b" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    async def test_operator_gets_insufficient_scope(
-        self,
-        mock_session: AsyncMock,
-        mock_validate_auth: AsyncMock,
-    ) -> None:
+    async def test_operator_gets_insufficient_scope(self) -> None:
+        # FAR-1100 chunk 3 → 3b freeze: the guard fires before the scope check,
+        # so an operator now receives definition_frozen rather than
+        # insufficient_scope.  Revert when chunk 3b lands (CO-8).
         _set_context("operator")
-        mock_session.return_value = _make_session_cm(_make_eval_def())
 
         result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="new")
 
-        assert result["error"] == "insufficient_scope"
+        assert result["error"] == "definition_frozen"
+        assert "chunk 3b" in result["detail"]
 
 
 # ---------------------------------------------------------------------------
