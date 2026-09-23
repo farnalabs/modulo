@@ -9,6 +9,7 @@ from typing import Any, ClassVar, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
@@ -2175,6 +2176,62 @@ async def test_sweep_lock_timeout_only_affected_org(
     assert excinfo.value.org_failures == 1
     assert excinfo.value.scanned == 1  # org_b's row was scanned
     assert excinfo.value.cleared == 1  # org_b's marker was cleared
+
+
+# ---------------------------------------------------------------------------
+# FAR-1202: org-index query under the production autobegin=False factory
+# ---------------------------------------------------------------------------
+
+
+async def test_org_index_query_runs_inside_explicit_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression FAR-1202: the sweep's org-index query needs session.begin().
+
+    The production factories (``saq_worker._make_session_factory`` and
+    ``cron_helpers._open_factory``) are built with ``autobegin=False`` — the
+    codebase DI convention — so a bare ``session.execute`` raises
+    ``InvalidRequestError: Autobegin is disabled on this Session``. The
+    org-index query (``SELECT id FROM organisations``) was the one path in the
+    sweep that ran without an explicit transaction, so the sweep failed on
+    EVERY tick in production and the advisory /healthz/ready
+    ``runner_marker_sweep`` check surfaced the autobegin error (observed on a
+    real EKS cluster during FAR-1052 validation).
+
+    This test uses a REAL ``async_sessionmaker(..., autobegin=False)`` over an
+    in-memory SQLite schema — the exact production factory shape — with zero
+    orgs so the org pass never runs: the ONLY statement exercised is the
+    org-index query. Without the fix the sweep raises
+    ``RunnerMarkerSweepError`` (InvalidRequestError wrapped); with the fix it
+    returns the zero-count result.
+    """
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    engine = create_async_engine("sqlite+aiosqlite://")
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE TABLE organisations (id CHAR(36) PRIMARY KEY)"))
+        # The PRODUCTION factory shape: autobegin=False (the DI convention).
+        # With zero rows the org loop never runs, so the org-index query is the
+        # only statement the sweep executes.
+        factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        result = await reconcile_runner_dispatch_markers(factory)
+    finally:
+        await engine.dispose()
+
+    assert result["orgs_failed"] == 0
+    assert result["scanned"] == 0
+    assert result["cleared"] == 0
 
 
 def _unused(*_a: Any, **_kw: Any) -> None:  # pragma: no cover
