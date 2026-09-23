@@ -1410,6 +1410,54 @@ describe('PipelineEditorView — run dialog', () => {
     }))
     wrapper.unmount()
   })
+
+  it('reverts the autonomy ceiling select to the persisted value when the PATCH fails', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    // Seed the pipeline with an explicit persisted ceiling and the control at
+    // the same value (FAR-1163: a failed PATCH must not leave the rejected
+    // value displayed while pipeline.max_autonomy_level stays unchanged).
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline', max_autonomy_level: 'manual_approval' }
+    vm.maxAutonomyInput = 'manual_approval'
+    await nextTick()
+
+    const select = wrapper.find('[data-testid="pipeline-editor-max-autonomy"]')
+    expect((select.element as HTMLSelectElement).value).toBe('manual_approval')
+
+    // Reset first: earlier tests in this describe queue once-implementations
+    // on api.PATCH that would otherwise consume this one (same hygiene as the
+    // max-duration failure test above).
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockReset()
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockResolvedValue({ data: {}, error: undefined })
+    // 422 — ceiling below the pipeline default: the error-return path.
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockImplementationOnce(() =>
+      Promise.resolve({ data: null, error: { detail: 'ceiling below default' }, response: { status: 422 } }))
+
+    // setValue on a SELECT sets the value and dispatches change — the handler runs here.
+    await select.setValue('fully_autonomous')
+    await flushPromises()
+    await nextTick()
+
+    expect((select.element as HTMLSelectElement).value).toBe('manual_approval')
+    expect(vm.pipeline.max_autonomy_level).toBe('manual_approval')
+    expect(wrapper.find('[data-testid="pipeline-editor-save-error"]').text()).toContain(
+      'Autonomy ceiling cannot be below the pipeline default level',
+    )
+
+    // rejection — timeout / network failure: the catch path reverts too.
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockImplementationOnce(() => Promise.reject(new Error('network_down')))
+    await select.setValue('notify_on_complete')
+    await flushPromises()
+    await nextTick()
+
+    expect((select.element as HTMLSelectElement).value).toBe('manual_approval')
+    expect(vm.pipeline.max_autonomy_level).toBe('manual_approval')
+    expect(wrapper.find('[data-testid="pipeline-editor-save-error"]').text()).toContain('network_down')
+    wrapper.unmount()
+  })
 })
 
 describe('PipelineEditorView — edge properties panel', () => {

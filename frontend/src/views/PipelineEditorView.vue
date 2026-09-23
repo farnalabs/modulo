@@ -2621,12 +2621,18 @@ async function updateMaxAutonomyLevel(event: Event) {
       saveGraphError.value = response?.status === 422
         ? t('views.PipelineEditorView.max_autonomy_below_default', { error: formatApiError(error) })
         : t('views.PipelineEditorView.failed_to_update_max_autonomy', { error: formatApiError(error) })
+      // The optimistic set above must not outlive a failed PATCH — restore the
+      // control to the persisted value (pipeline.value was never updated).
+      maxAutonomyInput.value = pipeline.value?.max_autonomy_level ?? null
       return
     }
     if (pipeline.value) pipeline.value.max_autonomy_level = val
     saveGraphError.value = null
   } catch (e: unknown) {
     saveGraphError.value = t('views.PipelineEditorView.failed_to_update_max_autonomy', { error: formatApiError(e) })
+    // Timeout / network failure: same revert — never display a value the
+    // server rejected.
+    maxAutonomyInput.value = pipeline.value?.max_autonomy_level ?? null
   }
 }
 
