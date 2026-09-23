@@ -512,6 +512,59 @@ async def _apply_role_ddl(
     _log.info("Granted DML permissions to: %s", app_user)
 
 
+async def _apply_role_ddl_with_retry(
+    conn: asyncpg.Connection,
+    *,
+    app_user: str,
+    app_pass: str,
+    bg_user: str,
+    bg_pass: str,
+    sys_user: str,
+    sys_pass: str,
+) -> None:
+    """Apply the idempotent DDL body, retrying the FAR-1200 concurrent race.
+
+    Two replicas updating the same system-catalog tuple at once surface as
+    ``asyncpg InternalServerError: tuple concurrently updated``. The body is
+    idempotent, so the collision is retried a bounded number of times with a
+    short backoff. A non-concurrent error raises immediately; exhausting the
+    budget re-raises the last collision so a persistent fault still fails the
+    bootstrap loudly rather than being swallowed.
+    """
+    # Pre-seeded so the re-raise after the loop is total for the type checker;
+    # it is always overwritten before the loop can exhaust (a successful attempt
+    # returns, a non-concurrent error raises immediately).
+    last_exc: asyncpg.PostgresError = asyncpg.InternalServerError("bootstrap retry budget exhausted")
+    for attempt in range(1, _BOOTSTRAP_MAX_ATTEMPTS + 1):
+        try:
+            await _apply_role_ddl(
+                conn,
+                app_user=app_user,
+                app_pass=app_pass,
+                bg_user=bg_user,
+                bg_pass=bg_pass,
+                sys_user=sys_user,
+                sys_pass=sys_pass,
+            )
+            return
+        except asyncpg.PostgresError as exc:
+            if not _is_concurrent_update_error(exc):
+                raise
+            last_exc = exc
+            if attempt < _BOOTSTRAP_MAX_ATTEMPTS:
+                backoff = _BOOTSTRAP_RETRY_BACKOFF_SECONDS * attempt
+                _log.warning(
+                    "Concurrent bootstrap update (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt,
+                    _BOOTSTRAP_MAX_ATTEMPTS,
+                    backoff,
+                    exc,
+                )
+                await asyncio.sleep(backoff)
+    # Budget exhausted: every attempt lost the race — surface the last collision.
+    raise last_exc
+
+
 async def _bootstrap(admin_url: str, app_url: str) -> None:
     admin_conn_str, admin_ssl = _asyncpg_admin_connect(admin_url)
     app_user = _parse_role(app_url)
@@ -543,30 +596,15 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
                 _BOOTSTRAP_LOCK_POLL_ATTEMPTS * _BOOTSTRAP_LOCK_POLL_INTERVAL,
             )
         try:
-            for attempt in range(1, _BOOTSTRAP_MAX_ATTEMPTS + 1):
-                try:
-                    await _apply_role_ddl(
-                        conn,
-                        app_user=app_user,
-                        app_pass=app_pass,
-                        bg_user=bg_user,
-                        bg_pass=bg_pass,
-                        sys_user=sys_user,
-                        sys_pass=sys_pass,
-                    )
-                    break
-                except asyncpg.PostgresError as exc:
-                    if attempt >= _BOOTSTRAP_MAX_ATTEMPTS or not _is_concurrent_update_error(exc):
-                        raise
-                    backoff = _BOOTSTRAP_RETRY_BACKOFF_SECONDS * attempt
-                    _log.warning(
-                        "Concurrent bootstrap update (attempt %d/%d), retrying in %.1fs: %s",
-                        attempt,
-                        _BOOTSTRAP_MAX_ATTEMPTS,
-                        backoff,
-                        exc,
-                    )
-                    await asyncio.sleep(backoff)
+            await _apply_role_ddl_with_retry(
+                conn,
+                app_user=app_user,
+                app_pass=app_pass,
+                bg_user=bg_user,
+                bg_pass=bg_pass,
+                sys_user=sys_user,
+                sys_pass=sys_pass,
+            )
         finally:
             if lock_acquired:
                 k1, k2 = _BOOTSTRAP_LOCK_KEY

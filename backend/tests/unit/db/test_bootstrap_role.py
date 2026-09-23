@@ -865,6 +865,46 @@ class TestConcurrentBootstrap:
         assert "Concurrent bootstrap update" in caplog.text
         assert fake.closed is True
 
+    async def test_retry_budget_exhaustion_reraises_last_collision(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A persistent concurrent-update race must not be swallowed.
+
+        Every attempt loses the race: the bounded retry budget is exhausted and
+        the last collision is re-raised, so a genuine, persistent fault still
+        fails the bootstrap loudly instead of silently succeeding.
+        """
+        fake = _fresh_db_posture_conn()
+        monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setattr("modulo.db.bootstrap_role._BOOTSTRAP_RETRY_BACKOFF_SECONDS", 0)
+        target = 'GRANT SELECT, INSERT ON public.accounts TO "modulo_breakglass"'
+        attempts = {"count": 0}
+
+        def _hook(q: str) -> None:
+            if target in q:
+                attempts["count"] += 1
+                raise asyncpg.InternalServerError("tuple concurrently updated")
+
+        fake.sql_hook = _hook
+        caplog.set_level("WARNING", logger="modulo.db.bootstrap_role")
+        with (
+            patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)),
+            pytest.raises(asyncpg.InternalServerError, match="tuple concurrently updated"),
+        ):
+            await bootstrap_roles(
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+            )
+
+        # One initial attempt + (_BOOTSTRAP_MAX_ATTEMPTS - 1) retries.
+        assert attempts["count"] == 3
+        assert "Concurrent bootstrap update" in caplog.text
+        # The session-scoped lock is still released on the failure path.
+        assert "pg_advisory_unlock" in fake.executed[-1]
+        assert fake.closed is True
+
     async def test_non_concurrent_postgres_errors_are_not_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The retry is scoped to the FAR-1200 error — anything else raises at once."""
         fake = _fresh_db_posture_conn()
