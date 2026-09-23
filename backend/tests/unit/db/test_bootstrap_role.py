@@ -15,6 +15,7 @@ import re
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import asyncpg
 import pytest
 
 from modulo.db.bootstrap_role import (
@@ -66,8 +67,9 @@ class _FakeConn:
       * ``table_update_grantees`` — list[str]: role_table_grants UPDATE grantees
       * ``column_updatable``      — set[str]: accounts columns modulo_app may UPDATE
       * ``is_superuser``          — bool
-      * ``privileged_memberships``— list[str]: privileged roles app belongs to
+      * ``privileged_memberships``— list[str] — privileged roles app belongs to
       * ``function_exists``       — bool: deactivate_break_glass present
+      * ``lock_available``        — bool: pg_try_advisory_lock result (FAR-1200)
       * ``sql_hook``              — callable[str]: called for every executed statement
     """
 
@@ -81,6 +83,7 @@ class _FakeConn:
         self.is_superuser: bool = options.get("is_superuser", False)
         self.privileged_memberships: list[str] = options.get("privileged_memberships", [])
         self.function_exists: bool = options.get("function_exists", True)
+        self.lock_available: bool = options.get("lock_available", True)
         self.sql_hook: Any = options.get("sql_hook")
         self.executed: list[str] = []
         self.closed = False
@@ -94,6 +97,8 @@ class _FakeConn:
     async def fetchval(self, query: str, *args: Any) -> Any:
         self._record(query)
         lowered = query.lower()
+        if "pg_try_advisory_lock" in lowered:
+            return self.lock_available
         if lowered.startswith("select 1 from pg_roles where rolname"):
             return self.roles.get(args[0] if args else "", False)
         if "to_regclass(" in lowered:
@@ -156,6 +161,22 @@ def _clean_posture_conn() -> _FakeConn:
         is_superuser=False,
         privileged_memberships=[],
     )
+
+
+def _fresh_db_posture_conn() -> _FakeConn:
+    """A clean-posture conn simulating a fresh DB (roles missing, tables present)."""
+    fake = _clean_posture_conn()
+    fake.roles = {}  # every role starts missing -> CREATE paths
+    fake.tables = {
+        "accounts",
+        "organisations",
+        "org_memberships",
+        "token_families",
+        "org_api_keys",
+        "audit_events",
+        "audit_chain_heads",
+    }
+    return fake
 
 
 @pytest.fixture
@@ -774,6 +795,122 @@ class TestBootstrap:
                 "postgres://admin:secret@db:5432/modulo",
                 "postgres://modulo_app:apppw@db:5432/modulo",
             )
+        assert fake.closed is True
+
+
+# ---------------------------------------------------------------------------
+# Concurrent first-boot bootstrap (FAR-1200)
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentBootstrap:
+    """Two replicas bootstrapping a fresh DB must not collide (FAR-1200).
+
+    Observed on a real EKS cluster: both replicas ran ``_grant_break_glass``
+    concurrently and one died with ``asyncpg InternalServerError: tuple
+    concurrently updated``. The fix serialises the DDL behind a session-scoped
+    advisory lock and retries the idempotent body on that specific error.
+    """
+
+    async def test_serialises_ddl_behind_advisory_lock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake = _fresh_db_posture_conn()
+        monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
+        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+            await bootstrap_roles(
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+            )
+        # The lock is the FIRST statement and the unlock the LAST: every DDL
+        # statement ran while the session-scoped lock was held.
+        assert "pg_try_advisory_lock" in fake.executed[0]
+        assert "pg_advisory_unlock" in fake.executed[-1]
+        assert fake.closed is True
+
+    async def test_recovers_from_concurrent_update_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Regression (FAR-1200): the observed race error must not kill bootstrap.
+
+        Simulates the exact EKS failure — a ``tuple concurrently updated``
+        raised from the break-glass GRANT — and asserts the bootstrap retries
+        the idempotent body and completes. Against unfixed code the error
+        propagates out of ``bootstrap_roles`` and this test fails with exactly
+        the observed EKS error (no fix-specific monkeypatching here, so that
+        failure mode stays reachable).
+        """
+        fake = _fresh_db_posture_conn()
+        monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
+        target = 'GRANT SELECT, INSERT ON public.accounts TO "modulo_breakglass"'
+        attempts = {"count": 0}
+
+        def _hook(q: str) -> None:
+            if target in q:
+                attempts["count"] += 1
+                if attempts["count"] == 1:
+                    raise asyncpg.InternalServerError("tuple concurrently updated")
+
+        fake.sql_hook = _hook
+        caplog.set_level("WARNING", logger="modulo.db.bootstrap_role")
+        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+            await bootstrap_roles(
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+            )
+
+        assert attempts["count"] == 2  # failed once, retried once, succeeded
+        grants = [q for q in fake.executed if target in q]
+        assert len(grants) == 2
+        assert "Concurrent bootstrap update" in caplog.text
+        assert fake.closed is True
+
+    async def test_non_concurrent_postgres_errors_are_not_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The retry is scoped to the FAR-1200 error — anything else raises at once."""
+        fake = _fresh_db_posture_conn()
+        monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
+        target = 'GRANT SELECT, INSERT ON public.accounts TO "modulo_breakglass"'
+        attempts = {"count": 0}
+
+        def _hook(q: str) -> None:
+            if target in q:
+                attempts["count"] += 1
+                raise asyncpg.InternalServerError("some other internal failure")
+
+        fake.sql_hook = _hook
+        with (
+            patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)),
+            pytest.raises(asyncpg.InternalServerError, match="some other internal failure"),
+        ):
+            await bootstrap_roles(
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+            )
+        assert attempts["count"] == 1
+        assert fake.closed is True
+
+    async def test_lock_budget_exhausted_fails_open(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When the lock never frees within the budget, bootstrap proceeds unlocked
+        (fail open — never worse than the pre-lock behaviour) and does not
+        attempt to release a lock it never acquired."""
+        fake = _fresh_db_posture_conn()
+        fake.lock_available = False
+        monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setattr("modulo.db.bootstrap_role._BOOTSTRAP_LOCK_POLL_ATTEMPTS", 3)
+        monkeypatch.setattr("modulo.db.bootstrap_role._BOOTSTRAP_LOCK_POLL_INTERVAL", 0)
+        caplog.set_level("WARNING", logger="modulo.db.bootstrap_role")
+        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+            await bootstrap_roles(
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+            )
+        assert not any("pg_advisory_unlock" in q for q in fake.executed)
+        assert any("CREATE ROLE" in q for q in fake.executed)
+        assert "proceeding unlocked" in caplog.text
         assert fake.closed is True
 
 
