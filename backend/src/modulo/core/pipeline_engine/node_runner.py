@@ -7043,12 +7043,14 @@ def _script_enforcement_requires_remote(
 
 
 def _resolved_e2b_key_for_enforcement() -> str | None:
-    """Remote E2B credential for the script-enforcement refusal (FAR-1159).
+    """Resolved remote E2B credential (FAR-1159, FAR-1171).
 
-    Resolves ``MODULO_E2B_API_KEY`` through the runtime-config bridge
-    (override wins over env — the same bridge the provider-registration
-    gate uses, so the two paths cannot disagree) and layers the legacy
-    ``E2B_API_KEY`` env fallback exactly as before. ``None`` => fail closed.
+    Serves BOTH the script-enforcement refusal AND the E2B
+    ``AsyncSandbox.create`` credential: resolves ``MODULO_E2B_API_KEY``
+    through the runtime-config bridge (override wins over env — the same
+    bridge the provider-registration gate uses, so the paths cannot
+    disagree) and layers the legacy ``E2B_API_KEY`` env fallback exactly as
+    before. ``None`` => fail closed.
     """
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
 
@@ -7921,6 +7923,15 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     sandbox = await asyncio.wait_for(
                         AsyncSandbox.create(
                             template=template_id,
+                            # FAR-1171: pass the runtime-config-resolved key
+                            # explicitly, reusing the SAME resolver as the
+                            # enforcement gate so the gate and the live create
+                            # call can never disagree. Without it the e2b SDK
+                            # falls back to the legacy ``E2B_API_KEY`` env var,
+                            # so a rotation via PUT /api/v1/admin/runtime-config
+                            # would reach the gate but not the credential
+                            # actually used to provision the sandbox.
+                            api_key=_resolved_e2b_key_for_enforcement(),
                             # FAR-487: lifetime STRICTLY greater than the command
                             # timeout (+ _SANDBOX_LIFETIME_GRACE_S) so the platform
                             # endAt kill can never preempt the runner's own timeout
