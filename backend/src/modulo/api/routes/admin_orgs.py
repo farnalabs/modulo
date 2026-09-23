@@ -655,7 +655,7 @@ async def admin_set_org_authz_enforce(
     _: Annotated[AuthenticatedPrincipal, require_target_org_role("org.authz_enforce.manage", "admin")],
     session: AsyncSession = Depends(get_db_session),
 ) -> SetOrgAuthzEnforceResponse:
-    # Tenancy-bounded (ADR 017 DECISION 3): only the org's own admin (or a
+    # Tenancy-bounded (ADR 047 DECISION 3): only the org's own admin (or a
     # system admin) may flip the flag, and only for their org. Flipping org A
     # never affects org B.
 
@@ -702,7 +702,7 @@ class SetOrgTriggersPausedResponse(BaseModel):
 async def admin_set_org_triggers_paused(
     org_id: uuid.UUID,
     req: SetOrgTriggersPausedRequest,
-    # Tenancy-bounded (ADR 017 DECISION 3 scope pin): the authz kill-switch must
+    # Tenancy-bounded (ADR 047 DECISION 3 scope pin): the authz kill-switch must
     # NOT be able to lift this gate -- ``kill_switch_eligible=False`` mirrors the
     # org.delete immunity in ``require_system_or_org_admin``.
     current_user: Annotated[

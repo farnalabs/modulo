@@ -11,7 +11,7 @@ Covers the credential-scope gate end to end with mocked persistence:
   scope ``'user'``.
 * ``validate_current_auth`` dispatches the new ``'jwt'`` branch to
   ``_validate_principal_live``; the OAuth revalidation path is untouched.
-* The live-role clamp (ADR 017 ceiling) is reused verbatim for user-scoped
+* The live-role clamp (ADR 047 ceiling) is reused verbatim for user-scoped
   keys: runner key + live viewer degrades; missing membership dies (401).
 * Handler-level: ``create_api_key`` is org-only — denied under a user-scoped
   key, unchanged under org keys, and the denial survives the kill switch.
@@ -238,7 +238,7 @@ class TestApiKeyAuthScopeStamping:
 
 
 class TestUserKeyLiveRoleClamp:
-    """The ADR-017 ceiling is REUSED for user-scoped keys (3d): clamp results
+    """The ADR-047 ceiling is REUSED for user-scoped keys (3d): clamp results
     are independent of key_scope; the degrade and death cells hold."""
 
     @pytest.mark.asyncio

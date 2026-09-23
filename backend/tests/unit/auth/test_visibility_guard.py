@@ -6,7 +6,7 @@ visibility/owner_team_id values before writing, so a team member cannot
 downgrade a team-private pipeline to org-visible or reassign it to a team they
 don't belong to.
 
-The helper mirrors the RLS-parity membership-or-admin gate (ADR 017 DECISION 2)
+The helper mirrors the RLS-parity membership-or-admin gate (ADR 047 DECISION 2)
 against BOTH the current owner team (if the row is currently team-private) and
 any new owner team, with the org-admin bypass applying throughout. Tests drive
 the helper directly with a stubbed membership lookup, following the

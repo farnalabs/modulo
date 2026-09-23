@@ -9,7 +9,7 @@ Why
 The ``WorkspaceLease`` scaffolding (model, hub ``create_lease`` /
 ``destroy_lease``, the run-retention pre-delete workaround and its one API
 reader ``GET /runs/{run_id}/workspace-lease``) never shipped a production
-writer — ADR 004's "WorkspaceLease remains useful" bet did not pay off.
+writer — ADR 045's "WorkspaceLease remains useful" bet did not pay off.
 Capacity tracking uses ``runs.sandbox_dispatch_state`` plus the dispatch-time
 advisory gate instead (D8 of the Agent Execution Tiers plan). D2 (FAR-587)
 deletes the scaffolding in code and this migration drops the table.

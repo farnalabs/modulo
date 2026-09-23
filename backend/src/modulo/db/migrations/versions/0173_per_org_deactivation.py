@@ -15,7 +15,7 @@ An admin of org A could therefore lock a shared user out of orgs B/C where
 they hold no authority (and ``admin_reactivate_user`` could unlock them
 everywhere). The org-membership ``deactivated_at`` tombstone the function
 already writes IS the per-org deactivation signal; role resolution, JWT
-revalidation and refresh already honour it (ADR 017).
+revalidation and refresh already honour it (ADR 047).
 
 This migration redefines the function (identical signature, identical
 authorisation / advisory-lock / last-admin logic) so that:

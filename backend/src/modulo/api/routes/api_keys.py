@@ -152,7 +152,7 @@ async def _enforce_mint_cap(session: AsyncSession, principal: TenantPrincipal, r
     """Enforce the API-key role-cap: never mint above the caller's LIVE role.
 
     ``get_current_tenant_user`` already re-reads the live membership role
-    (ADR 017), but this explicit ``resolve_role_from_membership`` read is the
+    (ADR 047), but this explicit ``resolve_role_from_membership`` read is the
     cap's own authoritative source — a runner cannot mint an operator key, an
     operator can mint operator/runner, and a removed/deactivated member's live
     role is None so minting is denied outright.

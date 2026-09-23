@@ -1,4 +1,4 @@
-"""ADR 017 service-layer backstop tests.
+"""ADR 047 service-layer backstop tests.
 
 Verifies that the guarded pipeline write paths (``replace_pipeline_graph``,
 ``rollback_to_snapshot``) require an explicit ``is_privileged`` keyword-only

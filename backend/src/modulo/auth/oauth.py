@@ -299,7 +299,7 @@ async def create_authorization_code(
     """Generate and store a one-time, account-bound authorization code.
 
     The code is minted ONLY by the authenticated consent approve endpoint
-    (ADR 017 DECISION 1 — approve POST is the consent). ``account_id`` is the
+    (ADR 047 DECISION 1 — approve POST is the consent). ``account_id`` is the
     account that approved; ``code_challenge`` comes from the consent state row
     (never client-supplied at approve). The challenge is verified at token
     exchange via ``verify_pkce``.
@@ -383,7 +383,7 @@ async def consume_authorization_code(
 
 
 # ---------------------------------------------------------------------------
-# Consent-state store (ADR 017 A1b)
+# Consent-state store (ADR 047 A1b)
 # ---------------------------------------------------------------------------
 
 
@@ -484,7 +484,7 @@ def create_oauth_access_token(
 
     Carries the consenting account's ``account_id`` so the MCP middleware can
     resolve the account's LIVE org role per call and clamp scope-derived roles
-    to it (ADR 017) instead of synthesising a uuid5(client_id) actor.
+    to it (ADR 047) instead of synthesising a uuid5(client_id) actor.
     """
     now = datetime.now(UTC)
     claims = {
@@ -803,7 +803,7 @@ def scopes_required_role(scopes: list[str]) -> str:
     """Return the minimum org role a live account must hold to carry these scopes.
 
     Mirrors the MCP middleware's scope→role ladder: ``hitl:review`` requires
-    ``operator``; anything else is ``runner`` (ADR 017 — scope grants can never
+    ``operator``; anything else is ``runner`` (ADR 047 — scope grants can never
     exceed the account's live role).
     """
     if "hitl:review" in scopes:
@@ -816,7 +816,7 @@ def clamp_oauth_role(scope_role: str, live_role: str) -> str:
 
     A token's scope grants can never exceed what the account currently holds:
     a demoted operator's ``hitl:review`` token degrades to the live role on the
-    next call (ADR 017 per-call live re-validation). Pure + unit-testable, no DB.
+    next call (ADR 047 per-call live re-validation). Pure + unit-testable, no DB.
     """
     from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 
@@ -838,7 +838,7 @@ async def verify_live_role_covers_scopes(
 
     Returns the live role on success. Raises InvalidGrantError when the account
     has no active membership or its live role is below what the scopes require —
-    the token/refresh endpoints then deny issuance (fail-closed, ADR 017).
+    the token/refresh endpoints then deny issuance (fail-closed, ADR 047).
     """
     from modulo.auth.dependencies import resolve_role_from_membership
     from modulo.auth.permissions import PermissionDenied, assert_org_role

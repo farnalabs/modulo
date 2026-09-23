@@ -1,4 +1,4 @@
-"""MCP structural coverage — every registered tool is scoped (ADR 017).
+"""MCP structural coverage — every registered tool is scoped (ADR 047).
 
 Walks the FastMCP tool registry and asserts:
 1. The registered tool-name set equals a pinned fixed list.

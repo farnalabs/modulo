@@ -101,6 +101,9 @@ async def _process_trigger(
     condition returns early so there is no deep nesting.
     """
     config = trigger.config_json or {}
+    from modulo.core.trigger_engine import _warn_unrecognised_config_keys
+
+    _warn_unrecognised_config_keys(trigger.id, config)
     str_trigger_id = str(trigger.id)
 
     # Check if this trigger watches the completed pipeline+node.

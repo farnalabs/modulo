@@ -1,6 +1,6 @@
 """Unit tests for POST /api/v1/metrics/web-vitals.
 
-ADR 017: the ingest route is swept with ``metrics.ingest`` (``viewer``
+ADR 047: the ingest route is swept with ``metrics.ingest`` (``viewer``
 minimum) so telemetry keeps working for every tenant role.
 
 FAR-880: the summary/timeseries read endpoints now carry the same

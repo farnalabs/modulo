@@ -464,7 +464,7 @@ def _refresh_token() -> str:
 
 
 def test_refresh_denied_for_break_glass_no_write(client: TestClient) -> None:
-    """ADR 017 live-role re-read denies refresh once the break-glass account is
+    """ADR 047 live-role re-read denies refresh once the break-glass account is
     no longer live — advance_sequence (the only write in the refresh path) is
     never called, so no family mutation happens."""
     with (

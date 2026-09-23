@@ -23,8 +23,12 @@ from modulo.core.runtime_provider.docker import DockerRuntimeProvider, _split_ex
 # ---------------------------------------------------------------------------
 
 
-async def test_abc_default_exec_stream_raises_not_implemented() -> None:
-    from modulo.core.runtime_provider import RuntimeProvider
+async def test_abc_default_exec_stream_raises_typed_streaming_unsupported() -> None:
+    """ADR 040 carve-out: the ABC default raises the typed
+    ``StreamingUnsupportedError`` (a ``RuntimeProviderError`` member), not a
+    raw ``NotImplementedError``. Reconciled in place from the pre-ADR
+    assertion — coverage of the default's raise is unchanged."""
+    from modulo.core.runtime_provider import RuntimeProvider, RuntimeProviderError, StreamingUnsupportedError
 
     class _Bare(RuntimeProvider):
         async def create_workspace(self, spec):  # type: ignore[no-untyped-def]
@@ -39,8 +43,10 @@ async def test_abc_default_exec_stream_raises_not_implemented() -> None:
         async def get_workspace_status(self, provider_ref):  # type: ignore[no-untyped-def]
             return "running"
 
-    with pytest.raises(NotImplementedError, match="exec_command_stream"):
+    with pytest.raises(StreamingUnsupportedError, match="exec_command_stream") as exc_info:
         await _Bare().exec_command_stream("ref", ["echo"])
+    assert isinstance(exc_info.value, RuntimeProviderError)
+    assert not isinstance(exc_info.value, NotImplementedError)
 
 
 def test_split_exec_frame_tuple_shape() -> None:

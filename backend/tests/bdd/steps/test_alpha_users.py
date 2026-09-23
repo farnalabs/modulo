@@ -1,6 +1,6 @@
 """BDD step definitions: User roles, runner role.
 
-ADR 017 PR B reconciliation: steps hit REAL endpoints through real role
+ADR 047 PR B reconciliation: steps hit REAL endpoints through real role
 clients (viewer/runner/operator/admin). The permission gate is exercised at
 the HTTP layer; the DB CRUD functions are mocked at the route boundary so the
 tests remain DB-free and fast.

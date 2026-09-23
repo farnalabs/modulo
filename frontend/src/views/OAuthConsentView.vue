@@ -87,7 +87,7 @@ const state = computed(() => query.value.state ?? '')
 
 onMounted(async () => {
   // Display-only client info — never authoritative. The approve endpoint mints
-  // the code from the stored consent-state row ONLY (ADR 017 A1b), so a
+  // the code from the stored consent-state row ONLY (ADR 047 A1b), so a
   // spoofed client name here cannot escalate the granted scope.
   if (!hasToken.value) return
   try {

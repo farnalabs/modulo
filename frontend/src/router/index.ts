@@ -156,7 +156,7 @@ const router = createRouter({
       meta: { public: true, breadcrumb: 'Signing in' },
     },
     {
-      // OAuth browser consent route (ADR 017 A1b): the 302 target of
+      // OAuth browser consent route (ADR 047 A1b): the 302 target of
       // /mcp/oauth/authorize. Public — anonymous users must be able to land
       // here and sign in before approving (the authenticated approve POST IS
       // the consent).

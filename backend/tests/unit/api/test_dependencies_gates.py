@@ -6,7 +6,7 @@ it accepts both user JWTs and ``mk_`` org API keys and applies the same
 org-role floor and tenancy-bounded authz kill switch as ``require_permission``.
 The lens review found one divergence: the kill-switch read was not wrapped in
 the fail-closed ``SQLAlchemyError`` handler that ``require_permission`` has
-(ADR 017 DECISION 3 — a DB blip must not fail-open the gate). A ``begin()``
+(ADR 047 DECISION 3 — a DB blip must not fail-open the gate). A ``begin()``
 failure there escaped as an unhandled 500 instead of degrading to ENFORCE.
 This suite locks the fail-closed read, the kill-switch lift, the
 runner/operator/viewer role floor, the per-request ContextVar reset, and the

@@ -2,7 +2,7 @@
 id: feat-router
 prd: N/A
 adr:
-  - ADR 025 (execution-graph-router-hitl-nodes)
+  - ADR 050 (execution-graph-router-hitl-nodes)
 code:
   - backend/src/modulo/core/pipeline_engine/jmespath_eval.py
   - backend/src/modulo/core/pipeline_engine/node_runner.py
@@ -28,7 +28,7 @@ status: covered
 # Router & HITL Execution-Graph Nodes
 
 First-class, authorable Router decision nodes and human-in-the-loop (HITL) gate
-nodes in the pipeline execution graph (FAR-402 P1 / FAR-415, ADR 025). The
+nodes in the pipeline execution graph (FAR-402 P1 / FAR-415, ADR 050). The
 Router promotes the buried conditional-edge branching into a visible ordered
 rule node; the HITL node promotes the legacy edge-gate HITL into a draggable
 node that compiles to the exact same synthetic-gate path. Ships under the
@@ -81,7 +81,7 @@ registry (`feat-router`).
 
 - **Edge-gate HITL remains compile-supported** — the legacy edge-level
   `hitl_gate_config` is deliberately not removed; the `hitl` node lowers onto
-  it (ADR 025, backward-compatible). (The prior "No BDD feature scenarios"
+  it (ADR 050, backward-compatible). (The prior "No BDD feature scenarios"
   gap was closed 2026-09-17 by `router_nodes.feature` — Router authoring,
   first-match-wins/default/classifier routing semantics, and the
   RouterNoMatchError → `router_no_match` terminalisation are now executing BDD
@@ -105,7 +105,7 @@ registry (`feat-router`).
 - 2026-08-29: **product-map review pass** — entry added to close
   the feature-graph gap behind the manifest `feat-router` registry entry (with
   `/pipelines` route referencing it) that shipped in FAR-415 but had no
-  behaviour-tracker node. Behaviours re-verified against ADR 025,
+  behaviour-tracker node. Behaviours re-verified against ADR 050,
   `pipeline_engine/{node_runner,graph_cache,jmespath_eval,errors,executor}*.py`,
   `run.py` + migration `0150_add_router_no_match_status`, the
   `PipelineGraphNode` validators in `api/routes/pipelines.py`, and the

@@ -9,7 +9,7 @@ Covers the ``scope`` axis on ``OrgApiKey``:
 4. ``update_api_key`` accepts NO scope parameter (immutability post-mint).
 5. The ORM model carries the column + CHECK constraint in lockstep with
    migration 0181.
-6. The live-role clamp is INDEPENDENT of key_scope (ADR-017 ceiling is
+6. The live-role clamp is INDEPENDENT of key_scope (ADR-047 ceiling is
    reused verbatim — a user-scoped key never widens it).
 """
 

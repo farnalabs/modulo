@@ -194,7 +194,7 @@ async def receive_webhook(
     Requires X-Modulo-Timestamp header (Unix seconds, ±300s window).
     Requires X-Modulo-Webhook-Secret header if trigger has hmac_secret configured.
 
-    ADR 017 exempt-channel: this route is CSRF-exempt via the audited
+    ADR 047 exempt-channel: this route is CSRF-exempt via the audited
     ``/api/v1/triggers/`` prefix and exempt from the org-role sweep because it
     authenticates via the trigger's shared-secret HMAC (or is public run
     creation for HMAC-less triggers by design). Replay and cleanup-expired are
@@ -595,7 +595,7 @@ async def replay_webhook(
     Replays the original raw payload through the trigger pipeline, skipping
     HMAC and timestamp validation but preserving dedup and flood protection.
 
-    ADR 017: replay is a mutating run-creation channel and is NOT exempt. A
+    ADR 047: replay is a mutating run-creation channel and is NOT exempt. A
     principal (if present) must hold the ``run.trigger`` permission (``runner``
     minimum). An unauthenticated caller must present a valid HMAC signature
     (``X-Modulo-Webhook-Secret`` + ``X-Modulo-Timestamp``) over the stored
@@ -652,7 +652,7 @@ async def replay_webhook(
             await set_rls_execution_context(session)
 
             if principal is None:
-                # ADR 017: unauthenticated replay requires a valid HMAC signature
+                # ADR 047: unauthenticated replay requires a valid HMAC signature
                 # over the stored payload (same check as receive_webhook).
                 hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
                 modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
@@ -896,7 +896,7 @@ async def cleanup_expired(
     Acquires a Postgres advisory lock to prevent concurrent cleanup across workers.
     Safe to call from cron every 5 minutes (with a ``runner`` credential).
 
-    ADR 017: swept with ``trigger.cleanup`` (``runner`` minimum) — this route
+    ADR 047: swept with ``trigger.cleanup`` (``runner`` minimum) — this route
     mutates state and resolves a user principal, so it is no longer exempt.
     """
     org_id = principal.organisation_id

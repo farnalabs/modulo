@@ -1,4 +1,4 @@
-"""Strict route-introspection test for the ADR 017 permission sweep.
+"""Strict route-introspection test for the ADR 047 permission sweep.
 
 Walks the FastAPI router and asserts that every mutating user-principal route
 carries a permission dependency (tagged via ``_tagged_dep``) OR is on the
@@ -29,7 +29,7 @@ from tests.unit.api.route_introspection import (
 
 # ---------------------------------------------------------------------------
 # Exempt allowlist: mutating routes that intentionally do NOT carry a
-# permission tag, each with a documented reason (ADR 017 exempt channels).
+# permission tag, each with a documented reason (ADR 047 exempt channels).
 # Key = (method, path) ; value = reason.
 # ---------------------------------------------------------------------------
 EXEMPT: dict[tuple[str, str], str] = {

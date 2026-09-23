@@ -244,7 +244,7 @@ def test_ws_token_endpoint_unauthenticated_returns_4xx() -> None:
 
 
 def test_ws_token_removed_member_returns_401(mock_session: AsyncMock) -> None:
-    """ADR 017: a removed/deactivated member must not mint a WS token (401)."""
+    """ADR 047: a removed/deactivated member must not mint a WS token (401)."""
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
 
@@ -279,7 +279,7 @@ def test_ws_token_removed_member_returns_401(mock_session: AsyncMock) -> None:
 
 
 def test_refresh_removed_member_returns_401_without_advancing_sequence(mock_session: AsyncMock) -> None:
-    """ADR 017: a removed/deactivated member cannot refresh (401) and the
+    """ADR 047: a removed/deactivated member cannot refresh (401) and the
     token-family sequence must NOT advance."""
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True

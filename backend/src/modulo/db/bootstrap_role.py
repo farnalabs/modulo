@@ -53,7 +53,7 @@ _SYSTEM_ROLE = "modulo_system"
 
 # The single-sourced allow-list constant for writable accounts columns.
 # Every future column added to accounts must be allow-listed here or be
-# read-only (schema-evolution contract — ADR-017/018 amendment).
+# read-only (schema-evolution contract — ADR-047/018 amendment).
 ACCOUNTS_WRITABLE_COLUMNS = (
     "email",
     "display_name",
