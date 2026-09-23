@@ -104,11 +104,6 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
             "modulo.api.middleware.rate_limiter:AuthRateLimitMiddleware._should_rate_limit",
         ),
     ),
-    # No consumer exists anywhere in the codebase (not even Settings is read).
-    "MODULO_INACTIVITY_TIMEOUT_MINUTES": _KeyConfig(
-        default="480",
-        boot_reason="no consumer reads this setting (FAR-1135 follow-up: wire a consumer or remove the key)",
-    ),
     # Security-sensitive: flipping DEBUG at runtime would make session cookies
     # drop their Secure flag — fixed at process start on purpose.
     "DEBUG": _KeyConfig(

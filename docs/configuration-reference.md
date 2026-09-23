@@ -130,9 +130,9 @@ Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env va
 | `MODULO_LOG_LEVEL` | No | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `MODULO_WS_TOKEN_TTL_SECONDS` | No | `60` | WebSocket auth token TTL in seconds |
 | `MODULO_ACCESS_TOKEN_MINUTES` | No | `15` | Access token TTL in minutes (min 5, max 1440) |
+| `MODULO_REFRESH_TOKEN_TTL_HOURS` | No | `24` | Refresh-token lifetime in hours (min 1, max 168). The refresh token slides on every rotation, so this is the idle-logout window: an abandoned session cannot refresh after it lapses. |
 | `DEBUG` | No | `false` | Enable debug mode (test/staging environments) |
 | `MODULO_DEV_MODE` | No | `false` | Enable preview / in-development features |
-| `INACTIVITY_TIMEOUT_MINUTES` | No | `480` | Session inactivity timeout in minutes (0 to disable) |
 
 ---
 

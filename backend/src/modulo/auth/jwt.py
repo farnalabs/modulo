@@ -21,7 +21,15 @@ _log = logging.getLogger(__name__)
 
 _ALGORITHM: str = "HS256"
 _ACCESS_TOKEN_MINUTES: int = 15
-_REFRESH_TOKEN_HOURS: int = 168
+#: FAR-1170: fallback refresh-token lifetime (hours) used only when a mint
+#: site does NOT pass ``ttl_hours``. The single source of truth for the
+#: production default is ``Settings.modulo_refresh_token_ttl_hours`` (24,
+#: env ``MODULO_REFRESH_TOKEN_TTL_HOURS``) — every production call site
+#: passes it explicitly. This constant exists so the pure JWT helpers stay
+#: import-free of ``modulo.settings`` (no settings/DB dependency at mint
+#: time, keeps unit tests light); a drift-guard test asserts the two stay
+#: equal.
+_REFRESH_TOKEN_HOURS: int = 24
 _WS_TOKEN_MINUTES: int = 15
 
 #: FAR-634: the credential class stamped on every access/refresh JWT at mint
@@ -146,9 +154,16 @@ def create_refresh_token(
     token_family: str,
     token_sequence: int,
     user_id: str = "",
+    ttl_hours: int | None = None,
     client_kind: str,
 ) -> str:
-    """7-day refresh token with family+sequence for rotation detection.
+    """Refresh token (default 24h — the sliding idle-logout window) with
+    family+sequence for rotation detection.
+
+    ``ttl_hours`` mirrors :func:`create_access_token`'s ``ttl_minutes``:
+    production call sites pass ``settings.modulo_refresh_token_ttl_hours``
+    (FAR-1170); ``None`` falls back to the module constant so the pure helper
+    keeps a sane default without importing Settings.
 
     ``client_kind`` (FAR-634) rides along so rotation propagates the ORIGINAL
     credential class: the refresh endpoint re-stamps it onto the rotated
@@ -170,7 +185,7 @@ def create_refresh_token(
         "token_sequence": token_sequence,
         _CLIENT_KIND_CLAIM: client_kind,
         "iat": now,
-        "exp": now + timedelta(hours=_REFRESH_TOKEN_HOURS),
+        "exp": now + timedelta(hours=ttl_hours if ttl_hours is not None else _REFRESH_TOKEN_HOURS),
     }
     return str(jwt.encode(claims, secret_key, algorithm=_ALGORITHM))
 

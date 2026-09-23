@@ -551,6 +551,7 @@ async def issue_sso_tokens(
         org_role=org_role,
         token_family=str(family.family_id),
         token_sequence=0,
+        ttl_hours=settings.modulo_refresh_token_ttl_hours,
         client_kind=CLIENT_KIND_BROWSER,
     )
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}  # nosec B105 — OAuth token_type label, not a credential

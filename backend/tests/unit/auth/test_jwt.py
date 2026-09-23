@@ -290,7 +290,53 @@ def test_refresh_token_has_refresh_purpose() -> None:
     iat_ts: float = payload["iat"]
     exp = datetime.fromtimestamp(exp_ts, tz=UTC)
     iat = datetime.fromtimestamp(iat_ts, tz=UTC)
-    assert 167 <= (exp - iat).total_seconds() / 3600 <= 168
+    # Default lifetime is 24h (FAR-1170; was 168h before the setting existed).
+    assert 23 <= (exp - iat).total_seconds() / 3600 <= 24
+
+
+def test_create_refresh_token_honours_configured_ttl() -> None:
+    """ttl_hours overrides the default: exp - iat equals the configured TTL."""
+    token = create_refresh_token(
+        "alice",
+        _KEY,
+        organisation_id=_ORG,
+        account_id=_ACCOUNT,
+        org_role="admin",
+        token_family="f",
+        token_sequence=1,
+        ttl_hours=6,
+        client_kind="browser",
+    )
+    payload = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
+    lifetime_seconds = float(payload["exp"]) - float(payload["iat"])
+    assert abs(lifetime_seconds - 6 * 3600) <= 1
+
+
+def test_default_refresh_ttl_matches_settings_default() -> None:
+    """FAR-1170 drift guard: the jwt module fallback must equal the
+    Settings.modulo_refresh_token_ttl_hours production default (single source
+    of truth), so the two cannot silently diverge."""
+    from modulo.settings import Settings
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_KEY,
+        fernet_key=_KEY,
+        redis_url="",
+    )
+    token = create_refresh_token(
+        "alice",
+        _KEY,
+        organisation_id=_ORG,
+        account_id=_ACCOUNT,
+        org_role="admin",
+        token_family="f",
+        token_sequence=1,
+        client_kind="browser",
+    )
+    payload = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
+    lifetime_seconds = float(payload["exp"]) - float(payload["iat"])
+    assert abs(lifetime_seconds - settings.modulo_refresh_token_ttl_hours * 3600) <= 1
 
 
 def test_decode_refresh_token_claims_roundtrip() -> None:
