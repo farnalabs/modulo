@@ -1219,7 +1219,16 @@ export default {
       "failed_to_archive_pipeline": "Failed to archive pipeline: {error}",
       "failed_to_unarchive_pipeline": "Failed to unarchive pipeline: {error}",
       "failed_to_update_max_duration": "Failed to update max duration: {error}",
-      "failed_to_save_graph": "Failed to save graph: {error}"
+      "failed_to_save_graph": "Failed to save graph: {error}",
+      "spend_circuit_breaker_label": "Monthly spend circuit breaker (USD)",
+      "spend_circuit_breaker_help": "Stops this pipeline when its spend this calendar month would exceed this amount: the run is rejected, all of the pipeline's triggers pause, and admins are notified. Leave empty for no limit. Available on every plan.",
+      "spend_circuit_breaker_invalid": "Enter an amount greater than 0, or leave empty for no limit.",
+      "failed_to_update_spend_circuit_breaker": "Failed to update the spend circuit breaker: {error}",
+      "circuit_breaker_tripped": "Circuit breaker tripped",
+      "circuit_breaker_tripped_help": "This pipeline exceeded its monthly spend limit, so its triggers are paused. An org admin can reset it.",
+      "circuit_breaker_reset": "Reset",
+      "circuit_breaker_resetting": "Resetting...",
+      "failed_to_reset_circuit_breaker": "Failed to reset the circuit breaker: {error}"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",

@@ -402,6 +402,7 @@ class TestConstants:
             "update_eval_definition",
             "delete_eval_definition",
             "bind_connector_to_node",
+            "set_pipeline_circuit_breaker",
             "list_triggers",
             "get_trigger",
             "update_trigger",

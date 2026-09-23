@@ -100,6 +100,40 @@
                 data-testid="pipeline-editor-max-duration"
               />
             </div>
+            <!-- FAR-1182: monthly spend circuit breaker (Community tier). Empty = disabled. -->
+            <div class="flex items-center gap-1" v-tooltip.bottom="$t('views.PipelineEditorView.spend_circuit_breaker_help')">
+              <label for="pipeline-spend-circuit-breaker" class="whitespace-nowrap text-[10px] text-muted-foreground">{{ $t('views.PipelineEditorView.spend_circuit_breaker_label') }}:</label>
+              <input id="pipeline-spend-circuit-breaker"
+                v-model="circuitBreakerInput"
+                type="number"
+                min="0.01"
+                step="0.01"
+                inputmode="decimal"
+                :placeholder="$t('views.PipelineEditorView.no_limit')"
+                aria-describedby="pipeline-spend-circuit-breaker-help"
+                class="w-24 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                @change="updateCircuitBreakerThreshold"
+                data-testid="pipeline-editor-circuit-breaker-threshold"
+              />
+              <span id="pipeline-spend-circuit-breaker-help" class="sr-only">{{ $t('views.PipelineEditorView.spend_circuit_breaker_help') }}</span>
+            </div>
+            <div
+              v-if="pipeline?.circuit_breaker_tripped"
+              class="flex items-center gap-1"
+              data-testid="pipeline-editor-circuit-breaker-tripped"
+            >
+              <span class="badge badge-status-destructive whitespace-nowrap" role="status" :title="$t('views.PipelineEditorView.circuit_breaker_tripped_help')">{{ $t('views.PipelineEditorView.circuit_breaker_tripped') }}</span>
+              <button
+                v-if="canResetCircuitBreaker"
+                type="button"
+                :class="btnToolbarSecondary"
+                :disabled="resettingCircuitBreaker"
+                @click="resetCircuitBreaker"
+                data-testid="pipeline-editor-circuit-breaker-reset"
+              >
+                {{ resettingCircuitBreaker ? $t('views.PipelineEditorView.circuit_breaker_resetting') : $t('views.PipelineEditorView.circuit_breaker_reset') }}
+              </button>
+            </div>
             <div class="relative">
               <button
                 type="button"
@@ -1297,6 +1331,7 @@ import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
 import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
+import { useCurrentUser } from '../composables/useCurrentUser'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 
@@ -1433,6 +1468,14 @@ watch(runPrompt, () => {
 })
 
 const maxDurationInput = ref<number | undefined>(undefined)
+
+// FAR-1182: monthly spend circuit breaker. '' = disabled (null on the API).
+const circuitBreakerInput = ref<string | number>('')
+const resettingCircuitBreaker = ref(false)
+const { orgRole } = useCurrentUser()
+// Mirrors the backend reset gate: POST /admin/costs/circuit-breaker/{id}/reset
+// requires the org-admin `cost.manage` permission (no plan gate).
+const canResetCircuitBreaker = computed(() => orgRole.value === 'admin')
 
 const retryPolicyOpen = ref(false)
 const retryPolicySaving = ref(false)
@@ -2422,6 +2465,7 @@ async function loadPipeline() {
     }))
     pipeline.value = data as any
     maxDurationInput.value = (data as any)?.max_duration_seconds ?? undefined
+    circuitBreakerInput.value = data?.circuit_breaker_threshold ?? ''
     syncRetryPolicyFromPipeline()
   } catch (e) {
     pageError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(e) })
@@ -2494,6 +2538,47 @@ async function updateMaxDuration() {
     saveGraphError.value = null
   } catch (e) {
     saveGraphError.value = t('views.PipelineEditorView.failed_to_update_max_duration', { error: formatApiError(e) })
+  }
+}
+
+async function updateCircuitBreakerThreshold() {
+  const raw = circuitBreakerInput.value
+  const empty = raw === '' || raw === null || raw === undefined
+  const parsed = empty ? null : Number(raw)
+  if (parsed !== null && (!Number.isFinite(parsed) || parsed <= 0)) {
+    saveGraphError.value = t('views.PipelineEditorView.spend_circuit_breaker_invalid')
+    return
+  }
+  try {
+    const { data } = await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { circuit_breaker_threshold: parsed },
+      signal,
+    }))
+    if (pipeline.value) pipeline.value.circuit_breaker_threshold = data?.circuit_breaker_threshold ?? parsed
+    circuitBreakerInput.value = data?.circuit_breaker_threshold ?? parsed ?? ''
+    saveGraphError.value = null
+  } catch (e) {
+    saveGraphError.value = t('views.PipelineEditorView.failed_to_update_spend_circuit_breaker', { error: formatApiError(e) })
+  }
+}
+
+async function resetCircuitBreaker() {
+  resettingCircuitBreaker.value = true
+  try {
+    await withTimeout((signal) => api.POST('/api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset', {
+      params: { path: { pipeline_id: pipelineId } },
+      signal,
+    }))
+    if (pipeline.value) {
+      pipeline.value.circuit_breaker_tripped = false
+      pipeline.value.circuit_breaker_tripped_at = null
+    }
+    saveGraphError.value = null
+  } catch (e) {
+    saveGraphError.value = t('views.PipelineEditorView.failed_to_reset_circuit_breaker', { error: formatApiError(e) })
+  } finally {
+    resettingCircuitBreaker.value = false
   }
 }
 

@@ -446,11 +446,77 @@ def test_reset_circuit_breaker_happy_path(client: tuple[TestClient, AsyncMock]) 
     http, _session = client
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=True)))
+        stack.enter_context(patch(f"{_PREFIX}append_audit_event", new=AsyncMock()))
         stack.enter_context(_rls_cm())
         resp = http.post(f"/api/v1/admin/costs/circuit-breaker/{_PIPELINE_ID}/reset")
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["circuit_breaker_tripped"] is False
+
+
+def test_reset_circuit_breaker_writes_reset_audit_event(client: tuple[TestClient, AsyncMock]) -> None:
+    http, _session = client
+    audit = AsyncMock()
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=True)))
+        stack.enter_context(patch(f"{_PREFIX}append_audit_event", new=audit))
+        stack.enter_context(_rls_cm())
+        resp = http.post(f"/api/v1/admin/costs/circuit-breaker/{_PIPELINE_ID}/reset")
+
+    assert resp.status_code == 200, resp.text
+    audit.assert_awaited_once()
+    kwargs = audit.await_args.kwargs
+    assert kwargs["event_type"] == "pipeline.circuit_breaker_reset"
+    assert kwargs["resource_id"] == _PIPELINE_ID
+    assert kwargs["actor_user_id"] == _USER_ID
+
+
+def test_reset_circuit_breaker_unknown_pipeline_writes_no_audit_event(client: tuple[TestClient, AsyncMock]) -> None:
+    http, _session = client
+    audit = AsyncMock()
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=False)))
+        stack.enter_context(patch(f"{_PREFIX}append_audit_event", new=audit))
+        stack.enter_context(_rls_cm())
+        resp = http.post(f"/api/v1/admin/costs/circuit-breaker/{_PIPELINE_ID}/reset")
+
+    assert resp.status_code == 404, resp.text
+    audit.assert_not_awaited()
+
+
+def test_reset_circuit_breaker_works_without_team_license(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-1182: the breaker is Community-tier safety - no plan feature gates the reset."""
+    http, _session = client
+    community_plan = MagicMock()
+    community_plan.feature_enabled.return_value = False
+    community_plan.list_enabled_features.return_value = []
+    app.dependency_overrides[get_plan_context] = lambda: community_plan
+    reset = AsyncMock(return_value=True)
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=reset))
+        stack.enter_context(patch(f"{_PREFIX}append_audit_event", new=AsyncMock()))
+        stack.enter_context(_rls_cm())
+        resp = http.post(f"/api/v1/admin/costs/circuit-breaker/{_PIPELINE_ID}/reset")
+
+    assert resp.status_code == 200, resp.text
+    reset.assert_awaited_once()
+
+
+@pytest.mark.parametrize("role", ["viewer", "runner", "operator"])
+def test_reset_circuit_breaker_requires_org_admin(client: tuple[TestClient, AsyncMock], role: str) -> None:
+    """The reset stays behind the org-admin ``cost.manage`` permission on every plan."""
+    http, _session = client
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username=f"{role}@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role
+    )
+    reset = AsyncMock(return_value=True)
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=reset))
+        stack.enter_context(_rls_cm())
+        resp = http.post(f"/api/v1/admin/costs/circuit-breaker/{_PIPELINE_ID}/reset")
+
+    assert resp.status_code == 403, resp.text
+    reset.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

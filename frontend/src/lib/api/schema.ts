@@ -2091,6 +2091,8 @@ export interface paths {
          *     Sets ``circuit_breaker_tripped = False`` on the pipeline and re-activates
          *     all of its (non-deleted) triggers so new runs are allowed again (spec §8.10
          *     ``circuit_breaker``: "Permanently pauses trigger until admin re-enables").
+         *     Records a ``pipeline.circuit_breaker_reset`` audit event in the same
+         *     transaction. Available on every plan (no feature gate, FAR-1182).
          */
         post: operations["reset_circuit_breaker_api_v1_admin_costs_circuit_breaker__pipeline_id__reset_post"];
         delete?: never;
@@ -15087,6 +15089,11 @@ export interface components {
             stdout_retention_config?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Circuit Breaker Threshold
+             * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included).
+             */
+            circuit_breaker_threshold?: number | null;
         };
         /** PipelineFolderMoveRequest */
         PipelineFolderMoveRequest: {
@@ -15493,6 +15500,18 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Circuit Breaker Threshold
+             * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included).
+             */
+            circuit_breaker_threshold?: number | null;
+            /**
+             * Circuit Breaker Tripped
+             * @default false
+             */
+            circuit_breaker_tripped: boolean;
+            /** Circuit Breaker Tripped At */
+            circuit_breaker_tripped_at?: string | null;
+            /**
              * Snapshot Count
              * @default 0
              */
@@ -15598,6 +15617,11 @@ export interface components {
             stdout_retention_config?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Circuit Breaker Threshold
+             * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included). Send null to disable; omit to leave unchanged.
+             */
+            circuit_breaker_threshold?: number | null;
         };
         /** PlanInfo */
         PlanInfo: {

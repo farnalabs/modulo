@@ -2898,6 +2898,15 @@ elements:
       - testid: pipeline-editor-max-duration
         type: input
         dynamic_testid: false
+      - testid: pipeline-editor-circuit-breaker-threshold
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-circuit-breaker-tripped
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-circuit-breaker-reset
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-retry-policy-toggle
         type: button
         dynamic_testid: false
@@ -4858,6 +4867,11 @@ features:
             - "[x] The dedicated /ceiling surface manages max_run_cost (per-run) and spend_ceiling (per-org) independently: explicit null clears one ceiling back to unlimited, omitting a field leaves it unchanged, and 0 is a kill-switch; remaining_budget_usd is derived from the org ceiling (test_spend_ceiling_endpoints.py)"
             - "[x] Ceiling enforcement runs before the daily-ledger write: a run exceeding its per-run ceiling or the org cumulative ceiling has its ledger refused (never billed beyond the ceiling) and terminalizes as 'cost_ceiling_exceeded' — except an explicit cancelled status, which is preserved; within ceilings the org cumulative spend is incremented (test_cost_finalize_ceiling.py)"
             - "[x] POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset re-enables a tripped pipeline and re-activates its non-deleted triggers; a missing pipeline is 404"
+            # Configurable, Community-tier pipeline spend circuit breaker (FAR-1182)
+            - "[x] The pipeline monthly spend circuit breaker threshold (circuit_breaker_threshold, USD, null = disabled, must be > 0 and fit Numeric(14,6)) is configurable on pipeline create / PATCH / GET (plus circuit_breaker_tripped / circuit_breaker_tripped_at on the response), on the MCP create_pipeline + set_pipeline_circuit_breaker tools, and in modulo apply (managed only when the key is declared; explicit null disables) (test_pipeline_circuit_breaker_threshold.py, test_apply_circuit_breaker.py)"
+            - "[x] Every threshold change (create with a value, set, change, clear) writes a pipeline.circuit_breaker_threshold_changed audit event with previous/new USD and the actor; an unchanged write records nothing; a reset writes pipeline.circuit_breaker_reset"
+            - "[x] The pipeline circuit breaker is Community-tier: setting the threshold and the admin reset carry no plan feature gate (Modulo never paywalls basic safety); the reset stays behind the org-admin cost.manage permission (403 for operators and below)"
+            - "[x] The pipeline editor toolbar has a 'Monthly spend circuit breaker (USD)' field (empty = disabled) and shows a 'Circuit breaker tripped' badge with a Reset action rendered only for org admins (PipelineEditorViewCircuitBreaker.spec.ts)"
 
             # Cost components + formula engine (ADR 019)
             - "[x] Cost-component CRUD lives under /api/v1/admin/costs/components (list / create / update / delete) with an org-level component cap and 409 on a duplicate name"

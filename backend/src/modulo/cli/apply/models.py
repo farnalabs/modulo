@@ -36,6 +36,19 @@ def quantize_daily_spend_limit(value: float | None) -> float | None:
     return float(Decimal(str(value)).quantize(_SPEND_QUANTUM, rounding=ROUND_HALF_UP))
 
 
+# circuit_breaker_threshold is a Numeric(14, 6) column (FAR-1182); quantized
+# to 6dp on both sides of the drift hash for the same reason as above.
+_CIRCUIT_BREAKER_QUANTUM = Decimal("0.000001")
+CIRCUIT_BREAKER_THRESHOLD_MAX = 99_999_999.999999
+
+
+def quantize_circuit_breaker_threshold(value: float | None) -> float | None:
+    """Quantize a circuit_breaker_threshold to the column's 6dp scale (None passthrough)."""
+    if value is None or isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(Decimal(str(value)).quantize(_CIRCUIT_BREAKER_QUANTUM, rounding=ROUND_HALF_UP))
+
+
 # \Z (not $) so a trailing-newline variant ("${env:VAR}\n") fails to match.
 ENV_REF_PATTERN = re.compile(r"\$\{env:([A-Za-z_]\w*)\}\Z", re.ASCII)
 SECRET_REF_PATTERN = re.compile(r"secretref://\S+\Z")
@@ -387,6 +400,11 @@ class PipelineEntity(BaseModel):
     ``graph`` is OPTIONAL: when omitted, apply does not manage the graph at
     all (the hash never includes it and no graph write is ever sent) so a
     UI-authored graph is not clobbered by a graph-less config.
+
+    ``circuit_breaker_threshold`` (FAR-1182, USD, > 0) follows the same
+    opt-in rule: it is managed ONLY when the key is declared. An explicit
+    ``null`` disables the breaker; omitting the key leaves a UI/API-set
+    threshold untouched (no drift, no write).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -403,6 +421,29 @@ class PipelineEntity(BaseModel):
             "NULL = no pipeline override."
         ),
     )
+    circuit_breaker_threshold: float | None = Field(
+        default=None,
+        gt=0,
+        le=CIRCUIT_BREAKER_THRESHOLD_MAX,
+        description=(
+            "Monthly spend circuit breaker (USD). null = disabled. Managed only when declared: "
+            "omit the key to leave the live value untouched."
+        ),
+    )
+
+    @field_validator("circuit_breaker_threshold")
+    @classmethod
+    def _threshold_must_survive_quantization(cls, value: float | None) -> float | None:
+        quantized = quantize_circuit_breaker_threshold(value)
+        if value is not None and (quantized is None or quantized <= 0):
+            msg = "circuit_breaker_threshold must be greater than 0 (USD) at 6 decimal places; use null to disable"
+            raise ValueError(msg)
+        return value
+
+    @property
+    def manages_circuit_breaker(self) -> bool:
+        """True when the config declares circuit_breaker_threshold (even as null)."""
+        return "circuit_breaker_threshold" in self.model_fields_set
 
     @field_validator("name")
     @classmethod
@@ -428,6 +469,8 @@ class PipelineEntity(BaseModel):
             "max_concurrent_runs": self.max_concurrent_runs,
             "stdout_retention_config": self.stdout_retention_config,
         }
+        if self.manages_circuit_breaker:
+            view["circuit_breaker_threshold"] = quantize_circuit_breaker_threshold(self.circuit_breaker_threshold)
         if self.graph is not None:
             view["graph"] = {"nodes": [], "edges": []} if graph is None else graph
         return view
