@@ -391,6 +391,13 @@ def agent_has_output_schema(agent: str, schema: str, request):
     request.node._agent_output_schema = schema
 
 
+@then(parsers.parse('agent "{agent}" has no input schema'))
+def agent_has_no_input_schema(agent: str, request):
+    data = request.node._resp.json()
+    assert data.get("input_schema_id") is None
+    assert data.get("input_schema_version") is None
+
+
 @given(parsers.parse('agent "{agent}" has input schema "{schema}"'))
 def agent_has_input_schema(agent: str, schema: str, request):
     request.node._agent_input_schema = schema
@@ -439,7 +446,22 @@ def agent_still_has_input_schema(schema: str, request):
 
 @when(parsers.parse('I remove the input schema assignment from agent "{agent}"'))
 def remove_input_schema(agent: str, client, request):
-    # Genuinely unimplementable in the current API: schemas are bound at agent
-    # creation and there is no PATCH path to detach them. The scenario carrying
-    # this step is marked @awaiting-implementation and deselected.
-    request.node._resp = None
+    """Drive the real PATCH - clear the input schema binding (id + version)."""
+    agent_id = _agent_id_for(agent)
+    before = _make_mock_agent(name=agent, input_schema_id=_schema_id_for("review-input"), input_schema_version="latest")
+    after = _make_mock_agent(name=agent, input_schema_id=None, input_schema_version=None)
+    with (
+        patch("modulo.api.routes.agents.get_agent", return_value=before),
+        patch("modulo.api.routes.agents.update_agent", return_value=after),
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.patch(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "input_schema_id": None,
+                "input_schema_version": None,
+                "required_environment_capabilities": [],
+                "template_id": None,
+            },
+        )
+    request.node._resp = resp

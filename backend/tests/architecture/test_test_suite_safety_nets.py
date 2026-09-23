@@ -109,11 +109,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Import handles duplicate pipeline names with suffix",
         }
     ),
-    "tests/bdd/features/agents/schema_assignment.feature": frozenset(
-        {
-            "Remove schema assignment",
-        }
-    ),
     "tests/bdd/features/errors/recovery.feature": frozenset(
         {
             "Already running run cannot be recovered",
