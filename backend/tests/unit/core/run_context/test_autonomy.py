@@ -338,7 +338,7 @@ class TestValidateAutonomyCeiling:
 
         ``AutonomyLevel._missing_`` parses ``"FULLY_AUTONOMOUS"`` fine, so
         without this the value would be stored raw and the INSERT would die
-        with an IntegrityError (500) instead of a clean rejection. This
+        with an IntegrityError (409) instead of a clean rejection. This
         function cannot return a normalised value (raise-or-return-None
         contract), so it rejects; the REST field validators normalise before
         reaching here (see the endpoint tests).

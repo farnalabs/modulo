@@ -1692,6 +1692,63 @@ async def test_hitl_gate_no_clamp_emits_no_clamp_telemetry(
     clamp_mock.assert_not_awaited()
 
 
+async def test_hitl_gate_autonomy_telemetry_forwards_pipeline_id_on_skip_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """FAR-1163: the skip/auto-approve level-applied event must carry the
+    executor-seeded ``_pipeline_id`` — without it every production event had
+    ``pipeline_id: null`` while the unit tests passed it explicitly."""
+    telemetry_mock = AsyncMock()
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
+        telemetry_mock,
+    )
+    node_fn = make_hitl_gate_fn({"gate_id": "telemetry-skip", "human_only": False})
+
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_pipeline_id": "pipe-1",
+            "_run_id": "run-1",
+            "run_context": {"_pipeline_default_autonomy": "fully_autonomous"},
+        }
+    )
+
+    assert result["artifacts"][0]["status"] == "skipped"
+    telemetry_mock.assert_awaited_once()
+    kwargs = telemetry_mock.await_args.kwargs
+    assert kwargs["gate_outcome"] == "skipped"
+    assert kwargs["pipeline_id"] == "pipe-1"
+
+
+async def test_hitl_gate_autonomy_telemetry_forwards_pipeline_id_on_fired_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The fired (interrupt) level-applied event forwards ``_pipeline_id`` too."""
+    telemetry_mock = AsyncMock()
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
+        telemetry_mock,
+    )
+    node_fn = make_hitl_gate_fn({"gate_id": "telemetry-fired", "human_only": False})
+
+    with pytest.raises(GraphInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "_pipeline_id": "pipe-1",
+                "_run_id": "run-1",
+                "run_context": {"_pipeline_default_autonomy": "manual_approval"},
+            }
+        )
+
+    telemetry_mock.assert_awaited_once()
+    kwargs = telemetry_mock.await_args.kwargs
+    assert kwargs["gate_outcome"] == "fired"
+    assert kwargs["pipeline_id"] == "pipe-1"
+
+
 class TestResolveSubjectParentAndKey:
     """FAR-862: resolve the container holding the subject leaf.
 

@@ -441,6 +441,25 @@ class TestPipelineEntityContracts:
             "stdout_retention_config": None,
         }
 
+    def test_mixed_case_max_autonomy_level_is_normalised(self) -> None:
+        """FAR-1163: a case-variant ceiling in an apply YAML must hash
+        canonical — the server stores the canonical spelling, so hashing the
+        raw input would produce perpetual plan drift."""
+        entity = PipelineEntity.model_validate({"name": "sample", "max_autonomy_level": "FULLY_AUTONOMOUS"})
+        assert entity.max_autonomy_level == "fully_autonomous"
+        assert entity.managed_view()["max_autonomy_level"] == "fully_autonomous"
+
+    def test_invalid_max_autonomy_level_rejected_at_load(self) -> None:
+        """An unparseable ceiling fails at config load, not at apply time."""
+        with pytest.raises(ValidationError, match="Invalid max_autonomy_level"):
+            PipelineEntity.model_validate({"name": "sample", "max_autonomy_level": "banana"})
+
+    def test_null_max_autonomy_level_passes_through(self) -> None:
+        """NULL/omitted = don't manage the ceiling (unchanged contract)."""
+        entity = PipelineEntity.model_validate({"name": "sample", "max_autonomy_level": None})
+        assert entity.max_autonomy_level is None
+        assert "max_autonomy_level" not in entity.managed_view()
+
     def test_declared_graph_managed_view_includes_graph(self) -> None:
         entity = PipelineEntity.model_validate(
             {

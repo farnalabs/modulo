@@ -484,25 +484,40 @@ def _validate_retry_policy(value: dict[str, Any] | None) -> dict[str, Any] | Non
     return value
 
 
-def _validate_max_autonomy_level_field(v: str | None) -> str | None:
-    """Validate the ``max_autonomy_level`` ceiling field (FAR-1163).
+def _normalise_autonomy_level(v: str | None, field_name: str) -> str | None:
+    """Validate + canonicalise an autonomy-level request field (FAR-1163).
 
-    ONE shared implementation for ``PipelineCreate`` and ``PipelineUpdate``
-    (the two field validators were byte-for-byte identical). The ceiling must
-    be a real autonomy level when provided, and the value is normalised to
-    the canonical lowercase spelling: ``AutonomyLevel._missing_`` matches
-    case-insensitively, so ``"MANUAL_APPROVAL"`` would otherwise be stored
-    raw and die against the case-sensitive ``ck_pipelines_max_autonomy_level``
-    CHECK constraint with an IntegrityError (500) instead of a 422. The
-    ceiling >= default ordering check runs in the create/update routes (it
-    needs both fields).
+    Shared by the ``max_autonomy_level`` ceiling and the
+    ``default_autonomy_level`` field on both ``PipelineCreate`` and
+    ``PipelineUpdate``: the value must be a real autonomy level when
+    provided, normalised to the canonical lowercase spelling.
+    ``AutonomyLevel._missing_`` matches case-insensitively, so
+    ``"MANUAL_APPROVAL"`` would otherwise be stored raw and die against the
+    case-sensitive ``ck_pipelines_autonomy_level`` /
+    ``ck_pipelines_max_autonomy_level`` CHECK constraints with an
+    ``IntegrityError`` (HTTP 409) instead of a clean 422. An unparseable
+    value (e.g. ``"banana"``) raises ``ValueError`` with a message naming
+    *field_name*, which Pydantic surfaces as a 422.
     """
     if v is None:
         return v
     try:
         return AutonomyLevel(v).value
     except ValueError as exc:
-        raise ValueError(f"Invalid max_autonomy_level: {v!r}") from exc
+        raise ValueError(f"Invalid {field_name}: {v!r}") from exc
+
+
+def _validate_max_autonomy_level_field(v: str | None) -> str | None:
+    """Validate the ``max_autonomy_level`` ceiling field (FAR-1163).
+
+    Thin wrapper over :func:`_normalise_autonomy_level` keeping the exact
+    historical error message (``Invalid max_autonomy_level: ...``) for the
+    ceiling field. ONE shared implementation for ``PipelineCreate`` and
+    ``PipelineUpdate`` (the two field validators were byte-for-byte
+    identical). The ceiling >= default ordering check runs in the
+    create/update routes (it needs both fields).
+    """
+    return _normalise_autonomy_level(v, "max_autonomy_level")
 
 
 class PipelineCreate(TeamVisibilityMixin):
@@ -593,6 +608,19 @@ class PipelineCreate(TeamVisibilityMixin):
         # ceiling >= default ordering check runs in the create route (it
         # needs both fields).
         return _validate_max_autonomy_level_field(v)
+
+    @field_validator("default_autonomy_level")
+    @classmethod
+    def _validate_default_autonomy_level(cls, v: str) -> str:
+        # FAR-1163: the default the ceiling RANKS AGAINST must get the same
+        # treatment as the ceiling — a case-variant or invalid default would
+        # otherwise pass Pydantic and die against the case-sensitive
+        # ck_pipelines_autonomy_level CHECK as an IntegrityError (409)
+        # instead of a clean 422.
+        normalised = _normalise_autonomy_level(v, "default_autonomy_level")
+        # v is non-Optional str, so the helper's None branch is unreachable;
+        # keep mypy satisfied without an assert (bandit B101).
+        return v if normalised is None else normalised
 
     @field_validator("stdout_retention_config", mode="before")
     @classmethod
@@ -720,6 +748,16 @@ class PipelineUpdate(TeamVisibilityMixin):
         # an unparseable ceiling); the ordering check against the merged
         # default runs in the update route.
         return _validate_max_autonomy_level_field(v)
+
+    @field_validator("default_autonomy_level")
+    @classmethod
+    def _validate_default_autonomy_level(cls, v: str | None) -> str | None:
+        # FAR-1163: same treatment as the ceiling — validates + canonicalises
+        # (422 on an unparseable value); None means "not provided" and passes
+        # through. Without this a case-variant default would reach the
+        # case-sensitive ck_pipelines_autonomy_level CHECK as an
+        # IntegrityError (409) instead of a clean 422.
+        return _normalise_autonomy_level(v, "default_autonomy_level")
 
 
 class PipelineResponse(BaseModel):

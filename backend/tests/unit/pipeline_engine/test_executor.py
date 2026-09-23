@@ -1050,6 +1050,43 @@ def test_seed_state_non_dict_variant_snapshot_overrides_ignored():
     assert "_run_overrides" not in state["run_context"]
 
 
+def test_seed_state_run_context_defaults_cannot_smuggle_run_overrides():
+    """FAR-1163: ``_run_overrides`` is engine-managed, never caller-writable.
+
+    ``run_context_defaults`` is unfiltered caller-controlled JSON, and
+    ``_run_overrides`` is read at the node_runner's override boundary — so a
+    planted entry must NOT survive the seed. Fails without the spread-time
+    filter: the planted dict would sit at ``run_context["_run_overrides"]``
+    exactly as a legitimate variant override would.
+    """
+    snap = _make_snapshot()
+    injected = {"prompt_templates": {"a": "smuggled prompt"}}
+    snap.run_context_defaults = {
+        "_run_overrides": injected,
+        "_run_context_write_log": [{"node": "evil"}],
+        "_work_item_refs": [{"kind": "linear", "ref": "EVIL-1"}],
+        "env": "prod",
+    }
+    state = _seed_state(snap, {})
+    # Planted engine-managed keys filtered from the defaults spread.
+    assert "_run_overrides" not in state["run_context"]
+    assert "_run_context_write_log" not in state["run_context"]
+    assert "_work_item_refs" not in state["run_context"]
+    # Non-reserved defaults still seed normally.
+    assert state["run_context"]["env"] == "prod"
+
+
+def test_seed_state_variant_config_run_overrides_wins_over_smuggled_default():
+    """A legitimate variant-config ``_run_overrides`` still seeds, and beats
+    any planted run_context_defaults entry (the variant snapshot is the ONLY
+    authoritative source)."""
+    snap = _make_snapshot()
+    snap.run_context_defaults = {"_run_overrides": {"prompt_templates": {"a": "smuggled"}}}
+    legit = {"model_backend_id": "backend-a"}
+    state = _seed_state(snap, {}, {"_run_overrides": legit})
+    assert state["run_context"]["_run_overrides"] == legit
+
+
 # ---------------------------------------------------------------------------
 # PipelineExecutor.execute — happy path
 # ---------------------------------------------------------------------------

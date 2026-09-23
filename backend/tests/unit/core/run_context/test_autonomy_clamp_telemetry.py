@@ -188,3 +188,39 @@ async def test_clamp_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch)
             effective="manual_approval",
             ceiling="manual_approval",
         )
+
+
+async def test_clamp_payload_construction_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1163 regression guard: the labels import + payload build sit in
+    the fail-open envelope.
+
+    A raise during payload construction (here: the labels module's ``short_id``
+    blowing up) must be swallowed with the clamp ``failure_message`` — never
+    propagate into gate evaluation and break a run.
+    """
+    import modulo.core.audit_logger as al
+    import modulo.core.audit_logger.labels as labels
+
+    append = AsyncMock()
+    monkeypatch.setattr(al, "append_audit_event", append)
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+
+    def _boom_short_id(run_id: object) -> str:
+        raise RuntimeError("labels module broken")
+
+    monkeypatch.setattr(labels, "short_id", _boom_short_id)
+
+    # Must not raise — payload construction is inside the fail-open envelope.
+    await at.emit_autonomy_clamp_telemetry(
+        _session_factory,
+        org_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        gate_id="g1",
+        requested="fully_autonomous",
+        effective="manual_approval",
+        ceiling="manual_approval",
+    )
+
+    # The event was never built, so no audit write happened — and nothing raised.
+    assert append.await_count == 0

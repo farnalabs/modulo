@@ -335,6 +335,87 @@ def test_create_pipeline_default_autonomy_default_value(client: TestClient) -> N
     assert create.await_args.kwargs["default_autonomy_level"] == "manual_approval"
 
 
+def test_create_pipeline_rejects_invalid_default_autonomy_level(client: TestClient) -> None:
+    """FAR-1163: an invalid default must be a clean 422, NOT an IntegrityError.
+
+    ``default_autonomy_level`` is the field the ceiling ranks against, and the
+    case-sensitive ``ck_pipelines_autonomy_level`` CHECK would otherwise turn
+    an unparseable value into an ``IntegrityError`` -> HTTP 409 deep in the
+    handler. The field validator rejects it during request parsing instead.
+    """
+    with patch("modulo.api.routes.pipelines.create_pipeline") as create:
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={"name": "Pipeline", "default_autonomy_level": "banana"},
+        )
+
+    assert resp.status_code == 422
+    assert "default_autonomy_level" in resp.text
+    create.assert_not_awaited()
+
+
+def test_update_pipeline_rejects_invalid_default_autonomy_level(client: TestClient) -> None:
+    """PATCH runs through the SAME field validator — 422, never 409."""
+    with patch("modulo.api.routes.pipelines.update_pipeline") as update:
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"default_autonomy_level": "banana"},
+        )
+
+    assert resp.status_code == 422
+    update.assert_not_awaited()
+
+
+def test_create_pipeline_normalises_mixed_case_default_autonomy_level(client: TestClient) -> None:
+    """A mixed-case valid default is canonicalised before it reaches the DB.
+
+    ``"Notify_On_Complete"`` parses via ``AutonomyLevel._missing_`` but the
+    ``ck_pipelines_autonomy_level`` CHECK is case-sensitive — the validator
+    must store the canonical spelling, not the raw one (which would die as an
+    IntegrityError -> HTTP 409).
+    """
+    pipeline = _make_pipeline()
+    pipeline.default_autonomy_level = "notify_on_complete"
+
+    with (
+        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/pipelines",
+            json={"name": "Pipeline", "default_autonomy_level": "Notify_On_Complete"},
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["default_autonomy_level"] == "notify_on_complete"
+    assert create.await_args.kwargs["default_autonomy_level"] == "notify_on_complete"
+
+
+def test_update_pipeline_normalises_mixed_case_default_autonomy_level(client: TestClient) -> None:
+    """PATCH hands the canonical spelling to ``update_pipeline``."""
+    current = _make_pipeline()
+    current.default_autonomy_level = "manual_approval"
+    updated = _make_pipeline()
+    updated.default_autonomy_level = "notify_on_complete"
+
+    with (
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=updated) as update,
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"default_autonomy_level": "NOTIFY_ON_COMPLETE"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["default_autonomy_level"] == "notify_on_complete"
+    assert update.await_args.args[2]["default_autonomy_level"] == "notify_on_complete"
+
+
 # ---------------------------------------------------------------------------
 # max_autonomy_level ceiling (FAR-1163 S0)
 # ---------------------------------------------------------------------------
@@ -508,7 +589,7 @@ def test_create_pipeline_normalises_mixed_case_ceiling(client: TestClient) -> No
 
     ``AutonomyLevel._missing_`` matches case-insensitively but the
     ``ck_pipelines_max_autonomy_level`` CHECK is case-sensitive — storing the
-    raw spelling would die with an IntegrityError (500) instead of a clean
+    raw spelling would die with an IntegrityError (409) instead of a clean
     response. The field validator must normalise before the value reaches
     ``create_pipeline``.
     """

@@ -174,14 +174,14 @@ async def emit_autonomy_telemetry(
     if gate_outcome not in VALID_GATE_OUTCOMES:
         _log.warning("autonomy_telemetry: invalid gate_outcome %r — skipping", gate_outcome)
         return
-    from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
+    # Fail-open envelope: the labels import and payload construction sit
+    # INSIDE a guarded region — a raise here must never propagate into gate
+    # evaluation and break a run ("telemetry must never break a run").
+    # asyncio.CancelledError is a BaseException and propagates untouched.
+    try:
+        from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
 
-    await _append_run_autonomy_event(
-        session_factory,
-        org_id=org_id,
-        run_id=run_id,
-        event_type=AUTONOMY_LEVEL_APPLIED,
-        payload_json={
+        payload: dict[str, Any] = {
             "actor": SYSTEM_ACTOR,
             "summary": (
                 f'Autonomy level "{autonomy_level}" applied to run '
@@ -192,7 +192,17 @@ async def emit_autonomy_telemetry(
             "gate_outcome": gate_outcome,
             "pipeline_id": str(pipeline_id) if pipeline_id else None,
             "human_only": bool(human_only),
-        },
+        }
+    except Exception:  # pragma: no cover - fail-open telemetry
+        _log.exception("autonomy_telemetry: failed to record event (ignored)")
+        return
+
+    await _append_run_autonomy_event(
+        session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        event_type=AUTONOMY_LEVEL_APPLIED,
+        payload_json=payload,
         failure_message="autonomy_telemetry: failed to record event (ignored)",
     )
 
@@ -238,14 +248,14 @@ async def emit_autonomy_clamp_telemetry(
     """
     if session_factory is None or org_id is None:
         return
-    from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
+    # Fail-open envelope: same guarded payload-construction region as
+    # emit_autonomy_telemetry — the labels import / f-string build must
+    # never propagate into gate evaluation. CancelledError (BaseException)
+    # propagates untouched.
+    try:
+        from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
 
-    await _append_run_autonomy_event(
-        session_factory,
-        org_id=org_id,
-        run_id=run_id,
-        event_type=AUTONOMY_RECOMMENDATION_CLAMPED,
-        payload_json={
+        payload: dict[str, Any] = {
             "actor": SYSTEM_ACTOR,
             "summary": (
                 f'Autonomy recommendation "{requested}" clamped to "{effective}" '
@@ -257,6 +267,16 @@ async def emit_autonomy_clamp_telemetry(
             "effective": effective,
             "ceiling": ceiling,
             "pipeline_id": str(pipeline_id) if pipeline_id else None,
-        },
+        }
+    except Exception:  # pragma: no cover - fail-open telemetry
+        _log.exception("autonomy_telemetry: failed to record clamp event (ignored)")
+        return
+
+    await _append_run_autonomy_event(
+        session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        event_type=AUTONOMY_RECOMMENDATION_CLAMPED,
+        payload_json=payload,
         failure_message="autonomy_telemetry: failed to record clamp event (ignored)",
     )

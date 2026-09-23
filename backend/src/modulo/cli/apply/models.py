@@ -458,6 +458,22 @@ class PipelineEntity(BaseModel):
     def _name_must_not_contain_separator(cls, value: str) -> str:
         return _reject_composite_separator("pipeline name", value)
 
+    @field_validator("max_autonomy_level")
+    @classmethod
+    def _validate_max_autonomy_level(cls, v: str | None) -> str | None:
+        # FAR-1163: canonicalise before hashing — a mixed-case value in an
+        # apply YAML would otherwise hash raw against the server's canonical
+        # stored value and produce perpetual plan drift. Invalid values are
+        # rejected at load time (same message shape as the REST field).
+        if v is None:
+            return v
+        from modulo.core.run_context.autonomy import AutonomyLevel
+
+        try:
+            return AutonomyLevel(v).value
+        except ValueError as exc:
+            raise ValueError(f"Invalid max_autonomy_level: {v!r}") from exc
+
     @field_validator("stdout_retention_config", mode="before")
     @classmethod
     def _validate_stdout_retention_config(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:

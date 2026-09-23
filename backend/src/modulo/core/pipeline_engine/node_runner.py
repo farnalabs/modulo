@@ -4752,6 +4752,11 @@ def make_hitl_gate_fn(
                 autonomy_level=autonomy.value,
                 gate_outcome=outcome,
                 human_only=human_only,
+                # FAR-1163: carry the pipeline id (seeded into state by the
+                # executor alongside _run_id/_org_id) — without it every
+                # production level-applied event on this path had
+                # pipeline_id: null while the unit test passed it explicitly.
+                pipeline_id=state.get("_pipeline_id"),
             )
             return autonomy_result
 
@@ -4765,6 +4770,9 @@ def make_hitl_gate_fn(
             autonomy_level=autonomy.value,
             gate_outcome="fired",
             human_only=human_only,
+            # FAR-1163: same pipeline-id forwarding as the skip/auto-approve
+            # path above — the fired event must be joinable too.
+            pipeline_id=state.get("_pipeline_id"),
         )
         hitl_gates: list[dict[str, Any]] = list(state.get("_hitl_gates") or [])
         hitl_gates.append(hitl_gate_config)

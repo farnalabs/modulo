@@ -129,7 +129,7 @@ def resolve_autonomy(
         if rec is None:     effective = base
         elif rec <= base:   effective = rec            # lowering always allowed
         else:               effective = min(rec, ceiling)  # raising capped; clamp audited
-        clamped = rec is not None and rec > base and effective != rec
+        clamped = rec is not None and effective != rec
 
     With the default ceiling (== the pipeline default) a recommendation can
     ONLY lower autonomy; a ceiling above the default re-opens raising up to
@@ -161,9 +161,8 @@ def resolve_autonomy(
         # Raising is capped at the ceiling; the clamp is audited by the caller.
         effective = _min_level(rec, ceiling)
 
-    # ``effective != rec`` already implies rec > base (the lowering branch
-    # sets effective = rec, the equal branch too), so the rank conjunct is
-    # redundant — kept to the two necessary terms.
+    # ``effective != rec`` already implies rec > base (the lowering/equal
+    # branch sets effective = rec), so only these two terms are needed.
     clamped = rec is not None and effective != rec
     return AutonomyResolution(effective=effective, requested=rec, ceiling=ceiling, clamped=clamped)
 
@@ -204,7 +203,7 @@ def validate_autonomy_ceiling(
     validators normalise to canonical before reaching here, and a caller that
     passes the raw string through (e.g. an MCP tool) gets a clean ValueError
     instead of a stored value that would fail the CHECK with an IntegrityError
-    (500) rather than the promised 422.
+    (409) rather than the promised 422.
     """
     if ceiling is None or (lenient and not isinstance(ceiling, str)):
         return
