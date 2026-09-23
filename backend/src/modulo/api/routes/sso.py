@@ -29,6 +29,7 @@ from modulo.auth.sso import (
     sign_saml_relay_state,
     verify_saml_relay_state,
 )
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.sanitize_log import sanitise_log_value
 from modulo.db.crud.sso_provider import (
     get_enabled_saml_provider,
@@ -232,7 +233,7 @@ async def oidc_login(
     system_session: AsyncSession = Depends(get_system_db_session),
 ) -> Any:
     """Redirect the user to the OIDC provider's authorization page."""
-    public_url = settings.modulo_public_url.rstrip("/")
+    public_url = get_public_url(settings).rstrip("/")
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
     try:
@@ -269,7 +270,7 @@ async def oidc_callback(
             detail="Missing 'code' or 'state' query parameter",
         )
 
-    public_url = settings.modulo_public_url.rstrip("/")
+    public_url = get_public_url(settings).rstrip("/")
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
     try:
@@ -536,8 +537,8 @@ async def saml_metadata_provider(
             # this outer transaction, so the RLS binding has a live tx).
             provider = await _resolve_saml_for_route(provider_id, system_session, session)
 
-            entity_id = provider.entity_id or f"{settings.modulo_public_url.rstrip('/')}/api/v1/auth/saml/{provider_id}"
-            public_url = settings.modulo_public_url.rstrip("/")
+            entity_id = provider.entity_id or f"{get_public_url(settings).rstrip('/')}/api/v1/auth/saml/{provider_id}"
+            public_url = get_public_url(settings).rstrip("/")
             acs_url = f"{public_url}/api/v1/auth/saml/acs/{provider_id}"
 
             xml_entities = {'"': "&quot;", "'": "&apos;"}
@@ -586,7 +587,7 @@ async def saml_login_provider(
     """
     await _resolve_saml_for_route(provider_id, system_session, session)
 
-    public_url = settings.modulo_public_url.rstrip("/")
+    public_url = get_public_url(settings).rstrip("/")
     acs_url = f"{public_url}/api/v1/auth/saml/acs/{provider_id}"
 
     # Defense-in-depth (FAR-1003): sign the provider_id into RelayState.
@@ -620,7 +621,7 @@ async def saml_login(
     system_session: AsyncSession = Depends(get_system_db_session),
 ) -> Any:
     """Redirect the user to the SAML IdP for authentication."""
-    public_url = settings.modulo_public_url.rstrip("/")
+    public_url = get_public_url(settings).rstrip("/")
     acs_url = f"{public_url}/api/v1/auth/saml/acs"
 
     return await _saml_login_redirect(
@@ -711,7 +712,7 @@ async def saml_metadata(
                 )
             entity_id = (db_saml.entity_id if db_saml is not None else None) or settings.modulo_saml_entity_id
 
-            public_url = settings.modulo_public_url.rstrip("/")
+            public_url = get_public_url(settings).rstrip("/")
             acs_url = f"{public_url}/api/v1/auth/saml/acs"
 
             # XML-escape before embedding (FAR-915 / GitHub #281): entity_id is

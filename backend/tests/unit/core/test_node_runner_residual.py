@@ -277,8 +277,27 @@ async def test_fetch_sandbox_log_tail_network_failure_returns_empty(monkeypatch:
 
     monkeypatch.setattr("urllib.request.urlopen", _boom)
     monkeypatch.setenv("E2B_API_KEY", "k")
-    tail = await nr._fetch_sandbox_log_tail("sbx-1")
+    tail = await nr._fetch_sandbox_log_tail("sbx-netfail")
     assert not tail
+    assert not tail
+
+
+async def test_fetch_sandbox_log_tail_reads_e2b_override(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1159 prove-the-fix: the log-tail fetch resolves MODULO_E2B_API_KEY
+    via the runtime-config bridge — an override reaches the X-API-KEY path
+    even with no env var set (fails without the bridge: early "" return)."""
+    from modulo.core.runtime_config.store import get_runtime_config_store
+
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: _fake_urlopen(b'{"other": 1}'))
+    store = get_runtime_config_store()
+    store.set_override("MODULO_E2B_API_KEY", "hot-key")
+    try:
+        tail = await nr._fetch_sandbox_log_tail("sbx-1")
+        assert tail == '{"other": 1}'
+    finally:
+        store.clear_override("MODULO_E2B_API_KEY")
 
 
 # ---------------------------------------------------------------------------

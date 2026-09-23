@@ -28,6 +28,7 @@ from modulo.api.dependencies import (
 from modulo.api.middleware.sensitive_mask import SensitiveValue
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.sso_presets import list_presets, resolve_preset
 from modulo.core.ssrf import pinned_async_client, validate_outbound_url_async
 from modulo.db.crud.sso_provider import (
@@ -196,7 +197,7 @@ def _provider_response(provider: Any, settings: Settings | None = None) -> SsoPr
     if provider.provider_type == "oidc" and provider.provider_id:
         if settings is None:
             settings = get_settings()
-        public_url = settings.modulo_public_url.rstrip("/")
+        public_url = get_public_url(settings).rstrip("/")
         resp.callback_url = f"{public_url}/api/v1/auth/oidc/{provider.provider_id}/callback"
     return resp
 

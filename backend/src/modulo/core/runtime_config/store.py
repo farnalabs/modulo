@@ -47,14 +47,10 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
     "CORS_MAX_AGE": _KeyConfig(default="600", boot_reason=_REASON_STARTUP),
     "MODULO_USERS": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
     "MODULO_ADMIN_PASSWORD": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
-    # Deferred hot-bridge (FAR-1135): read via get_settings() across many
-    # request handlers — not safe to bridge in one focused change.
     "MODULO_PUBLIC_URL": _KeyConfig(
         default="http://localhost:8000",
-        boot_reason=(
-            "read via Settings across request handlers; hot-bridge deferred "
-            "(FAR-1135 follow-up) — set MODULO_PUBLIC_URL and restart"
-        ),
+        hot_reloadable=True,
+        consumers=("modulo.core.runtime_config.key_bridge:get_public_url",),
     ),
     "MODULO_LICENSE_KEY": _KeyConfig(default="", boot_reason=_REASON_ENV_BOOT),
     "MODULO_OIDC_PROVIDERS": _KeyConfig(default="[]", boot_reason=_REASON_STARTUP),
@@ -93,13 +89,12 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
             "modulo.core.runtime_provider.local:create_local_provider_from_env",
         ),
     ),
-    # Credential: rotating the E2B key touches the provider registration gate
-    # and the node-runner enforcement check — bridged only with both, deferred.
+    # Bridged with BOTH read sites moved together (FAR-1159): the
+    # provider-registration gate and the node-runner enforcement check
+    # resolve through key_bridge.get_e2b_api_key so they cannot disagree.
     "MODULO_E2B_API_KEY": _KeyConfig(
-        boot_reason=(
-            "credential resolved when the E2B provider registers; hot-bridge "
-            "deferred (FAR-1135 follow-up) — set the env var and restart"
-        ),
+        hot_reloadable=True,
+        consumers=("modulo.core.runtime_config.key_bridge:get_e2b_api_key",),
     ),
     "MODULO_RATELIMIT_BYPASS_TOKEN": _KeyConfig(
         default="",

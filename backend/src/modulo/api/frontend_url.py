@@ -10,7 +10,9 @@ Resolution order (deployment-agnostic):
    deployment).
 2. ``MODULO_PUBLIC_URL`` (env / ``settings.modulo_public_url``) — the
    correct default because the standard self-host topology has nginx
-   serving the SPA and the API on the same origin.
+   serving the SPA and the API on the same origin. A runtime
+   ``MODULO_PUBLIC_URL`` override (``key_bridge.get_public_url``) wins
+   over the boot-time Settings value when one is set.
 3. ``http://localhost:5173`` when both are empty (local dev fallback).
 
 Rationale: CORS origins are for CORS, not for routing the browser after
@@ -23,6 +25,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from modulo.core.runtime_config.key_bridge import get_public_url
+
 if TYPE_CHECKING:
     from modulo.settings import Settings
 
@@ -31,5 +35,5 @@ _DEFAULT_FALLBACK = "http://localhost:5173"
 
 def resolve_frontend_url(settings: Settings) -> str:
     """Return the browser-facing frontend base URL, trailing slash stripped."""
-    raw = settings.modulo_frontend_url or settings.modulo_public_url
+    raw = settings.modulo_frontend_url or get_public_url(settings)
     return (raw or _DEFAULT_FALLBACK).rstrip("/")

@@ -669,6 +669,38 @@ def test_script_mode_local_provider_is_refused(monkeypatch: pytest.MonkeyPatch):
     make_sandbox_agent_fn(plain)
 
 
+def test_script_mode_enforcement_reads_e2b_override(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1159 prove-the-fix: the enforcement gate resolves
+    MODULO_E2B_API_KEY via the runtime-config bridge.
+
+    An override satisfies the gate exactly like the env var (fails without
+    the bridge — the gate would read only os.environ and refuse), an explicit
+    empty override disables the key, and the no-key case still fails closed.
+    """
+    from modulo.core.runtime_config.store import get_runtime_config_store
+
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    store = get_runtime_config_store()
+    denied = _script_node_def(egress_policy="deny_all")
+
+    store.set_override("MODULO_E2B_API_KEY", "hot-key")
+    try:
+        # Override present, env absent -> enforcement constructs (no refusal).
+        make_sandbox_agent_fn(denied)
+
+        # Explicit empty override disables the key -> refused (fail closed).
+        store.set_override("MODULO_E2B_API_KEY", "")
+        with pytest.raises(ValueError, match="requires a remote E2B provider"):
+            make_sandbox_agent_fn(denied)
+    finally:
+        store.clear_override("MODULO_E2B_API_KEY")
+
+    # No override, no env -> refused (fail closed, unchanged behaviour).
+    with pytest.raises(ValueError, match="requires a remote E2B provider"):
+        make_sandbox_agent_fn(denied)
+
+
 async def test_resource_limits_passed_as_metadata():
     """resource_limits is carried as sandbox metadata to AsyncSandbox.create."""
     limits = {"cpu_count": 2, "memory_mb": 512}

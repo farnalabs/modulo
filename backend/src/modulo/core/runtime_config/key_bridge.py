@@ -10,6 +10,12 @@ remaining hot-reloadable keys use so a runtime override
   read). This is the FAR-1131 pattern generalised: consumers keep their
   existing fallback, the store wins only when an override exists.
 - :func:`override_int_or` — integer-typed variant with safe parsing.
+- :func:`get_public_url` — keyed bridge for ``MODULO_PUBLIC_URL`` (FAR-1159):
+  every URL-anchoring consumer resolves through it so a runtime override
+  wins over the boot-time Settings value.
+- :func:`get_e2b_api_key` — keyed bridge for ``MODULO_E2B_API_KEY``
+  (FAR-1159): the provider-registration gate and the node-runner
+  enforcement check both resolve through it, fail-closed.
 - :func:`apply_log_level` — an *apply-on-write* hook: logging levels are
   configured once, so the runtime-config route invokes this after a
   ``MODULO_LOG_LEVEL`` override/clear to take effect immediately (the
@@ -23,9 +29,14 @@ without one, so a new dead switch cannot ship silently.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from modulo.core.runtime_config.store import get_runtime_config_store
+
+if TYPE_CHECKING:
+    from modulo.settings import Settings
 
 _log = logging.getLogger(__name__)
 
@@ -74,6 +85,35 @@ def override_int_or(key: str, fallback: int) -> int:
     except ValueError:
         _log.warning("Runtime config override for %s is not an integer: %r; using %d", key, override, fallback)
         return fallback
+
+
+# ── keyed bridges for FAR-1159 (deferred dead switches) ─────────────────────
+
+
+def get_public_url(settings: Settings) -> str:
+    """Effective ``MODULO_PUBLIC_URL``: runtime override wins over Settings.
+
+    Consumers pass their resolved ``Settings`` (the FastAPI dependency or
+    ``get_settings()``) so the boot-time value stays the fallback — tests
+    that inject a Settings instance keep working, and an admin override
+    (``PUT /api/v1/admin/runtime-config``) wins only when one is set.
+    """
+    return override_or("MODULO_PUBLIC_URL", settings.modulo_public_url)
+
+
+def get_e2b_api_key() -> str | None:
+    """Effective ``MODULO_E2B_API_KEY``: runtime override wins over the env var.
+
+    Single source of truth for BOTH the provider-registration gate
+    (``build_hub``) and the node-runner script-enforcement refusal, so the
+    two paths can never disagree about whether the remote E2B provider is
+    configured (FAR-1159). Fail-closed: no override and no env var →
+    ``None`` (the provider does not register; enforcement refuses), and an
+    explicit empty override disables the key rather than falling back to
+    the env value. Callers that historically also accept the legacy
+    ``E2B_API_KEY`` env var layer it themselves.
+    """
+    return override_or("MODULO_E2B_API_KEY", os.environ.get("MODULO_E2B_API_KEY") or "") or None
 
 
 # ── apply-on-write hooks ────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
 from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 from modulo.auth.secret_storage import decode_stored_secret
 from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.ssrf import (
     derive_oidc_allowed_hosts,
     pinned_async_client,
@@ -1077,7 +1078,7 @@ async def _resolve_saml_config(
         # has no entity_id set, default to {public_url}/saml/{provider_id}
         # for per-provider routes, or the legacy env setting for singleton.
         if provider_id is not None:
-            default_entity = f"{settings.modulo_public_url.rstrip('/')}/api/v1/auth/saml/{provider_id}"
+            default_entity = f"{get_public_url(settings).rstrip('/')}/api/v1/auth/saml/{provider_id}"
         else:
             default_entity = settings.modulo_saml_entity_id or "modulo"
         entity_id = db_saml.entity_id or default_entity
@@ -1239,7 +1240,7 @@ async def saml_process_response(
     except (ElementTree.ParseError, ValueError) as exc:
         raise ValueError(f"Failed to parse IdP metadata: {exc}") from None
 
-    public_url = settings.modulo_public_url.rstrip("/")
+    public_url = get_public_url(settings).rstrip("/")
     # Per-provider ACS URL (FAR-1001) when provider_id is given; legacy
     # singleton ACS URL for the single-tenant convenience path.
     acs_url = (

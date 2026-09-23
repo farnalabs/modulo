@@ -67,6 +67,7 @@ from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.feature_flags import get_registry
 from modulo.core.remy.config_service import RemyConfig, RemyConfigService
 from modulo.core.remy.skill_loader import SkillLoader
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.ssrf import pinned_async_client
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.remy_message import ChatMessage
@@ -669,7 +670,7 @@ class _StreamContext:
         self.settings = settings
         self.chat_session = chat_session
         self.session_id_str = str(session_id)
-        self.mcp_base_url = settings.modulo_public_url.rstrip("/")
+        self.mcp_base_url = get_public_url(settings).rstrip("/")
 
 
 class _StreamInit:

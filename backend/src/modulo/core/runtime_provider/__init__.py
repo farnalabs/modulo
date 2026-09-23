@@ -417,7 +417,9 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
     Registration matrix (env-gated, operator opt-in = consent):
 
     - ``local`` — always registered (host-process fallback tier).
-    - ``e2b`` — registered when ``MODULO_E2B_API_KEY`` is set.
+    - ``e2b`` — registered when ``MODULO_E2B_API_KEY`` is set (env var or
+      runtime override — both resolved via ``key_bridge.get_e2b_api_key``,
+      the same bridge the node-runner enforcement check uses, FAR-1159).
     - ``runner_docker`` (aliases ``docker`` / ``local_docker``) — registered
       when ``MODULO_DOCKER_HOST`` or ``DOCKER_HOST`` is set.  An unrelated
       ``MODULO_RUNNER_*`` variable does NOT register Docker (FAR-996).
@@ -429,6 +431,7 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
         )
         max_local_concurrency = 2
 
+    from modulo.core.runtime_config.key_bridge import get_e2b_api_key
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
     from modulo.core.runtime_provider.local import LocalRuntimeProvider
 
@@ -437,7 +440,7 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
     local = LocalRuntimeProvider(max_concurrency=max_local_concurrency)
     hub.register("local", local)
 
-    if os.environ.get(_E2B_ENV_VAR):
+    if get_e2b_api_key():
         try:
             from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
 

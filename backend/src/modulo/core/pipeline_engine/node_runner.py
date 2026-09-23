@@ -1035,12 +1035,15 @@ async def _fetch_sandbox_log_tail(sandbox_id: str | None, limit: int = 60) -> st
     """Fetch the tail of an E2B sandbox's logs — the only place the kill reason lives.
 
     Uses GET https://api.e2b.app/sandboxes/{sandbox_id}/logs?limit={limit} with
-    header X-API-KEY: <MODULO_E2B_API_KEY or E2B_API_KEY>. Returns a bounded
-    string (last ~limit log lines) or "" if unavailable/disabled. Never raises.
+    header X-API-KEY: <MODULO_E2B_API_KEY (runtime override or env) or
+    E2B_API_KEY>. Returns a bounded string (last ~limit log lines) or "" if
+    unavailable/disabled. Never raises.
     """
     if not isinstance(sandbox_id, str) or not sandbox_id:
         return ""
-    api_key = os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY")
+    from modulo.core.runtime_config.key_bridge import get_e2b_api_key
+
+    api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
     if not api_key:
         return ""
 
@@ -7039,6 +7042,19 @@ def _script_enforcement_requires_remote(
     )
 
 
+def _resolved_e2b_key_for_enforcement() -> str | None:
+    """Remote E2B credential for the script-enforcement refusal (FAR-1159).
+
+    Resolves ``MODULO_E2B_API_KEY`` through the runtime-config bridge
+    (override wins over env — the same bridge the provider-registration
+    gate uses, so the two paths cannot disagree) and layers the legacy
+    ``E2B_API_KEY`` env fallback exactly as before. ``None`` => fail closed.
+    """
+    from modulo.core.runtime_config.key_bridge import get_e2b_api_key
+
+    return get_e2b_api_key() or os.environ.get("E2B_API_KEY")
+
+
 def _run_identity_strs(state: dict[str, Any]) -> tuple[str, str, str]:
     """Derive the run/pipeline/org identity strings from internal state keys.
 
@@ -9747,7 +9763,7 @@ def _build_sandbox_node_config(
         resource_limits=resource_limits,
         read_only=read_only,
         git_credentials=git_credentials,
-    ) and not (os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY")):
+    ) and not (_resolved_e2b_key_for_enforcement()):
         raise ValueError(
             f"sandbox_agent node '{node_id}' mode='script' requests egress/resource/"
             "sandbox-policy enforcement (egress_policy='deny_all'/'selected', resource_limits, "

@@ -60,9 +60,10 @@ def _get_hub() -> RuntimeProviderHub:
 
     Hubs are cheap, stateless, and never cached process-globally (ADR 029):
     the E2B provider is auto-registered when ``MODULO_E2B_API_KEY`` is set
-    and the Docker Runner provider when a Runner/Docker endpoint variable is
-    set — adding the key post-deployment and restarting the process is
-    enough to switch from local to sandboxed execution.
+    (env var or runtime override) and the Docker Runner provider when a
+    Runner/Docker endpoint variable is set — adding the key post-deployment
+    (or setting its runtime override) and rebuilding the hub is enough to
+    switch from local to sandboxed execution.
     """
     from modulo.core.runtime_config.key_bridge import override_int_or
     from modulo.settings import get_settings
