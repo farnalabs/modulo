@@ -51,7 +51,12 @@ from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_stderr_artifact, node_stdout_artifact, node_telemetry
 from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
-from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error, sanitize_error_text
+from modulo.core.pipeline_engine.error_codes import (
+    map_legacy_code,
+    match_known_fixes,
+    present_error,
+    sanitize_error_text,
+)
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -732,6 +737,10 @@ class RunResponse(BaseModel):
     snapshot_id: uuid.UUID | None = None
     error_detail: str | None = None
     error_code: str | None = None
+    # FAR-706: curated known-fix entries whose raw signature matched this run's
+    # error detail (matched server-side by error_codes.match_known_fixes).
+    # Empty list when nothing matches — display-only, never gates the response.
+    known_fixes: list[dict[str, Any]] | None = None
     total_cost_usd: Decimal | None = None
     token_consumption: dict[str, Any] | None = None
     trace_id: str | None = None
@@ -907,6 +916,18 @@ def _build_run_response(
 
     error_code, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
 
+    # FAR-706: match the curated known-fixes KB over the raw error detail.
+    # match_known_fixes is fail-safe (never raises); serialise defensively so a
+    # malformed entry can never 500 the run detail endpoint.
+    try:
+        known_fixes = [
+            {"fix_id": fix.fix_id, "title": fix.title, "body": fix.body, "link": fix.link}
+            for fix in match_known_fixes(error_detail)
+        ]
+    except Exception:
+        _log.warning("runs.known_fixes_serialise_failed", extra={"run_id": str(getattr(run, "id", ""))}, exc_info=True)
+        known_fixes = []
+
     # FAR-228: defensive coercion — the run_classification JSON column could
     # hold any JSON value (or a MagicMock in tests); a non-dict is surfaced as
     # None, never a 500. gate_fired is derived in _run_gate_fired (also guarded).
@@ -939,6 +960,7 @@ def _build_run_response(
         snapshot_id=snapshot_id,
         error_detail=error_detail,
         error_code=error_code,
+        known_fixes=known_fixes,
         total_cost_usd=run.total_cost_usd,
         token_consumption=token_consumption,
         trace_id=trace_id,

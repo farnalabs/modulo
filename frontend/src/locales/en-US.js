@@ -1525,6 +1525,8 @@ export default {
       "node_prefix": "node: {id}"
     },
     "RunDetailView": {
+      "known_fix_heading": "Known fixes",
+      "known_fix_reference": "View documentation",
       "copy_run_id": "Copy run ID",
       "copy": "Copy",
       "final_output": "Final Output",

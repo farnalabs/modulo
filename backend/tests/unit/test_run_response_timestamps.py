@@ -9,7 +9,7 @@ populates the three timestamps when present and returns ``None`` when absent.
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from modulo.api.routes.runs import (
     _build_list_item,
@@ -102,3 +102,57 @@ def test_list_item_snapshot_id_none_when_absent() -> None:
     item = _build_list_item(_make_run(snapshot_id=None, input_payload=None), ctx)
 
     assert item["snapshot_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-706: curated known-fixes wiring on the run detail response
+# ---------------------------------------------------------------------------
+
+
+def test_run_response_carries_matched_known_fixes() -> None:
+    """A raw signature in error_detail surfaces the curated known fix on the
+    run detail response, with the wire shape the UI renders."""
+    resp = _build_run_response(
+        _make_run(
+            status="failed",
+            error_code="node.cancelled",
+            error_detail="bash: here-document delimited by end-of-file (wanted 'PYFAR647')",
+        )
+    )
+
+    assert resp.known_fixes is not None
+    assert len(resp.known_fixes) == 1
+    first = resp.known_fixes[0]
+    assert first["fix_id"] == "heredoc_at_end_of_command"
+    assert first["title"]
+    assert first["body"]
+
+
+def test_run_response_known_fixes_empty_when_no_signature_matches() -> None:
+    resp = _build_run_response(
+        _make_run(status="failed", error_code="node.cancelled", error_detail="something unrelated")
+    )
+
+    assert resp.known_fixes is not None
+    assert not resp.known_fixes
+
+
+def test_run_response_known_fixes_empty_when_detail_absent() -> None:
+    resp = _build_run_response(_make_run())
+
+    assert resp.known_fixes is not None
+    assert not resp.known_fixes
+
+
+def test_run_response_known_fixes_empty_when_serialisation_fails() -> None:
+    """Defensive contract: if serialising a matched fix raises, the run detail
+    response still succeeds with an empty known_fixes list — never a 500."""
+    from modulo.api.routes import runs as runs_module
+
+    def _boom(_detail: object) -> object:
+        raise RuntimeError("boom")
+
+    with patch.object(runs_module, "match_known_fixes", _boom):
+        resp = _build_run_response(_make_run(status="failed", error_code="node.cancelled", error_detail="anything"))
+
+    assert not resp.known_fixes
