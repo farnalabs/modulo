@@ -1,8 +1,8 @@
 name: "Bundle: single-install artifact (bundle-v*)"
 
-# FAR-670 â€” P1a bundle pipeline for the single-install native distribution
+# FAR-670 -- P1a bundle pipeline for the single-install native distribution
 # (ADR 031). Tag `bundle-v*` and this workflow builds the linux-amd64
-# tar.gz artifact, attaches it (plus its SHA256SUMS â€” the P1a checksums page)
+# tar.gz artifact, attaches it (plus its SHA256SUMS -- the P1a checksums page)
 # to the GitHub release, and asserts the pinned bundled-service majors still
 # match docker-compose.yml (the CI mirror of the shared version constants in
 # scripts/bundle-versions.env).
@@ -47,7 +47,7 @@ jobs:
     # Shared-constants rule (ADR 031, Decision 3/11): the bundle's pinned
     # majors must match the docker-compose.yml image tags. This is the CI
     # assertion over scripts/bundle-versions.env; a later ticket also asserts
-    # it from the compose side. Fail loudly on drift â€” never warn.
+    # it from the compose side. Fail loudly on drift -- never warn.
     name: Assert bundle versions match docker-compose
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -152,7 +152,7 @@ jobs:
             want="${spec#*:}"
             got="$(dpkg-deb -f "downloads/${deb}" Version)"
             if [ "$got" != "$want" ]; then
-              echo "::error::${deb} Version field is '${got}' but the pin is '${want}' â€” refusing to ship a mismatched package"
+              echo "::error::${deb} Version field is '${got}' but the pin is '${want}' -- refusing to ship a mismatched package"
               exit 1
             fi
           done
@@ -164,7 +164,7 @@ jobs:
           BUNDLE="build/${BUNDLE_ROOT}"
           mkdir -p "$BUNDLE/runtime" "$BUNDLE/pg" "$BUNDLE/redis"
 
-          # CPython runtime (glibc build â€” x86_64/aarch64-unknown-linux-gnu).
+          # CPython runtime (glibc build -- x86_64/aarch64-unknown-linux-gnu).
           # Strip the top-level `python/` dir so runtime/ IS the interpreter
           # tree: runtime/bin/python3.12, runtime/lib/...
           tar -xzf "downloads/${PBS_TARBALL}" -C "$BUNDLE/runtime" --strip-components=1
@@ -185,13 +185,13 @@ jobs:
           cp -a debx/redis-server/usr/bin/redis-server "$BUNDLE/redis/"
           cp -a debx/redis-tools/usr/bin/. "$BUNDLE/redis/"
 
-          # Launcher placeholder â€” the real launcher binary is FAR-671.
+          # Launcher placeholder -- the real launcher binary is FAR-671.
           # TODO(FAR-671): replace with the actual launcher (process
           # supervision, env scrub, boot contract per ADR 031 Decisions 1-2),
           # plus PG share-dir relocation and venv rewiring to runtime/.
           {
             echo '#!/bin/sh'
-            echo '# PLACEHOLDER â€” the Modulo launcher is implemented in FAR-671.'
+            echo '# PLACEHOLDER -- the Modulo launcher is implemented in FAR-671.'
             echo '# The bundle layout is complete; the launcher wires it together.'
             echo 'echo "Modulo bundle layout is present, but the launcher is not implemented yet (tracked as FAR-671)." >&2'
             echo 'exit 1'
