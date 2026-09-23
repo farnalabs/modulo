@@ -1,4 +1,4 @@
-"""Centralized permission registry for REST + MCP authorization (ADR 017).
+"""Centralized permission registry for REST + MCP authorization (ADR 047).
 
 One registry and one comparison function, REST and MCP as thin adapters.
 The registry is the single source of truth; MCP tool requirements reference
@@ -15,7 +15,7 @@ from contextvars import ContextVar, Token
 
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 
-# Per-request, tenancy-bounded authorization kill switch (ADR 017 DECISION 3).
+# Per-request, tenancy-bounded authorization kill switch (ADR 047 DECISION 3).
 # ``None`` means enforcement is ON (fail-closed default); ``False`` fail-opens
 # the generic org-role gate for the current request. Set by the REST
 # ``require_permission`` variants and the MCP auth middleware per-request.
@@ -297,7 +297,7 @@ class PermissionConfigurationError(Exception):
     """Raised when the permission registry is misconfigured (unknown key or role)."""
 
 
-class PermissionDenied(Exception):  # noqa: N818 — name mandated by ADR 017 exception contract
+class PermissionDenied(Exception):  # noqa: N818 — name mandated by ADR 047 exception contract
     """Raised when a principal lacks the minimum org role for a permission.
 
     Attributes:
@@ -357,7 +357,7 @@ def assert_org_role(
     skipped (fail-open). Only the level gate is lifted — the fail-closed
     identity checks (missing/unknown role) still deny, and destructive
     mutations (org deletion via ``require_system_or_org_admin``) pass
-    ``kill_switch_eligible=False`` so they are never bypassed. ADR 017
+    ``kill_switch_eligible=False`` so they are never bypassed. ADR 047
     DECISION 3.
     """
     if required not in ORG_ROLE_HIERARCHY:
@@ -394,7 +394,7 @@ def _clamp_role(minted_role: str, live_role: str | None) -> str:
 
     Never escalates: a demoted operator's key degrades to the live role.
     ``live_role=None`` (owner removed/deactivated) returns ``""`` — the
-    sentinel DENIAL marker the caller must reject (the key dies, ADR 017).
+    sentinel DENIAL marker the caller must reject (the key dies, ADR 047).
     Unknown roles also return ``""`` so the caller can deny (fail-closed).
 
     Pure function: no DB access, unit-testable in isolation.

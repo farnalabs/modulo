@@ -66,7 +66,15 @@ class _MockSession:
         return self._get_bind()
 
     async def get(self, model: Any, pk: Any) -> SimpleNamespace:
-        return SimpleNamespace(max_concurrent_runs=5, status="running")
+        return SimpleNamespace(
+            max_concurrent_runs=5,
+            status="running",
+            pipeline_id=uuid.uuid4(),
+            trigger_id=uuid.uuid4(),
+            claim_count=1,
+            started_at=datetime.now(UTC) - timedelta(minutes=60),
+            dispatched_at=datetime.now(UTC) - timedelta(minutes=65),
+        )
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
         self.executed.append((stmt, params))
@@ -74,16 +82,22 @@ class _MockSession:
         if "set_config" in s:
             return MagicMock()
         if "UPDATE runs SET" in s:
-            # Dedicated org-scoped terminalizer UPDATEs (B4/B5/FAR-648) — zero
-            # rows matched by default; individual tests configure
-            # terminalizer_rows.
+            # Dedicated org-scoped terminalizer UPDATEs (B4/B5/FAR-648/
+            # FAR-721) — zero rows matched by default; individual tests
+            # configure terminalizer_rows.
             ids = self.terminalizer_rows.get("executor_superseded", [])
             if "claim_cap_exhausted" in s:
                 ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
-            if "hitl_claims" in s:
-                # FAR-648 expired-HITL-gate terminalizer — the only
-                # UPDATE-runs statement referencing hitl_claims (its error
-                # code is a bound param, so it cannot be keyed by code).
+            elif "created_at < now()" in s:
+                # FAR-721 zero-claim-awaiting_human terminalizer — keyed by
+                # its age-bound predicate since it references hitl_claims in
+                # its NOT EXISTS guard (like the FAR-648 sweep) and its error
+                # code is a bound param.
+                ids = self.terminalizer_rows.get("hitl_gate_missing", [])
+            elif "hitl_claims" in s:
+                # FAR-648 expired-HITL-gate terminalizer — the EXISTS-gated
+                # UPDATE-runs statement (error code is a bound param, so it
+                # cannot be keyed by code).
                 ids = self.terminalizer_rows.get("hitl_gate_expired", [])
             r = MagicMock()
             r.all.return_value = [(uid,) for uid in ids]
@@ -126,6 +140,7 @@ def _run_row(
     enqueue_failed_at: Any = None,
     claim_count: int = 1,
     retry_policy: Any = None,
+    trigger_id: uuid.UUID | None = None,
 ) -> SimpleNamespace:
     heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
     if dispatched_minutes_ago is not None:
@@ -135,6 +150,7 @@ def _run_row(
     return SimpleNamespace(
         id=run_id,
         pipeline_id=uuid.uuid4(),
+        trigger_id=trigger_id,
         status=status,
         dispatched_at=dispatched_at,
         heartbeat_at=heartbeat,
@@ -203,15 +219,18 @@ async def _run_reconcile(
     awaiting_committed: bool = True,
     terminalizer_ids: dict[str, list[uuid.UUID]] | None = None,
     terminalizer: AsyncMock | None = None,
+    terminalizer_missing: AsyncMock | None = None,
     settings_overrides: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Any, Any, Any, Any, _MockSession]:
     """Drive one ``dispatcher_reconcile`` tick against a fully mocked env.
 
     ``terminalizer`` optionally patches ``_terminalize_expired_hitl_gates``
-    (FAR-648 wiring tests) — the caller keeps its own reference and asserts on
-    it directly; ``settings_overrides`` feeds ``_settings`` so a test can
-    prove a settings-derived value (e.g. the gate-expiry grace) reaches the
-    reconciled code unchanged. Both default to the historical behaviour.
+    (FAR-648 wiring tests) and ``terminalizer_missing`` optionally patches
+    ``_terminalize_hitl_gate_missing`` (FAR-721 wiring tests) — the caller
+    keeps its own reference and asserts on it directly; ``settings_overrides``
+    feeds ``_settings`` so a test can prove a settings-derived value (e.g. the
+    gate-expiry grace) reaches the reconciled code unchanged. Both default to
+    the historical behaviour.
     """
     _patch_env(monkeypatch)
     session = _MockSession([_org_result([ORG]), _rows_result(rows)])
@@ -230,6 +249,8 @@ async def _run_reconcile(
         stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
         if terminalizer is not None:
             stack.enter_context(patch.object(ch, "_terminalize_expired_hitl_gates", terminalizer))
+        if terminalizer_missing is not None:
+            stack.enter_context(patch.object(ch, "_terminalize_hitl_gate_missing", terminalizer_missing))
         reenqueue = stack.enter_context(
             patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result)
         )
@@ -258,6 +279,8 @@ async def _run_reconcile(
     session.record_facts = record_facts
     if terminalizer is not None:
         session.terminalizer = terminalizer
+    if terminalizer_missing is not None:
+        session.terminalizer_missing = terminalizer_missing
     return summary, reenqueue, ingest, redis_client, awaiting_guard, session
 
 
@@ -1407,6 +1430,52 @@ class TestClaimedButNeverDispatchedCounter:
             await ch._fail_nodeless_run(_NoRunSession(), uuid.uuid4(), ORG, summary2)
         assert summary2["claimed_but_never_dispatched"] == 0
         ingest2.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fail_nodeless_run_error_detail_includes_pipeline_trigger_claim_count(self) -> None:
+        """FAR-1088: the error_detail written to the run includes pipeline_id,
+        trigger_id, and claim_count so the terminal-failed run is diagnosable
+        from the error alone — no TriggerEvent or pipeline-config cross-reference needed."""
+        run_id = uuid.uuid4()
+        pipeline_id = uuid.uuid4()
+        trigger_id = uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        run = SimpleNamespace(
+            status="running",
+            pipeline_id=pipeline_id,
+            trigger_id=trigger_id,
+            claim_count=5,
+            started_at=datetime.now(UTC) - timedelta(minutes=40),
+            dispatched_at=datetime.now(UTC) - timedelta(minutes=45),
+        )
+
+        class _SessionWithRun:
+            begin_cm = _MockBegin()
+
+            def begin(self) -> _MockBegin:
+                return self.begin_cm
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            async def get(self, model: Any, pk: Any) -> Any:
+                return run
+
+        ingest = AsyncMock()
+        with (
+            patch.object(ch, "_ingest_saq_error", ingest),
+            patch.object(ch, "get_settings", return_value=_settings()),
+        ):
+            await ch._fail_nodeless_run(_SessionWithRun(), run_id, ORG, summary)
+        assert summary["claimed_but_never_dispatched"] == 1
+        ingest.assert_awaited_once()
+        ctx = ingest.await_args.kwargs["context"]
+        assert ctx["pipeline_id"] == str(pipeline_id)
+        assert ctx["trigger_id"] == str(trigger_id)
+        assert ctx["claim_count"] == 5
 
 
 class _NoRunSession:
@@ -2569,6 +2638,159 @@ class TestHitlGateExpiryTerminalizerWiring:
         assert terminalizer.await_args.kwargs["grace_seconds"] == 180
 
 
+class TestTerminalizeHitlGateMissing:
+    """FAR-721: the zero-claim-``awaiting_human`` terminalizer's SQL contract.
+
+    The complement sweep is a SINGLE guarded UPDATE (the same TOCTOU-safe
+    idiom as the FAR-648 sweep) whose orphan predicate is a ``NOT EXISTS`` over
+    ANY ``hitl_claims`` row, so a run with a live claim is never collected.
+    These tests pin the predicate shape; the behavioral matrix (orphan older
+    than grace collected; live-claim / in-grace orphan spared) runs against
+    real Postgres in tests/integration/test_org_sandbox_capacity.py."""
+
+    async def _run(self, terminalized: list[uuid.UUID] | None = None) -> tuple[list[uuid.UUID], _MockSession]:
+        session = _MockSession([])
+        if terminalized is not None:
+            session.terminalizer_rows["hitl_gate_missing"] = terminalized
+        returned = await ch._terminalize_hitl_gate_missing(session, ORG, grace_seconds=3600)
+        return returned, session
+
+    @pytest.mark.asyncio
+    async def test_writes_cancelled_with_hitl_gate_missing_code_and_detail(self) -> None:
+        """P7' contract: the terminalizer writes status='cancelled' with the
+        new ``hitl_gate_missing`` code and its synthetic error_detail — distinct
+        from the FAR-648 ``hitl_gate_expired`` code."""
+        _returned, session = await self._run()
+        stmt, params = session.executed[-1]
+        sql = str(stmt)
+        assert "status='cancelled'" in sql
+        assert params["code"] == ch._HITL_GATE_MISSING_ERROR_CODE
+        assert ch._HITL_GATE_MISSING_ERROR_CODE == "hitl_gate_missing"
+        assert ch._HITL_GATE_MISSING_ERROR_CODE != ch._HITL_GATE_EXPIRED_ERROR_CODE
+        assert params["detail"] == ch._HITL_GATE_MISSING_ERROR_DETAIL
+
+    @pytest.mark.asyncio
+    async def test_source_status_bound_to_awaiting_human_constant(self) -> None:
+        """qa F15: the ``awaiting_human`` status literal is a bound param named
+        from the shared model constant — never a raw SQL literal."""
+        _returned, session = await self._run()
+        stmt, params = session.executed[-1]
+        assert "status=:awaiting_status" in str(stmt)
+        assert params["awaiting_status"] == ch.AWAITING_HUMAN_STATUS
+        assert ch.AWAITING_HUMAN_STATUS == "awaiting_human"
+
+    @pytest.mark.asyncio
+    async def test_grace_window_ages_on_created_at(self) -> None:
+        """The grace anchor is ``created_at``: ``runs.updated_at`` is an
+        insert-time default no status transition bumps in this codebase (see
+        the sweep's docstring), so it cannot age an awaiting_human run."""
+        _returned, session = await self._run()
+        stmt, params = session.executed[-1]
+        sql = str(stmt)
+        assert "created_at < now() - (:grace_seconds * interval '1 second')" in sql
+        assert params["grace_seconds"] == 3600
+
+    @pytest.mark.asyncio
+    async def test_zero_claim_predicate_is_a_not_exists_over_any_claim(self) -> None:
+        """The orphan predicate excludes ANY claim row — claimed or not,
+        decided or not, expired or in grace — so a run with a live or historical
+        HITL claim can never be over-collected."""
+        _returned, session = await self._run()
+        sql = str(session.executed[-1][0])
+        assert "NOT EXISTS" in sql
+        assert "SELECT 1 FROM hitl_claims hc" in sql
+        assert "hc.organisation_id = runs.organisation_id" in sql
+        assert "hc.run_id = runs.id" in sql
+
+    @pytest.mark.asyncio
+    async def test_predicate_keeps_cancel_wins_precedence(self) -> None:
+        """A cancellation-requested run is owned by the cancel path — the
+        terminalizer must never write ``cancelled`` over it."""
+        _returned, session = await self._run()
+        assert "cancellation_requested=false" in str(session.executed[-1][0])
+
+    @pytest.mark.asyncio
+    async def test_returns_terminalized_ids_and_warns_per_run(self, caplog: pytest.LogCaptureFixture) -> None:
+        orphaned = [uuid.uuid4(), uuid.uuid4()]
+        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+            returned, _session = await self._run(orphaned)
+        assert returned == orphaned
+        zombie_warns = [r for r in caplog.records if "zero-claim awaiting_human zombie terminalized" in r.message]
+        assert len(zombie_warns) == len(orphaned)
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_empty(self) -> None:
+        returned, _session = await self._run()
+        assert not returned
+
+
+class TestHitlGateMissingTerminalizerWiring:
+    """FAR-721 wiring: the reconcile tick must invoke the zero-claim
+    terminalizer with the settings grace and fold its results into the summary
+    stats key + the post-commit compensating daily fact (P6', FAR-162)."""
+
+    def test_stats_key_declared_in_both_vocabularies(self) -> None:
+        assert "hitl_gate_missing_terminalized" in ch._dispatcher_reconcile_stats
+        assert "hitl_gate_missing_terminalized" in ch._dispatcher_summary()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_invokes_terminalizer_with_settings_grace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        orphaned_run = uuid.uuid4()
+        terminalizer = AsyncMock(return_value=[orphaned_run])
+        summary, _reenqueue, _ingest, _redis, _awaiting, session = await _run_reconcile(
+            monkeypatch, [], terminalizer_missing=terminalizer
+        )
+
+        terminalizer.assert_awaited_once()
+        assert terminalizer.await_args.kwargs["grace_seconds"] == 3600
+        assert summary["hitl_gate_missing_terminalized"] == 1
+        session.record_facts.assert_awaited_once_with(orphaned_run, ORG)
+
+    @pytest.mark.asyncio
+    async def test_grace_is_settings_derived_not_hardcoded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The knob is read from settings every tick — an operator override
+        reaches the terminalizer unchanged."""
+        terminalizer = AsyncMock(return_value=[])
+        await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_missing=terminalizer,
+            settings_overrides={"hitl_gate_cancel_grace_seconds": 180},
+        )
+
+        assert terminalizer.await_args.kwargs["grace_seconds"] == 180
+
+    @pytest.mark.asyncio
+    async def test_terminalize_capped_counter_fires_at_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A zero-claim sweep returning exactly ``terminalize_max`` rows signals
+        a saturated batch — the tick raises ``terminalize_capped`` so the
+        overflow backlog is observable, mirroring the sibling terminalizers."""
+        terminalizer = AsyncMock(return_value=[uuid.uuid4(), uuid.uuid4()])
+        summary, _reenqueue, _ingest, _redis, _awaiting, _session = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_missing=terminalizer,
+            settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 2},
+        )
+
+        assert summary["hitl_gate_missing_terminalized"] == 2
+        assert summary["terminalize_capped"] == 1
+
+    @pytest.mark.asyncio
+    async def test_terminalize_capped_counter_silent_under_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A zero-claim sweep below the cap must not raise the overflow signal."""
+        terminalizer = AsyncMock(return_value=[uuid.uuid4()])
+        summary, _reenqueue, _ingest, _redis, _awaiting, _session = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_missing=terminalizer,
+            settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 25},
+        )
+
+        assert summary["hitl_gate_missing_terminalized"] == 1
+        assert summary["terminalize_capped"] == 0
+
+
 class TestRecordFactForTerminalizedRun:
     """FAR-648 phantom-fact guard: the compensating daily-fact recorder (P6',
     FAR-162) re-selects the run AFTER the per-org transactions commit. The
@@ -2741,21 +2963,10 @@ class TestDispatcherReconcileFactsBatchCap:
         facts_org = uuid.uuid4()
 
         async def _five_terminalized(
-            _factory: Any,
-            _q: Any,
-            _rc: Any,
+            *,
             org_id: uuid.UUID,
-            _pred: Any,
-            _nw: Any,
-            _mam: Any,
-            _cc: Any,
-            _sw: Any,
-            _crs: Any,
-            _efr: Any,
-            _summary: Any,
             terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
-            _grace: Any,
-            **_kw: Any,
+            **kwargs: Any,
         ) -> int:
             terminalized_run_ids.extend((uuid.uuid4(), org_id) for _ in range(5))
             return 0
@@ -2802,21 +3013,10 @@ class TestDispatcherReconcileFactsBatchCap:
         facts_org = uuid.uuid4()
 
         async def _two_terminalized(
-            _factory: Any,
-            _q: Any,
-            _rc: Any,
+            *,
             org_id: uuid.UUID,
-            _pred: Any,
-            _nw: Any,
-            _mam: Any,
-            _cc: Any,
-            _sw: Any,
-            _crs: Any,
-            _efr: Any,
-            _summary: Any,
             terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
-            _grace: Any,
-            **_kw: Any,
+            **kwargs: Any,
         ) -> int:
             terminalized_run_ids.extend((uuid.uuid4(), org_id) for _ in range(2))
             return 0
@@ -3222,3 +3422,36 @@ class TestFailNodelessObservability:
         assert "dispatched_at" in ctx
         assert "started_at" in ctx
         assert "saq_queue_wait_seconds" in ctx
+
+
+class TestResolveTerminalizer:
+    """FAR-720: name-based lookup guards in _resolve_terminalizer."""
+
+    def test_resolves_registered_batch_spec_coroutine(self) -> None:
+        """Every registered batch terminalizer resolves to a coroutine."""
+        for spec in ch._BATCH_TERMINALIZER_SPECS:
+            coroutine = ch._resolve_terminalizer(spec)
+            assert callable(coroutine)
+
+    def test_spec_without_coroutine_raises_type_error(self) -> None:
+        """A terminalizer spec with coroutine_name=None fails loudly."""
+        spec = ch.ReconcileTerminalizer(
+            key="x",
+            stats_key="x",
+            blob_keys=("x",),
+            stall_reason="executor_stalled",
+        )
+        with pytest.raises(TypeError, match="no coroutine registered"):
+            ch._resolve_terminalizer(spec)
+
+    def test_spec_with_unknown_coroutine_raises_attribute_error(self) -> None:
+        """A terminalizer spec pointing at a missing module attribute fails loudly."""
+        spec = ch.ReconcileTerminalizer(
+            key="x",
+            stats_key="x",
+            blob_keys=("x",),
+            stall_reason="executor_stalled",
+            coroutine_name="_terminalize_does_not_exist_anywhere",
+        )
+        with pytest.raises(AttributeError, match="not found in module"):
+            ch._resolve_terminalizer(spec)

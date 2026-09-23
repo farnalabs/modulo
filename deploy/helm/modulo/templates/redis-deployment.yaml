@@ -1,0 +1,94 @@
+{{- if .Values.redis.embedded }}
+{{- $redisPassword := include "modulo.redisPassword" . }}
+{{- $redisArgs := list "redis-server" "--maxmemory" "256mb" "--maxmemory-policy" "allkeys-lru" }}
+{{- if $redisPassword }}
+{{- $redisArgs = concat $redisArgs (list "--requirepass" "$(REDIS_PASSWORD)") }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "modulo.fullname" . }}-redis
+  namespace: {{ include "modulo.namespace" . }}
+  labels:
+    {{- include "modulo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "modulo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "modulo.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
+    spec:
+      serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: redis:8-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http-redis
+              containerPort: 6379
+              protocol: TCP
+          command:
+            {{- toYaml $redisArgs | nindent 12 }}
+          {{- if $redisPassword }}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.fullname" . }}-secrets
+                  key: REDIS_PASSWORD
+          {{- end }}
+          livenessProbe:
+            exec:
+              {{- if $redisPassword }}
+              command: ["sh", "-c", 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping']
+              {{- else }}
+              command: ["redis-cli", "ping"]
+              {{- end }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              {{- if $redisPassword }}
+              command: ["sh", "-c", 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping']
+              {{- else }}
+              command: ["redis-cli", "ping"]
+              {{- end }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+      volumes:
+        - name: redis-data
+          emptyDir: {}
+{{- end }}

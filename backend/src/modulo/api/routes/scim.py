@@ -4,13 +4,13 @@ Requires MODULO_SCIM_TOKEN env var for auth. Gated behind the "scim"
 feature flag (require_feature). Maps SCIM Users → internal User, SCIM
 Groups → internal Team + TeamMembership.
 
-ADR 017: SCIM is EXEMPT from the org-role sweep at phase 1 — every route
+ADR 047: SCIM is EXEMPT from the org-role sweep at phase 1 — every route
 authenticates via the shared-secret ``MODULO_SCIM_TOKEN`` (an enumerated
 channel with a dedicated non-role auth mechanism). No SCIM route passes
 ``org_role`` to the CRUD layer: ``scim_create_user`` defaults to the
 ``runner`` grant and ``scim_update_user`` has a *functional* role-UPDATE
 that is intentionally left unwired. Do not wire a role-update path without
-an ADR 017 follow-up (Phase 3 documents the runner-default grant).
+an ADR 047 follow-up (Phase 3 documents the runner-default grant).
 """
 
 import logging
@@ -28,6 +28,7 @@ from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.admin import _raise_bg_pgcode
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal, require_scim_feature
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.crud.last_admin_guard import (
     LastAdminLockoutError,
     LastAdminLockoutUnavailableError,
@@ -194,7 +195,7 @@ def _group_to_scim(group: Team, members: list[dict[str, str]], base_url: str) ->
 
 
 def _get_base_url(settings: Settings) -> str:
-    url = settings.modulo_public_url
+    url = get_public_url(settings)
     if not url:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

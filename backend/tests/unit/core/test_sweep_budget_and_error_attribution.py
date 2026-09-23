@@ -99,6 +99,14 @@ class TestDispatcherReconcileRowBudget:
             summary["scanned"] += 3
             return 0
 
+        tuning = ch.ReconcileTuning(
+            nodeless_window=15,
+            max_age_minutes=135,
+            claim_cap=3,
+            stale_window=90,
+            capacity_redispatch_seconds=60,
+            hitl_gate_cancel_grace_seconds=3600,
+        )
         with (
             patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=org_ids),
             patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org),
@@ -111,12 +119,7 @@ class TestDispatcherReconcileRowBudget:
                 factory=MagicMock(),
                 queue_name="runs",
                 reenqueue_window=5,
-                stale_window=90,
-                nodeless_window=15,
-                capacity_redispatch_seconds=60,
-                max_age_minutes=135,
-                claim_cap=3,
-                hitl_gate_cancel_grace=3600,
+                tuning=tuning,
                 terminalize_max=25,
                 facts_max=25,
                 max_rows=5,
@@ -144,6 +147,14 @@ class TestDispatcherReconcileRowBudget:
             summary["scanned"] += 2
             return 0
 
+        tuning = ch.ReconcileTuning(
+            nodeless_window=15,
+            max_age_minutes=135,
+            claim_cap=3,
+            stale_window=90,
+            capacity_redispatch_seconds=60,
+            hitl_gate_cancel_grace_seconds=3600,
+        )
         with (
             patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=org_ids),
             patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org),
@@ -156,12 +167,7 @@ class TestDispatcherReconcileRowBudget:
                 factory=MagicMock(),
                 queue_name="runs",
                 reenqueue_window=5,
-                stale_window=90,
-                nodeless_window=15,
-                capacity_redispatch_seconds=60,
-                max_age_minutes=135,
-                claim_cap=3,
-                hitl_gate_cancel_grace=3600,
+                tuning=tuning,
                 terminalize_max=25,
                 facts_max=25,
                 max_rows=100,

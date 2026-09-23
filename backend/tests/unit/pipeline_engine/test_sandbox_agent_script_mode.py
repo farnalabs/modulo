@@ -296,6 +296,22 @@ def test_jinja_helper_validates_agent_commands_list():
     assert "n1" in err
 
 
+def test_node_runner_binds_shared_sandbox_jinja_environment():
+    """The run-time renderer resolves the SAME helper as the save-time gate (FAR-226).
+
+    node_runner imports ``sandbox_jinja_environment`` into its own namespace at
+    module load (used by ``_sandbox_agent_impl`` to render the sandbox
+    ``agent_prompt`` + ``agent_command``). Pinning the identity here means a
+    regression to an inline ``SandboxedEnvironment()`` in the run-time path
+    fails loudly, keeping the save-time parse and the run-time render
+    guaranteed to share one environment.
+    """
+    from modulo.core.pipeline_engine import node_runner
+    from modulo.core.pipeline_engine.sandbox_mode import sandbox_jinja_environment
+
+    assert node_runner.sandbox_jinja_environment is sandbox_jinja_environment
+
+
 # ---------------------------------------------------------------------------
 # 2. Verbatim script_command execution (no Jinja render)
 # ---------------------------------------------------------------------------
@@ -651,6 +667,38 @@ def test_script_mode_local_provider_is_refused(monkeypatch: pytest.MonkeyPatch):
     # No enforcement requested -> no refusal (a plain script needs no key).
     plain = _script_node_def()
     make_sandbox_agent_fn(plain)
+
+
+def test_script_mode_enforcement_reads_e2b_override(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1159 prove-the-fix: the enforcement gate resolves
+    MODULO_E2B_API_KEY via the runtime-config bridge.
+
+    An override satisfies the gate exactly like the env var (fails without
+    the bridge — the gate would read only os.environ and refuse), an explicit
+    empty override disables the key, and the no-key case still fails closed.
+    """
+    from modulo.core.runtime_config.store import get_runtime_config_store
+
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    store = get_runtime_config_store()
+    denied = _script_node_def(egress_policy="deny_all")
+
+    store.set_override("MODULO_E2B_API_KEY", "hot-key")
+    try:
+        # Override present, env absent -> enforcement constructs (no refusal).
+        make_sandbox_agent_fn(denied)
+
+        # Explicit empty override disables the key -> refused (fail closed).
+        store.set_override("MODULO_E2B_API_KEY", "")
+        with pytest.raises(ValueError, match="requires a remote E2B provider"):
+            make_sandbox_agent_fn(denied)
+    finally:
+        store.clear_override("MODULO_E2B_API_KEY")
+
+    # No override, no env -> refused (fail closed, unchanged behaviour).
+    with pytest.raises(ValueError, match="requires a remote E2B provider"):
+        make_sandbox_agent_fn(denied)
 
 
 async def test_resource_limits_passed_as_metadata():

@@ -283,7 +283,7 @@ The reference-integrity guard test (`tests/architecture/test_feature_flag_refere
 
 2. **Snapshot** – The pipeline's current definition is frozen as a PipelineSnapshot (all agent versions, schema pins, connector bindings, model backend pins, environment profile). The run now executes against this immutable snapshot; the snapshot is tagged `version_kind='run'`.
 
-   **Live-edit history + release channels (ADR 025 / FAR-402 P6):** the snapshot
+   **Live-edit history + release channels (ADR 049 / FAR-402 P6):** the snapshot
    machinery is reused for versioning beyond run-start freezes. The editor's
    save action creates a new snapshot tagged `version_kind='edit'` (the live-edit
    chain), leaving prior rows immutable so rollback is a pointer swap to a prior
@@ -615,7 +615,7 @@ When a pipeline runs, the run executes with the **pipeline owner's authority**, 
 - A run may only use secrets scoped to the **pipeline's owner team**; cross-team secret use requires moving the secret to an org-visible scope.
 - `runs.owner_team_id` is **metadata** (for dashboard aggregation), not a security control. Run access is derived from pipeline access; runs do not need their own team gate.
 
-See ADR 038 (`Repos/devtools/adr/038-rbac-security-boundary.md`) for the full decision.
+See ADR 038 (rbac-security-boundary) for the full decision.
 
 ### Folder Security Model (ADR 038)
 
@@ -712,17 +712,17 @@ OpenTelemetry-native. Default exporter: stdout JSON. Configurable OTLP endpoint 
 
 ## Architecture Decision Records
 
-ADRs live in the private `farnalabs/devtools` repo at `Repos/devtools/adr/` (migrated out of this repo 2026-09-02, FAR-434; they were previously in-repo under `docs/adr/`). They document key trade-offs:
+ADRs document key trade-offs and are maintained alongside this project's private development tooling (migrated out of this repo 2026-09-02, FAR-434).
 
 | ADR | Title | Status |
 |-----|-------|--------|
 | 001 | Agent Execution Environment as a V1 Primitive | Implemented (provider/tier model superseded by ADR 029) |
 | 002 | Multi-Backend Database Abstraction Strategy | Draft |
-| 003 | Agent Dispatch Model | Supersedes ADR 001 |
+| 044 | Agent Dispatch Model | Supersedes ADR 001 |
 | 003 | Packaging & Distribution Strategy | Draft |
-| 004 | Agent as a Self-Contained Bundle | Accepted |
+| 045 | Agent as a Self-Contained Bundle | Accepted |
 | 004 | User Offboarding Uses Deactivation (Not Hard Deletion) | Accepted |
-| 005 | Agent Architecture: Two-Tier Orchestration + Execution | Superseded by ADR 029 |
+| 046 | Agent Architecture: Two-Tier Orchestration + Execution | Superseded by ADR 029 |
 | 005 | Self-Hosted Deployments Use One Org; Teams Are the Separation Boundary | Active |
 | 006 | Dashboard Performance: Application Cache Over Materialized View | Active |
 | 007 | Remy UI Commands: Frontend-Mediated Browser Automation | Active |
@@ -735,14 +735,14 @@ ADRs live in the private `farnalabs/devtools` repo at `Repos/devtools/adr/` (mig
 | 015 | Bundle Format v2 (YAML) | Accepted |
 | 016 | Agent Log Observability | Accepted |
 | 017 | Celery to SAQ Migration | Accepted |
-| 017/018 | Centralized Authorization: Shared Permission Registry for REST + MCP | v9 – revised after 7 plan-review-iterate cycles |
+| 047/018 | Centralized Authorization: Shared Permission Registry for REST + MCP | v9 – revised after 7 plan-review-iterate cycles |
 | 019 | Cost Formula Engine + E2B Rate/Fallback Decision | Accepted |
 | 020 | Analytics: run_daily_facts + typed-params query surface | Accepted |
 | 025 | Generic REST Integration Connector | Accepted |
 | 029 | Agent Execution Tiers + the Bundled Runner | Accepted |
 | 038 | RBAC as a Security Boundary: One Rule, One Principal | Accepted |
 
-Note: ADR numbers 003/004/005 are shared by two distinct ADR files each (the numbering mirrors the filesystem). ADR 017/018 – Centralized Authorization – exists as both `017-centralized-authorization.md` and `018-centralized-authorization.md` (a duplicated file), so it is listed once here under the combined number.
+Note: duplicate ADR numbers were resolved by FAR-1157 (devtools commit `b65b5de`): where two files shared a number, the later arrival was renumbered — 003 Agent Dispatch Model → 044, 004 Agent as a Self-Contained Bundle → 045, 005 Agent Architecture: Two-Tier → 046, 017 Centralized Authorization → 047, 021 E2B Session Liveness → 048, 025 Live-Edit History + Release Channels → 049 and Execution-Graph Router/HITL Nodes → 050, 042 Managed Sandbox Adapter Pattern → 051 — so each number now names exactly one ADR file (the keeper files — 003 Packaging & Distribution, 004 User Offboarding, 005 Single-Org Self-Hosted, 017 Celery to SAQ, 021 Worker Resilience, 025 Generic REST Integration Connector, 042 Governed Run Contract — kept their numbers). Centralized Authorization still exists as two copies, `047-centralized-authorization.md` (superseded by the canonical `018-centralized-authorization.md`), so it is listed once above under the combined number 047/018.
 
 ## Import Contracts (enforced by import-linter)
 

@@ -12,6 +12,7 @@ import pytest
 
 from modulo.core.pipeline_engine.error_codes import (
     ERROR_CODE_REGISTRY,
+    KNOWN_FIXES,
     LEGACY_ALIASES,
     class_for,
     error_code_map_conflicts,
@@ -19,6 +20,7 @@ from modulo.core.pipeline_engine.error_codes import (
     is_retryable,
     known_error_codes,
     map_legacy_code,
+    match_known_fixes,
     present_error,
     sanitize_error_text,
 )
@@ -622,9 +624,85 @@ def test_unmapped_fallback_signal_emits_once_per_distinct_code(caplog):
 
 @pytest.mark.usefixtures("_clean_unmapped_signal")
 def test_unmapped_fallback_signal_skips_empty_codes(caplog):
-    """None/empty is the ABSENT-code case, not an unmapped class name � no
+    """None/empty is the ABSENT-code case, not an unmapped class name — no
     signal (the present_error contract keeps None on the wire)."""
     with caplog.at_level("WARNING"):
         assert map_legacy_code(None) == "harness.unknown"
         assert map_legacy_code("") == "harness.unknown"
     assert "harness.unknown.fallback" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Known-fixes KB (FAR-706): curated raw-signature → documented-fix mapping
+# ---------------------------------------------------------------------------
+
+
+def test_known_fixes_registry_integrity():
+    """Every entry carries a non-empty id/signature/title/body and unique ids —
+    a curated KB entry is only useful if it can actually be rendered."""
+    fix_ids = [fix.fix_id for fix in KNOWN_FIXES]
+    assert KNOWN_FIXES
+    assert len(fix_ids) == len(set(fix_ids))
+    for fix in KNOWN_FIXES:
+        assert fix.fix_id
+        assert fix.signature
+        assert fix.title
+        assert fix.body
+
+
+def test_match_known_fixes_positive_heredoc_pyfar647():
+    """The FAR-647 bash parse failure surfaces its documented base64-block fix
+    from the raw stderr signature alone (node.cancelled is the generic code)."""
+    detail = "bash: -c: line 1: here-document delimited by end-of-file (wanted 'PYFAR647')"
+    matches = match_known_fixes(detail)
+    assert len(matches) == 1
+    assert matches[0].fix_id == "heredoc_at_end_of_command"
+    assert "base64" in matches[0].body
+
+
+def test_match_known_fixes_positive_session_interrupted_is_case_insensitive():
+    """'session interrupted' matches regardless of case — the fallback string
+    appears in several casings across wrapper variants."""
+    matches = match_known_fixes("No output from agent - Session Interrupted")
+    assert len(matches) == 1
+    assert matches[0].fix_id == "session_interrupted_no_output"
+
+
+def test_match_known_fixes_positive_e2b_cap():
+    matches = match_known_fixes("validation failed: SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP (3600 > 3300)")
+    assert len(matches) == 1
+    assert matches[0].fix_id == "sandbox_timeout_exceeds_e2b_cap"
+    assert matches[0].link is not None
+
+
+def test_match_known_fixes_returns_every_match():
+    """One detail can hit several signatures; each matching entry is returned."""
+    detail = "here-document delimited by end-of-file (wanted 'PYFAR647'); no output from agent - session interrupted"
+    matches = match_known_fixes(detail)
+    matched_ids = {fix.fix_id for fix in matches}
+    assert matched_ids == {"heredoc_at_end_of_command", "session_interrupted_no_output"}
+
+
+def test_match_known_fixes_no_match_returns_empty():
+    """An unrelated detail matches nothing — the run detail page then renders
+    no known-fix panel at all (no empty box)."""
+    assert not match_known_fixes("Connection refused by provider")
+    assert not match_known_fixes("some unrelated stderr output")
+
+
+def test_match_known_fixes_handles_absent_and_non_string_detail():
+    """None/empty/non-string detail degrade to an empty list, never a raise."""
+    assert not match_known_fixes(None)
+    assert not match_known_fixes("")
+    assert not match_known_fixes(12345)
+
+
+def test_match_known_fixes_never_raises_on_pathological_input():
+    """Fail-safe contract: an input whose stringification blows up still
+    returns [] (logged), so a bad value can never break a read surface."""
+
+    class Explodes:
+        def __str__(self) -> str:
+            raise RuntimeError("boom")
+
+    assert not match_known_fixes(Explodes())

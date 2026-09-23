@@ -193,7 +193,7 @@ async def rollback_to_snapshot(
 ) -> PipelineSnapshot | None:
     """Create a new snapshot that restores the graph from a previous snapshot.
 
-    ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19: the
+    ADR 047 service-layer backstop + hitl-gate-removal-guard-plan.md v19: the
     HITL gate guard runs here, under the row lock and BEFORE the graph mutation.
     A historical snapshot's missing/``None`` gate fields are fail-closed
     (treated as weakening) with the distinct reason code

@@ -8,7 +8,7 @@ Dual-layer enforcement:
 
 The per-tool requirement map references the centralized permission registry
 (``modulo.auth.permissions.PERMISSIONS``) rather than duplicating roles — the
-registry is the single source of truth (ADR 017).
+registry is the single source of truth (ADR 047).
 """
 
 import contextvars

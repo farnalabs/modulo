@@ -7,8 +7,6 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/pipelines/create.feature")
-with contextlib.suppress(FileNotFoundError, OSError):
-    scenarios("../features/pipelines/concurrency.feature")
 
 from tests.bdd.conftest import _make_mock_pipeline_full
 

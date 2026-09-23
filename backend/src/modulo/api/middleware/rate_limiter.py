@@ -20,6 +20,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from modulo.api.models.problem import ProblemDetail, ProblemType
 from modulo.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
 from modulo.core.rate_limiter import RateLimiterRegistry, RateLimitRule, TokenBucket
+from modulo.core.runtime_config.key_bridge import override_or
 from modulo.settings import Settings, get_settings
 
 RATELIMIT_BYPASS_HEADER = "MODULO_RATELIMIT_BYPASS_TOKEN"
@@ -281,7 +282,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method not in ("POST", "PUT", "PATCH", "GET"):
             return False
         token = request.headers.get(RATELIMIT_BYPASS_HEADER, "")
-        if _matches_bypass_token(token, self._bypass_token or ""):
+        # FAR-1135: bypass token is hot-reloadable — resolve the override
+        # per-request so an admin rotation takes effect without a restart.
+        bypass = override_or("MODULO_RATELIMIT_BYPASS_TOKEN", self._bypass_token or "")
+        if _matches_bypass_token(token, bypass):
             return False
         path = request.url.path
         # FAR-856: GET-specific rate limiting for pre-auth anonymous endpoints.
@@ -455,7 +459,10 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         if request.method not in ("POST", "PUT", "PATCH"):
             return False
         token = request.headers.get(RATELIMIT_BYPASS_HEADER, "")
-        if _matches_bypass_token(token, self._bypass_token or ""):
+        # FAR-1135: bypass token is hot-reloadable — resolve the override
+        # per-request so an admin rotation takes effect without a restart.
+        bypass = override_or("MODULO_RATELIMIT_BYPASS_TOKEN", self._bypass_token or "")
+        if _matches_bypass_token(token, bypass):
             return False
         path = request.url.path
         # FAR-535: the demo auto-login path NEVER touches the shared

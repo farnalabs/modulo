@@ -1,4 +1,4 @@
-Feature: MCP Onboarding — discoverable tool surface (ADR 017)
+Feature: MCP Onboarding — discoverable tool surface (ADR 047)
   As a new MCP client
   I want to discover the MCP tool stack and the authentication contract that gates it
   So that I can drive Modulo through the MCP protocol

@@ -1,4 +1,4 @@
-"""Unit tests for the permission-based REST dependency adapters (ADR 017).
+"""Unit tests for the permission-based REST dependency adapters (ADR 047).
 
 Each test drives the dependency's inner coroutine directly (the same style
 ``require_feature`` uses) and asserts the five variants behave as specified.

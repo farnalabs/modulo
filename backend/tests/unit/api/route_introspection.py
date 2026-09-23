@@ -1,4 +1,4 @@
-"""Shared route-introspection helpers for the ADR 017 permission sweep.
+"""Shared route-introspection helpers for the ADR 047 permission sweep.
 
 These helpers walk the FastAPI router and extract permission-dependency tags so
 the strict introspection test can assert that every mutating user-principal
@@ -48,7 +48,7 @@ def _tagged_deps_from_param(param, annotation=None) -> list[dict]:
     * classic default-value form —
       ``user: T = Depends(require_system_permission("..."))`` — where the
       ``Depends`` is the parameter *default*;
-    * ``Annotated`` form (ADR 017 sweep, used to drop ``# type: ignore``) —
+    * ``Annotated`` form (ADR 047 sweep, used to drop ``# type: ignore``) —
       ``user: Annotated[T, Depends(require_system_permission("..."))]`` — where
       the ``Depends`` lives in the annotation metadata rather than the default.
     """

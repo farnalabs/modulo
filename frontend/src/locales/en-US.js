@@ -549,7 +549,8 @@ export default {
       "modulo": "Modulo",
       "or_continue_with": "or continue with",
       "sign_in_to_org": "Sign in to {orgName}",
-      "sign_in_with": "Sign in with {provider}"
+      "sign_in_with": "Sign in with {provider}",
+      "used_last_time": "Used last time"
     },
     "OrgLoginView": {
       "sign_in_to_your_organisation": "Sign in to your organisation",
@@ -557,7 +558,8 @@ export default {
       "organisation_slug_label": "Organisation name or slug",
       "organisation_slug_placeholder": "e.g. acme-corp",
       "organisation_slug_hint": "Enter your organisation's name or URL slug to continue.",
-      "continue": "Continue"
+      "continue": "Continue",
+      "change_organization": "(change organization)"
     },
     "NotificationsPage": {
       "title": "Notifications",
@@ -1523,6 +1525,8 @@ export default {
       "node_prefix": "node: {id}"
     },
     "RunDetailView": {
+      "known_fix_heading": "Known fixes",
+      "known_fix_reference": "View documentation",
       "copy_run_id": "Copy run ID",
       "copy": "Copy",
       "final_output": "Final Output",
@@ -1637,6 +1641,9 @@ export default {
       "work_item_kind_github_pr": "PR",
       "work_item_kind_github_issue": "Issue",
       "work_item_kind_github_default": "GitHub",
+      "pr_state_open": "Open",
+      "pr_state_merged": "Merged",
+      "pr_state_closed": "Closed",
       "child_runs": "Child runs",
       "stale": "stale",
       "running_label": "running",

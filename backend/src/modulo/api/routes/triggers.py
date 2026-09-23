@@ -75,6 +75,87 @@ _MSG_ONLY_CRON_TRIGGERS_CAN = "Only cron triggers can have cron configuration"
 _CODE_TRIGGERS_TEST_TRIGGER = "triggers.test_trigger"
 _MAX_PREVIEW_COUNT = 50
 
+# Keys the trigger engine actually reads from config_json.  A create/update
+# whose config_json declares a key NOT in this set is rejected with a clear
+# 400 — the key would be silently ignored at delivery time, which is worse
+# than failing loudly.  When the engine gains a new key, add it here AND to
+# the engine's cfg.get() call site in the same change.
+#
+# This is the union of every trigger-engine ``config.get(...)`` read site
+# plus the per-trigger-type fire paths in ``cron_helpers``.  The union is
+# accepted regardless of ``trigger_type`` so a key a *different* trigger
+# surface legitimately reads is never rejected on the wrong trigger type.
+# Keep in sync with ``_RECOGNISED_TRIGGER_CONFIG_KEYS`` in
+# ``modulo.core.trigger_engine``.
+_RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        # Webhook / HMAC / event filtering (trigger_engine, slack_app_mention)
+        "hmac_secret",
+        "signing_secret",
+        "ci_failure_coalesce_window_seconds",
+        "payload_mapping",
+        "accepted_events",
+        "event_filters",
+        "rate_limit",
+        "work_item_ref_paths",
+        # Rate-limit keying (TriggerEngine._compute_rate_limit_key)
+        "key_fields",
+        "match_mode",
+        # Cron / ongoing schedule + run input (cron_helpers)
+        "input_template",
+        "snapshot_id",
+        "scan_interval_seconds",
+        # Polling configuration (trigger_engine, cron_helpers)
+        "poll_interval_seconds",
+        "poll_query",
+        "condition_expression",
+        "connector_instance_id",
+        # Agent-signal source matching (agent_signal)
+        "source_pipeline_id",
+        "source_node_id",
+        # Suite-run execution context (cron_helpers._resolve_suite_run_config)
+        "dataset_id",
+        "model_backend_id",
+        "scenario_inputs",
+        "cost_per_llm_case",
+        "suite_ceiling",
+        "entity_thresholds",
+        "eval_definition_version",
+    }
+)
+
+
+def _validate_trigger_config_keys(
+    config: dict[str, Any] | None,
+    *,
+    context: str = "config_json",
+) -> None:
+    """Reject config_json keys the trigger engine does not read.
+
+    Raises ``HTTPException`` 400 naming every offending key and the set of
+    keys the engine recognises.  A ``None`` or empty config passes through —
+    there are no keys to mis-declare.
+
+    *context* labels the source in the error message (e.g. ``"config_json"``
+    for create, ``"merged config_json"`` for update-after-merge).
+    """
+    if not config:
+        return
+    unrecognised = sorted(set(config) - _RECOGNISED_TRIGGER_CONFIG_KEYS)
+    if unrecognised:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{context} contains key(s) the trigger engine does not read: "
+                f"{unrecognised}. "
+                f"Recognised keys: {sorted(_RECOGNISED_TRIGGER_CONFIG_KEYS)}. "
+                "If you intended to filter events, use 'accepted_events' "
+                "(event-type gate) or 'event_filters' (value gate). "
+                "To remove a stale key, send it as null "
+                '(e.g. {"events": null}).'
+            ),
+        )
+
 
 _log = logging.getLogger(__name__)
 
@@ -215,11 +296,17 @@ def _merge_trigger_config(current: dict[str, Any] | None, update: dict[str, Any]
     """MERGE config fields — never wholesale replace (drops unmanaged keys).
 
     A masked placeholder must never clobber the stored secret (read-modify-write
-    round-trip guard); an explicit ``None`` clears the key; a missing key leaves
-    it intact. Delegates to :func:`merge_masked_config_json` so nested masked
-    values (``headers.Authorization``, list elements, ``operations`` params) are
+    round-trip guard); an explicit ``None`` value **deletes** the key from the
+    merged result (e.g. ``{"events": null}`` removes the ``events`` key);
+    a missing key leaves it intact. Delegates to
+    :func:`merge_masked_config_json` so nested masked values
+    (``headers.Authorization``, list elements, ``operations`` params) are
     skipped at every depth — the trigger GET emits a recursive mask, so the
     PATCH merge must be recursive too (previously top-level exact-equality only).
+
+    Removal vs. null-setting: trigger config values are strings, lists, dicts,
+    or numbers — never JSON ``null``. A ``None``/``null`` in the update payload
+    therefore unambiguously means "remove this key", not "set the value to null".
     """
     return merge_masked_config_json(current or {}, update)
 
@@ -940,6 +1027,7 @@ async def create_trigger(
                             "with this (pipeline, name) identity already exists"
                         ),
                     )
+            _validate_trigger_config_keys(req.config_json)
             next_fire_at = _resolve_cron_next_fire(req.trigger_type, req.cron_expression, req.cron_timezone)
             if req.trigger_type == "ongoing":
                 # FAR-158 ongoing guard: validated BEFORE creating (the shared
@@ -1050,6 +1138,7 @@ async def _apply_trigger_update(
         trigger.daily_spend_limit = req.daily_spend_limit
     if req.config_json is not None:
         merged = _merge_trigger_config(trigger.config_json, req.config_json)
+        _validate_trigger_config_keys(merged, context="merged config_json")
         trigger.config_json = _encrypt_trigger_config_secrets(merged, settings.fernet_key)
     if req.cron_expression is not None:
         trigger.cron_expression = req.cron_expression

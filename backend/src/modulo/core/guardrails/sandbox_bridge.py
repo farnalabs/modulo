@@ -149,7 +149,7 @@ class BridgeClient:
         When the server returns ``action="block"`` with ``blocked: False`` —
         the ``block_on_guardrail: false`` downgrade, or any ``after``-direction
         block routed through here — the block is RECORD-ONLY: the call
-        proceeds (ADR 003 amendment: interception is preventive, not
+        proceeds (ADR 044 amendment: interception is preventive, not
         compensating, and ``block_on_guardrail: false`` downgrades block actions
         to record-only inside the loop).
         """

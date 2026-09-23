@@ -1,0 +1,57 @@
+Modulo has been installed!
+
+Release: {{ .Release.Name }}
+Namespace: {{ include "modulo.namespace" . }}
+
+=== Services ===
+
+Backend API:
+  kubectl get svc {{ include "modulo.fullname" . }}-backend -n {{ include "modulo.namespace" . }}
+
+SAQ System Worker:
+  kubectl get svc {{ include "modulo.fullname" . }}-saq-system -n {{ include "modulo.namespace" . }}
+
+Frontend:
+  kubectl get svc {{ include "modulo.fullname" . }}-frontend -n {{ include "modulo.namespace" . }}
+
+=== Access ===
+
+{{- if .Values.ingress.enabled }}
+Ingress is enabled. Access Modulo at:
+{{- range .Values.ingress.hosts }}
+  https://{{ .host }}
+{{- end }}
+{{- else }}
+Port-forward to access Modulo locally:
+
+  # Frontend (port 80)
+  kubectl port-forward svc/{{ include "modulo.fullname" . }}-frontend 8080:{{ .Values.frontend.service.port }} -n {{ include "modulo.namespace" . }}
+
+  # Backend API (port 8000)
+  kubectl port-forward svc/{{ include "modulo.fullname" . }}-backend 8000:{{ .Values.backend.service.port }} -n {{ include "modulo.namespace" . }}
+
+Then open: http://localhost:8080
+{{- end }}
+
+=== Admin Access ===
+
+Create an admin user by setting MODULO_USERS in the backend env:
+
+  helm upgrade {{ .Release.Name }} ./deploy/helm/modulo \
+    --set backend.env.MODULO_USERS="admin:$(openssl passwd -6 your-password)"
+
+Or use existingSecret to reference a pre-created Kubernetes Secret.
+
+=== Database ===
+
+Postgres is EXTERNAL. Ensure DATABASE_URL is set in backend.env or
+postgres.host/postgres.password are set so the chart can construct it.
+
+=== Redis ===
+
+{{- if .Values.redis.embedded }}
+Redis is running inside the chart.
+{{- else }}
+Redis is EXTERNAL. Ensure REDIS_URL is set in backend.env or
+the redis.existingSecret secret contains a valid connection string.
+{{- end }}

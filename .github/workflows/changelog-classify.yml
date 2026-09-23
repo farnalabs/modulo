@@ -1,0 +1,79 @@
+# Changelog classification check (FAR-1155)
+#
+# Fails a PR that changes user-facing paths (backend/src/**, frontend/src/**)
+# without carrying a label that starts with "changelog:". The failure message
+# names all four labels so the fix is one click. PRs touching none of those
+# paths pass with a ::notice::.
+#
+# Label state comes from the event payload (github.event.pull_request.labels),
+# not an API call: the labeled/unlabeled trigger types re-run this workflow
+# with the updated label set already in the payload, so no `gh` round-trip is
+# needed and `github.token` stays a read-only checkout credential.
+
+name: "Check: Changelog classification"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changelog-classify-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changelog-classify:
+    name: Changelog classification
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a changelog:* label on user-facing changes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+
+          # Resolve the diff base the same way ci.yml's integration-changed
+          # job does: actions/checkout checks out the PR merge commit, whose
+          # first parent is the base branch; fall back to origin/<base> only
+          # when HEAD is not a merge commit.
+          if git rev-parse -q --verify "HEAD^2" >/dev/null 2>&1; then
+            BASE="HEAD^"
+          else
+            BASE="origin/${BASE_REF}"
+          fi
+          CHANGED="$(git diff --name-only "$BASE" HEAD -- backend/src frontend/src || true)"
+
+          if [ -z "$CHANGED" ]; then
+            echo "::notice::PR #${PR_NUMBER} touches no user-facing paths (backend/src, frontend/src) — no changelog label required."
+            exit 0
+          fi
+
+          # Exactly one of the four labels (any label starting with
+          # "changelog:") satisfies the gate. Labels arrive as a JSON array
+          # (toJSON) so no separator character can split or merge a label name.
+          HAS_LABEL="false"
+          if jq -e 'any(.[]; startswith("changelog:"))' >/dev/null 2>&1 <<< "$PR_LABELS_JSON"; then
+            HAS_LABEL="true"
+          fi
+
+          if [ "$HAS_LABEL" = "true" ]; then
+            echo "PR #${PR_NUMBER} changes user-facing paths and carries a changelog:* label."
+            printf 'Changed user-facing paths:\n%s\n' "$CHANGED"
+            exit 0
+          fi
+
+          echo "Changed user-facing paths:"
+          printf '%s\n' "$CHANGED"
+          echo "::error::PR #${PR_NUMBER} changes user-facing paths (backend/src/**, frontend/src/**) but has no changelog classification label. Apply exactly one of: 'changelog: breaking' (Breaking Changes), 'changelog: feature' (Features), 'changelog: fix' (Fixes), 'changelog: none' (no entry — the correct, honest label for internal/refactor/test/docs/infra work)."
+          exit 1

@@ -76,3 +76,39 @@ def test_parse_uuid_roundtrip_and_none() -> None:
     assert rd._parse_uuid(value) == uuid.UUID(value)
     assert rd._parse_uuid("not-a-uuid") is None
     assert rd._parse_uuid(object()) is None
+
+
+async def test_render_agent_template_uses_shared_sandbox_jinja_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bundled-runner renderer resolves the shared FAR-226 helper.
+
+    ``_render_agent_template`` lazily resolves ``sandbox_jinja_environment`` -
+    the single source of truth shared with the save-time validator and the E2B
+    node-runner path. Spying on the helper fails loudly if the renderer
+    regresses to an inline ``SandboxedEnvironment()``.
+    """
+    from modulo.core.pipeline_engine import sandbox_mode
+
+    calls: list[None] = []
+    real_env = sandbox_mode.sandbox_jinja_environment()
+
+    def _spy() -> object:
+        calls.append(None)
+        return real_env
+
+    monkeypatch.setattr(sandbox_mode, "sandbox_jinja_environment", _spy)
+
+    result = await rd._render_agent_template(
+        sandbox_mode="llm",
+        agent_command="echo hi",
+        agent_prompt_template="hello",
+        state={},
+        scoped_run_context={},
+        raw_input=None,
+        run_id="run-1",
+        node_id="n1",
+    )
+
+    assert calls == [None]
+    assert result == ("hello", "echo hi", "null")

@@ -2,7 +2,7 @@
 id: feat-core-db-abstraction-core
 prd: N/A
 adr:
-  - Repos/devtools/adr/002-database-abstraction-strategy.md
+  - ADR 002 (database-abstraction-strategy)
 code:
   - backend/src/modulo/db/session.py
   - backend/src/modulo/db/repositories/base.py

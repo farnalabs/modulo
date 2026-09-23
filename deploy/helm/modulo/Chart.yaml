@@ -1,0 +1,19 @@
+apiVersion: v2
+name: modulo
+description: >-
+  Vendor-neutral Helm chart for the Modulo stack — backend API, SAQ workers,
+  frontend SPA, and Redis. Postgres is external/optional.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - modulo
+  - agent-governance
+  - sdlc
+  - helm
+home: https://modulo.run
+sources:
+  - https://github.com/farnalabs/modulo
+maintainers:
+  - name: FarnaLabs
+    url: https://farnalabs.com

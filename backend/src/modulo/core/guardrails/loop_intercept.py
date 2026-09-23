@@ -51,6 +51,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
+from modulo.core.audit_logger.labels import SYSTEM_ACTOR
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.core.guardrails import (
     GuardrailAction,
@@ -358,7 +359,7 @@ async def run_loop_interception(
     if not config.enabled or not definitions:
         return _pass(), []
     if not tool_matches_patterns(tool_name, config.intercepted_tool_patterns):
-        # Read-only/local-only calls pass through (ADR 003 amendment).
+        # Read-only/local-only calls pass through (ADR 044 amendment).
         return _pass(), []
     if direction == "after" and not config.intercept_tool_results:
         return _pass(), []
@@ -397,7 +398,13 @@ async def run_loop_interception(
             [
                 LoopInterceptAuditRecord(
                     "guardrail.loop_bridge_timeout",
-                    {"tool": tool_name, "direction": direction, "reason": mechanism_error},
+                    {
+                        "actor": SYSTEM_ACTOR,
+                        "summary": f'Loop bridge timed out for tool "{tool_name}" ({direction}): {mechanism_error}',
+                        "tool": tool_name,
+                        "direction": direction,
+                        "reason": mechanism_error,
+                    },
                 )
             ],
         )
@@ -418,7 +425,13 @@ async def run_loop_interception(
             [
                 LoopInterceptAuditRecord(
                     "guardrail.loop_blocked",
-                    {"tool": tool_name, "direction": direction, "guardrail": guardrail_name},
+                    {
+                        "actor": SYSTEM_ACTOR,
+                        "summary": f'Loop blocked tool "{tool_name}" ({direction}) by guardrail "{guardrail_name}"',
+                        "tool": tool_name,
+                        "direction": direction,
+                        "guardrail": guardrail_name,
+                    },
                 )
             ],
         )
@@ -451,7 +464,15 @@ async def run_loop_interception(
                     [
                         LoopInterceptAuditRecord(
                             "guardrail.loop_blocked",
-                            {"tool": tool_name, "direction": direction, "guardrail": redact_names},
+                            {
+                                "actor": SYSTEM_ACTOR,
+                                "summary": (
+                                    f'Loop blocked tool "{tool_name}" ({direction}) by guardrail "{redact_names}"'
+                                ),
+                                "tool": tool_name,
+                                "direction": direction,
+                                "guardrail": redact_names,
+                            },
                         )
                     ],
                 )
@@ -471,7 +492,15 @@ async def run_loop_interception(
                     [
                         LoopInterceptAuditRecord(
                             "guardrail.loop_redacted",
-                            {"tool": tool_name, "direction": direction, "guardrail": redact_names},
+                            {
+                                "actor": SYSTEM_ACTOR,
+                                "summary": (
+                                    f'Loop redacted tool "{tool_name}" ({direction}) by guardrail "{redact_names}"'
+                                ),
+                                "tool": tool_name,
+                                "direction": direction,
+                                "guardrail": redact_names,
+                            },
                         )
                     ],
                 )
@@ -491,7 +520,13 @@ async def run_loop_interception(
             [
                 LoopInterceptAuditRecord(
                     "guardrail.loop_warned",
-                    {"tool": tool_name, "direction": direction, "guardrail": warn_names},
+                    {
+                        "actor": SYSTEM_ACTOR,
+                        "summary": f'Loop warned tool "{tool_name}" ({direction}) by guardrail "{warn_names}"',
+                        "tool": tool_name,
+                        "direction": direction,
+                        "guardrail": warn_names,
+                    },
                 )
             ],
         )
@@ -585,7 +620,7 @@ class LoopInterceptCallbackServer:
     The endpoint the sandbox bridge reaches must be reachable FROM the sandbox
     (in production this is the Modulo sandbox-agent process's loopback, exposed
     into the sandbox; in tests it binds 127.0.0.1 and the stub agent runs on
-    the same host). See the ADR 003 amendment for the deployment model.
+    the same host). See the ADR 044 amendment for the deployment model.
     """
 
     def __init__(

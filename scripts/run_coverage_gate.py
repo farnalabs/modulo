@@ -68,16 +68,18 @@ Gate semantics (fail-closed):
 - **Tiny diff (≤10 non-blank lines)** → PASS with a note.  Trivial
   changes (typo fixes, label tweaks) should not fail the gate.
 - **Unmeasured changed file** → counts as 0% coverage.  A brand-new
-  production file with no coverage in the report is a gate failure.
-  Detected by comparing the changed production files against the report's
-  ``src_stats``: a file absent from the report contributes every non-blank
-  changed line to the denominator at 0%.  A file that IS in the report is
-  measured only against its *coverable* changed lines (``covered_lines`` +
-  ``violation_lines`` from diff-cover's ``src_stats``), because coverage.py
-  and v8 never instrument non-executable lines (annotations, decorators,
-  continuations, static ``.vue`` template markup, comments, import-only
-  lines).  Counting those against a tested module would make a fully-covered
-  module mathematically unable to clear the threshold.
+  production file with no coverage in the report is a gate failure: a file
+  absent from BOTH the raw report's file list and diff-cover's ``src_stats``
+  contributes every non-blank changed line to the denominator at 0%.  A file
+  the report *does* measure is scored only against its *coverable* changed
+  lines (``covered_lines`` + ``violation_lines`` from ``src_stats``), because
+  coverage.py and v8 never instrument non-executable lines (annotations,
+  decorators, continuations, static ``.vue`` template markup, comments,
+  import-only lines).  A measured file whose changed lines are ALL
+  non-instrumentable (e.g. a view that only gained a component tag and an
+  import) is absent from ``src_stats``; the raw-report file list keeps it from
+  being charged as unmeasured.  Counting those lines against a tested file
+  would make a fully-covered file mathematically unable to clear the threshold.
 
 Branch coverage edge cases:
 
@@ -1289,24 +1291,81 @@ def _production_coverage_from_json(changed_files: dict[str, int], json_data: dic
     return covered, measured
 
 
-def _unmeasured_file_lines(changed_files: dict[str, int], json_data: dict | None) -> int:
+def _report_source_files(report_path: Path, language: str) -> set[str]:
+    """Return the raw source-file keys listed in the coverage report.
+
+    The gate needs to tell two "absent from ``src_stats``" cases apart:
+    a file the report never measured at all (brand-new, untested — must fail)
+    and a file the report *does* measure but whose changed lines are all
+    non-instrumentable (a view's template/import lines — must NOT be scored at
+    0%; there is no executable changed code to cover).  ``src_stats`` alone
+    cannot distinguish them because diff-cover omits a file whose changed lines
+    carry no coverage records, so consult the raw report's file list.
+
+    Returns the report's own keys (unmapped); callers map them onto the
+    changed-file namespace with :func:`_match_report_key_to_changed`.
+    """
+    try:
+        if language == "JavaScript":
+            text = report_path.read_text(encoding="utf-8")
+            return {raw[3:].strip() for raw in text.splitlines() if raw.startswith("SF:") and raw[3:].strip()}
+        tree = ET.parse(str(report_path))  # noqa: S314 — internal trusted report
+        return {filename for cls in tree.getroot().iter("class") if (filename := cls.get("filename"))}
+    except (OSError, ET.ParseError):
+        return set()
+
+
+def _report_counts_files(
+    changed_files: dict[str, int],
+    report_path: Path,
+    language: str,
+    js_src_root: str = DEFAULT_JS_SRC_ROOT,
+) -> set[str]:
+    """Return the changed production files the coverage report measured.
+
+    Re-keys :func:`_report_source_files` output onto the repo-relative
+    changed-file namespace so a file present in the report (but absent from
+    diff-cover's ``src_stats`` because none of its changed lines are
+    instrumentable) is not mistaken for an unmeasured, brand-new file.
+    """
+    present: set[str] = set()
+    for raw_key in _report_source_files(report_path, language):
+        target = _match_report_key_to_changed(raw_key, changed_files, language, js_src_root)
+        if target is not None:
+            present.add(target)
+    return present
+
+
+def _unmeasured_file_lines(
+    changed_files: dict[str, int],
+    json_data: dict | None,
+    present_files: set[str] | None = None,
+) -> int:
     """Count changed lines in production files ABSENT from the coverage report.
 
     The "unmeasured lines at 0%" penalty exists to fail a brand-new production
     file that never reaches the report (see the module docstring).  It must NOT
     also punish the non-executable lines *inside* a file that IS measured:
     ``git diff`` counts every non-blank added line (Pydantic field annotations,
-    ``@router`` decorators, multi-line call continuations, ...) while
-    coverage.py only records executable statements, so subtracting the two
-    charged every annotation to the file as uncovered and made a fully-tested
-    route module mathematically unable to clear the threshold.
+    ``@router`` decorators, multi-line call continuations, view template/import
+    lines, ...) while coverage.py and v8 record only executable statements, so
+    subtracting the two charged every annotation to the file as uncovered and
+    made a fully-tested module mathematically unable to clear the threshold.
 
-    Returns the summed changed-line count of files with no ``src_stats`` entry.
+    *present_files* is the set of changed files the raw report contains (from
+    :func:`_report_counts_files`).  A file absent from ``src_stats`` but present
+    in the report has no coverable changed lines, so it contributes nothing;
+    a file absent from both is genuinely unmeasured and contributes every
+    changed line.  When *present_files* is omitted the report-presence filter
+    is skipped (used by direct unit tests).
+
+    Returns the summed changed-line count of unmeasured files.
     """
     if not json_data or not isinstance(json_data.get("src_stats"), dict):
         return 0
     src_stats = json_data["src_stats"]
-    return sum(changed for path, changed in changed_files.items() if path not in src_stats)
+    present = present_files or set()
+    return sum(changed for path, changed in changed_files.items() if path not in src_stats and path not in present)
 
 
 def _production_coverage_from_text(output: str, changed_lines: int) -> tuple[float, int, int] | None:
@@ -1444,7 +1503,8 @@ def evaluate(
         # scored at 0% (brand-new untested file detection).  Non-executable
         # lines inside a measured file are simply not part of the coverage
         # denominator (see _unmeasured_file_lines).
-        unmeasured_lines = _unmeasured_file_lines(changed_files, json_data)
+        present_files = _report_counts_files(changed_files, report_path, language, js_src_root)
+        unmeasured_lines = _unmeasured_file_lines(changed_files, json_data, present_files)
         scored_lines = measured_lines + unmeasured_lines
         measured_pct = (covered_lines / scored_lines) * 100.0 if scored_lines else None
     else:

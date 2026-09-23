@@ -35,6 +35,7 @@ from modulo.auth.oauth import (
     list_oauth_clients,
     normalize_scopes,
 )
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -87,7 +88,8 @@ async def register_oauth_client(
             detail="Only admin or operator users can register OAuth clients",
         )
 
-    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
+    public_url = get_public_url(settings)
+    if not public_url or public_url == "http://localhost:8000":
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="MODULO_PUBLIC_URL must be configured for OAuth flow",
@@ -135,8 +137,8 @@ async def register_oauth_client(
         ) from None
     except asyncio.CancelledError:
         raise
-    except HTTPException as exc:
-        raise exc
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception(
             "mcp_oauth.register_oauth_client.unexpected_error", extra={"org_id": str(principal.organisation_id)}
@@ -187,8 +189,8 @@ async def list_oauth_clients_endpoint(
         ) from None
     except asyncio.CancelledError:
         raise
-    except HTTPException as exc:
-        raise exc
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception(
             "mcp_oauth.list_oauth_clients.unexpected_error", extra={"org_id": str(principal.organisation_id)}
@@ -242,8 +244,8 @@ async def remove_oauth_client(
         ) from None
     except asyncio.CancelledError:
         raise
-    except HTTPException as exc:
-        raise exc
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception(
             "mcp_oauth.remove_oauth_client.unexpected_error",
@@ -282,7 +284,7 @@ async def approve_consent(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ConsentApproveResponse:
-    """Approve a pending OAuth consent (ADR 017 DECISION 1 — the approve POST IS the consent).
+    """Approve a pending OAuth consent (ADR 047 DECISION 1 — the approve POST IS the consent).
 
     The authenticated approve POST is the human approval: the Bearer principal
     IS the consenting account. There is deliberately NO consent page / deny
@@ -342,8 +344,8 @@ async def approve_consent(
         ) from None
     except asyncio.CancelledError:
         raise
-    except HTTPException as exc:
-        raise exc
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("mcp_oauth.approve_consent.unexpected_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(

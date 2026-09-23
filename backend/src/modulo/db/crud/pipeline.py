@@ -896,7 +896,7 @@ async def replace_pipeline_graph(
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
     """Atomically replace an editable graph while preserving first-class edges.
 
-    ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19: the
+    ADR 047 service-layer backstop + hitl-gate-removal-guard-plan.md v19: the
     HITL gate guard runs here, under the row lock and BEFORE any delete/insert.
     ``caller_type`` is required (no default); ``"mcp"`` forces ``is_privileged``
     to False with no live-role query. For ``"rest"`` with ``account_id`` the

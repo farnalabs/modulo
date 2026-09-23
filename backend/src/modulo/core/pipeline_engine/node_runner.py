@@ -92,7 +92,7 @@ from modulo.core.cost_controller.breakdown.params import (
     coerce_reported_token,
     is_proven_zero_token_usage,
 )
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
+from modulo.core.eval_engine import EvalEngine, EvalResult, EvalType
 from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
@@ -106,7 +106,7 @@ from modulo.core.pipeline_engine.error_codes import (
     sanitize_error_text,
 )
 from modulo.core.pipeline_engine.errors import NodeMissingModelBackendError, RouterNoMatchError
-from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
+from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO, run_evals_persist_before_decide
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.hitl_context import serialize_value, slice_with_marker
 from modulo.core.pipeline_engine.idempotency import (
@@ -125,7 +125,10 @@ from modulo.core.pipeline_engine.sandbox_errors import (
 from modulo.core.pipeline_engine.sandbox_errors import (
     SandboxTierRefusedError as SandboxTierRefusedError,  # noqa: PLC0414 - explicit re-export
 )
-from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
+from modulo.core.pipeline_engine.sandbox_mode import (
+    _validate_sandbox_mode_config,
+    sandbox_jinja_environment,
+)
 from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
     should_notify_on_complete,
@@ -141,7 +144,6 @@ from modulo.db.lifecycle_refs import (
     notify_refs_event,
     validate_ref_entry,
 )
-from modulo.db.models.eval_result import EvalResult as EvalResultModel
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.settings import work_item_refs_cap
 
@@ -781,10 +783,10 @@ def _claim_token_attempt_suffix(claim_lease: str | None) -> str:
 def _effective_self_reported_cap() -> float:
     """The per-node clamp ceiling (Settings knob, min-capped at the column cap).
 
-    devtools' ``read_opencode_cost`` uses the CONSTANTS default via this name;
+    The sandbox-agent cost reader uses the CONSTANTS default via this name;
     the backend node_runner clamp is AUTHORITATIVE — the executor re-applies
     the Settings-knob clamp (effective value min-capped at the column cap) when
-    it extracts ``model_cost_usd`` from the node output, so a devtools-side
+    it extracts ``model_cost_usd`` from the node output, so an upstream
     default drift can never bypass the knob.
     """
     try:
@@ -823,7 +825,8 @@ def _extract_reported_cost(
     stays rejected.
 
     The raw input is read from ``model_cost_raw_usd`` WHEN PRESENT (the
-    producer's pre-clamp value — devtools writes it), falling back to
+    producer's pre-clamp value, written by the pipeline-side cost reader),
+    falling back to
     ``model_cost_usd`` for legacy producers. The flags derive from the TRUE raw.
 
     CLAMP ORDER (pinned): the value is clamped at the per-node cap
@@ -834,7 +837,7 @@ def _extract_reported_cost(
     ``was_clamped = clamped != raw`` (ANY clamp — band OR per-node);
     ``out_of_band_high = raw > band``.
 
-    SCHEMA-DRIFT FLAG READ AT THE TOP: the devtools-emitted ``schema_drift``
+    SCHEMA-DRIFT FLAG READ AT THE TOP: the pipeline-emitted ``schema_drift``
     producer-wire key (the FATAL minimal dict ``{"schema_drift": true}``
     forwarded by write_output) returns ``None`` (no report) when truthy — a
     drifted-schema node reports NO cost. The COUNTER INCREMENT does NOT happen
@@ -1032,12 +1035,15 @@ async def _fetch_sandbox_log_tail(sandbox_id: str | None, limit: int = 60) -> st
     """Fetch the tail of an E2B sandbox's logs — the only place the kill reason lives.
 
     Uses GET https://api.e2b.app/sandboxes/{sandbox_id}/logs?limit={limit} with
-    header X-API-KEY: <MODULO_E2B_API_KEY or E2B_API_KEY>. Returns a bounded
-    string (last ~limit log lines) or "" if unavailable/disabled. Never raises.
+    header X-API-KEY: <MODULO_E2B_API_KEY (runtime override or env) or
+    E2B_API_KEY>. Returns a bounded string (last ~limit log lines) or "" if
+    unavailable/disabled. Never raises.
     """
     if not isinstance(sandbox_id, str) or not sandbox_id:
         return ""
-    api_key = os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY")
+    from modulo.core.runtime_config.key_bridge import get_e2b_api_key
+
+    api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
     if not api_key:
         return ""
 
@@ -4047,7 +4053,7 @@ def _run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
 def _build_llm_judge_callable(
     hub: Any,
     backend_id_str: str,
-) -> Callable[[dict[str, Any], EvalDefinition], dict[str, Any]]:
+) -> Callable[[dict[str, Any], EvalDefDTO], dict[str, Any]]:
     """Build a synchronous LLM judge callable backed by a model backend.
 
     The ``LLMJudgeCallable`` protocol is synchronous, but ``make_hitl_gate_fn``
@@ -4059,7 +4065,7 @@ def _build_llm_judge_callable(
 
     def _judge(
         output: dict[str, Any],
-        eval_def: EvalDefinition,
+        eval_def: EvalDefDTO,
     ) -> dict[str, Any]:
         field = eval_def.config.get("field", "")
         content = output.get(field, "")
@@ -4472,44 +4478,9 @@ def _resolve_llm_judge_callable(eval_def: Any) -> Any:
     return None
 
 
-async def _persist_gate_eval_results(
-    state: dict[str, Any],
-    eval_definitions: Sequence[EvalDefinition],
-    eval_results_by_name: dict[str, EvalResult],
-    session_factory: Any,
-    org_id: Any,
-) -> None:
-    """Persist gate eval results to the eval_results table (best-effort)."""
-    if session_factory is not None and org_id is not None:
-        try:
-            _run_id: uuid.UUID | None = state.get("_run_id")
-            if _run_id is not None:
-                async with session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    await set_rls_execution_context(session)
-                    for eval_def in eval_definitions:
-                        eval_result = eval_results_by_name[eval_def.name]
-                        node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
-                        db_result = EvalResultModel(
-                            organisation_id=org_id,
-                            run_id=_run_id,
-                            node_id=node_uuid,
-                            eval_id=eval_def.id,
-                            eval_definition_version=eval_def.version,
-                            passed=eval_result.passed,
-                            score=eval_result.score,
-                            detail=eval_result.detail,
-                        )
-                        session.add(db_result)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("hitl_gate.persist_eval_failed")
-
-
 async def _run_gate_evals(
     state: dict[str, Any],
-    eval_definitions: Sequence[EvalDefinition] | None,
+    eval_definitions: Sequence[EvalDefDTO] | None,
     node_type_map: dict[str, str] | None,
     gate_id: str,
     session_factory: Any,
@@ -4526,11 +4497,11 @@ async def _run_gate_evals(
         return {}
     _run_id = state.get("_run_id")
 
-    def _resolve_eval_target_for_gate(eval_def: EvalDefinition) -> Any:
+    def _resolve_eval_target_for_gate(eval_def: EvalDefDTO) -> Any:
         """Per-eval target resolution (Defect 4 fix)."""
         return _resolve_gate_eval_target(state, eval_def.node_id, node_type_map)
 
-    def _on_gate_eval_result(eval_def: EvalDefinition, result: EvalResult) -> None:
+    def _on_gate_eval_result(eval_def: EvalDefDTO, result: EvalResult) -> None:
         """Per-eval structured log (Defect 3 fix — restores dropped log)."""
         _log.info(
             "hitl_gate.eval_result",
@@ -4655,7 +4626,7 @@ def _resolve_subject_parent_and_key(
 def make_hitl_gate_fn(
     hitl_gate_config: dict[str, Any],
     *,
-    eval_definitions: Sequence[EvalDefinition] | None = None,
+    eval_definitions: Sequence[EvalDefDTO] | None = None,
     session_factory: Callable[..., Any] | None = None,
     org_id: uuid.UUID | None = None,
     node_type_map: dict[str, str] | None = None,
@@ -7071,6 +7042,19 @@ def _script_enforcement_requires_remote(
     )
 
 
+def _resolved_e2b_key_for_enforcement() -> str | None:
+    """Remote E2B credential for the script-enforcement refusal (FAR-1159).
+
+    Resolves ``MODULO_E2B_API_KEY`` through the runtime-config bridge
+    (override wins over env — the same bridge the provider-registration
+    gate uses, so the two paths cannot disagree) and layers the legacy
+    ``E2B_API_KEY`` env fallback exactly as before. ``None`` => fail closed.
+    """
+    from modulo.core.runtime_config.key_bridge import get_e2b_api_key
+
+    return get_e2b_api_key() or os.environ.get("E2B_API_KEY")
+
+
 def _run_identity_strs(state: dict[str, Any]) -> tuple[str, str, str]:
     """Derive the run/pipeline/org identity strings from internal state keys.
 
@@ -7423,7 +7407,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         rendered_prompt: str = ""
         rendered_agent_command = agent_command
     else:
-        env = SandboxedEnvironment()
+        env = sandbox_jinja_environment()
         template = env.from_string(agent_prompt_template)
         # FAR-436: context_scope — the sandbox agent's run_context VIEW (the keys
         # fed to the prompt + agent_command templates) is allowlist-gated to the
@@ -8421,7 +8405,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # inert); a setup failure disables the bridge for this node but
             # NEVER blocks the dispatch or wedges the agent loop. The
             # endpoint is the Modulo sandbox-agent process's localhost —
-            # the ADR 003 amendment documents how it is exposed into the
+            # the ADR 044 amendment documents how it is exposed into the
             # sandbox (in the test-driven slice it is the same host).
             if loop_intercept_config is not None and loop_intercept_config.enabled:
                 try:
@@ -9779,7 +9763,7 @@ def _build_sandbox_node_config(
         resource_limits=resource_limits,
         read_only=read_only,
         git_credentials=git_credentials,
-    ) and not (os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY")):
+    ) and not (_resolved_e2b_key_for_enforcement()):
         raise ValueError(
             f"sandbox_agent node '{node_id}' mode='script' requests egress/resource/"
             "sandbox-policy enforcement (egress_policy='deny_all'/'selected', resource_limits, "
@@ -9846,7 +9830,7 @@ def _build_sandbox_node_config(
     delivery_sentinel: str | None = node_def.get("delivery_sentinel")
     delivery_sentinel = delivery_sentinel if isinstance(delivery_sentinel, str) and delivery_sentinel else None
 
-    # FAR-211: agent-loop interior tool-call interception (ADR 003 amendment).
+    # FAR-211: agent-loop interior tool-call interception (ADR 044 amendment).
     # When the node carries a ``loop_intercept`` config, a Modulo-hosted bridge
     # runs INSIDE the sandbox alongside the agent: tool calls are reported to
     # the Modulo side BEFORE execution and tool results BEFORE they re-enter
@@ -9941,7 +9925,7 @@ def make_sandbox_agent_fn(
       - context_files: dict[str, str] —  optional files to write into the sandbox
         keyed by path
       - loop_intercept: dict | None —  optional agent-loop interior tool-call
-        interception config (FAR-211 / ADR 003 amendment). When enabled AND the
+        interception config (FAR-211 / ADR 044 amendment). When enabled AND the
         pipeline has bound guardrails, a Modulo-hosted bridge runs inside the
         sandbox: tool calls are evaluated against the SAME bound guardrails as
         the T1 ingestion edge before execution and before results re-enter the

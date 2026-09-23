@@ -484,6 +484,48 @@ def test_sandbox_script_mode_jinja_not_checked():
     assert result.is_valid
 
 
+def test_sandbox_jinja_gate_renders_through_shared_runtime_environment(monkeypatch) -> None:
+    """FAR-226: the save-time Jinja gate parses through the shared helper.
+
+    Guards the "no invented environment" rule on the validator side:
+    ``validate_sandbox_agent_command_jinja`` must resolve through
+    :func:`sandbox_jinja_environment` — the identical helper
+    ``node_runner._sandbox_agent_impl`` renders its prompt + agent_command
+    through (the run-time side is separately pinned by
+    ``test_node_runner_binds_shared_sandbox_jinja_environment``).
+    """
+    from modulo.core.pipeline_engine import sandbox_mode as _sandbox_mode
+    from modulo.core.pipeline_engine.sandbox_mode import (
+        SandboxedEnvironment,
+        validate_sandbox_agent_command_jinja,
+    )
+
+    parsed: list[SandboxedEnvironment] = []
+
+    def _fake_env() -> SandboxedEnvironment:
+        env = SandboxedEnvironment()
+        parsed.append(env)
+        return env
+
+    monkeypatch.setattr(_sandbox_mode, "sandbox_jinja_environment", _fake_env)
+    node = {"id": "n1", "mode": "llm", "agent_commands": ["opencode run --model {{ input.m }}"]}
+    assert validate_sandbox_agent_command_jinja(node) is None
+    assert len(parsed) == 1
+
+
+def test_sandbox_jinja_gate_undefined_var_is_no_false_positive() -> None:
+    """FAR-226: a template referencing an undefined variable passes the gate.
+
+    The runtime renders undefined variables leniently (empty string); the gate
+    must not flag them — only genuinely broken template syntax.
+    """
+    graph = {"nodes": [_sandbox_node(agent_commands=["opencode --model {{ input.model }} --auto"])], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_BAD_JINJA_TEMPLATE" not in _codes(result)
+    assert result.is_valid
+
+
 def test_sandbox_multiple_issues_collected():
     """A badly configured sandbox node surfaces all issues at once."""
     graph = {

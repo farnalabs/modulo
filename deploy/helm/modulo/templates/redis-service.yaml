@@ -1,0 +1,20 @@
+{{- if .Values.redis.embedded }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "modulo.fullname" . }}-redis
+  namespace: {{ include "modulo.namespace" . }}
+  labels:
+    {{- include "modulo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: http-redis
+      protocol: TCP
+      name: http-redis
+  selector:
+    {{- include "modulo.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+{{- end }}

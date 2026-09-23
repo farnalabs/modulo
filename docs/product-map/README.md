@@ -31,7 +31,7 @@ of these two places — otherwise it is invisible to Remy and to this graph.
 ---
 id: feat-<domain>-<feature>        # unique feature id (match the manifest registry)
 prd: N.N                           # PRD section (N/A for infra-only surfaces)
-adr: [Repos/devtools/adr/...md]              # governing ADRs (optional)
+adr: [ADR <number> (<slug>)]                     # governing ADRs (optional)
 code: [backend/src/...]            # code paths implementing this feature
 bdd: [tests/.../feature]           # BDD feature files (missing = coverage gap)
 unit-tests: [tests/...]            # unit/integration test files
@@ -566,6 +566,56 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > credential fields, and a telemetry-disabled provider registered with NO span
 > processor so nothing reaches the exporter. The closed gap moved to a ticked
 > behaviour in the tracker + manifest; `_ORPHANED_BDD_FEATURES` stays empty.
+
+> **Closed this walk (2026-09-22):** closed `feat-library-collections`'s "No BDD
+> feature file" gap (`library/library-collections.md`). Registered the new
+> `library/library_collections.feature` into the executing BDD suite from the new
+> `steps/test_library_collections.py`, driving the real `/api/v1/libraries/collections`
+> install/uninstall/grant routes with only the library_service + flag/RLS seams
+> patched: installing a published collection → 201 with an `installed` record +
+> runnability verdict, a non-published collection → 400, an unresolvable pin →
+> 422, a repeat install → 400; uninstall's delete-vs-detach semantics (unmodified
+> entities deleted, a modified schema detached) + unknown-install 404; and the
+> community-sourced grant gate (200 with `agents_granted` for community installs,
+> idempotent re-grant 200, 400 for local installs, 404 for unknown installs).
+> 11 scenarios execute in CI. `_ORPHANED_BDD_FEATURES` stays empty.
+
+> **Closed this walk (2026-09-22):** closed `feat-mcp`'s "No executing BDD for
+> the trigger tool" gap (`configure/mcp.md`). The five `mcp/trigger.feature`
+> scenarios previously targeted the dead legacy `/mcp/tools/call` HTTP surface
+> (pinned `@awaiting-implementation`, never ran); they are rewritten to drive
+> the REAL shipped contract by calling the `trigger_pipeline` / `review_hitl`
+> handler functions directly (request ContextVars hydrated by hand) — exercising
+> the real `_check_agent_tool_scope` scope-gate chokepoint (manual run with
+> `trigger_type manual` and the caller's account via `create_run`, `input_payload`
+> passthrough, unknown-pipeline `pipeline_not_found` refusal), the real
+> `McpAuthMiddleware` 401 gate for unauthenticated requests, and the real
+> role-hierarchy scope denial (a `runner` key triggers but cannot `review_hitl`
+> `approve` → `insufficient_scope`), network-free and DB-free with only the auth
+> re-validation and DB/dispatch seams patched (`steps/test_alpha_mcp.py`). The
+> FastMCP invoke/dispatch layer itself is not exercised by these steps.
+> Removed the five scenarios from `PINNED_AWAITING_IMPLEMENTATION`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+
+> **Closed this walk (2026-09-23):** closed the four stale pipeline-level BDD
+> drafts tracked as `@awaiting-implementation` gaps under the feature graph —
+> every one was a placeholder whose behaviour was already shipped and covered by
+> the executing `feat-triggers` suite or unit coverage, so the duplicates were
+> archived, not re-wired: `pipelines/webhook_trigger.feature` (deleted; HMAC
+> valid/invalid, duplicate and flood scenarios live in
+> `triggers/webhook_hmac.feature` / `triggers/flood_protection.feature`, expired
+> timestamp unit-pinned), `pipelines/scheduling.feature` (cron-fire + three
+> polling scenarios live in `triggers/cron.feature` / `triggers/polling.feature`;
+> the file keeps its executing cron-CRUD scenarios), `pipelines/concurrency.feature`
+> (deleted; targeted the dead per-pipeline runs endpoint, admission coverage
+> lives in the `max_concurrent_runs` 429 path + `tests/unit/pipeline_engine`),
+> and `pipelines/run_variants.feature` (its coverage-gaps draft duplicated
+> `variants/variant_groups.feature`'s real `get_coverage_gaps` seam). Dead step
+> definitions were dropped from `steps/test_pipelines.py` /
+> `steps/test_alpha_pipelines.py` and `PINNED_AWAITING_IMPLEMENTATION` shrank by
+> four entries. Trackers updated: `pipelines/pipelines.md`,
+> `triggers/trigger-engine.md`, `improve/variants.md`.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

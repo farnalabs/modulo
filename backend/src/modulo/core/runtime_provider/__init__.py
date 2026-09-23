@@ -21,12 +21,22 @@ _log = logging.getLogger(__name__)
 
 # Re-export for callers that import from this module.
 __all__ = [
+    "ArtifactTooLargeError",
+    "BackendUnreachableError",
     "ExecProcess",
     "ExecResult",
     "ExecStreamChunk",
+    "ProviderCapabilityUnsupportedError",
     "ProviderNotConfiguredError",
+    "ProvisionTimeoutError",
+    "RateLimitedError",
     "RuntimeProvider",
+    "RuntimeProviderError",
+    "SdkMissingError",
+    "StreamingUnsupportedError",
     "UnknownProviderTypeError",
+    "UnknownRefError",
+    "WorkspaceGoneError",
     "WorkspaceNetworkValidationError",
     "WorkspaceSpec",
     "build_hub",
@@ -97,6 +107,87 @@ class UnknownProviderTypeError(ProviderNotConfiguredError):
         # then override the message with the more specific unknown-type copy.
         super().__init__(provider_type, env_var=None)
         self.args = (message,)
+
+
+# ---------------------------------------------------------------------------
+# RuntimeProviderError family (ADR 040 "Error family") — NEW members only
+# ---------------------------------------------------------------------------
+#
+# DELIBERATE DUAL HIERARCHY: the pre-existing ProviderNotConfiguredError /
+# UnknownProviderTypeError tree above is intentionally NOT re-parented under
+# RuntimeProviderError. Unifying them would change the control flow of every
+# existing ``except ProviderNotConfiguredError`` handler (they would start
+# catching runtime-failure members they were never meant to catch), so ADR 040
+# records the unification as a separate, GA-gated ticket. Until that gate
+# closes, new-family members are admitted ONLY under RuntimeProviderError —
+# they are siblings of the configuration-error tree, not subclasses. Handlers
+# catching ProviderNotConfiguredError will NOT catch these, and vice versa;
+# each call site was reconciled explicitly when this family landed
+# (FAR-1050 slice 1).
+
+
+class RuntimeProviderError(RuntimeError):
+    """Base class for NEW runtime-provider failure members (ADR 040).
+
+    Raised for mechanism/runtime failures during provider operations
+    (capability refusals, workspace-gone, streaming-unsupported, artefact
+    limits, rate limits, missing SDK, provision timeouts, unknown refs,
+    unreachable backends). Configuration-resolution failures keep their own
+    separate hierarchy (:class:`ProviderNotConfiguredError` and its subclass
+    :class:`UnknownProviderTypeError`) — see the dual-hierarchy note above.
+    """
+
+
+class ProviderCapabilityUnsupportedError(RuntimeProviderError):
+    """The provider cannot enforce a requested control (ADR 040 isolation).
+
+    Terminal, named-code refusal — e.g. a node-level egress-allowlist /
+    read-only-seal / git-credential-scoping request on a tier that cannot
+    express it. Never a silent downgrade.
+    """
+
+
+class WorkspaceGoneError(RuntimeProviderError):
+    """The workspace/ref no longer exists on the substrate.
+
+    Distinct from an unknown-ref at lookup time: the workspace was tracked
+    and is now gone (destroyed, reclaimed, or expired out from under the
+    caller).
+    """
+
+
+class StreamingUnsupportedError(RuntimeProviderError):
+    """The provider does not implement ``exec_command_stream`` (ADR 040).
+
+    Raised by the ABC's default implementation and by any dispatch that
+    *requires* streaming against a non-overriding provider. The buffered
+    collect-then-return route (:meth:`RuntimeProvider.exec_command`) remains
+    available to callers that can use it.
+    """
+
+
+class ArtifactTooLargeError(RuntimeProviderError):
+    """An artefact exceeds the provider or retention size limit."""
+
+
+class RateLimitedError(RuntimeProviderError):
+    """The substrate rate-limited or quota-capped the request."""
+
+
+class SdkMissingError(RuntimeProviderError):
+    """The provider's backing SDK is not installed in this environment."""
+
+
+class ProvisionTimeoutError(RuntimeProviderError):
+    """Workspace provisioning exceeded its timeout without becoming ready."""
+
+
+class UnknownRefError(RuntimeProviderError):
+    """The supplied workspace ref is not recognised by the provider."""
+
+
+class BackendUnreachableError(RuntimeProviderError):
+    """The provider's backend/endpoint could not be reached."""
 
 
 # ---------------------------------------------------------------------------
@@ -278,11 +369,15 @@ class RuntimeProvider(ABC):
 
         The streaming primitive alongside collect-then-return
         :meth:`exec_command` so script-mode's live-log drain + stall/no-output
-        detection work on every provider exactly as on E2B. Default
-        implementation raises NotImplementedError — providers that do not
-        implement streaming keep the collect-then-return contract.
+        detection work on every provider exactly as on E2B. Optional
+        base-class method (ADR 040 "Streaming parity"): providers that do not
+        override it keep the collect-then-return contract, and the default
+        raises the typed :class:`StreamingUnsupportedError` — not a raw
+        ``NotImplementedError`` (ADR 040 "Error honesty": an explicit
+        carve-out from the contract freeze). A dispatch that *requires*
+        streaming fails terminally with this error.
         """
-        raise NotImplementedError(
+        raise StreamingUnsupportedError(
             f"Runtime provider '{self.__class__.__name__}' does not implement exec_command_stream"
         )
 
@@ -322,7 +417,9 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
     Registration matrix (env-gated, operator opt-in = consent):
 
     - ``local`` — always registered (host-process fallback tier).
-    - ``e2b`` — registered when ``MODULO_E2B_API_KEY`` is set.
+    - ``e2b`` — registered when ``MODULO_E2B_API_KEY`` is set (env var or
+      runtime override — both resolved via ``key_bridge.get_e2b_api_key``,
+      the same bridge the node-runner enforcement check uses, FAR-1159).
     - ``runner_docker`` (aliases ``docker`` / ``local_docker``) — registered
       when ``MODULO_DOCKER_HOST`` or ``DOCKER_HOST`` is set.  An unrelated
       ``MODULO_RUNNER_*`` variable does NOT register Docker (FAR-996).
@@ -334,6 +431,7 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
         )
         max_local_concurrency = 2
 
+    from modulo.core.runtime_config.key_bridge import get_e2b_api_key
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
     from modulo.core.runtime_provider.local import LocalRuntimeProvider
 
@@ -342,7 +440,7 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
     local = LocalRuntimeProvider(max_concurrency=max_local_concurrency)
     hub.register("local", local)
 
-    if os.environ.get(_E2B_ENV_VAR):
+    if get_e2b_api_key():
         try:
             from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
 

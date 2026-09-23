@@ -465,3 +465,44 @@ class TestAuthenticatedRoutesStillGuarded:
         assert resp.status_code == 401, (
             f"Admin SSO route must still require authentication, got {resp.status_code}: {resp.text}"
         )
+
+
+class TestOidcLoginPublicUrlBridge:
+    """FAR-1159 prove-the-fix: the OIDC login redirect is anchored to the
+    effective MODULO_PUBLIC_URL, so a runtime override wins over Settings.
+
+    This exercises the handler body (SSO enabled), which the 402/401 gating
+    tests above never reach, and asserts the redirect_uri is built from the
+    override — reverting the route to ``settings.modulo_public_url`` fails it.
+    """
+
+    def test_oidc_login_redirect_uri_uses_public_url_override(self, client_with_sso: TestClient) -> None:
+        from modulo.core.runtime_config.store import RuntimeConfigStore, get_runtime_config_store
+
+        captured: dict[str, str] = {}
+
+        async def _fake_authorize_url(
+            provider: str,
+            settings: Settings,
+            redirect_uri: str,
+            system_session: AsyncMock,
+            session: AsyncMock,
+        ) -> tuple[str, None]:
+            captured["redirect_uri"] = redirect_uri
+            return "https://idp.example.com/authorize", None
+
+        RuntimeConfigStore.reset()
+        store = get_runtime_config_store()
+        store.set_override("MODULO_PUBLIC_URL", "https://hot.example.com")
+        try:
+            with patch(
+                "modulo.api.routes.sso.oidc_get_authorize_url",
+                new=AsyncMock(side_effect=_fake_authorize_url),
+            ):
+                resp = client_with_sso.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
+        finally:
+            store.clear_override("MODULO_PUBLIC_URL")
+            RuntimeConfigStore.reset()
+
+        assert resp.status_code == 307, resp.text
+        assert captured["redirect_uri"] == "https://hot.example.com/api/v1/auth/oidc/google/callback"

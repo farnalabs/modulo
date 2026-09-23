@@ -1,4 +1,4 @@
-"""Unit tests for the team-scoping RLS-parity floor (ADR 017 DECISION 2, task-authz-a1a-team-floor).
+"""Unit tests for the team-scoping RLS-parity floor (ADR 047 DECISION 2, task-authz-a1a-team-floor).
 
 The team gate dependency mirrors the DB team-visibility RLS policy:
 

@@ -358,7 +358,7 @@ class TestFeatureGate:
 
 
 class TestRoleGating:
-    """view.list is viewer-level; view.manage is operator-level (ADR 017)."""
+    """view.list is viewer-level; view.manage is operator-level (ADR 047)."""
 
     def test_viewer_can_list(self, viewer_client: TestClient) -> None:
         page_result = MagicMock(items=[], total=0, page=1, page_size=20)

@@ -150,6 +150,27 @@ def test_build_backend_openai_compatible_accepts_custom_base_url() -> None:
 
 
 # ---------------------------------------------------------------------------
+# opencode — custom subclass that sends session/User-Agent headers (FAR-1139)
+# ---------------------------------------------------------------------------
+
+
+def test_build_backend_opencode_routes_to_opencode_backend() -> None:
+    with patch("modulo.model_backends.opencode.OpenCodeBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend("opencode", "glm-5.3-flash", {"api_key": "k"}, {"temperature": 0})
+    assert isinstance(result, _DummyBackend)
+    # The subclass pins base_url/provider itself, so the hub must NOT pass them.
+    assert result.kwargs == {"api_key": "k", "model_id": "glm-5.3-flash", "temperature": 0}
+
+
+def test_build_backend_opencode_missing_api_key_defaults_to_empty() -> None:
+    with patch("modulo.model_backends.opencode.OpenCodeBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend("opencode", "glm-5.3-flash", {}, {})
+    assert not result.kwargs["api_key"]
+
+
+# ---------------------------------------------------------------------------
 # azure_openai
 # ---------------------------------------------------------------------------
 

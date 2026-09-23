@@ -1,7 +1,7 @@
 ---
 id: feat-core-runtime-provider-core
 prd: 6
-adr: [Repos/devtools/adr/003-agent-dispatch-model.md]
+adr: [ADR 044 (agent-dispatch-model)]
 delivery-tasks: []
 code:
   - backend/src/modulo/core/runtime_provider/
@@ -31,11 +31,11 @@ status: covered
 # Runtime Provider Core
 
 Provider abstraction that executes `sandbox_agent` nodes and manages workspaces
-(ADR 003 — Agent Dispatch Model). Runtime providers (`local`, `runner_docker` with
+(ADR 044 — Agent Dispatch Model). Runtime providers (`local`, `runner_docker` with
 `docker`/`local_docker` aliases, `e2b`) expose the same capability surface, gated
 per-environment via environment profiles and validated at graph-validation time.
-`ShellConnector` (the legacy command connector) is deprecated since ADR 003 and maps
-onto the same runtime-provider surface; its product-map entry carries the ADR 003
+`ShellConnector` (the legacy command connector) is deprecated since ADR 044 and maps
+onto the same runtime-provider surface; its product-map entry carries the ADR 044
 deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 029)
 — workspace state lives in `runs.sandbox_dispatch_state`.
 
@@ -52,7 +52,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       (`test_environment_capabilities`)
 - [x] `sandbox_agent` node dispatch, crash-resume, and output-handling contracts
       (run model fields: node retry/resume markers)
-- [x] ShellConnector is deprecated (ADR 003, 2026-07-16) with a runtime
+- [x] ShellConnector is deprecated (ADR 044, 2026-07-16) with a runtime
       `DeprecationWarning` and doc notice; existing ShellConnector pipelines continue
       running, and the node type is marked deprecated in the UI — new pipelines should
       use `sandbox_agent`
@@ -93,8 +93,8 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
   `environments.py` router into `/environment-profiles`; ported the `/test`
   connectivity check; added the missing API feature-gate.
 - 2026-08-25: **product-map review pass** — restored this entry as part of
-  rebuilding the `docs/product-map/` feature graph. This entry is the one ADR 003
+  rebuilding the `docs/product-map/` feature graph. This entry is the one ADR 044
   requires to carry the ShellConnector deprecation notice
-  (`Repos/devtools/adr/003-agent-dispatch-model.md`). Re-verified the runtime_provider package
+  (ADR 044 (agent-dispatch-model)). Re-verified the runtime_provider package
   layout, environment-profile CRUD routes, workspace-lease model, and ShellConnector
   deprecation notice against the current tree. Status: covered.

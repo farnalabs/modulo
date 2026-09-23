@@ -444,6 +444,89 @@ def test_unmeasured_file_lines_counts_only_files_absent_from_report():
     assert mod._unmeasured_file_lines(changed, json_data) == 30
 
 
+def test_unmeasured_file_lines_ignores_files_present_in_the_report():
+    """A file absent from diff-cover's ``src_stats`` but present in the raw
+    report has no coverable changed lines (all template/import), so it must not
+    be scored as unmeasured 0%."""
+    changed = {"src/present.py": 40, "src/only_template.py": 3, "src/absent.py": 30}
+    json_data = {"src_stats": {"src/present.py": {"covered_lines": [], "violation_lines": []}}}
+
+    assert mod._unmeasured_file_lines(changed, json_data, {"src/only_template.py"}) == 30
+
+
+def test_report_counts_files_maps_lcov_entries_to_changed_files(tmp_path):
+    """``_report_counts_files`` re-keys raw LCOV ``SF:`` paths onto the
+    repo-relative changed-file namespace (vitest emits them relative to the
+    frontend project root)."""
+    component = mod.REPO_ROOT / "frontend/src/components/shared/Foo.vue"
+    view = mod.REPO_ROOT / "frontend/src/views/BarView.vue"
+    report = tmp_path / "lcov.info"
+    report.write_text(f"SF:{component}\nSF:{view}\n")
+
+    changed = {
+        "frontend/src/components/shared/Foo.vue": 60,
+        "frontend/src/views/BarView.vue": 3,
+        "frontend/src/views/AbsentView.vue": 5,
+    }
+
+    assert mod._report_counts_files(changed, report, "JavaScript") == {
+        "frontend/src/components/shared/Foo.vue",
+        "frontend/src/views/BarView.vue",
+    }
+
+
+def test_evaluate_non_instrumentable_view_change_is_not_unmeasured(tmp_path):
+    """Regression (FAR-706): a view whose only changed lines are its template
+    usage and import (v8 instruments neither) must not fail the gate.
+
+    Observed on PR #913: ``RunDetailView.vue`` gained a 3-line
+    ``<KnownFixesPanel>`` wiring with no instrumentable lines, so diff-cover
+    omitted it from ``src_stats`` and the gate charged all 3 lines as
+    unmeasured 0%, pulling a fully-covered component down to 75%.
+    """
+    component = mod.REPO_ROOT / "frontend/src/components/shared/KnownFixesPanel.vue"
+    view = mod.REPO_ROOT / "frontend/src/views/RunDetailView.vue"
+    report = tmp_path / "lcov.info"
+    report.write_text(f"SF:{component}\nSF:{view}\n")
+
+    json_present = {
+        "src_stats": {
+            "frontend/src/components/shared/KnownFixesPanel.vue": {
+                "percent_covered": 100.0,
+                "covered_lines": list(range(1, 22)),
+                "violation_lines": [],
+            }
+        },
+        "total_num_lines": 21,
+        "total_num_violations": 0,
+        "total_percent_covered": 100.0,
+        "num_changed_lines": 24,
+    }
+    with (
+        patch.object(
+            mod,
+            "_get_changed_production_files",
+            return_value={
+                "frontend/src/components/shared/KnownFixesPanel.vue": 60,
+                "frontend/src/views/RunDetailView.vue": 3,
+            },
+        ),
+        patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+        patch.object(mod, "_get_diff_cover_json", return_value=json_present),
+    ):
+        result = mod.evaluate(
+            language="JavaScript",
+            report_path=report,
+            compare_branch="origin/main",
+            fail_under=98,
+        )
+
+    assert result.passed is True
+    assert result.actual_pct == 100.0
+    assert result.unmeasured_lines == 0
+    assert result.changed_lines == 21
+
+
 def test_schema_ts_is_excluded_from_the_gate():
     """The generated openapi-typescript file is out of scope (as it is for Sonar)."""
     assert mod._is_excluded("frontend/src/lib/api/schema.ts") is True

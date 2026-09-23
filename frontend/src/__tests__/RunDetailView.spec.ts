@@ -20,6 +20,10 @@ let mockApproveResult: Record<string, unknown> | null = null
 let mockApproveError: Record<string, unknown> | undefined
 let mockRejectResult: Record<string, unknown> | null = null
 let mockRejectError: Record<string, unknown> | undefined
+let mockEnrichment: { items?: Array<Record<string, unknown>> } | null = null
+let mockEnrichmentError: unknown = undefined
+let mockEnrichmentThrow = false
+let mockEnrichmentDeferred: Promise<{ data: unknown; error: unknown }> | null = null
 
 vi.mock('../lib/api/client', () => {
   const mockPost = vi.fn().mockImplementation((url: string) => {
@@ -102,6 +106,13 @@ vi.mock('../lib/api/client', () => {
         if (url === '/api/v1/runs/{run_id}/workspace-lease') {
           return Promise.resolve({ data: mockWorkspaceLease, error: undefined })
         }
+        if (url === '/api/v1/runs/{run_id}/work-items/enrichment') {
+          if (mockEnrichmentThrow) return Promise.reject(new Error('enrichment transport failed'))
+          if (mockEnrichmentDeferred) return mockEnrichmentDeferred
+          if (mockEnrichmentError) return Promise.resolve({ data: null, error: mockEnrichmentError })
+          if (mockEnrichment) return Promise.resolve({ data: mockEnrichment, error: undefined })
+          return Promise.resolve({ data: null, error: undefined })
+        }
         return Promise.resolve({ data: null, error: undefined })
       }),
       POST: mockPost
@@ -178,6 +189,10 @@ describe('RunDetailView', () => {
     mockApproveError = undefined
     mockRejectResult = null
     mockRejectError = undefined
+    mockEnrichment = null
+    mockEnrichmentError = undefined
+    mockEnrichmentThrow = false
+    mockEnrichmentDeferred = null
   })
 
   afterEach(() => {
@@ -389,6 +404,13 @@ describe('RunDetailView', () => {
       }
       if (url === '/api/v1/runs/{run_id}/io') {
         return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/work-items/enrichment') {
+        if (mockEnrichmentThrow) return Promise.reject(new Error('enrichment transport failed'))
+        if (mockEnrichmentDeferred) return mockEnrichmentDeferred
+        if (mockEnrichmentError) return Promise.resolve({ data: null, error: mockEnrichmentError })
+        if (mockEnrichment) return Promise.resolve({ data: mockEnrichment, error: undefined })
+        return Promise.resolve({ data: null, error: undefined })
       }
       return Promise.resolve({ data: null, error: undefined })
     })
@@ -1187,6 +1209,300 @@ describe('RunDetailView', () => {
     expect(section.findAll('.badge').length).toBe(1)
     expect(section.find('.badge').text()).toBe('PR #206')
     expect(section.find('code').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // ── FAR-737: live GitHub enrichment for the PR work-item badge ────────────
+
+  const livePrItem = {
+    ref: 'acme/repo#42',
+    repo: 'acme/repo',
+    number: 42,
+    title: 'Live PR title',
+    state: 'open',
+    merged: false,
+    html_url: 'https://github.com/acme/repo/pull/42',
+  }
+
+  function prRefs() {
+    return [{ kind: 'github_pr', ref: 'acme/repo#42', source: 'derived' }]
+  }
+
+  it('shows the live state chip and title when enrichment succeeds (FAR-737)', async () => {
+    mockEnrichment = { items: [livePrItem] }
+    const wrapper = await mountWithDetail({ ...baseDetail(), work_item_refs: prRefs() })
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.attributes('data-enrichment')).toBe('enriched')
+    const chip = section.find('[data-testid="run-detail-pr-state-0"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('Open')
+    expect(chip.attributes('data-state')).toBe('open')
+    // Payload has no PR title — the live title fills the title slot.
+    expect(section.text()).toContain('Live PR title')
+    wrapper.unmount()
+  })
+
+  it('renders the Merged state for a merged PR (FAR-737)', async () => {
+    mockEnrichment = {
+      items: [{ ...livePrItem, title: 'Shipped', state: 'closed', merged: true }],
+    }
+    const wrapper = await mountWithDetail({ ...baseDetail(), work_item_refs: prRefs() })
+
+    const chip = wrapper.find('[data-testid="run-detail-pr-state-0"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('Merged')
+    expect(chip.attributes('data-state')).toBe('merged')
+    wrapper.unmount()
+  })
+
+  it('keeps the plain linked badge when the enrichment request fails (FAR-737)', async () => {
+    mockEnrichmentError = { detail: 'connector unconfigured' }
+    const wrapper = await mountWithDetail({ ...baseDetail(), work_item_refs: prRefs() })
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.attributes('data-enrichment')).toBe('absent')
+    expect(section.find('[data-testid="run-detail-pr-state-0"]').exists()).toBe(false)
+    const prLink = section.find('[data-testid="run-detail-pr-link-0"]')
+    expect(prLink.exists()).toBe(true)
+    expect(prLink.attributes('href')).toBe('https://github.com/acme/repo/pull/42')
+    expect(prLink.text()).toBe('PR #42')
+    wrapper.unmount()
+  })
+
+  it('keeps the plain linked badge when enrichment returns no items (FAR-737)', async () => {
+    mockEnrichment = { items: [] }
+    const wrapper = await mountWithDetail({ ...baseDetail(), work_item_refs: prRefs() })
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.attributes('data-enrichment')).toBe('absent')
+    expect(section.find('[data-testid="run-detail-pr-state-0"]').exists()).toBe(false)
+    expect(section.find('[data-testid="run-detail-pr-link-0"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders the badge immediately and flips to enriched when the lookup lands (FAR-737)', async () => {
+    mockWorkItemRefs = prRefs()
+    let resolveEnrichment!: (value: { data: unknown; error: unknown }) => void
+    mockEnrichmentDeferred = new Promise((resolve) => {
+      resolveEnrichment = resolve
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.attributes('data-enrichment')).toBe('loading')
+    // The plain badge is already rendered while enrichment is in flight —
+    // the run view never blocks on the lookup.
+    expect(section.find('[data-testid="run-detail-pr-link-0"]').exists()).toBe(true)
+    expect(section.find('[data-testid="run-detail-pr-state-0"]').exists()).toBe(false)
+
+    resolveEnrichment({ data: { items: [livePrItem] }, error: undefined })
+    await flushPromises()
+    await nextTick()
+
+    expect(section.attributes('data-enrichment')).toBe('enriched')
+    expect(section.find('[data-testid="run-detail-pr-state-0"]').text()).toBe('Open')
+    wrapper.unmount()
+  })
+
+  it('does not call the enrichment endpoint without a GitHub PR work item (FAR-737)', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      work_item_refs: [{ kind: 'linear', ref: 'FAR-1', source: 'derived' }],
+    })
+
+    const { api } = await import('../lib/api/client')
+    const called = (api.GET as any).mock.calls.some(
+      (c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/work-items/enrichment',
+    )
+    expect(called).toBe(false)
+    expect(wrapper.find('[data-testid="run-detail-work-items"]').attributes('data-enrichment')).toBe('idle')
+    wrapper.unmount()
+  })
+
+  it('enriches a non-numeric PR ref through the payload repo (FAR-737)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            ...baseDetail(),
+            work_item_refs: [{ kind: 'github_pr', ref: 'no-number-here', source: 'derived' }],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: null,
+            input_payload: { repository: { full_name: 'acme/widgets' }, pull_request: { number: 206 } },
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/work-items/enrichment') {
+        return Promise.resolve({
+          data: {
+            items: [
+              {
+                ref: 'acme/widgets#206',
+                repo: 'acme/widgets',
+                number: 206,
+                title: 'Live bare-number title',
+                state: 'open',
+                merged: false,
+                html_url: 'https://github.com/acme/widgets/pull/206',
+              },
+            ],
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.attributes('data-enrichment')).toBe('enriched')
+    expect(section.find('[data-testid="run-detail-pr-state-0"]').attributes('data-state')).toBe('open')
+    expect(section.text()).toContain('Live bare-number title')
+    wrapper.unmount()
+  })
+
+  it('leaves a non-numeric PR ref unenriched when the payload has no PR number (FAR-737)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            ...baseDetail(),
+            work_item_refs: [{ kind: 'github_pr', ref: 'no-number-here', source: 'derived' }],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: { outputs_json: null, input_payload: { repository: { full_name: 'acme/widgets' } } },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.find('[data-testid="run-detail-pr-state-0"]').exists()).toBe(false)
+    expect(section.find('[data-testid="run-detail-pr-link-0"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('renders the Closed state chip for a closed, unmerged PR (FAR-737)', async () => {
+    mockEnrichment = { items: [{ ...livePrItem, title: null, state: 'closed', merged: false }] }
+    const wrapper = await mountWithDetail({ ...baseDetail(), work_item_refs: prRefs() })
+
+    const chip = wrapper.find('[data-testid="run-detail-pr-state-0"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('Closed')
+    expect(chip.attributes('data-state')).toBe('closed')
+    wrapper.unmount()
+  })
+
+  it('renders no state chip when enrichment carries no resolvable state (FAR-737)', async () => {
+    mockEnrichment = { items: [{ ...livePrItem, title: null, state: null, merged: false }] }
+    const wrapper = await mountWithDetail({ ...baseDetail(), work_item_refs: prRefs() })
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.attributes('data-enrichment')).toBe('enriched')
+    expect(section.find('[data-testid="run-detail-pr-state-0"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps the plain linked badge when the enrichment request throws (FAR-737)', async () => {
+    mockEnrichmentThrow = true
+    const wrapper = await mountWithDetail({ ...baseDetail(), work_item_refs: prRefs() })
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.attributes('data-enrichment')).toBe('absent')
+    expect(section.find('[data-testid="run-detail-pr-link-0"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('handles an enrichment payload with no items field (FAR-737)', async () => {
+    mockEnrichment = {}
+    const wrapper = await mountWithDetail({ ...baseDetail(), work_item_refs: prRefs() })
+
+    expect(wrapper.find('[data-testid="run-detail-work-items"]').attributes('data-enrichment')).toBe('absent')
+    wrapper.unmount()
+  })
+
+  it('does not re-request enrichment on run polling (FAR-737)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            ...baseDetail(),
+            status: 'running',
+            work_item_refs: [{ kind: 'github_pr', ref: 'acme/repo#42', source: 'derived' }],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/work-items/enrichment') {
+        return Promise.resolve({ data: { items: [livePrItem] }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ events: [] }) }),
+    )
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const enrichmentCalls = () =>
+      (api.GET as any).mock.calls.filter(
+        (c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/work-items/enrichment',
+      ).length
+    expect(enrichmentCalls()).toBe(1)
+
+    // A polling refetch replaces run.value (new work_item_refs reference),
+    // re-firing the watcher — the request guard must prevent a second lookup.
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    await nextTick()
+
+    expect(enrichmentCalls()).toBe(1)
     wrapper.unmount()
   })
 

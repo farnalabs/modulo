@@ -25,10 +25,8 @@ bdd:
   - backend/tests/bdd/features/pipelines/crud.feature
   - backend/tests/bdd/features/pipelines/node_types.feature
   - backend/tests/bdd/features/pipelines/conditional_transitions.feature
-  - backend/tests/bdd/features/pipelines/concurrency.feature
   - backend/tests/bdd/features/pipelines/error_recovery.feature
   - backend/tests/bdd/features/pipelines/scheduling.feature
-  - backend/tests/bdd/features/pipelines/webhook_trigger.feature
   - backend/tests/bdd/features/pipelines/checkpoint_resume.feature
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
   - backend/tests/bdd/features/pipelines/run_sequential.feature
@@ -71,10 +69,16 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 - [x] Conditional transitions and parallel fan-out route state between nodes
       (`conditional_transitions.feature`)
 - [x] Concurrency and error-recovery guard the authored graph
-      (`concurrency.feature`, `error_recovery.feature`); graph/config validation is
-      unit-covered (`tests/unit/graph_validator`, `test_pipelines_endpoint.py`)
+      (`error_recovery.feature`; concurrency admission is unit-covered in
+      `tests/unit/pipeline_engine` and surface-tested by the 429
+      `max_concurrent_runs` refusal in `run_sequential.feature`) — graph/config
+      validation is unit-covered (`tests/unit/graph_validator`, `test_pipelines_endpoint.py`)
 - [x] Scheduling and webhook triggers start runs from the authored graph
-      (`scheduling.feature`, `webhook_trigger.feature`); checkpoint/resume replays a
+      (owned by `feat-triggers`: cron CRUD is BDD-exercised here in
+      `scheduling.feature`, while full cron/polling/webhook delivery surfaces
+      run under `triggers/cron.feature`, `triggers/polling.feature`,
+      `triggers/webhook_hmac.feature` and `triggers/flood_protection.feature`);
+      checkpoint/resume replays a
       failed run from its last checkpoint — now BDD-exercised end to end
       (`checkpoint_resume.feature`) and unit-covered
       (`tests/unit/pipeline_engine` recovery suite)
@@ -129,6 +133,36 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   covers the DB-backed pre-run checks.
 
 ## QA History
+- 2026-09-23: **product-map review pass** — resolved the last four
+  `@awaiting-implementation` BDD gaps tracked under the pipelines directory.
+  All of them were stale placeholder drafts whose behaviour is already shipped
+  and covered by the executing `feat-triggers` suite plus unit coverage, so the
+  duplicates were archived rather than re-wired:
+  - `pipelines/webhook_trigger.feature` (deleted) — the five HMAC webhook
+    scenarios duplicate `triggers/webhook_hmac.feature` (valid → 202, invalid →
+    401) and `triggers/flood_protection.feature` (duplicate → 400, rapid → 429);
+    the expired-timestamp → 400 path is unit-covered by
+    `test_trigger_engine.py` (`verify_timestamp` / `timestamp_expired`) and the
+    route gate is exercised by the sibling Slack signed-request BDD.
+  - `pipelines/scheduling.feature` — the cron-fire and three polling scenarios
+    (cron fire, poll met / not-met, connector-failure poll_error) duplicate
+    `triggers/cron.feature` and `triggers/polling.feature`; they were removed
+    and the file now keeps only its executing cron-CRUD scenarios (create /
+    invalid-expression / toggle / preview, also unit-covered by
+    `test_triggers_endpoint.py`).
+  - `pipelines/concurrency.feature` (deleted) — five scenarios targeted the dead
+    per-pipeline runs endpoint `POST /api/pipelines/{id}/runs` (removed when run
+    triggering moved to `POST /api/v1/runs`); concurrency admission is shipped
+    inside `create_run`/dispatch and is covered by the `max_concurrent_runs` 429
+    path in `run_sequential.feature` plus the `tests/unit/pipeline_engine`
+    admission suite.
+  - `pipelines/run_variants.feature` — the "Coverage gaps are reported for a
+    variant group" scenario duplicated the real `get_coverage_gaps` seam already
+    BDD-covered by `variants/variant_groups.feature`; removed. The dead step
+    definitions for all four drafts were dropped from `steps/test_pipelines.py` /
+    `steps/test_alpha_pipelines.py`, and `PINNED_AWAITING_IMPLEMENTATION`
+    shrank by four entries (the feature did not ship a wire shape the drafts
+    promised). `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-16: **product-map review pass** — closed the last BDD
   graph/config-validation gap. `pipelines/validation.feature` (a stale
   placeholder draft asserting graph semantics against the create endpoint,

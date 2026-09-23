@@ -52,6 +52,7 @@ from modulo.core.runtime_config import (
     read_org_flag,
     set_org_flag,
 )
+from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.invitations import (
@@ -1815,7 +1816,7 @@ async def admin_invite_user(
         logger.exception("admin_invite_user SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_temporarily_unavailable()
 
-    base_url = settings.modulo_public_url.rstrip("/")
+    base_url = get_public_url(settings).rstrip("/")
     return InviteUserResponse(
         id=str(invitation.id),
         # The plaintext token rides in the URL FRAGMENT (never sent to servers,

@@ -1,7 +1,7 @@
 """Unit tests for OAuth refresh-token JWT lifecycle (modulo.auth.oauth).
 
 Covers ``create_oauth_refresh_token`` / ``decode_oauth_refresh_token`` and the
-ADR 017 live-role re-check (``verify_live_role_covers_scopes``) that guards the
+ADR 047 live-role re-check (``verify_live_role_covers_scopes``) that guards the
 MCP refresh endpoint (``api/mcp_server.py``). These pure functions previously
 had no direct unit coverage — they were only exercised indirectly through mocks
 in the MCP OAuth BDD tests.
@@ -201,7 +201,7 @@ class TestCreateAndDecodeRefreshToken:
 
 
 # ---------------------------------------------------------------------------
-# verify_live_role_covers_scopes (ADR 017 live-role re-check)
+# verify_live_role_covers_scopes (ADR 047 live-role re-check)
 # ---------------------------------------------------------------------------
 
 
@@ -237,7 +237,7 @@ class TestVerifyLiveRoleCoversScopes:
             )
 
     async def test_live_role_below_scope_role_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # hitl:review requires operator (ADR 017); a viewer membership must deny.
+        # hitl:review requires operator (ADR 047); a viewer membership must deny.
         async def _resolve(session: object, account_id: str, org_id: str) -> str:
             return "viewer"
 

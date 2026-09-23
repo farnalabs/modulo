@@ -82,8 +82,11 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # chains off 0249_validation_level, and 0251_schema_enforcement_telemetry (FAR-902)
 # chains off 0250_eval_policy_gate, and 0252_enforcement_daily_facts (FAR-902) chains
 # off 0251_schema_enforcement_telemetry, and 0253_runs_enforcement_mode_outcome (FAR-902)
-# chains off 0252_enforcement_daily_facts as the chain head.
-_CHAIN_HEAD_MIGRATION = "0253_runs_enforcement_mode_outcome"
+# chains off 0252_enforcement_daily_facts, and 0254_eval_backfill_cutover (FAR-1100)
+# chains off 0253_runs_enforcement_mode_outcome, and
+# 0255_trigger_event_value_filter_label (FAR-1144) chains off
+# 0254_eval_backfill_cutover as the chain head.
+_CHAIN_HEAD_MIGRATION = "0255_trigger_event_value_filter_label"
 
 
 def _source(name: str) -> str:

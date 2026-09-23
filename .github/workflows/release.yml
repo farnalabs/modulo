@@ -1,6 +1,6 @@
 name: "Release: Cut / Recut / Promote"
 
-# Alpha release process (spec: devtools harness/docs/release-process.md).
+# Alpha release process.
 # The code freeze on main is signalled by the existence of the 'release-freeze'
 # tag; merge-queue.yml's freeze-gate job pauses merging while it exists.
 #
@@ -148,3 +148,91 @@ jobs:
           # Lift the freeze: the merge queue resumes on its next tick.
           git push origin --delete release-freeze
           echo "Freeze lifted - merge queue resumes."
+
+      - name: Update CHANGELOG.md and create the GitHub Release
+        # Runs only after the GA tag above has been CREATED AND PUSHED — the
+        # tag is the release identity. Everything here is therefore
+        # non-fatal to the tagging: a changelog/notes/release failure logs a
+        # loud annotation and continues (never aborts before the tag exists;
+        # the tag lives in the previous step regardless). Exit code: non-zero
+        # only when the CHANGELOG.md commit/push itself failed (that IS a
+        # required deliverable and must turn the job red); notes-generation
+        # and `gh release create` failures are ::warning:: only, per contract.
+        if: inputs.action == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          GA_TAG="v${VERSION}"
+          rc=0
+          NOTES_FILE="$(mktemp)"
+
+          # 1. Previous tag: nearest tag on the GA commit's parent. Fetch tags
+          #    first: on a re-run of this step alone (the tagging step above is
+          #    not re-run) ${GA_TAG} may exist only on origin, and a missing
+          #    local tag makes `git describe` fail silently and fall back to
+          #    full history from the root commit — quietly listing the whole
+          #    project as new. First-ever release has no predecessor — fall
+          #    back to the root commit so the initial CHANGELOG section still
+          #    covers full history.
+          git fetch origin --tags 2>/dev/null || echo "::warning::Unable to fetch tags from origin; proceeding with local tags only (a missing ${GA_TAG} falls back to full history)."
+          PREV="$(git describe --tags --abbrev=0 "${GA_TAG}^" 2>/dev/null || true)"
+          if [ -z "$PREV" ]; then
+            echo "::notice::No previous tag before ${GA_TAG}; generating the changelog from the repository root."
+            PREV="$(git rev-list --max-parents=0 "$GA_TAG" | tail -n1)"
+          fi
+          echo "Changelog range: ${PREV}..${GA_TAG}"
+
+          # 2. Sync the local main branch to origin/main before committing
+          #    (main was frozen for the whole cut/promote cycle, but fetch
+          #    anyway so the push cannot be rejected on a stale base). A
+          #    failed sync must NOT reach `git push origin main` below — that
+          #    would push a stale local main and falsely report success.
+          if ! git fetch origin main || ! git checkout -B main origin/main; then
+            echo "::error::Could not sync local main to origin/main before committing CHANGELOG.md for ${GA_TAG}. The tag is safe; re-run this step or commit manually."
+            rc=1
+          fi
+
+          # 3. Generate the CHANGELOG.md section + the GitHub Release notes.
+          #    stdout of the script IS the release notes body; --output
+          #    upserts the section into CHANGELOG.md (idempotent on re-run).
+          if [ "$rc" -eq 0 ]; then
+            if ! python3 scripts/generate_changelog.py \
+                --from "$PREV" --to "$GA_TAG" \
+                --version "$VERSION" --output CHANGELOG.md > "$NOTES_FILE"; then
+              echo "::warning::scripts/generate_changelog.py failed for ${GA_TAG}; falling back to minimal release notes. The tag itself is pushed and intact."
+              printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
+              rc=1
+            fi
+
+            # 4. Commit the updated CHANGELOG.md to main. (git add first, then
+            #    diff --cached: the file does not exist on main yet, so a plain
+            #    `git diff -- CHANGELOG.md` would silently miss the new file.)
+            if [ "$rc" -eq 0 ]; then
+              git add CHANGELOG.md
+              if git diff --cached --quiet; then
+                echo "CHANGELOG.md already up to date for ${GA_TAG} - nothing to commit."
+              elif git commit -m "changelog: ${GA_TAG}" && git push origin main; then
+                echo "CHANGELOG.md committed to main for ${GA_TAG}."
+              else
+                echo "::error::Failed to commit/push CHANGELOG.md for ${GA_TAG} to main. The tag is safe; re-run this step or commit manually."
+                rc=1
+              fi
+            fi
+          fi
+          if [ ! -s "$NOTES_FILE" ]; then
+            printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
+          fi
+
+          # 5. Create the GitHub Release. NON-FATAL: on failure log a loud
+          #    ::warning:: and continue — the tag is the release identity and
+          #    must never be lost to a notes failure.
+          if ! gh release create "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE"; then
+            echo "::warning::GitHub Release creation failed for ${GA_TAG} (notes/release non-fatal). The tag ${GA_TAG} is pushed and intact; create the release manually or re-run this step."
+          else
+            echo "GitHub Release created for ${GA_TAG}."
+          fi
+
+          exit $rc

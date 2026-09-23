@@ -73,7 +73,7 @@ _WEBHOOK_ORG_ID = uuid.uuid4()
 
 
 def _replay_auth_headers() -> dict[str, str]:
-    """Bearer JWT for the replay route (ADR 017: runner-or-HMAC).
+    """Bearer JWT for the replay route (ADR 047: runner-or-HMAC).
 
     The route uses ``get_current_tenant_user_optional``, which decodes the
     Bearer directly — a token signed with the test secret_key is enough. The
@@ -1449,7 +1449,8 @@ async def test_handle_webhook_event_value_filter_rejects() -> None:
     mock_create.assert_not_called()
     mock_dedup.assert_not_called()
     assert any(
-        getattr(c[0][0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list
+        getattr(c[0][0], "validation_result", None) == "event_value_filter_not_accepted"
+        for c in session.add.call_args_list
     )
 
 
@@ -1475,7 +1476,8 @@ async def test_handle_webhook_event_value_filter_missing_key_rejects() -> None:
 
     mock_create.assert_not_called()
     assert any(
-        getattr(c[0][0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list
+        getattr(c[0][0], "validation_result", None) == "event_value_filter_not_accepted"
+        for c in session.add.call_args_list
     )
 
 
@@ -1948,7 +1950,8 @@ async def test_replay_event_value_filter_not_accepted() -> None:
         )
     mock_create.assert_not_called()
     assert any(
-        getattr(c[0][0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list
+        getattr(c[0][0], "validation_result", None) == "event_value_filter_not_accepted"
+        for c in session.add.call_args_list
     )
 
 

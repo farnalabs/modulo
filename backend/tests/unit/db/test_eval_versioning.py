@@ -193,18 +193,18 @@ async def test_gate_eval_persist_stamps_definition_version(monkeypatch) -> None:
     ``resolve_eval_definition_version`` would resolve it to the definition's
     current/latest version, silently erasing the version timeline.
 
-    Exercises ``node_runner._persist_gate_eval_results`` with a capturing
-    session factory and RLS helpers stubbed to no-ops.
+    Exercises ``eval_persist_order.run_evals_persist_before_decide`` with a
+    capturing session factory and RLS helpers stubbed to no-ops.
     """
-    from types import SimpleNamespace
-
-    from modulo.core.pipeline_engine import node_runner
+    from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
+    from modulo.core.eval_engine import EvalType
+    from modulo.core.pipeline_engine import eval_persist_order
 
     async def _noop(session, *_args, **_kwargs) -> None:
         return None
 
-    monkeypatch.setattr(node_runner, "set_rls_org", _noop)
-    monkeypatch.setattr(node_runner, "set_rls_execution_context", _noop)
+    monkeypatch.setattr(eval_persist_order, "set_rls_org", _noop)
+    monkeypatch.setattr(eval_persist_order, "set_rls_execution_context", _noop)
 
     captured: list[EvalResult] = []
 
@@ -233,17 +233,25 @@ async def test_gate_eval_persist_stamps_definition_version(monkeypatch) -> None:
             return _FakeSession()
 
     org_id = uuid.uuid4()
-    definition = _make_definition(org_id, version=9)
-    definition.id = uuid.uuid4()
-    state = {"_run_id": uuid.uuid4()}
-    eval_result = SimpleNamespace(passed=True, score=1.0, detail="ok")
+    # A real EvalDefinition DTO whose regex evaluation passes — the shared
+    # helper computes via EvalEngine.evaluate_result, so a SimpleNamespace
+    # eval_result is no longer valid input.
+    eval_def = EvalDefDTO(
+        id=uuid.uuid4(),
+        org_id=org_id,
+        name="eval",
+        eval_type=EvalType.REGEX,
+        config={"pattern": "a", "field": "text"},
+        failure_behaviour="warn",
+        version=9,
+    )
 
-    await node_runner._persist_gate_eval_results(
-        state,
-        [definition],
-        {definition.name: eval_result},
-        _Factory(),
-        org_id,
+    await eval_persist_order.run_evals_persist_before_decide(
+        eval_defs=[eval_def],
+        resolve_eval_target=lambda ed: {"text": "a"},
+        run_id=uuid.uuid4(),
+        org_id=org_id,
+        session_factory=_Factory(),
     )
 
     assert captured, "write site must persist an EvalResult row"

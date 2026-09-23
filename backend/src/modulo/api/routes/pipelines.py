@@ -143,7 +143,7 @@ LEGACY_READ_CONTEXT: dict[str, bool] = {"legacy_read": True}
 _MAX_GRAPH_NODES = 500
 _MAX_GRAPH_EDGES = 1000
 
-# ADR 017 service-layer backstop: operator+ is "privileged" (privilege is
+# ADR 047 service-layer backstop: operator+ is "privileged" (privilege is
 # required to weaken/remove an existing HITL gate via a graph write).
 _OPERATOR_LEVEL = org_role_level("operator")
 _ADMIN_LEVEL = org_role_level("admin")
@@ -3478,7 +3478,7 @@ async def _finalize_locked_graph_save(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from exc
-    raise exc
+    raise
 
 
 @router.post(
@@ -3717,7 +3717,7 @@ async def _save_graph(
 
     Accepts edges as either ORM model instances (PipelineEdge) or plain dicts.
     Forwards is_privileged + caller_type + account_id + is_guardrail_admin to
-    the underlying graph write (ADR 017 backstop /
+    the underlying graph write (ADR 047 backstop /
     hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review).
     """
     edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]

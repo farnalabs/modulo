@@ -5,7 +5,7 @@ break-glass operator secrets. This is the operational procedure for
 recovering an organisation whose only admin cannot authenticate.
 
 **Prerequisite reading:**
-- `Repos/devtools/adr/017-centralized-authorization.md`, `Repos/devtools/adr/018-centralized-authorization.md` — the auth architecture and the ONE deliberate login-route hook deviation
+- ADR 047 (centralized-authorization), ADR 018 (centralized-authorization) — the auth architecture and the ONE deliberate login-route hook deviation
 - `docs/configuration-reference.md` §Break-glass Admin Recovery — env settings
 - `docs/deployment-security.md` — deployment security baseline
 - `docs/security/secret-management.md` — secret handling / vault
@@ -50,7 +50,7 @@ Before an incident, confirm all of the following hold:
    from `MODULO_BREAK_GLASS_DATABASE_URL`). Bootstrap failure is FATAL when
    `ENABLED=true`. The role requires a superuser to grant BYPASSRLS — a
    managed-Postgres platform without superuser is a hard platform constraint
-   (see ADR-017/018).
+   (see ADR-047/018).
 3. **CLI installed** — `modulo-break-glass` (registered console script, mirrors
    `modulo-migrate`'s `asyncio.run` wrapper). Connects as `modulo_breakglass`
    via a dedicated lazy engine — never the app `database_url`.
@@ -268,9 +268,7 @@ consumer is a scheduled follow-up task, tracked in Linear):
 - **Command:** `modulo-break-glass status --all --json`.
 - **Alert:** the non-zero-exit-on-live-rows condition (`5`) is wired to an
   alert. Live rows carry an explicit `reason`, so the alert is actionable.
-- **Evidence artifact:** committed to
-  `Repos/admin/reviews/break-glass-daily-sweep/YYYY-MM-DD.md`, 90-day
-  retention.
+- **Evidence artifact:** committed with 90-day retention.
 - **Forgery detector:** the sweep also verifies the last 24h of audit rows for
   `last_admin_forcibly_removed` / `break_glass_activated` and flags live rows
   without a matching `break_glass_activated` audit — the raw-INSERT forgery
@@ -388,7 +386,7 @@ the `modulo_breakglass` session (actor in `payload_json`, `account_id` NULL).
 | Topic | Document |
 |---|---|
 | Product requirements | `docs/configuration-reference.md` §Break-glass Admin Recovery |
-| Auth architecture / login hook | `Repos/devtools/adr/017-centralized-authorization.md`, `Repos/devtools/adr/018-centralized-authorization.md` |
+| Auth architecture / login hook | ADR 047 (centralized-authorization), ADR 018 (centralized-authorization) |
 | Env settings | `docs/configuration-reference.md` §Break-glass Admin Recovery |
 | Deploy-gate precondition | `docs/deployment.md` §Break-Glass Admin Recovery Deploy Gate |
 | Deployment security baseline | `docs/deployment-security.md` |

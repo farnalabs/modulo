@@ -14,6 +14,25 @@ test.describe('Dashboard', () => {
     await expect(page.locator('h1')).toContainText('Dashboard')
   })
 
+  test('trend window toggles reflect selection', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await page.reload()
+
+    const heading = page.locator('[data-testid="dashboard-title"]')
+    await expect(heading).toBeVisible()
+
+    // A fresh session has no persisted preference, and loadTrendWindow() falls
+    // back to the 3-day rolling window when localStorage holds nothing.
+    const defaultToggle = page.locator('[data-testid="trend-toggle-3"]')
+    await expect(defaultToggle).toHaveAttribute('aria-pressed', 'true')
+
+    const weekToggle = page.locator('[data-testid="trend-toggle-7"]')
+    await weekToggle.click()
+
+    await expect(weekToggle).toHaveAttribute('aria-pressed', 'true')
+    await expect(defaultToggle).toHaveAttribute('aria-pressed', 'false')
+  })
+
   test('run activity card shows HITL and rejection rate labels', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.reload()

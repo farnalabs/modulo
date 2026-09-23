@@ -1,10 +1,12 @@
 """Integration test fixtures — spins up a real Postgres via Testcontainers."""
 
 import asyncio
+import json
 import os
 import sys
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,7 +16,7 @@ from alembic import command
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import inspect, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from testcontainers.community.postgres import PostgresContainer
 
@@ -179,6 +181,55 @@ def _with_credentials(database_url: str, user: str, password: str) -> str:
     host_part, _, db = rest.partition("/")
     host = host_part.split("@")[-1]
     return f"{prefix}://{quote(user)}:{quote(password)}@{host}/{db}"
+
+
+@dataclass(frozen=True)
+class EvalMirrorDefinition:
+    """The ``evals``-superset fields of a legacy ``eval_definitions`` fixture row.
+
+    FAR-1100 chunk 3 (migration 0254) repointed ``eval_results.eval_id`` to
+    ``evals`` and recreated the tenant trigger against ``evals``: an
+    ``eval_results`` row can only reference an eval present in ``evals``. Every
+    legacy ``eval_definitions`` fixture row therefore needs its same-UUID
+    ``evals`` mirror — the data shape 0254's backfill produces for every
+    existing row.
+    """
+
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    pipeline_id: uuid.UUID
+    name: str
+    eval_type: str
+    account_id: uuid.UUID
+    node_id: uuid.UUID | None = None
+    config: dict[str, object] | None = None
+
+
+async def insert_evals_mirror(conn: AsyncConnection, definition: EvalMirrorDefinition) -> None:
+    """Insert the same-UUID ``evals`` mirror for a legacy ``eval_definitions`` row.
+
+    Single source of truth for the mirror insert so a future ``evals`` schema
+    change is single-touch. Callers pass an already-open connection inside the
+    surrounding transaction so the mirror commits atomically with the
+    ``eval_definitions`` row it mirrors.
+    """
+    await conn.execute(
+        text(
+            "INSERT INTO evals "
+            "(id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id) "
+            "VALUES (:id, :oid, :pid, :nid, :name, :eval_type, CAST(:cfg AS jsonb), :aid)"
+        ),
+        {
+            "id": str(definition.id),
+            "oid": str(definition.organisation_id),
+            "pid": str(definition.pipeline_id),
+            "nid": str(definition.node_id) if definition.node_id else None,
+            "name": definition.name,
+            "eval_type": definition.eval_type,
+            "cfg": json.dumps(definition.config or {}),
+            "aid": str(definition.account_id),
+        },
+    )
 
 
 # NOTE (FAR-595, D6 fix-Worker lesson): under heavy machine load, the

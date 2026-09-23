@@ -234,6 +234,21 @@ def _is_missing_variable(stderr: str) -> bool:
     return "not found" in lowered or "http 404" in lowered
 
 
+def _is_permission_error(stderr: str) -> bool:
+    """Return True when a ``gh api`` failure is an authorization fault.
+
+    Distinct from a missing variable (404): the token cannot read repository
+    variables at all.  The Actions integration token (``github.token``)
+    surfaces this as HTTP 403 ``Resource not accessible by integration`` —
+    it has no variables-read permission (see
+    ``.github/workflows/fast-lane-suspension.yml`` for the same limitation on
+    the *write* side).  The caller must authenticate with a token that can
+    read variables (the reviewer PAT) for this check to resolve.
+    """
+    lowered = stderr.lower()
+    return "resource not accessible" in lowered or "http 403" in lowered or "forbidden" in lowered
+
+
 def check_suspension(
     repo: str,
     gh_token: str | None = None,
@@ -283,6 +298,18 @@ def check_suspension(
     if result.returncode != 0:
         if _is_missing_variable(result.stderr):
             return True, "no active suspension (variable not set)"
+        if _is_permission_error(result.stderr):
+            # The token cannot read repository variables at all — a
+            # configuration fault, not an unknown suspension state.  Naming it
+            # explicitly keeps the fail-closed denial diagnosable instead of
+            # looking like a transient API error.  Fix: authenticate the
+            # classifier step with a token that can read variables (the
+            # reviewer PAT), mirroring fast-lane-suspension.yml.
+            return False, (
+                "suspension check denied (fail-closed): token cannot read repository "
+                f"variables — authenticate the classifier with a variables-read token "
+                f"(MODULO_REVIEWBOT_TOKEN): {result.stderr.strip()}"
+            )
         return False, f"suspension check denied (fail-closed): API error: {result.stderr.strip()}"
 
     raw_value = result.stdout.strip()

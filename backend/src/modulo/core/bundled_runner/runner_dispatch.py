@@ -34,7 +34,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import jinja2
-from jinja2.sandbox import SandboxedEnvironment
 
 from modulo.core.bundled_runner.profile import (
     is_placeholder_bundled_runner_image_ref,
@@ -171,10 +170,16 @@ async def resolve_sandbox_dispatch_route(
                 "profile, or wait for the digest to land."
             )
         try:
+            from modulo.core.runtime_config.key_bridge import override_int_or
             from modulo.settings import get_settings
 
             settings = get_settings()
-            hub = build_hub(max_local_concurrency=int(getattr(settings, "modulo_max_local_concurrency", 2) or 2))
+            # FAR-1135: MODULO_MAX_LOCAL_CONCURRENCY is hot-reloadable.
+            concurrency = override_int_or(
+                "MODULO_MAX_LOCAL_CONCURRENCY",
+                int(getattr(settings, "modulo_max_local_concurrency", 2) or 2),
+            )
+            hub = build_hub(max_local_concurrency=concurrency)
             provider = hub.resolve(profile)
         except ProviderNotConfiguredError as exc:
             raise SandboxDispatchUnboundError(str(exc)) from exc
@@ -637,7 +642,12 @@ async def _render_agent_template(
     """
     if sandbox_mode == "script":
         return ("", agent_command, json.dumps(raw_input))
-    env = SandboxedEnvironment()
+    # FAR-226: route through the shared sandbox Jinja helper (single source of
+    # truth with the save-time validator + the E2B node-runner path). Imported
+    # lazily so this dependency-light module does not drag in pipeline_engine.
+    from modulo.core.pipeline_engine.sandbox_mode import sandbox_jinja_environment
+
+    env = sandbox_jinja_environment()
     scoped_state = dict(state)
     scoped_state["run_context"] = scoped_run_context
     template_vars: dict[str, Any] = {
@@ -1531,7 +1541,7 @@ async def _maybe_start_loop_bridge(
     """Best-effort loop-intercept bridge (Docker packaging) — fail-open.
 
     The bridge server binds on the SAQ host; workspaces reach it via
-    ``host.docker.internal`` on Docker (ADR 003 amendment: a setup failure
+    ``host.docker.internal`` on Docker (ADR 044 amendment: a setup failure
     disables the bridge for this node and NEVER blocks the dispatch).
     Returns the bridge-wrapped command, or None (no bridge).
     """

@@ -839,7 +839,7 @@ async def _seed_demo_triggers(
     existing_webhook = webhook_result.scalar_one_or_none()
     webhook_config = {
         # No HMAC secret: the demo webhook is intentionally public-run-creation
-        # (ADR 017). The demo viewer cannot trigger runs — the endpoint is
+        # (ADR 047). The demo viewer cannot trigger runs — the endpoint is
         # gated on the unguessable trigger id and the viewer role is read-only.
         "events": ["pull_request"],
         "payload_mapping": {},

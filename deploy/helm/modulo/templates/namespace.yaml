@@ -1,0 +1,17 @@
+{{- if .Values.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "modulo.namespace" . }}
+  labels:
+    {{- include "modulo.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.namespace.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.podSecurity.enforce }}
+    pod-security.kubernetes.io/enforce: {{ .Values.podSecurity.enforce }}
+    pod-security.kubernetes.io/audit: {{ .Values.podSecurity.audit | default .Values.podSecurity.enforce }}
+    pod-security.kubernetes.io/warn: {{ .Values.podSecurity.warn | default .Values.podSecurity.enforce }}
+    {{- end }}
+{{- end }}

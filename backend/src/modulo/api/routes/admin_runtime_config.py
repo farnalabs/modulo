@@ -12,7 +12,14 @@ from fastapi import APIRouter, HTTPException, status
 from modulo.api.dependencies import require_feature, require_system_permission
 from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.runtime_config.store import KNOWN_KEYS, RuntimeConfigStore, get_runtime_config_store
+from modulo.core.runtime_config.key_bridge import APPLY_HOOKS
+from modulo.core.runtime_config.store import (
+    BOOT_ONLY_REASONS,
+    KNOWN_KEYS,
+    RuntimeConfigStore,
+    get_runtime_config_store,
+)
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 # WARNING: system.config.manage is currently ONLY assignable to is_system_admin
 # users. There is NO in-product path to grant is_system_admin. Self-hosted
@@ -45,6 +52,38 @@ def _validate_known_key(key: str, context: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown config key in {context}: {key}",
         )
+
+
+def _validate_override_key(key: str) -> None:
+    """Reject overrides for keys classified boot-only (FAR-1135).
+
+    An override for a boot-only key would be accepted, stored, and then
+    silently do nothing — the exact defect this classification exists to
+    prevent. ``clear`` stays allowed for every known key so stale overrides
+    can always be removed.
+    """
+    if key in BOOT_ONLY_REASONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Config key '{key}' cannot be overridden at runtime: {BOOT_ONLY_REASONS[key]}",
+        )
+
+
+def _validate_override_value(key: str, value: str) -> None:
+    """Reject values the governed consumer would silently ignore (FAR-1135)."""
+    if key == "MODULO_LOG_LEVEL" and value.upper() not in logging.getLevelNamesMapping():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid log level for 'MODULO_LOG_LEVEL': {value!r}",
+        )
+    if key == "MODULO_MAX_LOCAL_CONCURRENCY":
+        try:
+            int(value)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Override value for '{key}' must be an integer, got {value!r}",
+            ) from None
 
 
 def _build_response(store: RuntimeConfigStore) -> dict[str, Any]:
@@ -92,6 +131,8 @@ def set_runtime_config_overrides(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Override value for '{key}' must be a string, got {type(value).__name__}",
                 )
+            _validate_override_key(key)
+            _validate_override_value(key, value)
             validated_overrides.append((key, value))
 
         clear_keys = req.get("clear", [])
@@ -110,10 +151,26 @@ def set_runtime_config_overrides(
             _validate_known_key(key, "clear")
             validated_clear.append(key)
 
+        touched_keys: list[str] = []
         for key, value in validated_overrides:
             store.set_override(key, value)
+            touched_keys.append(key)
         for key in validated_clear:
             store.clear_override(key)
+            touched_keys.append(key)
+
+        # Apply-on-write hooks: keys whose governed state is configured
+        # once (not read per-call) re-apply here so the override takes
+        # effect without a restart (FAR-1135).
+        for key in touched_keys:
+            hook = APPLY_HOOKS.get(key)
+            if hook is not None:
+                try:
+                    hook()
+                except Exception:
+                    # The override itself is committed; a hook failure must
+                    # not roll the response into a 500 (commit-then-error).
+                    _log.exception("Runtime config apply hook failed for %s", _sanitise_log_value(key))
 
         return _build_response(store)
     except HTTPException:
