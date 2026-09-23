@@ -283,10 +283,6 @@ async def create_eval_definition(
 
     Admin only. The eval definition is scoped to the caller's organisation.
     """
-    # FAR-1100 chunk 3 → 3b freeze: creation disabled between read cutover and
-    # write cutover.  Remove when chunk 3b lands (CO-8).
-    raise_if_frozen()
-
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1572,10 +1568,6 @@ async def update_eval_definition(
     principal: TenantPrincipal = require_permission("eval.definition.update"),
 ) -> dict[str, Any]:
     """Update an eval definition. Admin only."""
-    # FAR-1100 chunk 3 → 3b freeze: editing disabled between read cutover and
-    # write cutover.  Remove when chunk 3b lands (CO-8).
-    raise_if_frozen()
-
     if principal.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can update eval definitions")
 

@@ -6,7 +6,7 @@ Tests: POST /api/v1/evals, GET /api/v1/evals, GET /api/v1/evals/{eval_id},
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -77,21 +77,6 @@ def _make_eval_def(**overrides) -> MagicMock:
     m.version = overrides.get("version", 1)
     m.pre_version_raw = overrides.get("pre_version_raw")
     return m
-
-
-@pytest.fixture(autouse=True)
-def _bypass_eval_definition_freeze():
-    """Bypass the FAR-1100 chunk 3 → 3b eval-definition create/edit freeze.
-
-    These tests cover the still-live create/update production paths (201/200
-    happy paths, 404, guardrail 422, admin gates, DB-error mapping).  The
-    freeze guard runs before all of that and would short-circuit every case to
-    409, gutting the coverage.  The freeze itself is verified directly in
-    tests/unit/api/test_eval_definition_freeze.py.  Remove when chunk 3b lands
-    (CO-8).
-    """
-    with patch("modulo.api.routes.evals.raise_if_frozen"):
-        yield
 
 
 @pytest.fixture

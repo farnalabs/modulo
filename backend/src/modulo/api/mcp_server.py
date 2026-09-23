@@ -121,7 +121,6 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # CLOSED (auth error) — there must never be a process-global fallback, because
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
-from modulo.core.eval_engine.eval_definition_freeze import definition_frozen_response
 from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import get_registry, resolve_plan_context
 from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
