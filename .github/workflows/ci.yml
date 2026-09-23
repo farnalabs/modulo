@@ -626,8 +626,13 @@ jobs:
           SONAR_HOST_URL: https://sonarcloud.io
         run: |
           set -uo pipefail
+          # One log file for the whole step, truncated per attempt so the
+          # signature grep never sees a previous attempt's output; removed on
+          # every exit path (success, non-transient failure, exhaustion).
+          LOG="$(mktemp)"
+          trap 'rm -f "$LOG"' EXIT
           for attempt in 1 2 3; do
-            LOG="$(mktemp)"
+            : > "$LOG"
             set +e
             "$SCANNER" -Dsonar.projectBaseDir=. 2>&1 | tee "$LOG"
             RC=${PIPESTATUS[0]}
@@ -637,8 +642,12 @@ jobs:
               exit 0
             fi
             if grep -qE "NoSuchFileException: .*\.git/\.probe-" "$LOG"; then
-              echo "::warning::SonarCloud scan hit the known transient .git/.probe-* race (attempt ${attempt}/3); retrying."
-              sleep $((attempt * 15))
+              if [ "$attempt" -lt 3 ]; then
+                echo "::warning::SonarCloud scan hit the known transient .git/.probe-* race (attempt ${attempt}/3); retrying."
+                sleep $((attempt * 15))
+              else
+                echo "::warning::SonarCloud scan hit the known transient .git/.probe-* race on the final attempt (3/3); not retrying."
+              fi
               continue
             fi
             echo "::error::SonarCloud scan failed with a non-transient error (not the .git/.probe-* race); not retrying."
