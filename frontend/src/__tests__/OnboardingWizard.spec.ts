@@ -416,7 +416,7 @@ describe('OnboardingWizard — create pipeline (step 5)', () => {
       name: 'My Pipeline',
       description: 'Does things',
       visibility: 'org',
-      default_autonomy_level: 'balanced',
+      default_autonomy_level: 'manual_approval',
     })
 
     // Next becomes available after creation (telemetry step follows).
