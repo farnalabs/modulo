@@ -2352,6 +2352,34 @@ async def test_sandbox_allowed_tools_exposed_as_env():
     assert envs["MODULO_ALLOWED_TOOLS"] == "git,pytest"
 
 
+async def test_sandbox_e2b_create_passes_resolved_api_key(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1171: the node-runner E2B create path passes the runtime-config-
+    resolved key explicitly.
+
+    A rotated key (runtime-config override) must be the credential the live
+    ``AsyncSandbox.create`` uses — the stale legacy ``E2B_API_KEY`` env var
+    must lose. Fails without the fix: ``create`` is called with no
+    ``api_key=`` and the e2b SDK resolves the legacy env var itself.
+    """
+    from modulo.core.runtime_config.store import RuntimeConfigStore, get_runtime_config_store
+
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.setenv("E2B_API_KEY", "stale-legacy-env-key")
+    RuntimeConfigStore.reset()
+    store = get_runtime_config_store()
+    store.set_override("MODULO_E2B_API_KEY", "hot-rotated-key")
+    try:
+        fn = make_sandbox_agent_fn(_sandbox_node_def())
+        sandbox = _make_sandbox_mock()
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create:
+            result = await fn(_run_state())
+        assert result["output"]["status"] == "completed"
+        assert create.call_args.kwargs["api_key"] == "hot-rotated-key"
+    finally:
+        store.clear_override("MODULO_E2B_API_KEY")
+        RuntimeConfigStore.reset()
+
+
 async def test_sandbox_invalid_stall_timeout_falls_back_with_warning(caplog):
     fn = make_sandbox_agent_fn(_sandbox_node_def(stall_timeout_seconds="not-a-number"))
     sandbox = _make_sandbox_mock()

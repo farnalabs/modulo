@@ -117,7 +117,7 @@ async def test_create_workspace_creates_sandbox(
     ref = await provider.create_workspace(workspace_spec)
 
     assert ref == "sbx-e2b-test-001"
-    mock_sandbox_cls.create.assert_called_once_with(template="ubuntu-22.04")
+    mock_sandbox_cls.create.assert_called_once_with(template="ubuntu-22.04", api_key="sk-test")
 
 
 @pytest.mark.asyncio
@@ -129,7 +129,7 @@ async def test_create_workspace_default_template(mock_sandbox_cls: MagicMock) ->
         image_ref="",
     )
     await provider.create_workspace(spec)
-    mock_sandbox_cls.create.assert_called_once_with(template="base")
+    mock_sandbox_cls.create.assert_called_once_with(template="base", api_key="sk-test")
 
 
 @pytest.mark.asyncio
@@ -642,6 +642,78 @@ async def test_multiple_workspaces_independent(
     assert ref1 == "sbx-e2b-001"
     assert ref2 == "sbx-e2b-002"
     assert len(provider._sandboxes) == 2
+
+
+# ---------------------------------------------------------------------------
+# FAR-1171: the resolved key reaches AsyncSandbox.create (key rotation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_passes_resolved_key_to_create(
+    mock_sandbox_cls: MagicMock,
+    workspace_spec: WorkspaceSpec,
+) -> None:
+    """FAR-1171: the constructor's resolved key is the credential handed to
+    the SDK's create call.
+
+    Without ``api_key=`` the SDK's ConnectionConfig resolves the legacy
+    ``E2B_API_KEY`` env var instead — the gate and the live call diverge.
+    """
+    provider = E2BRuntimeProvider(api_key="sk-explicit")
+    await provider.create_workspace(workspace_spec)
+    _args, kwargs = mock_sandbox_cls.create.call_args
+    assert kwargs.get("api_key") == "sk-explicit"
+    assert kwargs.get("template") == "ubuntu-22.04"
+
+
+@pytest.mark.asyncio
+async def test_runtime_override_key_reaches_create_not_legacy_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1171 prove-the-fix: a runtime-config override (key rotation) is the
+    credential the create path uses — the legacy ``E2B_API_KEY`` env var loses.
+
+    Fails without the fix: ``AsyncSandbox.create`` is called with no
+    ``api_key=`` and the SDK would resolve ``E2B_API_KEY`` (stale) itself.
+    """
+    from modulo.core.runtime_config.store import RuntimeConfigStore, get_runtime_config_store
+
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.setenv("E2B_API_KEY", "stale-legacy-env-key")
+    RuntimeConfigStore.reset()
+    store = get_runtime_config_store()
+    store.set_override("MODULO_E2B_API_KEY", "hot-rotated-key")
+    try:
+        with patch("e2b.AsyncSandbox") as mock_cls:
+            mock_cls.create = AsyncMock(return_value=MagicMock(sandbox_id="sbx-rot-001"))
+            provider = E2BRuntimeProvider()
+            spec = WorkspaceSpec(
+                environment_profile_id=uuid.uuid4(),
+                organisation_id=uuid.uuid4(),
+                image_ref="ubuntu-22.04",
+            )
+            await provider.create_workspace(spec)
+        _args, kwargs = mock_cls.create.call_args
+        assert kwargs.get("api_key") == "hot-rotated-key"
+    finally:
+        store.clear_override("MODULO_E2B_API_KEY")
+        RuntimeConfigStore.reset()
+
+
+def test_create_workspace_fails_closed_without_any_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1171: fail-closed preserved — no override, no env -> typed refusal
+    before any sandbox call can be attempted."""
+    from modulo.core.runtime_config.store import RuntimeConfigStore
+
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    RuntimeConfigStore.reset()
+    # pytest.raises is the assertion: the typed refusal fires before any
+    # AsyncSandbox.create call could be attempted.
+    with pytest.raises(ValueError, match="E2B API key is required"):
+        E2BRuntimeProvider()
 
 
 # ---------------------------------------------------------------------------
