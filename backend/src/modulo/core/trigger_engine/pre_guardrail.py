@@ -47,7 +47,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.guardrails import GuardrailAction, run_interception_pass, to_engine_definition
+from modulo.core.guardrails import GuardrailAction, run_interception_pass
 
 _log = logging.getLogger(__name__)
 
@@ -111,16 +111,20 @@ async def _load_guardrail_definitions(
     ``eval_type='guardrail'`` for the pipeline, org-scoped. No ``node_id``
     filter — both org-level (``node_id IS NULL``) and node-bound rows are bound
     to the pipeline's runs, mirroring the seam exactly. The engine DTO mapping
-    is ``to_engine_definition`` (never reimplemented here).
+    is ``EvalDefinition`` with ``failure_behaviour='warn'`` (guardrails pin
+    warn — the ``Eval`` table has no ``failure_behaviour`` column).
+
+    Reads from the ``evals`` table (chunk 3b cutover).
     """
-    from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
+    from modulo.core.eval_engine import EvalDefinition, EvalType
+    from modulo.db.models.eval import Eval
 
     result = await session.execute(
-        select(EvalDefinitionModel).where(
-            EvalDefinitionModel.pipeline_id == pipeline_id,
-            EvalDefinitionModel.organisation_id == org_id,
-            EvalDefinitionModel.eval_type == "guardrail",
-            EvalDefinitionModel.deleted_at.is_(None),
+        select(Eval).where(
+            Eval.pipeline_id == pipeline_id,
+            Eval.organisation_id == org_id,
+            Eval.eval_type == "guardrail",
+            Eval.deleted_at.is_(None),
         )
     )
     rows = result.scalars().all()
@@ -130,7 +134,21 @@ async def _load_guardrail_definitions(
         # contract always returns a list; a non-list result means no guardrails
         # are bound, which is exactly what a stub session should observe.
         return []
-    return [to_engine_definition(row) for row in rows]
+    return [
+        EvalDefinition(
+            id=row.id,
+            org_id=row.organisation_id,
+            pipeline_id=row.pipeline_id,
+            node_id=str(row.node_id) if row.node_id else None,
+            name=row.name or "",
+            eval_type=EvalType(row.eval_type),
+            config=dict(row.config_json or {}),
+            failure_behaviour="warn",
+            pass_threshold=float(row.pass_threshold) if row.pass_threshold is not None else None,
+            suite_id=row.suite_id,
+        )
+        for row in rows
+    ]
 
 
 async def run_pre_trigger_guardrail_pass(

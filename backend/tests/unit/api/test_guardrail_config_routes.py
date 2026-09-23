@@ -124,9 +124,9 @@ def _patched(
             ("check_guardrail_drift", "check_guardrail_drift", {"return_value": False}),
             ("append_audit_event", "append_audit_event", {"new_callable": AsyncMock}),
             (
-                "load_pipeline_guardrail_rows",
-                "load_pipeline_guardrail_rows",
-                {"new_callable": AsyncMock, "return_value": []},
+                "_load_pipeline_guardrail_rows_by_name",
+                "_load_pipeline_guardrail_rows_by_name",
+                {"new_callable": AsyncMock, "return_value": (MagicMock(), {})},
             ),
         ]:
             mocks[name] = stack.enter_context(patch(f"modulo.api.routes.guardrail_config.{target}", **kwargs))
@@ -268,9 +268,9 @@ def test_apply_collision_with_node_bound_row_returns_409(admin_client: TestClien
     with (
         _patched(pin=_proposed_pin()),
         patch(
-            "modulo.api.routes.guardrail_config.load_pipeline_guardrail_rows",
+            "modulo.api.routes.guardrail_config._load_pipeline_guardrail_rows_by_name",
             new_callable=AsyncMock,
-            return_value=[colliding_row],
+            return_value=(pipeline, {"no-aws-keys": colliding_row}),
         ),
     ):
         resp = admin_client.post(f"{_BASE}/apply")
