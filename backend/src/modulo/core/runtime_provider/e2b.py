@@ -32,6 +32,13 @@ class E2BRuntimeProvider(RuntimeProvider):
        (``key_bridge.get_e2b_api_key`` — the same bridge the provider-
        registration gate and node-runner enforcement check use, FAR-1159)
 
+    The resolved key is passed to every ``AsyncSandbox.create`` call as
+    ``api_key=`` (FAR-1171): without it the E2B SDK would resolve its own
+    credential from the legacy ``E2B_API_KEY`` env var, and a runtime-key
+    rotation via ``PUT /api/v1/admin/runtime-config`` would change the
+    registration gate and the node-runner enforcement check but not the
+    credential actually used to provision sandboxes.
+
     To store per-organisation keys securely, use ``FernetSecretsBackend`` at
     the service layer and pass the resolved key to the constructor.
     """
@@ -77,7 +84,10 @@ class E2BRuntimeProvider(RuntimeProvider):
         template_id = spec.image_ref.strip() if spec.image_ref else _DEFAULT_TEMPLATE_ID
         timeout = spec.timeout_seconds or _MAX_PROVISION_TIMEOUT
 
-        create_kwargs: dict[str, Any] = {"template": template_id}
+        # FAR-1171: pass the resolved key explicitly — the SDK's ConnectionConfig
+        # only falls back to the E2B_API_KEY env var when api_key is falsy, and
+        # ``__init__`` guarantees ``self._api_key`` is non-empty (fail-closed).
+        create_kwargs: dict[str, Any] = {"template": template_id, "api_key": self._api_key}
         if spec.workspace_metadata:
             create_kwargs["metadata"] = dict(spec.workspace_metadata)
 
