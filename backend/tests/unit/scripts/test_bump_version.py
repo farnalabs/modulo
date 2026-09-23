@@ -182,3 +182,13 @@ def test_main_exits_when_version_unreadable(monkeypatch, tmp_path, capsys):
         bv.main()
     assert exc.value.code == 1
     assert "could not read version from backend/pyproject.toml" in capsys.readouterr().out
+
+
+def test_main_invalid_part_exits(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["bump-version.py", "nonsense"])
+    with pytest.raises(SystemExit) as exc:
+        bv.main()
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "ERROR: invalid part 'nonsense'" in out
+    assert "expected one of" in out
