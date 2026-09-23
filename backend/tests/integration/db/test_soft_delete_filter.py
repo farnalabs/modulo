@@ -5,11 +5,14 @@ to every SELECT targeting a ``SoftDeleteMixin`` model, and that the
 ``include_soft_deleted`` opt-out correctly re-includes soft-deleted rows.
 
 Key design decisions:
-- Uses a SEPARATE DeclarativeBase (``_TestBase``) so ``create_all`` never touches
-  app tables. No ``Base.metadata.drop_all`` which would fail on FK dependencies.
+- Uses a SEPARATE DeclarativeBase (``_TestBase``) so ``create_all``/``drop_all``
+  only touch this test's table, never the app ``Base`` (whose ``drop_all`` would
+  fail on FK dependencies).
 - Calls ``register_soft_delete_filter()`` explicitly and ASSERTS the listener is
   registered — if someone removes the registration, these tests fail loudly.
-- Truncates the test table between tests for isolation (no row accumulation).
+- Drops the test table on teardown so it never leaks into the shared integration
+  database and trips the schema-parity test (``test_initial_migration``), which
+  treats any unexpected table as ORM drift.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from datetime import UTC, datetime
 import pytest
 import pytest_asyncio
 import sqlalchemy.event
-from sqlalchemy import String, func, select, text
+from sqlalchemy import String, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import Session as SASession
@@ -84,9 +87,12 @@ async def _create_test_table(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
         await conn.run_sync(_TestBase.metadata.create_all)
     yield
-    # Truncate (not drop_all) — avoids FK dependency errors and is fast.
+    # Drop the test-only table via _TestBase (never app tables) so it does not
+    # leak into the shared integration database. A leftover table is reported as
+    # ``remove_table`` ORM drift by test_initial_migration's schema-parity check,
+    # which failed the deploy gate (FAR-1025 regression).
     async with db_engine.begin() as conn:
-        await conn.execute(text(f"TRUNCATE TABLE {_TestSoftEntity.__tablename__} CASCADE"))
+        await conn.run_sync(_TestBase.metadata.drop_all)
 
 
 @pytest_asyncio.fixture()
