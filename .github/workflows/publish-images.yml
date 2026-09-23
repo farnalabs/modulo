@@ -79,7 +79,7 @@ jobs:
       - name: Smoke check — import modulo
         shell: bash
         run: |
-          IMAGE="${{ steps.meta.outputs.tags | head -n1 }}"
+          IMAGE="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
           echo "Checking image: $IMAGE"
           docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
 
@@ -132,6 +132,6 @@ jobs:
       - name: Smoke check — nginx -t
         shell: bash
         run: |
-          IMAGE="${{ steps.meta.outputs.tags | head -n1 }}"
+          IMAGE="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
           echo "Checking image: $IMAGE"
           docker run --rm --entrypoint nginx "$IMAGE" -t
