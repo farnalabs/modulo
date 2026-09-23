@@ -2898,6 +2898,9 @@ elements:
       - testid: pipeline-editor-max-duration
         type: input
         dynamic_testid: false
+      - testid: pipeline-editor-max-autonomy
+        type: select
+        dynamic_testid: false
       - testid: pipeline-editor-circuit-breaker-threshold
         type: input
         dynamic_testid: false
