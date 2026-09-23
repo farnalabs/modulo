@@ -31,6 +31,17 @@ Deliverable (A) of the break-glass admin recovery plan adds:
     for the app role, ``rolbypassrls = false`` for the app role (tenant
     isolation relies on RLS policies — BYPASSRLS is only for cross-org system
     roles), and no membership in the privileged roles.
+
+Concurrency (FAR-1200): on a multi-replica deployment every replica runs this
+bootstrap on first boot, and two concurrent runs updating the same system
+catalog tuples (pg_authid / ACL entries) collide with
+``asyncpg InternalServerError: tuple concurrently updated``. The bootstrap
+therefore (1) serialises on a session-scoped advisory lock
+(``pg_try_advisory_lock`` + bounded polling, the codebase convention — fail
+open with a warning when the budget is exhausted, never worse than the
+pre-lock behaviour) and (2) retries the (idempotent) DDL body a bounded number
+of times on that specific error, which also covers a rolling deploy where an
+old, unlocked replica races a new one.
 """
 
 import asyncio
@@ -50,6 +61,21 @@ REQUIRED_VARS = ["DATABASE_ADMIN_URL", "DATABASE_URL"]
 _BREAK_GLASS_ROLE = "modulo_breakglass"
 _MIGRATE_ROLE = "modulo_migrate"
 _SYSTEM_ROLE = "modulo_system"
+
+# FAR-1200: serialise concurrent first-boot bootstraps (multi-replica deploys).
+# Dedicated (int4, int4) advisory-lock key — distinct from the migration lock
+# (72001, 1) in api.main / db.migrations.env and the integration-fixture lock
+# (72002, 1). ``pg_try_advisory_lock`` + bounded polling is the codebase
+# convention: a bare blocking ``pg_advisory_lock`` under a client timeout races
+# server-side acquisition against the client.
+_BOOTSTRAP_LOCK_KEY = (72003, 1)
+_BOOTSTRAP_LOCK_POLL_ATTEMPTS = 60
+_BOOTSTRAP_LOCK_POLL_INTERVAL = 1.0
+
+# Bounded retry for the observed ``tuple concurrently updated`` collision. The
+# DDL body is idempotent, so re-running it after a lost race is safe.
+_BOOTSTRAP_MAX_ATTEMPTS = 3
+_BOOTSTRAP_RETRY_BACKOFF_SECONDS = 0.5
 
 # The single-sourced allow-list constant for writable accounts columns.
 # Every future column added to accounts must be allow-listed here or be
@@ -357,6 +383,188 @@ def _asyncpg_admin_connect(admin_url: str) -> tuple[str, bool | str]:
     return urlunparse((parts.scheme, parts.netloc, parts.path, "", "", "")), ssl
 
 
+async def _acquire_bootstrap_lock(conn: asyncpg.Connection) -> bool:
+    """Poll ``pg_try_advisory_lock`` until acquired or the budget runs out.
+
+    FAR-1200: serialises concurrent multi-replica bootstraps on this admin
+    connection for the whole DDL run. Returns False (fail open) when the
+    budget is exhausted — the caller then proceeds unlocked, which is never
+    worse than the pre-lock behaviour, and the concurrent-update retry still
+    applies.
+    """
+    k1, k2 = _BOOTSTRAP_LOCK_KEY
+    for _ in range(_BOOTSTRAP_LOCK_POLL_ATTEMPTS):
+        if await conn.fetchval("SELECT pg_try_advisory_lock($1, $2)", k1, k2):
+            return True
+        await asyncio.sleep(_BOOTSTRAP_LOCK_POLL_INTERVAL)
+    return False
+
+
+def _is_concurrent_update_error(exc: BaseException) -> bool:
+    """True for the FAR-1200 first-boot race error.
+
+    Two replicas updating the same system-catalog tuple at once surface as
+    ``asyncpg InternalServerError: tuple concurrently updated``.
+    """
+    return isinstance(exc, asyncpg.PostgresError) and "tuple concurrently updated" in str(exc)
+
+
+async def _apply_role_ddl(
+    conn: asyncpg.Connection,
+    *,
+    app_user: str,
+    app_pass: str,
+    bg_user: str,
+    bg_pass: str,
+    sys_user: str,
+    sys_pass: str,
+) -> None:
+    """Idempotent role/grant/posture body of the bootstrap.
+
+    Safe to re-run after a lost concurrent-update race (FAR-1200): every
+    statement is create-or-update / re-grant / re-assert.
+    """
+    # Idempotent role creation — skips if already exists.
+    # modulo_app must NEVER have BYPASSRLS — RLS policies enforce tenant
+    # isolation. modulo_system (cross-org system cron role) gets BYPASSRLS.
+    await _create_or_update_role(conn, app_user, login=True, password=app_pass, bypassrls=False)
+
+    await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None, bypassrls=True)
+    await _create_or_update_role(conn, bg_user, login=True, password=bg_pass, bypassrls=True)
+    # modulo_system: dedicated LOGIN BYPASSRLS role for cross-org system cron
+    # jobs (analytics_facts_maintenance, journey_reconcile, retention_cleanup,
+    # dispatcher_reconcile). Only system crons use this role; modulo_app is
+    # NOBYPASSRLS for tenant isolation.
+    await _create_or_update_role(conn, sys_user, login=True, password=sys_pass, bypassrls=True)
+
+    # Role grants for schema/DDL ownership (merged from the break-glass
+    # 0036 deliverable + the cost 0065 MIGRATE-role deploy-wiring):
+    #   - GRANT CREATE ON SCHEMA public: the migration chain (0036
+    #     break-glass) transfers ownership of accounts/org_memberships/
+    #     token_families/org_api_keys to modulo_migrate via ALTER TABLE
+    #     ... OWNER TO, which requires CREATE on the owning schema; and
+    #     modulo_migrate creates the RLS-confinement tables (e.g.
+    #     cost_components, migration 0066) via SET ROLE modulo_migrate
+    #     from the superuser DATABASE_ADMIN_URL. PG15+ does not grant
+    #     CREATE to PUBLIC by default, so the explicit grants are
+    #     required (hit on the reset staging DB, 2026-08-04).
+    #   - GRANT REFERENCES ON organisations: a new table's org FK
+    #     references it; guarded by to_regclass because the pre-alembic
+    #     bootstrap runs on a fresh DB where organisations does not
+    #     exist yet (migration 0066 re-applies both grants itself,
+    #     right before SET ROLE).
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'GRANT CREATE ON SCHEMA public TO "{_MIGRATE_ROLE}"')
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'GRANT CREATE ON SCHEMA public TO "{app_user}"')
+    if await _table_exists(conn, "organisations"):
+        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+        await conn.execute(f'GRANT REFERENCES ON TABLE public.organisations TO "{_MIGRATE_ROLE}"')
+
+    # Grant DML on existing tables.
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{app_user}"')
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{bg_user}"')
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{sys_user}"')
+    # modulo_migrate owns the SECURITY DEFINER ``lookup_api_key_org``
+    # function (0036 transfers ownership) used by API-key auth. The
+    # function executes as modulo_migrate, so it needs USAGE on schema
+    # public to resolve org_api_keys. Without it, every API-key request
+    # fails with ``UndefinedTableError: relation "org_api_keys" does not
+    # exist`` on DBs that revoke the PUBLIC default schema USAGE.
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{_MIGRATE_ROLE}"')
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{app_user}"')
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{app_user}"')
+    # modulo_system: DML on all tables for cross-org system crons.
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{sys_user}"')
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "{sys_user}"')
+    # Grant DML on future tables.
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(
+        f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{app_user}"'
+    )
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{app_user}"')
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(
+        f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{sys_user}"'
+    )
+    # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
+    await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO "{sys_user}"')
+
+    # Re-apply the accounts UPDATE allow-list (active from deliverable A).
+    await _apply_accounts_allow_list(conn, app_user)
+
+    # modulo_breakglass surface grants (A) + function EXECUTE re-apply.
+    await _grant_break_glass(conn, bg_user)
+    await _grant_function_execute(conn, app_user, bg_user)
+
+    # Deliverable (B): the allow-list + role-posture assertions (fatal).
+    await _assert_role_posture(conn, app_user)
+
+    _log.info("Granted DML permissions to: %s", app_user)
+
+
+async def _apply_role_ddl_with_retry(
+    conn: asyncpg.Connection,
+    *,
+    app_user: str,
+    app_pass: str,
+    bg_user: str,
+    bg_pass: str,
+    sys_user: str,
+    sys_pass: str,
+) -> None:
+    """Apply the idempotent DDL body, retrying the FAR-1200 concurrent race.
+
+    Two replicas updating the same system-catalog tuple at once surface as
+    ``asyncpg InternalServerError: tuple concurrently updated``. The body is
+    idempotent, so the collision is retried a bounded number of times with a
+    short backoff. A non-concurrent error raises immediately; exhausting the
+    budget re-raises the last collision so a persistent fault still fails the
+    bootstrap loudly rather than being swallowed.
+    """
+    # Pre-seeded so the re-raise after the loop is total for the type checker;
+    # it is always overwritten before the loop can exhaust (a successful attempt
+    # returns, a non-concurrent error raises immediately).
+    last_exc: asyncpg.PostgresError = asyncpg.InternalServerError("bootstrap retry budget exhausted")
+    for attempt in range(1, _BOOTSTRAP_MAX_ATTEMPTS + 1):
+        try:
+            await _apply_role_ddl(
+                conn,
+                app_user=app_user,
+                app_pass=app_pass,
+                bg_user=bg_user,
+                bg_pass=bg_pass,
+                sys_user=sys_user,
+                sys_pass=sys_pass,
+            )
+            return
+        except asyncpg.PostgresError as exc:
+            if not _is_concurrent_update_error(exc):
+                raise
+            last_exc = exc
+            if attempt < _BOOTSTRAP_MAX_ATTEMPTS:
+                backoff = _BOOTSTRAP_RETRY_BACKOFF_SECONDS * attempt
+                _log.warning(
+                    "Concurrent bootstrap update (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt,
+                    _BOOTSTRAP_MAX_ATTEMPTS,
+                    backoff,
+                    exc,
+                )
+                await asyncio.sleep(backoff)
+    # Budget exhausted: every attempt lost the race — surface the last collision.
+    raise last_exc
+
+
 async def _bootstrap(admin_url: str, app_url: str) -> None:
     admin_conn_str, admin_ssl = _asyncpg_admin_connect(admin_url)
     app_user = _parse_role(app_url)
@@ -379,93 +587,28 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
 
     conn = await asyncpg.connect(admin_conn_str, ssl=admin_ssl)
     try:
-        # Idempotent role creation — skips if already exists.
-        # modulo_app must NEVER have BYPASSRLS — RLS policies enforce tenant
-        # isolation. modulo_system (cross-org system cron role) gets BYPASSRLS.
-        await _create_or_update_role(conn, app_user, login=True, password=app_pass, bypassrls=False)
-
-        await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None, bypassrls=True)
-        await _create_or_update_role(conn, bg_user, login=True, password=bg_pass, bypassrls=True)
-        # modulo_system: dedicated LOGIN BYPASSRLS role for cross-org system cron
-        # jobs (analytics_facts_maintenance, journey_reconcile, retention_cleanup,
-        # dispatcher_reconcile). Only system crons use this role; modulo_app is
-        # NOBYPASSRLS for tenant isolation.
-        await _create_or_update_role(conn, sys_user, login=True, password=sys_pass, bypassrls=True)
-
-        # Role grants for schema/DDL ownership (merged from the break-glass
-        # 0036 deliverable + the cost 0065 MIGRATE-role deploy-wiring):
-        #   - GRANT CREATE ON SCHEMA public: the migration chain (0036
-        #     break-glass) transfers ownership of accounts/org_memberships/
-        #     token_families/org_api_keys to modulo_migrate via ALTER TABLE
-        #     ... OWNER TO, which requires CREATE on the owning schema; and
-        #     modulo_migrate creates the RLS-confinement tables (e.g.
-        #     cost_components, migration 0066) via SET ROLE modulo_migrate
-        #     from the superuser DATABASE_ADMIN_URL. PG15+ does not grant
-        #     CREATE to PUBLIC by default, so the explicit grants are
-        #     required (hit on the reset staging DB, 2026-08-04).
-        #   - GRANT REFERENCES ON organisations: a new table's org FK
-        #     references it; guarded by to_regclass because the pre-alembic
-        #     bootstrap runs on a fresh DB where organisations does not
-        #     exist yet (migration 0066 re-applies both grants itself,
-        #     right before SET ROLE).
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'GRANT CREATE ON SCHEMA public TO "{_MIGRATE_ROLE}"')
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'GRANT CREATE ON SCHEMA public TO "{app_user}"')
-        if await _table_exists(conn, "organisations"):
-            # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-            await conn.execute(f'GRANT REFERENCES ON TABLE public.organisations TO "{_MIGRATE_ROLE}"')
-
-        # Grant DML on existing tables.
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{app_user}"')
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{bg_user}"')
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{sys_user}"')
-        # modulo_migrate owns the SECURITY DEFINER ``lookup_api_key_org``
-        # function (0036 transfers ownership) used by API-key auth. The
-        # function executes as modulo_migrate, so it needs USAGE on schema
-        # public to resolve org_api_keys. Without it, every API-key request
-        # fails with ``UndefinedTableError: relation "org_api_keys" does not
-        # exist`` on DBs that revoke the PUBLIC default schema USAGE.
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{_MIGRATE_ROLE}"')
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{app_user}"')
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{app_user}"')
-        # modulo_system: DML on all tables for cross-org system crons.
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{sys_user}"')
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "{sys_user}"')
-        # Grant DML on future tables.
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(
-            f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{app_user}"'
-        )
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{app_user}"')
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(
-            f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{sys_user}"'
-        )
-        # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO "{sys_user}"')
-
-        # Re-apply the accounts UPDATE allow-list (active from deliverable A).
-        await _apply_accounts_allow_list(conn, app_user)
-
-        # modulo_breakglass surface grants (A) + function EXECUTE re-apply.
-        await _grant_break_glass(conn, bg_user)
-        await _grant_function_execute(conn, app_user, bg_user)
-
-        # Deliverable (B): the allow-list + role-posture assertions (fatal).
-        await _assert_role_posture(conn, app_user)
-
-        _log.info("Granted DML permissions to: %s", app_user)
-
+        # FAR-1200: serialise concurrent first-boot bootstraps across replicas.
+        lock_acquired = await _acquire_bootstrap_lock(conn)
+        if not lock_acquired:
+            _log.warning(
+                "Bootstrap advisory lock not acquired within %ss — proceeding unlocked "
+                "(concurrent-update retry still applies)",
+                _BOOTSTRAP_LOCK_POLL_ATTEMPTS * _BOOTSTRAP_LOCK_POLL_INTERVAL,
+            )
+        try:
+            await _apply_role_ddl_with_retry(
+                conn,
+                app_user=app_user,
+                app_pass=app_pass,
+                bg_user=bg_user,
+                bg_pass=bg_pass,
+                sys_user=sys_user,
+                sys_pass=sys_pass,
+            )
+        finally:
+            if lock_acquired:
+                k1, k2 = _BOOTSTRAP_LOCK_KEY
+                await conn.execute("SELECT pg_advisory_unlock($1, $2)", k1, k2)
     finally:
         await conn.close()
 
