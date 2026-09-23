@@ -166,7 +166,7 @@ Client sync for the hosted community library of pipeline primitives.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SAQ_RUNS_QUEUE` | No | `runs` | Runs-queue name (`staging-runs` on staging for isolation) |
-| `SAQ_HARD_GATE` | No | `true` | Healthz/ready 503-gates when THIS machine's SAQ workers are stale. Set `false` to relax to degraded (alerting continues). The cutover deploy-hold was retired 2026-08-05 – this readiness gate is the only gate left |
+| `SAQ_HARD_GATE` | No | `true` | Healthz/ready 503-gates when the DEPLOYMENT has no live SAQ workers on a configured queue, or no fresh system-cron heartbeat anywhere in it (deployment-scoped after FAR-1158/ADR 043 — not "this machine" — applied after the boot/probe grace). Set `false` to relax to alert-only: the condition is logged and alerted but never 503s readiness. The cutover deploy-hold was retired 2026-08-05 – this readiness gate is the only gate left |
 | `SAQ_AUTH_PASSWORD` | Yes (system worker) | – | Fail-closed web UI auth password; refuse to boot without it |
 | `SAQ_AUTH_USERNAME` | Yes (system worker) | – | Fail-closed web UI auth user; maps to the `AUTH_USER` env SAQ's web reads |
 | `SAQ_RUN_RETRIES` | No | `5` | SAQ retries per run job – `N` is N total attempts (N-1 retries) |

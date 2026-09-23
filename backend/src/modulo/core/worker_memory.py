@@ -27,9 +27,10 @@ in-process via structured logs rather than Grafana alert rules.
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any
+
+from modulo.settings import resolve_instance_identity
 
 _log = logging.getLogger(__name__)
 
@@ -43,8 +44,6 @@ _PROC_MEMINFO_PATH = "/proc/meminfo"
 _CGROUP_MEMORY_FAILCNT = "/sys/fs/cgroup/memory/memory.failcnt"
 _CGROUP_MEMORY_OOM_CONTROL = "/sys/fs/cgroup/memory/memory.oom_control"
 _CGROUP_MEMORY_PEAK = "/sys/fs/cgroup/memory/memory.peak"
-
-_MACHINE_ID = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
 
 
 def _read_proc_meminfo() -> dict[str, int]:
@@ -104,7 +103,9 @@ def capture_memory_stats() -> dict[str, Any]:
     Every read is best-effort: a missing path or parse error skips that
     field and never raises.
     """
-    stats: dict[str, Any] = {"machine_id": _MACHINE_ID}
+    # Instance identity via the shared platform-neutral resolver (ADR 043 /
+    # FAR-1194) — resolved at call time, never a platform env var at import.
+    stats: dict[str, Any] = {"machine_id": resolve_instance_identity()}
 
     meminfo = _read_proc_meminfo()
     for key in ("MemTotal", "MemAvailable", "Committed_AS", "CommitLimit"):

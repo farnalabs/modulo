@@ -27,7 +27,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import threading
 import time
 import uuid
@@ -67,7 +66,7 @@ from modulo.db.models.run import (
     Run,
 )
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
-from modulo.settings import get_settings
+from modulo.settings import get_settings, resolve_instance_identity
 
 _log = logging.getLogger(__name__)
 
@@ -464,8 +463,8 @@ _ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 def _machine_hostname() -> str:
-    """Machine identity shared with the health gate (FLY_MACHINE_ID or hostname)."""
-    return os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
+    """Instance identity shared with the health gate (platform-neutral, ADR 043)."""
+    return resolve_instance_identity()
 
 
 # Per-machine cron liveness heartbeat TTL (2026-09 Redis audit, FAR-538). The
