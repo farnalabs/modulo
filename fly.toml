@@ -57,11 +57,16 @@ primary_region = 'lhr'
 # Restart policy - crash-loop guard + max-restart in the entrypoint is the
 # control (plan F8): no auto-restart here; a crash-looping SAQ worker fails the
 # container and the LB moves traffic decisively.
-# Machine-level recovery for a machine whose worker/scheduler is SILENTLY dead
-# (not crash-looping) is the /healthz/ready watchdog: it 503s when THIS machine's
-# SAQ workers are stale on any queue OR the fire_due_triggers system cron has not
-# fired within 2x its cadence (health.py _check_saq_workers / _check_system_crons),
-# so Fly removes/replaces the machine without relying on a restart policy.
+# Recovery for a machine that is alive but SILENTLY wedged (HTTP server not
+# answering, state still `started`) is the external web-watchdog workflow
+# (.github/workflows/web-watchdog.yml), which keys on the process-local
+# [checks.app_liveness] signal below - NOT on /healthz/ready (FAR-1193 /
+# ADR 043 Decision 4: readiness is deployment-scoped since FAR-1158, so a
+# restart evaluator keyed on it would restart every app machine for as long as
+# ANY queue in the deployment lacked a live worker - a mass-restart storm that
+# restores nothing). Fly health checks never restart machines themselves
+# (ADR 021) - the restart policy is Fly's recovery mechanism, and for this
+# group it is deliberately `never`.
 [[restart]]
   processes = ['app']
   policy = "never"
@@ -73,8 +78,10 @@ primary_region = 'lhr'
   auto_start_machines = true
   # Prod runs ONE standing app machine (agreed 2026-09-02): rolling deploys bring up
   # the N+1 replacement before draining the old machine, so releases never cause
-  # downtime; machine failure is covered by the /healthz/ready watchdog (Fly
-  # replaces the machine on persistent 503) and the entrypoint crash-loop guard.
+  # downtime; a wedged-but-running machine is restarted by the web-watchdog
+  # workflow keyed on the process-local [checks.app_liveness] signal (Fly checks
+  # observe only - they never restart or replace machines, ADR 021), and a
+  # crash-loop is bounded by the entrypoint crash-loop guard (plan F8).
   # Inert while auto_stop_machines is false, but kept truthful for when auto-stop
   # is ever enabled.
   min_machines_running = 1
@@ -97,13 +104,33 @@ primary_region = 'lhr'
     path = "/healthz/ready"
     protocol = "http"
 
-# Worker process-group health check (ADR 021). Top-level [checks], not a service
-# check - it does not affect routing. The worker container exposes a liveness
-# server on 8082 (entrypoint.sh worker branch) that returns 200 only while BOTH
-# SAQ worker subprocesses (runs + system) are alive. The worker group has no
-# service/health check today, so a machine that is "up" but running no SAQ
-# workers is invisible to `fly checks list` and to rolling-deploy readiness.
+# App process-group LIVENESS check (FAR-1193 / ADR 043 Decision 4). Top-level
+# [checks], NOT a service check: observability only, it does not affect routing
+# (ADR 021: Fly checks never restart machines). It probes /healthz on port 8080
+# (nginx -> uvicorn) - a PROCESS-LOCAL signal that returns 200 whenever THIS
+# machine's HTTP process answers, regardless of deployment state. The external
+# web-watchdog restart evaluator (.github/workflows/web-watchdog.yml) keys on
+# THIS check, never on the [[http_service.checks]] readiness probe above: that
+# probe is deployment-scoped since FAR-1158 (any dead queue flips it on every
+# app machine), so keying restarts on it would storm-restart the whole fleet.
 [checks]
+  [checks.app_liveness]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "240s"
+    method = "GET"
+    path = "/healthz"
+    port = 8080
+    type = "http"
+    processes = ['app']
+
+  # Worker process-group health check (ADR 021). Top-level [checks], not a
+  # service check - it does not affect routing. The worker container exposes a
+  # liveness server on 8082 (entrypoint.sh worker branch) that returns 200 only
+  # while BOTH SAQ worker subprocesses (runs + system) are alive. The worker
+  # group has no service/health check today, so a machine that is "up" but
+  # running no SAQ workers is invisible to `fly checks list` and to
+  # rolling-deploy readiness.
   [checks.worker_health]
     interval = "15s"
     timeout = "5s"
