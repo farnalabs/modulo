@@ -633,6 +633,23 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `triggers/trigger-engine.md`, `improve/variants.md`.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-23):** closed `feat-license`'s
+> "`stripe_webhook.py` / `admin_tiers.py` cited as adjacents but not
+> behaviour-covered" gap (`licensing/license.md`). Registered the new
+> `licensing/stripe_billing.feature` into the executing BDD suite from the new
+> `steps/test_stripe_billing.py` (10 scenarios), driving the REAL
+> `POST /api/v1/webhooks/stripe` route with only the `fulfil_team_purchase`
+> background-task seam and the `get_settings` seam patched — signature
+> verification (HMAC-SHA256 over `<timestamp>.<raw_body>` with the ±300s replay
+> window) runs for real: valid `invoice.paid` → 200 + exactly one fulfilment
+> dispatch carrying `event_id`/`customer_email`/`org_name`, checkout→invoice
+> pairs fulfil exactly once (the FAR-180 double-issue guard),
+> `checkout.session.completed`, missing-email and unrelated events never
+> dispatch, bad/tampered/stale signatures and non-JSON payloads fail closed at
+> 400, and a Stripe-disabled instance 404s. Also wired the already-executing
+> `admin/tier_catalog.feature` into `feat-license`'s citations as the
+> tier-catalogue surface it belongs to. `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
