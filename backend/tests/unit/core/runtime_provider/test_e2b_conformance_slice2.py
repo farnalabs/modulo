@@ -372,6 +372,65 @@ async def test_exec_stream_kill_calls_through_to_sdk_handle() -> None:
     await _settle(provider)
 
 
+async def test_exec_stream_kill_swallows_failure_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """A kill failure is logged and swallowed — kill() never masks the stream."""
+    fake = _FakeSandbox()
+    provider = _provider_with_tracked(fake, "sbx-1")
+
+    process = await provider.exec_command_stream("sbx-1", ["sleep", "30"])
+
+    fake.handle.kill = AsyncMock(side_effect=RuntimeError("E2B API error"))
+    # Best-effort kill: the failure must not propagate to the caller.
+    await process.kill()
+
+    assert "failed to kill streamed command in sandbox sbx-1" in caplog.text
+
+    # The stream still terminates normally once the end event arrives.
+    fake.handle.set_result(exit_code=0)
+    _ = [chunk async for chunk in process.chunks]
+    await asyncio.wait_for(process.done.wait(), timeout=1)
+    assert process.exit_code == 0
+    await _settle(provider)
+
+
+async def test_exec_stream_kill_cancellation_propagates() -> None:
+    """Cancellation from the kill path is never swallowed by the best-effort wrapper."""
+    fake = _FakeSandbox()
+    provider = _provider_with_tracked(fake, "sbx-1")
+
+    process = await provider.exec_command_stream("sbx-1", ["sleep", "30"])
+
+    fake.handle.kill = AsyncMock(side_effect=asyncio.CancelledError())
+    with pytest.raises(asyncio.CancelledError):
+        await process.kill()
+
+    # Resolve the underlying handle so no waiter task leaks.
+    fake.handle.set_result(exit_code=0)
+    _ = [chunk async for chunk in process.chunks]
+    await _settle(provider)
+
+
+async def test_exec_stream_waiter_cancellation_propagates() -> None:
+    """Cancelling the internal stream waiter re-raises (never swallowed)."""
+    fake = _FakeSandbox()
+    provider = _provider_with_tracked(fake, "sbx-1")
+
+    await provider.exec_command_stream("sbx-1", ["sleep", "30"])
+    assert provider._stream_waiters
+
+    # Let the waiter task start and reach its ``await handle.wait()`` so the
+    # cancellation exercises the CancelledError branch (not a pre-start cancel).
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    waiter = next(iter(provider._stream_waiters))
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    await _settle(provider)
+
+
 async def test_exec_stream_unknown_sandbox_raises() -> None:
     """Unknown ref fails fast — same ValueError shape as exec_command."""
     provider = E2BRuntimeProvider(api_key="sk-test")
