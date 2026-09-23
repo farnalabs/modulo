@@ -4,20 +4,33 @@
 # Why this workflow exists
 # ------------------------
 # A Fly machine can be alive but wedged: the app's HTTP server stops answering
-# while the machine itself stays in the "started" state. Fly's service check
-# (servicecheck-00-http-8080) goes critical ("context deadline exceeded"), the
-# Fly proxy stops routing to the machine ("could not find a good candidate
-# within 40 attempts at load balancing"), and every request to the app times
-# out. Fly marks the check critical but does NOT restart the machine on a
-# failing service check - observed 2026-09-02: the production app machine sat
-# in this state for over two hours until a manual `fly machine restart`.
+# while the machine itself stays in the "started" state. The machine's health
+# check goes critical ("context deadline exceeded"), the Fly proxy stops
+# routing to the machine ("could not find a good candidate within 40 attempts
+# at load balancing"), and every request to the app times out. Fly marks the
+# check critical but does NOT restart the machine on a failing check -
+# observed 2026-09-02: the production app machine sat in this state for over
+# two hours until a manual `fly machine restart`.
 # This workflow closes that gap: every 5 minutes it looks for a STARTED machine
-# in the "app" process group whose servicecheck-prefixed health check is
-# critical, and restarts those machines if both guards below pass. Matches are
-# deduplicated by machine id, so a machine with several critical service
-# checks is restarted at most once per run. `warning` checks, non-servicecheck
-# checks (e.g. worker_health, which belongs to worker machines) and non-app
-# process groups are ignored.
+# in the "app" process group whose app_liveness check is critical, and
+# restarts those machines if both guards below pass. Matches are deduplicated
+# by machine id, so a machine with several critical checks is restarted at
+# most once per run. `warning` checks, other checks (servicecheck-*,
+# worker_health, ...) and non-app process groups are ignored.
+#
+# Why app_liveness and NOT the service check (FAR-1193 / ADR 043 Decision 4)
+# --------------------------------------------------------------------------
+# The Fly service check (servicecheck-00-http-8080) probes /healthz/ready,
+# which since FAR-1158 is DEPLOYMENT-scoped: it reports not-ready whenever
+# ANY queue in the deployment has no live worker (or any other deployment-wide
+# sub-check fails). A restart evaluator keyed on it would restart every app
+# machine - a mass-restart storm repeating for as long as the outage lasted -
+# restoring nothing, because restarting the app machine cannot bring up dead
+# workers. The app_liveness check (fly.toml top-level [checks.app_liveness])
+# probes /healthz on port 8080: a process-local signal that fails only when
+# THIS machine's HTTP process is dead or unresponsive - exactly the wedge this
+# workflow exists to recover, and never a fleet-wide condition. The service
+# check keeps its readiness/routing role; this workflow no longer reads it.
 #
 # What a restart means
 # --------------------
@@ -30,10 +43,10 @@
 # Guards (both must pass before a restart is issued)
 # --------------------------------------------------
 # 1. Freshness: the machine's updated_at must be older than 15 minutes. The
-#    service check has a 240s boot grace period, so a machine updated recently
-#    may simply still be booting; restarting it would risk a restart loop.
-#    An unparseable timestamp is treated as "too fresh" (skip; the next run
-#    retries).
+#    app_liveness check has a 240s boot grace period, so a machine updated
+#    recently may simply still be booting; restarting it would risk a restart
+#    loop. An unparseable timestamp is treated as "too fresh" (skip; the next
+#    run retries).
 # 2. Deploy: skipped while any run of the deploy workflow is in progress or
 #    queued (a queued deploy can transition to running between the check and
 #    the restart) - never restart a machine mid-rolling-deploy. If the
@@ -83,7 +96,7 @@ jobs:
           bash .github/scripts/install-flyctl.sh
           echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
 
-      - name: Detect critical service check and restart if guards pass
+      - name: Detect critical app_liveness check and restart if guards pass
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -116,8 +129,13 @@ jobs:
           # The machines list JSON embeds each machine's checks array
           # (verified against live flyctl output: fields id, state,
           # updated_at, config.metadata.fly_process_group, checks[].name /
-          # .status / .output). A machine-state query failure is fail-safe:
-          # log, take no action, exit 0.
+          # .status / .output). We select the process-local app_liveness check
+          # (fly.toml top-level [checks.app_liveness], port 8080 /healthz -
+          # ADR 043 Decision 4) and NEVER the servicecheck-* entries, which
+          # probe deployment-scoped /healthz/ready (FAR-1158) and would make
+          # a single dead queue storm-restart every app machine. A
+          # machine-state query failure is fail-safe: log, take no action,
+          # exit 0.
           MACHINES_JSON=""
           MACHINES_JSON="$(fly machines list --app "$APP" --json 2>/dev/null || true)"
           if [ -z "$MACHINES_JSON" ]; then
@@ -137,7 +155,7 @@ jobs:
             | select((((.config.metadata.fly_process_group // .config.env.FLY_PROCESS_GROUP // "") | tostring)) == "app")
             | . as $m
             | (($m.checks // [])[])
-            | select((((.name // "") | tostring) | startswith("servicecheck")) and ((((.status // "") | tostring)) == "critical"))
+            | select((((.name // "") | tostring) | contains("app_liveness")) and ((((.status // "") | tostring)) == "critical"))
             | {machine_id: ($m.id // "?"), check_name: (.name // "?"), output: ((.output // "") | tostring), updated_at: ($m.updated_at // "")}
           ]
           | unique_by(.machine_id)
