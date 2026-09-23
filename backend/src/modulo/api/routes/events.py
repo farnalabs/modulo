@@ -2,6 +2,13 @@
 
 Latency: sub-second for all normal event delivery.
 Zombie cleanup: 2s keepalive heartbeat detects dead clients within 2s.
+
+FAR-250 cross-worker delivery: the first SSE client for an org acquires the
+web-process Redis relay (subscribe on ``modulo:events:resource:{org_id}``,
+refcounted per org, idle-TTL fallback), so events created in OTHER processes
+(SAQ workers, other web replicas) reach this process's subscribers. Events
+created locally already fan out in-process and their own Redis echo is
+dropped by ``producer_id`` — each SSE client sees each event exactly once.
 """
 
 from __future__ import annotations
@@ -9,15 +16,23 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy import desc, select
 from starlette import status
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import require_permission
+from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory, require_permission
+from modulo.core.events import relay as relay_mod
 from modulo.core.events.event_bus import get_event_bus
+from modulo.core.events.listeners import next_event_version
+from modulo.core.events.notification_events import build_notification_event
+from modulo.db.models.notification import Notification
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 if TYPE_CHECKING:
@@ -33,11 +48,95 @@ _active_connections: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
 _queue_users: dict[int, str] = {}
 _active_connections_lock: asyncio.Lock = asyncio.Lock()
 
+# Relay reconnect backfill: how far back the DB re-read goes when a Redis
+# subscription blips (pub/sub has no replay).
+_BACKFILL_WINDOW = timedelta(minutes=5)
+_BACKFILL_LIMIT = 100
+_RELAY_IDLE_TTL_SECONDS = 60.0
+
+
+# Test-reset tasks fired without a handle — kept referenced so the loop does
+# not garbage-collect them mid-flight (RUF006).
+_relay_reset_tasks: set[asyncio.Task[None]] = set()
+
 
 def _test_reset_connections() -> None:
     """Test helper: clears all tracked SSE connections. Not for production use."""
     _active_connections.clear()
     _queue_users.clear()
+    # Drop any relay subscription bookkeeping tied to the cleared connections.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        relay_mod._relay = None
+        return
+    task = loop.create_task(relay_mod.reset_relay_for_tests())
+    _relay_reset_tasks.add(task)
+    task.add_done_callback(_relay_reset_tasks.discard)
+
+
+def _org_has_clients(org_id: str) -> bool:
+    """True when the SSE route tracks at least one live connection for *org_id*."""
+    return bool(_active_connections.get(org_id))
+
+
+def _make_backfill_loader() -> Any:
+    """Build the relay's DB backfill loader (api layer owns the session wiring).
+
+    Re-reads recent notifications for *org_id* and shapes them into SSE event
+    dicts (envelope + ``{notification_id, category, created_at}`` only — the
+    relay backfills the notification gap; other resource types recover via
+    their REST reads).
+    """
+
+    async def _load(org_id: str) -> list[dict[str, Any]]:
+        org_uuid = uuid.UUID(org_id)
+        engine = get_or_create_engine(get_settings())
+        factory = get_or_create_session_factory(engine)
+        cutoff = datetime.now(UTC) - _BACKFILL_WINDOW
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            result = await session.execute(
+                select(Notification)
+                .where(
+                    Notification.organisation_id == org_uuid,
+                    Notification.created_at >= cutoff,
+                )
+                .order_by(desc(Notification.created_at))
+                .limit(_BACKFILL_LIMIT)
+            )
+            rows = list(result.scalars().all())
+        return [
+            build_notification_event(
+                org_id=org_id,
+                notification_id=row.id,
+                category=row.category,
+                created_at=row.created_at,
+                version=next_event_version(org_id),
+            )
+            for row in rows
+        ]
+
+    return _load
+
+
+async def _ensure_relay() -> Any:
+    """Configure and return the web-process relay, or ``None`` when inert.
+
+    Inert (``None`) when no Redis broker is configured on the bus (tests,
+    Redis-less dev) — the SSE route then behaves exactly as before.
+    """
+    bus = get_event_bus()
+    broker = bus.redis_broker
+    if broker is None:
+        return None
+    return await relay_mod.configure_relay(
+        broker=broker,
+        bus=bus,
+        has_clients=_org_has_clients,
+        backfill_loader=_make_backfill_loader(),
+        idle_ttl=_RELAY_IDLE_TTL_SECONDS,
+    )
 
 
 async def _track_connection(
@@ -117,6 +216,21 @@ async def sse_event_stream(
         await event_bus.unsubscribe(org_id, queue)
         raise
 
+    # FAR-250: first client for this org subscribes the web-process relay to
+    # Redis (refcounted). Fail-open: a relay problem must never reject the
+    # stream — local delivery still works without it.
+    relay = await _ensure_relay()
+    if relay is not None:
+        try:
+            await relay.acquire(org_id)
+        except asyncio.CancelledError:
+            await event_bus.unsubscribe(org_id, queue)
+            await _untrack_connection(org_id, queue)
+            raise
+        except Exception:
+            _log.warning("sse.relay_acquire_failed", extra={"org_id": org_id}, exc_info=True)
+            relay = None
+
     headers = {
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
@@ -151,6 +265,13 @@ async def sse_event_stream(
         finally:
             await event_bus.unsubscribe(org_id, queue)
             await _untrack_connection(org_id, queue)
+            if relay is not None:
+                try:
+                    await relay.release(org_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning("sse.relay_release_failed", extra={"org_id": org_id}, exc_info=True)
 
     return StreamingResponse(
         _pump(),

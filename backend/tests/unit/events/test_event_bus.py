@@ -172,7 +172,21 @@ async def test_remove_dead_queues_ignores_queue_not_present(bus: EventBus) -> No
 async def test_redis_broadcast_publishes_to_resource_channel() -> None:
     broker = AsyncMock()
     await EventBus(redis_broker=broker)._redis_broadcast(broker, "org-1", {"type": "run"})
-    broker.publish.assert_awaited_once_with("resource:org-1", {"type": "run"})
+    # FAR-250: the Redis payload is stamped with this process's producer_id
+    # (echo-suppression key for the relay); the channel is unchanged.
+    broker.publish.assert_awaited_once_with(
+        "resource:org-1",
+        {"type": "run", "producer_id": eb.LOCAL_PRODUCER_ID},
+    )
+
+
+async def test_redis_broadcast_leaves_local_event_untouched() -> None:
+    """producer_id exists only on the Redis payload, never on the local event."""
+    broker = AsyncMock()
+    event = {"type": "run", "id": "r-1"}
+    await EventBus(redis_broker=broker)._redis_broadcast(broker, "org-1", event)
+    assert "producer_id" not in event
+    assert event == {"type": "run", "id": "r-1"}
 
 
 async def test_redis_broadcast_logs_failure(caplog: pytest.LogCaptureFixture) -> None:
@@ -216,7 +230,10 @@ async def test_publish_broadcasts_to_redis_when_configured() -> None:
 
     broker.publish.assert_awaited_once()
     assert broker.publish.await_args.args[0] == "resource:org-1"
-    assert broker.publish.await_args.args[1] == _event(rid="run-1", version=3)
+    assert broker.publish.await_args.args[1] == {
+        **_event(rid="run-1", version=3),
+        "producer_id": eb.LOCAL_PRODUCER_ID,
+    }
     assert not eb._background_tasks
 
 
