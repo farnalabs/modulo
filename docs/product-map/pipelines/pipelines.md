@@ -71,7 +71,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 - [x] Concurrency and error-recovery guard the authored graph
       (`error_recovery.feature`; concurrency admission is unit-covered in
       `tests/unit/pipeline_engine` and surface-tested by the 429
-      `max_concurrent_runs` refusal in `run_lifecycle.feature`) — graph/config
+      `max_concurrent_runs` refusal in `run_sequential.feature`) — graph/config
       validation is unit-covered (`tests/unit/graph_validator`, `test_pipelines_endpoint.py`)
 - [x] Scheduling and webhook triggers start runs from the authored graph
       (owned by `feat-triggers`: cron CRUD is BDD-exercised here in
@@ -154,7 +154,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
     per-pipeline runs endpoint `POST /api/pipelines/{id}/runs` (removed when run
     triggering moved to `POST /api/v1/runs`); concurrency admission is shipped
     inside `create_run`/dispatch and is covered by the `max_concurrent_runs` 429
-    path in `run_lifecycle.feature` plus the `tests/unit/pipeline_engine`
+    path in `run_sequential.feature` plus the `tests/unit/pipeline_engine`
     admission suite.
   - `pipelines/run_variants.feature` — the "Coverage gaps are reported for a
     variant group" scenario duplicated the real `get_coverage_gaps` seam already
