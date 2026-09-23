@@ -94,7 +94,7 @@ class TestFreezeGuardModule:
             "modulo.core.eval_engine.eval_definition_freeze.EVAL_DEFINITION_WRITE_FROZEN",
             False,
         ):
-            raise_if_frozen()
+            assert raise_if_frozen() is None
 
     def test_definition_frozen_response_returns_none_once_freeze_lifted(self) -> None:
         with patch(
