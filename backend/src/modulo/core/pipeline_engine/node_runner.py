@@ -7225,11 +7225,51 @@ def _persist_full_stderr_artifact(
     }
 
 
+async def _resolve_sandbox_git_content_config(config: _SandboxNodeConfig) -> _SandboxNodeConfig:
+    """FAR-220: replace whole-field git content refs with their pinned content.
+
+    Runs at the agent_command rendering point BEFORE dispatch, so every
+    provider path (Bundled Runner, legacy E2B) receives resolved fields:
+
+    * a non-ref field passes through untouched (zero cost for inline content);
+    * a pinned ``git+<repo>@<sha>#<path>`` ref is fetched at that exact commit
+      and the file content replaces the ref (the fetched content then flows
+      through the normal Jinja render for llm mode / verbatim for script mode);
+    * an UNPINNED ref or a fetch failure raises a typed
+      :class:`GitContentRefError` / :class:`GitContentFetchError` — fail
+      closed: the node errors with an observed message instead of dispatching
+      the raw ref string to the agent.
+
+    The resolved pin (repo/sha/path) is logged by the resolver for audit; the
+    pinned SHA itself is already resident in the run snapshot (graph-save
+    validation rejects unpinned refs, and ``modulo apply`` pins before write).
+    """
+    from modulo.core.pipeline_engine.git_content import is_git_content_ref, resolve_git_content_field
+
+    if not (is_git_content_ref(config.agent_prompt_template) or is_git_content_ref(config.agent_command)):
+        return config
+    resolved_prompt = await resolve_git_content_field(
+        config.agent_prompt_template,
+        node_id=config.node_id,
+        field="agent_prompt",
+    )
+    resolved_command = await resolve_git_content_field(
+        config.agent_command,
+        node_id=config.node_id,
+        field="agent_command",
+    )
+    return _dc_replace(config, agent_prompt_template=resolved_prompt, agent_command=resolved_command)
+
+
 async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
     state: dict[str, Any],
     *,
     config: _SandboxNodeConfig,
 ) -> dict[str, Any]:
+    # FAR-220: resolve git-sourced content refs BEFORE the config is
+    # destructured / dispatched (covers both the Bundled Runner early-return
+    # path and the legacy E2B render path below).
+    config = await _resolve_sandbox_git_content_config(config)
     # Destructure the immutable config back to the local names the dispatch
     # body uses, so the body is unchanged from the pre-dataclass form. Only the
     # SIGNATURE narrows to a single config object — the running body behaves

@@ -267,6 +267,26 @@ Manages the local and community library of reusable primitives (agents, schemas,
 
 `modulo apply -f <config.yaml>` applies an org's schemas (+ versions), model backends, pipelines and triggers to a live deployment from one YAML file (`api_version: modulo.dev/v1`), driven by `MODULO_URL` + `MODULO_API_KEY` (bearer `mk_` org key). Planning is name-based upsert (RLS-bound to the key's org): each entity chooses created / updated / unchanged / blocked from a canonical managed-field hash, so rerun is idempotent and runtime state (`next_fire_at`, `streak_epoch`, ...) never causes drift. Keys: entities apply in dependency order with per-entity containment; secrets are refs-only (`${env:VAR}` / `secretref://<key>` -- inline literals are a validation error; the server masks stored secrets, so `--refresh-secrets` re-sends trigger configs whose secrets rotated); backend writes are health-check-verified; `--dry-run/--plan` reports without writing; `--diff` is a read-only drift report (plan-shaped, labelled `mode=drift`, with graph node/edge breakdown for drifted pipelines) used as a CI gate -- exit 0 when the org matches the config, exit 1 on drift (created/updated/blocked), and real apply exits 1 on any blocked/failed entity.
 
+#### Git-sourced content refs (FAR-220)
+
+A `sandbox_agent` node's content fields — `agent_prompt`, each `agent_commands` item, and `script_command` — may reference a file tracked in a git repository instead of inlining the content (the "checkout-and-execute" / "fetch-and-render" pattern, productised):
+
+```
+git+<repo-url>[@<ref>]#<path>
+```
+
+- `git+` marks the value as a ref (it sits in a string field exactly like `secretref://` does — an alternative value, not a new field). A value that merely *mentions* `git+` mid-string stays inline content.
+- `<repo-url>` uses the same scheme set managed workspace inputs accept (`https://`, `ssh://`, SCP-style `git@host:path`). Credentials are forbidden in the URL — `@` after the repository is reserved for the ref separator.
+- `@<ref>` is an optional branch / tag / commit SHA; omitted means `HEAD`. A 40-hex value is a **pin**.
+- `#<path>` is a repository-relative file path (non-empty, no `..`, no `#`, no newlines).
+
+Lifecycle (the shared parse/resolve/pin helpers live in `modulo/core/pipeline_engine/git_content.py`; the save-time gate is part of the graph validator):
+
+1. **Graph-save validation** (`GraphValidator`, codes `GIT_CONTENT_REF_INVALID` / `GIT_CONTENT_REF_UNPINNED`): a `git+` value must parse, and stored graphs must carry a **pinned** `@<40-hex>` ref — so every run snapshot (which deep-copies the live graph at snapshot creation) surfaces the resolved commit SHA for audit. Movable refs are rejected at save with a hint to pin them or use `modulo apply`. Composite-template sandbox sub-nodes obey the same gate.
+2. **Pin-on-apply**: `modulo apply` resolves a movable spec ref to its current commit SHA at plan time (`git ls-remote`, bounded, fail-closed — an unresolvable ref BLOCKS the entity) and rewrites the field to the canonical pinned form. The desired managed view, the write payload, the stored graph, and every subsequent run snapshot therefore hold the same pinned SHA.
+3. **Run-time rendering**: at the agent-command rendering point (`node_runner`), a whole-field pinned ref is fetched at exactly that commit (host-side `git clone --no-checkout` + `git show <sha>:<path>`) and the file content replaces the ref before dispatch (fetched content then flows through the normal Jinja render for llm mode / verbatim for script mode). Unpinned refs and fetch failures raise typed errors — the node fails closed rather than dispatching the raw ref string. Host-side fetch is public-repository-only in this increment (no credential material is ever embedded in the ref or the process environment); private-repo credential support is a later increment.
+4. **Drift (`--diff`)**: because the desired side is the resolved pin and the deployed side is the stored pin, the managed-field hash reports `updated` when the tracked ref moved (branch/tag advanced, spec changed, or the deployed graph was saved unpinned). `drift_detail` additionally names the move per content field as a `git_content` list (`{node, field, desired, current}` with the full old/new refs), rendered as `drift detail git-content ...` lines — so a CI gate on `--diff` fails on content drift and the report shows the actual commit transition. Re-running `modulo apply` converges the deployed pin.
+
 ## Feature Flags
 
 Feature flags are declared once in `_KNOWN_FLAGS` (`core/feature_flags.py`). The DB seed catalog (`core/seed_data/catalog.py`) derives from it automatically. Flags gate behaviour behind tier thresholds and per-org overrides.

@@ -12,6 +12,7 @@ is stable across runs.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -23,6 +24,7 @@ from modulo.cli.apply.plan import KIND_PIPELINE, canonical_hash
 if TYPE_CHECKING:
     from modulo.cli.apply.executor import ApplyExecutor
     from modulo.cli.apply.models import EntitySet
+    from modulo.core.pipeline_engine.git_content import GitContentRef
 
 _log = logging.getLogger(__name__)
 
@@ -67,13 +69,34 @@ def normalize_current_graph(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def resolve_graph(entity: PipelineEntity, agent_ids: dict[str, Any]) -> dict[str, Any]:
-    """Resolve agent name-refs + normalise the declared graph.
+def resolve_graph(
+    entity: PipelineEntity,
+    agent_ids: dict[str, Any],
+    *,
+    git_resolver: Callable[[GitContentRef], str] | None = None,
+) -> dict[str, Any]:
+    """Resolve agent name-refs + git content refs, then normalise the declared graph.
 
-    Raises ApplyEntityResolutionError when a referenced agent is missing, or
+    FAR-220: every ``git+<repo>[@<ref>]#<path>`` content ref (``agent_prompt``,
+    ``script_command``, ``agent_commands`` items) is resolved to its pinned
+    commit SHA — an already-pinned ref is re-canonicalised without network
+    access; a movable ref (branch/tag/HEAD) resolves through *git_resolver*
+    (default: ``git ls-remote``). The graph payload therefore carries the
+    PINNED form, so the desired managed view, the write payload, the stored
+    graph, and every run snapshot all hold the same resolved SHA (drift
+    compares SHAs, not moving branch names).
+
+    Raises ApplyEntityResolutionError when a referenced agent is missing or a
+    git content ref is malformed/unresolvable (unmanaged reference / failed
+    resolution: the entity is blocked, never silently written unpinned), or
     ValueError (pydantic ValidationError included) when the resolved payload
     fails the API node/edge shape rules.
     """
+    from modulo.core.pipeline_engine.git_content import (
+        GitContentRefError,
+        pin_git_content_node_fields,
+    )
+
     declared = entity.graph
     nodes_payload: list[dict[str, Any]] = []
     for node in declared.nodes if declared is not None else []:
@@ -87,6 +110,11 @@ def resolve_graph(entity: PipelineEntity, agent_ids: dict[str, Any]) -> dict[str
                 )
                 raise ApplyEntityResolutionError(msg)
             node_data["agent_id"] = agent_id
+        try:
+            pin_git_content_node_fields(node_data, resolver=git_resolver)
+        except GitContentRefError as exc:
+            msg = f"git content ref for node {node.id!s}: {exc}"
+            raise ApplyEntityResolutionError(msg) from None
         nodes_payload.append(_normalized_node(node_data))
     edges_payload = [
         _normalized_edge(edge.api_edge_payload()) for edge in (declared.edges if declared is not None else [])
@@ -100,12 +128,16 @@ def build_desired_views(
     desired: dict[str, list[tuple[str, dict[str, Any]]]],
     blocked: list[tuple[str, str, str]],
     blocked_keys: set[tuple[str, str]],
+    *,
+    git_resolver: Callable[[GitContentRef], str] | None = None,
 ) -> tuple[dict[str, list[tuple[str, dict[str, Any]]]], list[tuple[str, str, str]]]:
-    """Plan-phase resolution for pipeline entities (agent refs + shape).
+    """Plan-phase resolution for pipeline entities (agent refs + git content refs + shape).
 
     Failures are per-entity blocked entries; later entities still plan. An
     AMBIGUOUS name (duplicate rows in the fetched org list — pipelines or
     agents) blocks the affected entity: name-based upsert cannot pick a row.
+    *git_resolver* threads into :func:`resolve_graph` for FAR-220 movable
+    ``git+`` refs (None = the default ``git ls-remote`` resolver).
     """
     agents = current_entities.get("agents") or {}
     ambiguous_pipelines = current_entities.get("ambiguous_pipeline_names") or {}
@@ -137,7 +169,7 @@ def build_desired_views(
             )
             continue
         try:
-            graph = resolve_graph(entity, agents) if entity.graph is not None else None
+            graph = resolve_graph(entity, agents, git_resolver=git_resolver) if entity.graph is not None else None
         except ApplyEntityResolutionError as exc:
             blocked.append((KIND_PIPELINE, entity.name, str(exc)))
             continue
@@ -153,6 +185,8 @@ def apply_pipelines(
     entities: dict[str, list[tuple[str, Any]]],
     current_entities: dict[str, dict[str, dict[str, Any]]],
     report: dict[str, list[dict[str, Any]]],
+    *,
+    git_resolver: Callable[[GitContentRef], str] | None = None,
 ) -> dict[str, str]:
     """Create/update pipelines per the plan report, capturing failures.
 
@@ -181,7 +215,7 @@ def apply_pipelines(
             try:
                 entity = _find(entities[KIND_PIPELINE], entry["name"])
                 assert isinstance(entity, PipelineEntity)
-                graph = resolve_graph(entity, agents) if entity.graph is not None else None
+                graph = resolve_graph(entity, agents, git_resolver=git_resolver) if entity.graph is not None else None
                 if status == "created":
                     response = executor._post(
                         "/pipelines",

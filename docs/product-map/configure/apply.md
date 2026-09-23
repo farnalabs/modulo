@@ -11,6 +11,8 @@ code:
   - backend/src/modulo/cli/apply/drift.py
   - backend/src/modulo/cli/apply/pipeline_apply.py
   - backend/src/modulo/cli/apply/trigger_apply.py
+  - backend/src/modulo/core/pipeline_engine/git_content.py
+  - backend/src/modulo/core/graph_validator/__init__.py
 unit-tests:
   - backend/tests/unit/cli/test_apply_cli.py
   - backend/tests/unit/cli/test_apply_loader.py
@@ -20,6 +22,11 @@ unit-tests:
   - backend/tests/unit/cli/test_apply_pipeline.py
   - backend/tests/unit/cli/test_apply_trigger.py
   - backend/tests/unit/cli/test_apply_drift.py
+  - backend/tests/unit/cli/test_apply_git_content.py
+  - backend/tests/unit/core/test_git_content.py
+  - backend/tests/unit/pipeline_engine/test_sandbox_git_content.py
+  - backend/tests/unit/graph_validator/test_edges_and_sandbox_validation.py
+  - backend/tests/unit/graph_validator/test_graph_validator_composite.py
   - backend/tests/unit/api/test_apply_api_key_auth.py
 bdd:
   - backend/tests/bdd/features/cli/apply.feature
@@ -103,6 +110,36 @@ schemas, model-backends, pipelines and triggers features.
       and the table output prefixes verbs (`drift create` / `drift update`)
       plus per-entity drift detail lines (`backend/src/modulo/cli/apply/drift.py`,
       `test_apply_drift.py`)
+- [x] Git-sourced content (FAR-220): a sandbox_agent node's `agent_prompt` /
+      `agent_commands` items / `script_command` may be a whole-field
+      `git+<repo-url>[@<ref>]#<path>` ref instead of inline content;
+      `modulo apply` resolves a movable ref to its commit SHA at plan time
+      (`git ls-remote`, bounded, identity fast-path for an already-pinned
+      ref) and writes the canonical pinned form — the desired view, the PATCH
+      payload, the stored graph and every run snapshot therefore carry the
+      same pinned SHA; malformed or unresolvable refs BLOCK the entity (fail
+      closed, never a silent unpinned write) and graph-save validation
+      rejects unpinned/`GIT_CONTENT_REF_INVALID` refs (including on composite
+      sandbox sub-nodes) so run snapshots always surface the resolved commit
+      (`pipeline_apply.resolve_graph`, `core/pipeline_engine/git_content.py`,
+      `core/graph_validator`, `test_apply_git_content.py`,
+      `test_git_content.py`, `test_sandbox_git_content.py`,
+      `test_edges_and_sandbox_validation.py`)
+- [x] `--diff` covers git-sourced content: the resolved pin is hashed into
+      the desired view, so a moved branch/tag, a changed spec, or an
+      unpinned deployed graph reports `updated` (exit 1); `drift_detail`
+      additionally emits a `git_content` list
+      (`{node, field, desired, current}` with the full old/new refs) rendered
+      as `drift detail git-content ...` lines, showing the actual commit
+      transition before `modulo apply` converges the pin
+      (`drift._diff_git_content`, `test_apply_git_content.py`)
+- [x] At run time the agent-command rendering point replaces a whole-field
+      pinned ref with the file content fetched at exactly that commit
+      (host-side `git clone --no-checkout` + `git show <sha>:<path>`,
+      public repositories only in this increment); unpinned refs and fetch
+      failures raise typed errors so the node fails closed instead of
+      dispatching the raw ref string (`node_runner._resolve_sandbox_git_content_config`,
+      `test_sandbox_git_content.py`)
 - [x] Output: human-friendly table (`render_table`: create/update/block/fail/
       unchanged lines + summary counts, or drift-prefixed variants) or
       `--output json` / `--json` (the full report); 401 surfaces "check
