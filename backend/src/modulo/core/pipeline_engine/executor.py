@@ -143,7 +143,6 @@ from modulo.db.crud.run import (
 )
 from modulo.db.crud.run_node_outputs import read_run_blobs, read_run_markers
 from modulo.db.models.eval import Eval
-from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.organisation import Organisation
@@ -5445,16 +5444,16 @@ class PipelineExecutor:
     ) -> list[SuiteEvalResult]:
         """Check all eval suites with pass_threshold for a completed run.
 
-        Queries eval definitions for the pipeline that belong to a suite
+        Queries Eval rows for the pipeline that belong to a suite
         with a pass_threshold, aggregates their results, and returns
         SuiteEvalResult for each suite.
         """
-        stmt = select(EvalDefinition).where(
-            EvalDefinition.pipeline_id == pipeline_id,
-            EvalDefinition.suite_id.isnot(None),
-            EvalDefinition.pass_threshold.isnot(None),
-            EvalDefinition.eval_type != "guardrail",
-            EvalDefinition.deleted_at.is_(None),
+        stmt = select(Eval).where(
+            Eval.pipeline_id == pipeline_id,
+            Eval.suite_id.isnot(None),
+            Eval.pass_threshold.isnot(None),
+            Eval.eval_type != "guardrail",
+            Eval.deleted_at.is_(None),
         )
         result = await session.execute(stmt)
         suite_defs = result.scalars().all()
@@ -5465,10 +5464,10 @@ class PipelineExecutor:
         suite_ids = list({d.suite_id for d in suite_defs if d.suite_id})
         results: list[SuiteEvalResult] = []
         for suite_id in suite_ids:
-            eval_stmt = select(EvalDefinition).where(
-                EvalDefinition.suite_id == suite_id,
-                EvalDefinition.pipeline_id == pipeline_id,
-                EvalDefinition.deleted_at.is_(None),
+            eval_stmt = select(Eval).where(
+                Eval.suite_id == suite_id,
+                Eval.pipeline_id == pipeline_id,
+                Eval.deleted_at.is_(None),
             )
             eval_result = await session.execute(eval_stmt)
             defs_in_suite = eval_result.scalars().all()
