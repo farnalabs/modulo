@@ -213,6 +213,10 @@ def run_starts(ctx: dict[str, Any]) -> None:
 
     snapshot = make_mock_snapshot(run_context_defaults=dict(ctx["defaults"]))
     snapshot.default_autonomy_level = None
+    # Explicit (never MagicMock-auto) so the executor's isinstance-str guard
+    # sees None when no ceiling is configured; a scenario that set an
+    # autonomy ceiling seeds it here exactly as the live snapshot would.
+    snapshot.max_autonomy_level = ctx.get("autonomy_ceiling")
 
     ctx["seeded_state"] = _seed_state(snapshot, dict(ctx["input_payload"]))
 
@@ -444,12 +448,48 @@ def audit_hook_received_node(node_name: str, fields: str, ctx: dict[str, Any]) -
 # ===================================================================
 
 
+def _pin_pipeline_ceiling(ctx: dict[str, Any]) -> None:
+    """Mirror executor._seed_state: pin the pipeline/snapshot ceiling into
+    run_context as the reserved ``_pipeline_max_autonomy`` key (FAR-1163).
+
+    The isinstance-str guard matches the production seed path — MagicMock
+    attribute stand-ins on BDD pipeline mocks are ignored, exactly as the
+    executor ignores non-string snapshot values. An already-pinned key wins
+    (a Given that seeded it explicitly is never overwritten).
+    """
+    from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
+
+    rc = ctx.setdefault("run_context", {})
+    if PIPELINE_MAX_AUTONOMY_KEY in rc:
+        return
+    ceiling = getattr(ctx.get("pipeline"), "max_autonomy_level", None)
+    if isinstance(ceiling, str) and ceiling:
+        rc[PIPELINE_MAX_AUTONOMY_KEY] = ceiling
+
+
 @given(parsers.parse('pipeline "{pipeline_name}" has autonomy default "{level}"'))
 def pipeline_has_autonomy_default(pipeline_name: str, level: str, ctx: dict[str, Any]) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
     ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
+    ctx["pipeline"].default_autonomy_level = level
     ctx["autonomy_default"] = level
+
+
+@given(parsers.parse('pipeline "{pipeline_name}" has autonomy ceiling "{level}"'))
+def pipeline_has_autonomy_ceiling(pipeline_name: str, level: str, ctx: dict[str, Any]) -> None:
+    """Configure the pipeline's max_autonomy_level ceiling and pin it into
+    run_context, seeding BOTH the pipeline attribute and the reserved
+    ``_pipeline_max_autonomy`` key the gate steps resolve against."""
+    from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
+
+    if ctx.get("pipeline") is None:
+        from tests.bdd.conftest import make_mock_pipeline
+
+        ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
+    ctx["pipeline"].max_autonomy_level = level
+    ctx["autonomy_ceiling"] = level
+    ctx["run_context"][PIPELINE_MAX_AUTONOMY_KEY] = level
 
 
 @given(parsers.parse('pipeline "{pipeline_name}" has no autonomy defaults'))
@@ -457,6 +497,7 @@ def pipeline_has_no_autonomy_defaults(pipeline_name: str, ctx: dict[str, Any]) -
     from tests.bdd.conftest import make_mock_pipeline
 
     ctx["pipeline"] = make_mock_pipeline(name=pipeline_name)
+    ctx["pipeline"].default_autonomy_level = None
     ctx["autonomy_default"] = None
 
 
@@ -464,6 +505,7 @@ def pipeline_has_no_autonomy_defaults(pipeline_name: str, ctx: dict[str, Any]) -
 def hitl_gate_checks_autonomy(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import effective_autonomy_level
 
+    _pin_pipeline_ceiling(ctx)
     rc: dict[str, Any] = ctx.get("run_context") or {}
     pipeline_default: str | None = ctx.get("autonomy_default")
     ctx["resolved_autonomy"] = effective_autonomy_level(pipeline_default, rc)
@@ -514,6 +556,7 @@ def gate_interrupts(ctx: dict[str, Any]) -> None:
 def next_gate_checks_new_level(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import effective_autonomy_level
 
+    _pin_pipeline_ceiling(ctx)
     rc: dict[str, Any] = ctx.get("run_context") or {}
     pipeline_default: str | None = ctx.get("autonomy_default")
     ctx["resolved_autonomy"] = effective_autonomy_level(pipeline_default, rc)

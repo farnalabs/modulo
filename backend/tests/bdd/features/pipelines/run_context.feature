@@ -74,12 +74,12 @@ Feature: Run Context — Seeding, Write Guard, and Audit
     And the agent node "bad-actor" attempts to write "secret"="data" to run_context
     Then the audit hook receives node "bad-actor" with attempted fields ["secret"]
 
-  Scenario: Autonomy recommendation overrides pipeline default
+  Scenario: Autonomy recommendation cannot escalate above the default ceiling
     Given pipeline "deploy-service" has autonomy default "manual_approval"
     And run_context contains "autonomy_recommendation" = "fully_autonomous"
     When a HITL gate checks the autonomy level
-    Then the gate is skipped
-    And no human interrupt is raised
+    Then the gate uses "manual_approval"
+    And the gate interrupts for human review
 
   Scenario: Invalid autonomy recommendation falls back to pipeline default
     Given pipeline "deploy-service" has autonomy default "fully_autonomous"
@@ -92,12 +92,18 @@ Feature: Run Context — Seeding, Write Guard, and Audit
     When a HITL gate checks the autonomy level
     Then the gate interrupts for human review
 
-  Scenario: Context-setter changes autonomy level mid-run
-    Given pipeline "deploy-service" has autonomy default "manual_approval"
-    And run_context contains "autonomy_recommendation" = "fully_autonomous"
-    When a context-setter node changes autonomy_recommendation to "notify_on_complete"
+  Scenario: Autonomy recommendation may lower the level
+    Given pipeline "deploy-service" has autonomy default "fully_autonomous"
+    When a context-setter node changes autonomy_recommendation to "manual_approval"
     Then the next HITL gate checks the new autonomy level
-    And the gate uses "notify_on_complete"
+    And the gate uses "manual_approval"
+
+  Scenario: Ceiling permits raising autonomy up to max_autonomy_level
+    Given pipeline "deploy-service" has autonomy default "manual_approval"
+    And pipeline "deploy-service" has autonomy ceiling "fully_autonomous"
+    And run_context contains "autonomy_recommendation" = "notify_on_complete"
+    When a HITL gate checks the autonomy level
+    Then the gate uses "notify_on_complete"
 
   Scenario: Context-setter writes empty dict — no-op
     Given pipeline "deploy-service" with a context_setter node "reviewer"
