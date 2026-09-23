@@ -1,34 +1,42 @@
 """Health check endpoints — liveness, readiness, and dependency health.
 
-PR B-2 (plan F7): ``/healthz/ready`` gains a machine-scoped SAQ worker check.
-Each worker writes its metadata (``{"hostname": FLY_MACHINE_ID}``) to
-``saq:{queue}:worker_info:{worker_id}``; this machine's readiness verifies that
-a live worker for THIS hostname exists on EACH configured queue independently
-(runs AND system — one live queue does not mask a dead sibling). Stale workers
-for 4 consecutive probes => 503. Post-cutover (PR C) the gate is ALWAYS active
-— there is no Celery path to fall back on — but can be relaxed to degraded
-(alert-only) via ``SAQ_HARD_GATE=false`` after the hold (plan F7).
+Readiness (``GET /healthz/ready``) is DEPLOYMENT-scoped (ADR 043 / FAR-1158):
+it asks "will work actually get processed?" — are live workers present for
+EACH configured queue anywhere in THIS deployment — never "on this host".
+The former machine-scoped gates required a live worker for THIS hostname
+(``FLY_MACHINE_ID``/``HOSTNAME``) and a per-host ``fire_due_triggers``
+heartbeat, an assumption that holds only where backend and workers share a
+host (docker-compose, local dev) and NEVER on multi-node Kubernetes, where a
+correctly-serving backend could never become Ready and the kubelet killed it
+on the liveness probe. There is exactly ONE path — no process-role
+(``FLY_PROCESS_GROUP``) routing, no platform env var for identity.
 
-Plan F8 (restart-policy watchdog): ``/healthz/ready`` ALSO 503s when THIS
-machine's ``fire_due_triggers`` system cron has not fired within 2x its 60s
-cadence (machine-scoped Redis heartbeat), so Fly's health check removes a
-machine whose system-worker cron scheduler is silently dead — the recovery the
-``policy = "never"`` restart policy relies on (see fly.toml).
+Determination contract (bounded fail-open, ADR 043 Decision 3):
 
-Process groups (PR dist/separate-workers): SAQ workers run ONLY on ``worker``
-machines; ``app`` machines run nginx + uvicorn and no workers. On ``app``
-machines the two machine-scoped worker gates are meaningless (this host is
-never live on a queue / never writes a cron heartbeat), so they switch to a
-FLEET-wide gate: any live worker on each queue (``_check_saq_workers``) and any
-fresh ``fire_due_triggers`` heartbeat (``_check_system_crons``). Worker machines
-and local dev (``FLY_PROCESS_GROUP`` unset) keep the machine-scoped semantics.
+- confirmed non-empty (live workers / a fresh heartbeat read successfully)
+  → ``ok``; the consecutive-probe counter resets.
+- confirmed-empty (the store read succeeded, nothing live) → fails closed
+  after grace: within boot grace → ``ok``; probes 1..limit-1 → ``degraded``;
+  probe >= ``_STALE_PROBE_LIMIT`` → ``unavailable`` under the default
+  ``SAQ_HARD_GATE=true``. A confirmed-empty queue forces this path
+  regardless of sibling read failures — it is never masked into
+  "undeterminable".
+- undeterminable (a store read failed) → ``degraded`` (non-gating) but it
+  advances the SAME consecutive-probe counter, escalating to ``unavailable``
+  after the grace tier — a transient blip never gates, a sustained outage
+  does. This makes the fail-open claim true and BOUNDED.
+- ``SAQ_HARD_GATE=false`` keeps the operator's explicit alert-only
+  relaxation (``ok`` + warning) for both outcomes.
+
+Scope (ADR 043 Decision 4): these checks are READINESS-ONLY. Liveness
+(``GET /healthz`` — process-local, always ``ok``) and any restart evaluator
+must key on a process-local signal, never on a deployment-scoped check.
 """
 
 import asyncio
 import contextlib
 import json
 import logging
-import os
 import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -48,7 +56,7 @@ from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
 from modulo.db.migration_guard import DivergenceCheckResult, check_migration_divergence
-from modulo.settings import Settings, break_glass_boot_findings, get_settings
+from modulo.settings import Settings, break_glass_boot_findings, get_settings, resolve_instance_identity
 from modulo.version import get_version
 
 _CODE_HEALTH_CHECK_CHECKPOINTER = "health._check_checkpointer"
@@ -62,11 +70,22 @@ router = APIRouter(tags=["health"])
 VERSION = get_version()
 _START_TIME: datetime = datetime.now(UTC)
 
-# 4 consecutive stale probes before 503 (plan F7): 4 x ~15-30s probe interval
-# leaves margin over the 90s worker_info TTL (3 strikes = exactly the TTL was
-# fragile). Counter is per-process (each web machine tracks its own).
+# 4 consecutive failed probes before a fleet readiness gate reports 503
+# (plan F7 grace tier, ADR 043): 4 x ~15-30s probe interval leaves margin
+# over the 90s worker_info TTL (3 strikes = exactly the TTL was fragile).
+# Counter is per-process (each web instance tracks its own probe streak) and
+# is shared by BOTH outcomes of the SAQ fleet gate — confirmed-empty and
+# undeterminable advance the same counter (ADR 043 Decision 3).
 _STALE_PROBE_LIMIT = 4
 _consecutive_stale_probes: int = 0
+# System-cron fleet gate has its OWN probe-grace counter (the machine-scoped
+# crons gate historically had boot grace but no probe tier — the fleet check
+# gets both, ADR 043 Decision 3).
+_consecutive_cron_stale_probes: int = 0
+# Boot grace for BOTH fleet gates: right after process start the workers /
+# heartbeats of the wider deployment may not have been observed yet, so a
+# failure inside this window reports ok without advancing any counter.
+_FLEET_BOOT_GRACE_SECONDS = 120
 
 # dispatcher_reconcile runs on a 60s system-cron tick; a last_run_at older
 # than 60s means at least one tick was missed -> report "stale" (degraded).
@@ -423,12 +442,20 @@ async def _live_worker_hostnames(queue_name: str) -> set[str]:
 
     Live = a ``saq:{queue}:stats`` zset entry whose expiry score is in the
     future (worker_info timer 89s / TTL 90s). The metadata hash holds
-    ``{"hostname": FLY_MACHINE_ID}`` written by the worker at startup.
+    ``{"hostname": <instance identity>}`` written by the worker at startup
+    (platform-neutral — ADR 043 Decision 5).
 
     SAQ stores zset scores in MILLISECONDS (``saq.utils.now()`` is
     ``int(time.time() * 1000)``) — the comparison lower bound must be
     milliseconds too, or ``zrangebyscore(key, now_seconds, "+inf")`` matches
     every entry and stale workers are never filtered.
+
+    Errors PROPAGATE (this helper deliberately does not swallow them):
+    distinguishing "read successfully, no live workers" (confirmed-empty)
+    from "could not read" (undeterminable) is the caller's job — the
+    determination contract in ``_check_fleet_saq_workers`` classifies a
+    raised error as undeterminable (bounded fail-open) instead of letting it
+    masquerade as a dead queue (ADR 043 Decision 3).
     """
     settings = get_settings()
     r: aioredis.Redis | None = None
@@ -441,124 +468,94 @@ async def _live_worker_hostnames(queue_name: str) -> set[str]:
             return set()
         raw = await r.mget(cast("list[bytes | str]", member_keys))
         return _hostnames_from_worker_blobs(raw)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        _log.warning("health._live_worker_hostnames queue=%s: %s", queue_name, exc)
-        return set()
     finally:
         if r is not None:
             with contextlib.suppress(Exception):
                 await r.aclose()
 
 
-async def _check_fleet_saq_workers() -> CheckResult:
-    """Fleet-wide SAQ worker liveness for ``app`` machines (plan F7, PR dist/separate-workers).
+def _in_fleet_boot_grace() -> bool:
+    """True within the fleet gates' post-boot grace window (ADR 043 Decision 3)."""
+    return (datetime.now(UTC) - _START_TIME).total_seconds() < _FLEET_BOOT_GRACE_SECONDS
 
-    ``app`` machines run no SAQ workers, so the machine-scoped gate cannot
-    apply. Instead readiness gates on ANY live worker being present on EACH
-    configured queue — a dead worker machine does not fail an app machine, but
-    a fleet-wide worker outage (no live worker on a queue) does. Fail-open on
-    Redis read errors. ``SAQ_HARD_GATE=false`` relaxes to alert-only, matching
-    the machine-scoped gate.
+
+async def _check_fleet_saq_workers() -> CheckResult:
+    """Fleet-wide SAQ worker gate — the sole readiness path (ADR 043 / FAR-1158).
+
+    Deployment-scoped: ANY live worker on EACH configured queue covers
+    readiness, wherever in the deployment it runs — there is no co-location
+    requirement and no process-role routing. Determination contract (module
+    docstring): confirmed non-empty resets the probe counter; a confirmed-
+    empty queue forces the failed-closed path even when a sibling queue's
+    read failed; undeterminable shares the same counter (bounded fail-open);
+    boot grace reports ok without advancing the counter; and
+    ``SAQ_HARD_GATE=false`` is the operator's alert-only relaxation.
     """
+    global _consecutive_stale_probes
     settings = get_settings()
+
+    live_by_queue: dict[str, set[str]] = {}
+    failed_queues: list[str] = []
     try:
         queues = _configured_queues()
-        live_by_queue: dict[str, set[str]] = {qname: await _live_worker_hostnames(qname) for qname in queues}
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        _log.warning("health._check_fleet_saq_workers failed: %s", exc)
-        return CheckResult(status="ok", detail="saq worker check unavailable (redis read failed)")
+        _log.warning("health._check_fleet_saq_workers queue config failed: %s", exc)
+        queues = []
+        failed_queues.append("<queue-config>")
+    for qname in queues:
+        try:
+            live_by_queue[qname] = await _live_worker_hostnames(qname)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log.warning("health._check_fleet_saq_workers queue=%s read failed: %s", qname, exc)
+            failed_queues.append(qname)
 
-    empty_queues = [qname for qname, live in live_by_queue.items() if not live]
-    if not empty_queues:
+    empty_queues = sorted(qname for qname, live in live_by_queue.items() if not live)
+    if not empty_queues and not failed_queues:
+        _consecutive_stale_probes = 0
         return CheckResult(status="ok", detail=f"saq workers live on all queues (fleet: {live_by_queue})")
+
+    # Aggregation precedence (ADR 043 Decision 3): a confirmed-empty queue
+    # forces the failed-closed path regardless of sibling read failures —
+    # it is never masked into the undeterminable classification.
+    probe_host = resolve_instance_identity()
+    if empty_queues:
+        problem = f"no live saq workers on queue(s) {empty_queues}"
+        if failed_queues:
+            problem += f" (sibling read failed for {sorted(failed_queues)})"
+    else:
+        problem = f"saq worker check undeterminable: read failed for queue(s) {sorted(failed_queues)}"
+    problem += f", live_by_queue={live_by_queue}, probe_host={probe_host}"
+
+    if _in_fleet_boot_grace():
+        return CheckResult(status="ok", detail=f"{problem} (within {_FLEET_BOOT_GRACE_SECONDS}s boot grace)")
+
+    _consecutive_stale_probes += 1
+    probes = _consecutive_stale_probes
     if settings.saq_hard_gate:
-        return CheckResult(
-            status="unavailable",
-            detail=f"no live saq workers on queue(s): {sorted(empty_queues)} (live_by_queue={live_by_queue})",
-        )
-    _log.warning("health.saq_workers_fleet_stale_relaxed empty_queues=%s", sorted(empty_queues))
-    return CheckResult(
-        status="ok",
-        detail=f"no live saq workers on queue(s) {sorted(empty_queues)} (SAQ_HARD_GATE=false, alert-only)",
-    )
+        if probes >= _STALE_PROBE_LIMIT:
+            return CheckResult(status="unavailable", detail=f"{problem} ({probes} consecutive probes)")
+        return CheckResult(status="degraded", detail=f"{problem} ({probes}/{_STALE_PROBE_LIMIT} probes)")
+    # SAQ_HARD_GATE=false (post-hold): alert-only — never 503s; alerting
+    # continues permanently (plan F7).
+    _log.warning("health.saq_workers_fleet_relaxed probes=%d %s", probes, problem)
+    return CheckResult(status="ok", detail=f"{problem} (SAQ_HARD_GATE=false, alert-only)")
 
 
 async def _check_saq_workers() -> CheckResult:
-    """SAQ worker liveness gate (plan F7).
+    """SAQ worker liveness gate — deployment-scoped, ONE path (ADR 043 / FAR-1158).
 
-    Process-group aware (PR dist/separate-workers): on ``app`` machines (which
-    run no workers) this delegates to ``_check_fleet_saq_workers`` — a global
-    "any live worker on each queue" gate. On ``worker`` machines and local dev
-    (``FLY_PROCESS_GROUP`` unset) it is machine-scoped: it verifies THIS
-    machine's workers (by FLY_MACHINE_ID hostname) are live on EACH configured
-    queue independently (runs AND system) — a live system worker does not mask
-    a dead runs worker on the same machine. After 4 consecutive stale probes
-    the check reports ``unavailable`` (503). The 503 gate is ALWAYS active
-    post-cutover (PR C — there is no Celery path), but ``SAQ_HARD_GATE=false``
-    relaxes it to degraded (alert-only) after the hold (plan F7).
+    Delegates unconditionally to ``_check_fleet_saq_workers``. The former
+    machine-scoped branch (``FLY_PROCESS_GROUP`` routing + THIS-host hostname
+    match against ``FLY_MACHINE_ID``/``HOSTNAME``) is removed: readiness never
+    assumes backend and workers share a host — that assumption never held on
+    multi-node Kubernetes, where a correctly-serving backend could never
+    become Ready (FAR-1158).
     """
-    global _consecutive_stale_probes
-
-    if os.environ.get("FLY_PROCESS_GROUP") == "app":
-        return await _check_fleet_saq_workers()
-
-    settings = get_settings()
-    this_host = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
-    try:
-        queues = _configured_queues()
-        live_by_queue: dict[str, set[str]] = {qname: await _live_worker_hostnames(qname) for qname in queues}
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        _log.warning("health._check_saq_workers failed: %s", exc)
-        return CheckResult(status="ok", detail="saq worker check unavailable (redis read failed)")
-
-    # THIS machine must be live on EVERY configured queue. A host that is live
-    # on only one queue is a partially-dead worker and must fail the gate.
-    missing_queues = [qname for qname, live in live_by_queue.items() if this_host not in live]
-    this_machine_live = not missing_queues
-
-    if this_machine_live:
-        _consecutive_stale_probes = 0
-        return CheckResult(
-            status="ok",
-            detail=f"saq workers live on this machine for all queues ({this_host})",
-        )
-
-    _consecutive_stale_probes += 1
-    if settings.saq_hard_gate and _consecutive_stale_probes >= _STALE_PROBE_LIMIT:
-        return CheckResult(
-            status="unavailable",
-            detail=(
-                f"this machine's saq workers stale for {_consecutive_stale_probes} "
-                f"consecutive probes (hostname={this_host}, stale_queues={sorted(missing_queues)}, "
-                f"live_by_queue={live_by_queue})"
-            ),
-        )
-    if settings.saq_hard_gate:
-        return CheckResult(
-            status="degraded",
-            detail=(
-                f"this machine's saq workers stale ({_consecutive_stale_probes}/"
-                f"{_STALE_PROBE_LIMIT} probes; hostname={this_host}, stale_queues={sorted(missing_queues)})"
-            ),
-        )
-    # SAQ_HARD_GATE=false (post-hold): alert-only — report ok so the check
-    # never 503s a machine; alerting continues permanently (plan F7).
-    _log.warning(
-        "health.saq_workers_stale_relaxed hostname=%s stale_queues=%s probes=%d",
-        this_host,
-        sorted(missing_queues),
-        _consecutive_stale_probes,
-    )
-    return CheckResult(
-        status="ok",
-        detail=f"saq workers stale (SAQ_HARD_GATE=false, alert-only) on this machine ({this_host})",
-    )
+    return await _check_fleet_saq_workers()
 
 
 async def _check_dispatcher_reconcile() -> CheckResult:
@@ -852,117 +849,91 @@ async def _check_runner_health_probe() -> CheckResult:
 
 
 async def _check_fleet_system_crons() -> CheckResult:
-    """Fleet-wide system-cron liveness for ``app`` machines (plan F8, PR dist/separate-workers).
+    """Fleet-wide system-cron liveness — the sole readiness path (ADR 043 / FAR-1158).
 
-    Only ``worker`` machines run the ``fire_due_triggers`` system-cron
-    scheduler, so on an ``app`` machine the per-machine heartbeat is never
-    written. Instead readiness gates on ANY machine having a fresh heartbeat —
-    a fleet-wide scheduler death fails readiness, a single dead worker machine
-    does not. Fail-open on Redis read errors. ``SAQ_HARD_GATE=false`` relaxes
-    to alert-only, matching the machine-scoped gate.
+    Deployment-scoped: readiness gates on ANY machine in the deployment
+    having a fresh ``fire_due_triggers`` heartbeat — a fleet-wide scheduler
+    death fails readiness, a single dead worker machine (or a backend pod on
+    a different node) does not. Heartbeat keys are enumerated with SCAN, never
+    KEYS (KEYS blocks Redis on large keyspaces).
+
+    Determination contract (module docstring): a fresh heartbeat read resets
+    the probe counter; a confirmed-stale store (read succeeded, no fresh
+    heartbeat anywhere) and an unreadable store (undeterminable) both advance
+    the SAME counter — degraded during probe grace, ``unavailable`` after the
+    grace tier under the default ``SAQ_HARD_GATE=true``; boot grace reports
+    ok; ``SAQ_HARD_GATE=false`` is alert-only.
     """
+    global _consecutive_cron_stale_probes
     settings = get_settings()
+    probe_host = resolve_instance_identity()
+
     r: aioredis.Redis | None = None
+    read_failed = False
+    fresh = False
     try:
         r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
-        heartbeat_keys = await r.keys("saq:cron:heartbeat:fire_due_triggers:*")
         now = time.time()
-        for key in heartbeat_keys:
+        async for key in r.scan_iter(match="saq:cron:heartbeat:fire_due_triggers:*"):
             raw = await r.get(key)
             if raw is None:
                 continue
             try:
                 last_ts = float(raw)
             except (TypeError, ValueError):
+                # Unparseable heartbeat: the store WAS read (confirmed), the
+                # value is just garbage — treat as not-fresh, never as a read
+                # failure. Fail closed on corrupt state, not open.
                 continue
             if now - last_ts <= _CRON_STALE_SECONDS:
-                return CheckResult(status="ok", detail="system-cron heartbeat fresh on at least one machine")
+                fresh = True
+                break
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         _log.warning("health._check_fleet_system_crons redis read failed: %s", exc)
-        return CheckResult(status="ok", detail="system-cron liveness check unavailable (redis read failed)")
+        read_failed = True
     finally:
         if r is not None:
             with contextlib.suppress(Exception):
                 await r.aclose()
 
+    if fresh:
+        _consecutive_cron_stale_probes = 0
+        return CheckResult(status="ok", detail="system-cron heartbeat fresh on at least one machine")
+
+    if read_failed:
+        problem = f"system-cron check undeterminable: redis read failed, probe_host={probe_host}"
+    else:
+        problem = f"no fresh fire_due_triggers cron heartbeat on any machine, probe_host={probe_host}"
+
+    if _in_fleet_boot_grace():
+        return CheckResult(status="ok", detail=f"{problem} (within {_FLEET_BOOT_GRACE_SECONDS}s boot grace)")
+
+    _consecutive_cron_stale_probes += 1
+    probes = _consecutive_cron_stale_probes
     if settings.saq_hard_gate:
-        return CheckResult(
-            status="unavailable",
-            detail="no fresh fire_due_triggers cron heartbeat on any machine",
-        )
-    _log.warning("health.system_cron_fleet_stale_relaxed")
-    return CheckResult(status="ok", detail="system-cron heartbeat stale fleet-wide (SAQ_HARD_GATE=false, alert-only)")
+        if probes >= _STALE_PROBE_LIMIT:
+            return CheckResult(status="unavailable", detail=f"{problem} ({probes} consecutive probes)")
+        return CheckResult(status="degraded", detail=f"{problem} ({probes}/{_STALE_PROBE_LIMIT} probes)")
+    # SAQ_HARD_GATE=false: alert-only — never gates readiness (plan F7/F8).
+    _log.warning("health.system_cron_fleet_relaxed probes=%d %s", probes, problem)
+    return CheckResult(status="ok", detail=f"{problem} (SAQ_HARD_GATE=false, alert-only)")
 
 
 async def _check_system_crons() -> CheckResult:
-    """System-cron liveness watchdog (plan F8 cron watchdog).
+    """System-cron liveness watchdog — deployment-scoped, ONE path (ADR 043 / FAR-1158).
 
-    Process-group aware (PR dist/separate-workers): on ``app`` machines (which
-    run no system worker) this delegates to ``_check_fleet_system_crons`` — any
-    machine with a fresh heartbeat. On ``worker`` machines and local dev
-    (``FLY_PROCESS_GROUP`` unset) it is machine-scoped: the SAQ system worker
-    runs ``fire_due_triggers`` every 60s and writes a per-machine Redis
-    heartbeat (``saq:cron:heartbeat:fire_due_triggers:{host}``). If THIS
-    machine's heartbeat is stale by more than 2x the cadence (or was never
-    written once the process has been up that long), the machine's cron
-    scheduler is silently dead — a worker loop can stay alive while its cron
-    scheduler is stuck — so return ``unavailable`` (503) to let Fly's health
-    check remove the machine. Fail-open on Redis read errors (never 503 a
-    healthy machine on a transient read). ``SAQ_HARD_GATE=false`` relaxes to
-    alert-only, matching the SAQ worker gate.
+    Delegates unconditionally to ``_check_fleet_system_crons``. The former
+    machine-scoped branch (``FLY_PROCESS_GROUP`` routing + THIS-host
+    ``saq:cron:heartbeat:fire_due_triggers:{FLY_MACHINE_ID|HOSTNAME}`` lookup)
+    is removed: whether the deployment's cron scheduler is alive is a
+    deployment question, not a host question — a backend pod sharing no node
+    with its workers can never write nor observe a co-located heartbeat
+    (FAR-1158). Per-instance worker liveness remains ADR 021's port-8082
+    check, unchanged.
     """
-    if os.environ.get("FLY_PROCESS_GROUP") == "app":
-        return await _check_fleet_system_crons()
-
-    settings = get_settings()
-    this_host = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
-    r: aioredis.Redis | None = None
-    try:
-        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
-        last = await r.get(f"saq:cron:heartbeat:fire_due_triggers:{this_host}")
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        _log.warning("health._check_system_crons redis read failed: %s", exc)
-        return CheckResult(status="ok", detail="system-cron liveness check unavailable (redis read failed)")
-    finally:
-        if r is not None:
-            with contextlib.suppress(Exception):
-                await r.aclose()
-
-    uptime_seconds = (datetime.now(UTC) - _START_TIME).total_seconds()
-    if last is None:
-        if uptime_seconds < _CRON_STALE_SECONDS:
-            return CheckResult(status="ok", detail="no system-cron heartbeat yet (boot grace)")
-        if settings.saq_hard_gate:
-            return CheckResult(
-                status="unavailable",
-                detail=f"system-cron scheduler never fired on this machine ({this_host})",
-            )
-        _log.warning("health.system_cron_never_fired_relaxed hostname=%s", this_host)
-        return CheckResult(status="ok", detail="system-cron never fired (SAQ_HARD_GATE=false, alert-only)")
-
-    try:
-        last_ts = float(last)
-    except (TypeError, ValueError):
-        return CheckResult(status="degraded", detail="system-cron heartbeat key unparseable")
-
-    age = time.time() - last_ts
-    if age <= _CRON_STALE_SECONDS:
-        return CheckResult(status="ok", detail=f"system-cron heartbeat fresh ({age:.0f}s ago)")
-
-    if settings.saq_hard_gate:
-        return CheckResult(
-            status="unavailable",
-            detail=(
-                f"this machine's fire_due_triggers cron heartbeat stale "
-                f"({age:.0f}s > {_CRON_STALE_SECONDS}s; hostname={this_host})"
-            ),
-        )
-    _log.warning("health.system_cron_stale_relaxed age=%.0fs hostname=%s", age, this_host)
-    return CheckResult(status="ok", detail="system-cron heartbeat stale (SAQ_HARD_GATE=false, alert-only)")
+    return await _check_fleet_system_crons()
 
 
 @router.get("/healthz")

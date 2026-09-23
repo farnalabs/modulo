@@ -1,11 +1,12 @@
 """Settings validation tests — SAQ runtime knobs (dist/runtime-cutover)."""
 
 import logging
+import socket
 
 import pytest
 from pydantic import ValidationError
 
-from modulo.settings import Settings
+from modulo.settings import Settings, resolve_instance_identity
 
 _VALID_32 = "a" * 32
 _VALID_KEY = "x" * 32
@@ -90,3 +91,47 @@ def test_nodeless_early_detect_below_full_window_no_warning(caplog: pytest.LogCa
     assert settings.saq_nodeless_early_detect_minutes == 15
     assert settings.saq_claimed_nodeless_minutes == 35
     assert not any("nodeless_early_detect_disabled" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# resolve_instance_identity — platform-neutral identity (ADR 043 / FAR-1158)
+# ---------------------------------------------------------------------------
+
+
+def test_instance_identity_uses_hostname_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOSTNAME (the generic process hostname) is the primary source."""
+    monkeypatch.setenv("HOSTNAME", "pod-abc123")
+    assert resolve_instance_identity() == "pod-abc123"
+
+
+def test_instance_identity_falls_back_to_socket_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No HOSTNAME env -> socket.gethostname(); never 'unknown' when a
+    socket hostname exists (FAR-1158: identity must resolve on every
+    platform with nothing declared)."""
+    monkeypatch.delenv("HOSTNAME", raising=False)
+    assert resolve_instance_identity() == socket.gethostname()
+
+
+def test_instance_identity_never_reads_platform_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FLY_MACHINE_ID / MODULO_RUNNER_MACHINE_ID are NOT identity sources:
+    the former is a platform variable, the latter is a DEPLOYMENT-identity
+    label (docs/configuration-reference.md) — neither may leak into
+    instance identity (ADR 043 Decision 5)."""
+    monkeypatch.setenv("FLY_MACHINE_ID", "fly-machine-xyz")
+    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "runner-deployment-label")
+    monkeypatch.delenv("HOSTNAME", raising=False)
+    assert resolve_instance_identity() == socket.gethostname()
+    assert resolve_instance_identity() != "fly-machine-xyz"
+    assert resolve_instance_identity() != "runner-deployment-label"
+
+
+def test_instance_identity_reads_env_at_call_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Zero module-scope os.environ reads (ADR 043 Decision 5): the resolver
+    observes env changes made AFTER import, proving the read happens per
+    call, not at module scope."""
+    import modulo.settings as settings_mod
+
+    monkeypatch.setenv("HOSTNAME", "first-host")
+    assert settings_mod.resolve_instance_identity() == "first-host"
+    monkeypatch.setenv("HOSTNAME", "second-host")
+    assert settings_mod.resolve_instance_identity() == "second-host"

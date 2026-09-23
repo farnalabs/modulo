@@ -1,4 +1,6 @@
 import logging
+import os
+import socket
 from collections.abc import Callable
 from decimal import Decimal
 from functools import lru_cache
@@ -29,6 +31,7 @@ __all__ = [
     "get_settings",
     "pin_env_file",
     "pinned_env_file",
+    "resolve_instance_identity",
     "set_first_boot_guard",
     "validate_break_glass_boot",
 ]
@@ -76,6 +79,23 @@ def pin_env_file(path: str | Path) -> None:
 def pinned_env_file() -> str | Path | None:
     """Return the currently pinned env_file path (None = default CWD ".env")."""
     return _pinned_env_file
+
+
+def resolve_instance_identity() -> str:
+    """Platform-neutral per-instance identity (ADR 043 / FAR-1158).
+
+    Returns this process's hostname: the ``HOSTNAME`` environment variable
+    when present (the generic POSIX/container process hostname), else
+    :func:`socket.gethostname()`, else ``"unknown"``.
+
+    The environment is read at CALL time — never at module scope — and no
+    platform-specific variable (``FLY_*``) or deployment-identity label
+    (``MODULO_RUNNER_MACHINE_ID``, which scopes container orphan sweeps to a
+    single deployment) is consulted: **instance** identity must be portable
+    across every deployment substrate, so a deployment that declares nothing
+    still resolves correctly (ADR 043 Decision 5).
+    """
+    return os.environ.get("HOSTNAME") or socket.gethostname() or "unknown"
 
 
 def set_first_boot_guard(guard: Callable[[], None] | None) -> None:
@@ -273,9 +293,10 @@ class Settings(BaseSettings):
     # the org-level ``run_api_key_max_ttl_seconds`` settings_json knob (default
     # 1 hour). A leaked per-run key expires quickly by construction.
     run_api_key_default_ttl_seconds: int = Field(default=900, alias="RUN_API_KEY_DEFAULT_TTL_SECONDS", ge=300, le=86400)
-    # Cutover hold gate: healthz/ready 503-gates when THIS machine's SAQ workers
-    # are stale (default true during the hold). Set false via deploy-time flag
-    # after the hold to relax the gate to degraded (alerting continues).
+    # Cutover hold gate: healthz/ready 503-gates when the DEPLOYMENT's SAQ
+    # workers are stale (ADR 043: deployment-scoped, never machine-scoped;
+    # default true during the hold). Set false via deploy-time flag after
+    # the hold to relax the gate to ok (alert-only, logging continues).
     saq_hard_gate: bool = Field(default=True, alias="SAQ_HARD_GATE")
     # A1 elevation flag (agent-failure UX, phase 1): when a captured sandbox
     # node output self-reports agent_status=failed OR outcome=failed, the run
