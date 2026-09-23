@@ -55,7 +55,11 @@ from modulo.core.eval_engine.coverage_gap import (
     DEFAULT_MIN_RUNS,
     compute_coverage_gap,
 )
-from modulo.core.eval_engine.eval_definition_freeze import raise_if_frozen
+from modulo.core.eval_engine.eval_definition_write import (
+    create_or_update_eval,
+    validate_guardrail_request,
+)
+from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 from modulo.core.eval_engine.suite_run import (
     EVAL_LEADERBOARD_DEFAULT_DAYS,
     EVAL_LEADERBOARD_MAX_DAYS,
@@ -156,6 +160,30 @@ def _eval_def_to_dict(eval_def: EvalDefinition) -> dict[str, Any]:
     }
 
 
+def _eval_row_to_legacy_dict(eval_row: Any, *, failure_behaviour: str = "warn") -> dict[str, Any]:
+    """Convert an ``Eval`` ORM row to the legacy ``_eval_def_to_dict`` JSON shape.
+
+    The ``failure_behaviour`` response field is retained for backward
+    compatibility; callers pass the actual value from the request context
+    (for creates) or from the PolicyGate (for reads in a later chunk).
+    """
+
+    return {
+        "id": str(eval_row.id),
+        "pipeline_id": str(eval_row.pipeline_id),
+        "node_id": str(eval_row.node_id) if eval_row.node_id else None,
+        "name": eval_row.name,
+        "eval_type": eval_row.eval_type,
+        "config_json": eval_row.config_json,
+        "failure_behaviour": failure_behaviour,
+        "pass_threshold": eval_row.pass_threshold,
+        "suite_id": eval_row.suite_id,
+        "account_id": str(eval_row.account_id),
+        "version": getattr(eval_row, "version", 1),
+        "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
+    }
+
+
 def _stamp_eval_definition_version(eval_def: EvalDefinition) -> None:
     """Bump the eval-definition version and snapshot the pre-edit config.
 
@@ -177,49 +205,14 @@ def _validate_guardrail_request(
 ) -> None:
     """Graph-save validation for guardrail definitions (FAR-208 item 5).
 
-    A guardrail binding never carries ``failure_behaviour='retry'`` — a
-    guardrail block is TERMINAL (eval_failed) and run-level retries are
-    excluded by design. Rejected at the API edge so an invalid binding can
-    never reach the graph or the engine.
+    Delegates to the consolidated validator in eval_definition_write.
+    Kept as a thin wrapper for backward compatibility with existing callers.
     """
-    if eval_type != "guardrail":
-        return
-    if failure_behaviour == "retry":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="A guardrail may never use failure_behaviour='retry' — guardrail blocks are terminal.",
-        )
-    if failure_behaviour not in (None, "warn", "block"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Guardrail failure_behaviour must be 'warn' or 'block'.",
-        )
-    if config_json is None:
-        return
-    action = config_json.get("action")
-    if action is not None and action not in ("observe", "warn", "block", "redact"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Guardrail action must be one of observe|warn|block|redact (got {action!r}).",
-        )
-    detection_type = config_json.get("type")
-    if detection_type is not None and detection_type not in ("regex", "json_schema"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Guardrail detection must be regex|json_schema (got {detection_type!r}).",
-        )
-    # The ``detection`` envelope (PRD §8.17) is an alternative declaration form;
-    # when present, its ``type`` is authoritative and must be deterministic pure
-    # detection too — reject a forbidden envelope type at the API edge rather
-    # than at run time (where it would fail closed as a mechanism error).
-    envelope = config_json.get("detection")
-    if isinstance(envelope, dict):
-        env_type = envelope.get("type")
-        if env_type is not None and env_type not in ("regex", "json_schema"):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Guardrail detection envelope type must be regex|json_schema (got {env_type!r}).",
-            )
+    validate_guardrail_request(
+        eval_type=eval_type,
+        failure_behaviour=failure_behaviour,
+        config_json=config_json,
+    )
 
 
 class UpdateEvalRequest(BaseModel):
@@ -322,21 +315,27 @@ async def create_eval_definition(
             if pipeline is None:
                 raise HTTPException(status_code=404, detail=MSG_PIPELINE_NOT_FOUND)
 
-            eval_def = EvalDefinition(
-                organisation_id=principal.organisation_id,
-                pipeline_id=req.pipeline_id,
-                node_id=req.node_id,
-                name=req.name,
-                eval_type=req.eval_type,
-                config_json=req.config_json,
-                failure_behaviour=req.failure_behaviour,
-                pass_threshold=req.pass_threshold,
-                suite_id=req.suite_id,
-                account_id=principal.account_id,
-                version=1,
-            )
-            session.add(eval_def)
-            await session.flush()
+            try:
+                eval_row = await create_or_update_eval(
+                    session,
+                    org_id=principal.organisation_id,
+                    account_id=principal.account_id,
+                    pipeline_id=req.pipeline_id,
+                    node_id=req.node_id,
+                    name=req.name,
+                    eval_type=req.eval_type,
+                    config_json=req.config_json,
+                    failure_behaviour=req.failure_behaviour,
+                    pass_threshold=req.pass_threshold,
+                    suite_id=req.suite_id,
+                )
+            except PolicyGateBindingViolationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"PolicyGate binding violation: {exc}",
+                ) from exc
+            # Map Eval row to the legacy response shape
+            eval_def = _eval_row_to_legacy_dict(eval_row, failure_behaviour=req.failure_behaviour or "warn")
     except HTTPException:
         raise
     except IntegrityError:
@@ -365,7 +364,7 @@ async def create_eval_definition(
             detail="An unexpected error occurred while creating the eval definition.",
         ) from None
 
-    return _eval_def_to_dict(eval_def)
+    return eval_def
 
 
 # ---------------------------------------------------------------------------
@@ -1614,6 +1613,29 @@ async def update_eval_definition(
             for key, value in updates.items():
                 setattr(eval_def, key, value)
             await session.flush()
+
+            # Also redirect to Eval+PolicyGate via the helper
+            try:
+                await create_or_update_eval(
+                    session,
+                    org_id=principal.organisation_id,
+                    account_id=principal.account_id,
+                    pipeline_id=eval_def.pipeline_id,
+                    node_id=updates.get("node_id", eval_def.node_id),
+                    name=updates.get("name", eval_def.name),
+                    eval_type=new_type,
+                    config_json=new_config,
+                    failure_behaviour=new_behaviour,
+                    pass_threshold=updates.get("pass_threshold", eval_def.pass_threshold),
+                    suite_id=updates.get("suite_id", eval_def.suite_id),
+                    eval_suite_id=updates.get("eval_suite_id", getattr(eval_def, "eval_suite_id", None)),
+                    existing_eval_id=eval_def.id,
+                )
+            except PolicyGateBindingViolationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"PolicyGate binding violation: {exc}",
+                ) from exc
     except HTTPException:
         raise
     except IntegrityError:
@@ -2237,24 +2259,48 @@ async def _insert_eval_definition(
     req: CreateEvalFromRunRequest,
     run: Run,
     config_json: dict[str, Any],
-) -> EvalDefinition:
-    """Persist the new eval definition in its own transaction."""
+) -> dict[str, Any]:
+    """Persist the new eval definition in its own transaction.
+
+    Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
+    Returns a legacy-compatible dict for the caller.
+    """
     try:
         async with session.begin():
-            eval_def = EvalDefinition(
-                organisation_id=principal.organisation_id,
-                pipeline_id=run.pipeline_id,
-                node_id=req.node_id,
-                name=req.name,
-                eval_type=req.eval_type,
-                config_json=config_json,
-                failure_behaviour="warn",
-                account_id=principal.account_id,
-                version=1,
-            )
-            session.add(eval_def)
-            await session.flush()
-            return eval_def
+            try:
+                eval_row = await create_or_update_eval(
+                    session,
+                    org_id=principal.organisation_id,
+                    account_id=principal.account_id,
+                    pipeline_id=run.pipeline_id,
+                    node_id=req.node_id,
+                    name=req.name,
+                    eval_type=req.eval_type,
+                    config_json=config_json,
+                    failure_behaviour="warn",
+                    pass_threshold=None,
+                    suite_id=None,
+                )
+            except PolicyGateBindingViolationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"PolicyGate binding violation: {exc}",
+                ) from exc
+            # Build a legacy-compatible dict for the caller
+            return {
+                "id": eval_row.id,
+                "pipeline_id": eval_row.pipeline_id,
+                "node_id": eval_row.node_id,
+                "name": eval_row.name,
+                "eval_type": eval_row.eval_type,
+                "config_json": eval_row.config_json,
+                "failure_behaviour": "warn",
+                "pass_threshold": eval_row.pass_threshold,
+                "suite_id": eval_row.suite_id,
+                "account_id": eval_row.account_id,
+                "version": eval_row.version,
+                "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
+            }
     except HTTPException:
         raise
     except IntegrityError:
@@ -2315,7 +2361,7 @@ async def create_eval_from_run(
         )
     run, sample_output = await _eval_from_run_source(session, principal, req)
     config_json = _build_eval_config_json(req.eval_type, sample_output)
-    eval_def = await _insert_eval_definition(session, principal, req, run, config_json)
-    result = _eval_def_to_dict(eval_def)
-    result["sample_output"] = sample_output
-    return result
+    eval_dict = await _insert_eval_definition(session, principal, req, run, config_json)
+    # eval_dict is already a legacy-compatible dict from the redirect helper
+    eval_dict["sample_output"] = sample_output
+    return eval_dict

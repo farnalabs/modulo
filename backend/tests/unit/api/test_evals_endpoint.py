@@ -559,7 +559,8 @@ class TestUpdateEvalDefinition:
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=eval_def),
+            _make_result(scalar_one_value=eval_def),  # EvalDefinition lookup
+            _make_result(scalar_one_value=None),  # Eval lookup (no existing Eval row yet — first-time redirect)
         ]
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:

@@ -3362,18 +3362,16 @@ async def _create_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Persist a new EvalDefinition; shared with the MCP tool wrapper."""
-    # FAR-1100 chunk 3 → 3b freeze: creation disabled between read cutover and
-    # write cutover.  Remove when chunk 3b lands (CO-8).
-    if (err := definition_frozen_response()) is not None:
-        return err
+    """Persist a new EvalDefinition; shared with the MCP tool wrapper.
 
+    Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
+    """
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("create_eval_definition")
 
     from modulo.api.constants import MSG_PIPELINE_NOT_FOUND
-    from modulo.api.routes.evals import _eval_def_to_dict
+    from modulo.api.routes.evals import _eval_row_to_legacy_dict
 
     if (err := _assert_create_eval_definition_params(name, eval_type, failure_behaviour, pass_threshold)) is not None:
         return err
@@ -3390,10 +3388,21 @@ async def _create_eval_definition_impl(
 
     cfg = config_json if config_json is not None else {}
 
-    if (guard_err := _eval_def_guardrail_validation_error(eval_type, failure_behaviour, cfg)) is not None:
-        return guard_err
+    from starlette.exceptions import HTTPException as StarletteHTTPException
 
-    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval, validate_guardrail_request
+    from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+
+    # Run guardrail validator; catch HTTPException and convert to MCP error dict
+    try:
+        validate_guardrail_request(
+            eval_type=eval_type,
+            failure_behaviour=failure_behaviour,
+            config_json=cfg,
+        )
+    except StarletteHTTPException as exc:
+        return {"error": "validation_failed", "detail": str(exc.detail)}
+
     from modulo.db.models.pipeline import Pipeline
 
     async with _session(org_id) as s:
@@ -3408,22 +3417,24 @@ async def _create_eval_definition_impl(
         if pipeline is None:
             return {"error": "pipeline_not_found", "detail": MSG_PIPELINE_NOT_FOUND}
 
-        eval_def = EvalDefinition(
-            organisation_id=org_id,
-            pipeline_id=pid,
-            node_id=nid,
-            name=name,
-            eval_type=eval_type,
-            config_json=cfg,
-            failure_behaviour=failure_behaviour,
-            pass_threshold=pass_threshold,
-            suite_id=suite_id,
-            account_id=account_id,
-            version=1,
-        )
-        s.add(eval_def)
-        await s.flush()
-        return _eval_def_to_dict(eval_def)
+        try:
+            eval_row = await create_or_update_eval(
+                s,
+                org_id=org_id,
+                account_id=account_id,
+                pipeline_id=pid,
+                node_id=nid,
+                name=name,
+                eval_type=eval_type,
+                config_json=cfg,
+                failure_behaviour=failure_behaviour,
+                pass_threshold=pass_threshold,
+                suite_id=suite_id,
+            )
+        except PolicyGateBindingViolationError as exc:
+            return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}
+
+        return _eval_row_to_legacy_dict(eval_row, failure_behaviour=failure_behaviour)
 
 
 @mcp.tool(
@@ -3512,25 +3523,6 @@ def _collect_eval_definition_updates(
     return updates
 
 
-def _eval_def_guardrail_validation_error(
-    eval_type: str,
-    failure_behaviour: str | None,
-    config_json: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Run the REST guardrail validator; returns a validation_failed dict or None."""
-    from modulo.api.routes.evals import _validate_guardrail_request
-
-    try:
-        _validate_guardrail_request(
-            eval_type=eval_type,
-            failure_behaviour=failure_behaviour,
-            config_json=config_json,
-        )
-    except StarletteHTTPException as exc:
-        return {"error": "validation_failed", "detail": str(exc.detail)}
-    return None
-
-
 async def _update_eval_definition_impl(
     eval_id: str,
     node_id: str | None,
@@ -3541,12 +3533,10 @@ async def _update_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper."""
-    # FAR-1100 chunk 3 → 3b freeze: editing disabled between read cutover and
-    # write cutover.  Remove when chunk 3b lands (CO-8).
-    if (err := definition_frozen_response()) is not None:
-        return err
+    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper.
 
+    Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
+    """
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("update_eval_definition")
@@ -3583,18 +3573,25 @@ async def _update_eval_definition_impl(
         suite_id=suite_id,
     )
 
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval, validate_guardrail_request
+    from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+
     async with _session(org_id) as s:
         eval_def = await _load_eval_def(s, org_id, eid)
         if eval_def is None:
             return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
 
-        guard_err = _eval_def_guardrail_validation_error(
-            eval_type=updates.get("eval_type", eval_def.eval_type),
-            failure_behaviour=updates.get("failure_behaviour", eval_def.failure_behaviour),
-            config_json=updates.get("config_json", eval_def.config_json),
-        )
-        if guard_err is not None:
-            return guard_err
+        # Run guardrail validator; catch HTTPException and convert to MCP error dict
+        try:
+            validate_guardrail_request(
+                eval_type=updates.get("eval_type", eval_def.eval_type),
+                failure_behaviour=updates.get("failure_behaviour", eval_def.failure_behaviour),
+                config_json=updates.get("config_json", eval_def.config_json),
+            )
+        except StarletteHTTPException as exc:
+            return {"error": "validation_failed", "detail": str(exc.detail)}
 
         # FAR-382: snapshot the pre-edit config, then bump the version so a
         # rubric/config change is an explicitly version-scoped event.
@@ -3602,6 +3599,27 @@ async def _update_eval_definition_impl(
         for key, value in updates.items():
             setattr(eval_def, key, value)
         await s.flush()
+
+        # Also redirect to Eval+PolicyGate via the helper
+        try:
+            await create_or_update_eval(
+                s,
+                org_id=org_id,
+                account_id=eval_def.account_id,
+                pipeline_id=eval_def.pipeline_id,
+                node_id=updates.get("node_id", eval_def.node_id),
+                name=updates.get("name", eval_def.name),
+                eval_type=updates.get("eval_type", eval_def.eval_type),
+                config_json=updates.get("config_json", eval_def.config_json),
+                failure_behaviour=updates.get("failure_behaviour", eval_def.failure_behaviour),
+                pass_threshold=updates.get("pass_threshold", eval_def.pass_threshold),
+                suite_id=updates.get("suite_id", eval_def.suite_id),
+                eval_suite_id=updates.get("eval_suite_id", getattr(eval_def, "eval_suite_id", None)),
+                existing_eval_id=eid,
+            )
+        except PolicyGateBindingViolationError as exc:
+            return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}
+
         return _eval_def_to_dict(eval_def)
 
 
