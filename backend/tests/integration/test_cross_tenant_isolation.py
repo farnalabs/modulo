@@ -1096,6 +1096,21 @@ class TestSystemAdminExplicitOrgParam:
 class TestEvalsCreateCrossTenant:
     """Creating eval definitions against another org's pipeline must fail."""
 
+    @pytest.fixture(autouse=True)
+    def _bypass_eval_definition_freeze(self):
+        """Bypass the FAR-1100 chunk 3 -> 3b eval-definition create/edit freeze.
+
+        These tests cover the still-live cross-tenant IDOR check on
+        ``POST /api/v1/evals`` (404 for another org's pipeline, 201 for the
+        caller's own).  The freeze guard runs before the pipeline-ownership
+        lookup and would short-circuit both cases to 409, gutting the
+        isolation coverage.  The freeze itself is verified directly in
+        tests/unit/api/test_eval_definition_freeze.py.  Remove when chunk 3b
+        lands (CO-8).
+        """
+        with patch("modulo.api.routes.evals.raise_if_frozen"):
+            yield
+
     async def test_create_eval_against_other_org_pipeline_returns_404(
         self,
         integration_client: AsyncClient,
