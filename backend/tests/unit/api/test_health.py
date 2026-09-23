@@ -709,6 +709,43 @@ class TestCheckSaqWorkersPerQueue:
         assert result.status == "ok"
         assert "SAQ_HARD_GATE=false" in result.detail
 
+    async def test_configured_queues_failure_is_undeterminable(self, reset_stale_probes: None) -> None:
+        """Resolving the queue list can itself fail (bad config): readiness
+        must not crash — the failed read is classified undeterminable
+        (ADR 043 bounded fail-open), degrades on the first probe via the
+        shared counter, and names the ``<queue-config>`` sentinel."""
+        settings = _make_settings()
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch(
+                "modulo.api.routes.health._configured_queues",
+                side_effect=RuntimeError("queue config exploded"),
+            ),
+        ):
+            result = await _check_saq_workers()
+        assert result.status == "degraded"
+        assert "undeterminable" in result.detail
+        assert "<queue-config>" in result.detail
+
+    async def test_cancelled_queue_read_propagates(self, reset_stale_probes: None) -> None:
+        """Cancellation is never swallowed (ADR 043): an in-flight queue read
+        cancelled during shutdown must propagate, NOT be counted as a failed
+        probe that would gate readiness."""
+        import modulo.api.routes.health as health_mod
+
+        settings = _make_settings()
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs"])),
+            patch(
+                "modulo.api.routes.health._live_worker_hostnames",
+                side_effect=asyncio.CancelledError(),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _check_saq_workers()
+        assert health_mod._consecutive_stale_probes == 0
+
 
 class TestCheckSaqWorkersEndToEnd:
     """_check_saq_workers through the REAL _live_worker_hostnames (fake Redis)
