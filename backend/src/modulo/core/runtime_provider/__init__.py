@@ -386,6 +386,37 @@ class RuntimeProvider(ABC):
         """Tear down a workspace and release all associated resources."""
         ...
 
+    async def destroy_workspace_by_ref(self, provider_ref: str) -> bool:
+        """Destroy a workspace using only its provider reference (ADR 040).
+
+        Substrate-level destroy for reclamation paths: the caller supplies a
+        ref persisted elsewhere (e.g. ``runs.sandbox_id``), so this must work
+        after a process restart or from another process — it may never depend
+        on in-process tracking of live workspace handles.
+
+        Contract:
+          - **Idempotent**: destroying an already-destroyed or foreign ref is
+            a no-op success, not an error;
+          - returns ``True`` when the ref is confirmed gone (killed by this
+            call, or already gone) and ``False`` when the destroy could not
+            be confirmed — the failure is logged and swallowed
+            (best-effort), never raised;
+          - two-phase destroy-marker semantics (``destroy_intent`` /
+            ``confirmed``) are the CALLER's concern, not this primitive's —
+            they are delivered in a later slice (ADR 040 workspace-lifetime
+            clause);
+          - optional base-class method: providers that do not override it
+            raise the typed :class:`ProviderCapabilityUnsupportedError` —
+            never a raw ``NotImplementedError`` (ADR 040 "Error honesty",
+            the same carve-out as the :meth:`exec_command_stream` default).
+
+        ``destroy_workspace``'s existing contract is unchanged — the
+        never-tracked-but-live case is served by this primitive.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement destroy_workspace_by_ref"
+        )
+
     @abstractmethod
     async def get_workspace_status(self, provider_ref: str) -> str:
         """Return the current status string for the workspace."""
