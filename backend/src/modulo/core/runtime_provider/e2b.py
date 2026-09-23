@@ -6,10 +6,18 @@ import asyncio
 import logging
 import shlex
 import time
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 
 from modulo.core.runtime_config.key_bridge import get_e2b_api_key
-from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
+from modulo.core.runtime_provider import (
+    ExecProcess,
+    ExecResult,
+    ExecStreamChunk,
+    RuntimeProvider,
+    WorkspaceSpec,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -18,6 +26,35 @@ _DEFAULT_CMD_TIMEOUT = 60
 _REPO_CLONE_TIMEOUT = 120
 _MAX_PROVISION_TIMEOUT = 120
 _KILL_TIMEOUT = 30
+# Background/streaming commands have no per-command deadline: the dispatch
+# layer owns stall/deadline kills through ExecProcess.kill() (ADR 040 — the
+# e2b ``timeout=0`` means "do not limit the command connection time").
+_STREAM_CMD_TIMEOUT = 0
+# Bound only the START of a streaming command (run() returns the handle once
+# the start event arrives; a wedged control plane must not hang the caller —
+# semgrep sandbox-commands-run-without-wait-for). Matches node_runner's
+# background-command start bound (min(sandbox_timeout, 120)).
+_STREAM_START_TIMEOUT = 120
+
+
+@dataclass(frozen=True)
+class _StreamEnd:
+    """Terminal queue marker for the E2B stream: healthy exit XOR stream error.
+
+    Exactly one field is set (by construction in the waiter): a healthy
+    stream end carries the real ``exit_code`` with ``error=None``; an
+    engine/proxy drop carries the ``error`` description with
+    ``exit_code=None`` — never a fabricated zero (ADR 040 "Streaming
+    parity").
+    """
+
+    exit_code: int | None
+    error: str | None
+
+
+def _stream_error_message(exc: Exception) -> str:
+    """Format an engine/proxy stream failure for ``ExecProcess.error`` (ADR 040)."""
+    return f"{type(exc).__name__}: {str(exc)[:200]}"
 
 
 class E2BRuntimeProvider(RuntimeProvider):
@@ -50,6 +87,9 @@ class E2BRuntimeProvider(RuntimeProvider):
         if not self._api_key:
             raise ValueError("E2B API key is required. Pass api_key= or set MODULO_E2B_API_KEY.")
         self._sandboxes: dict[str, Any] = {}
+        # Strong references to in-flight stream waiter tasks (asyncio holds
+        # only weak refs to tasks; RUF006). Discarded as each resolves.
+        self._stream_waiters: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------
     # Hub integration
@@ -171,6 +211,169 @@ class E2BRuntimeProvider(RuntimeProvider):
         if sandbox is not None:
             await self._kill_sandbox_best_effort(sandbox, "destroy cleanup")
 
+    async def destroy_workspace_by_ref(self, provider_ref: str) -> bool:
+        """Kill an E2B sandbox given only its sandbox id (ADR 040 primitive).
+
+        Reconnects through ``AsyncSandbox.connect(sandbox_id)`` — the SDK's
+        connect-by-id classmethod — rather than consulting
+        ``self._sandboxes``, so reclamation works after a process restart
+        or from another process (never-tracked-but-live refs included).
+
+        Contract (see :meth:`RuntimeProvider.destroy_workspace_by_ref`):
+          - already-gone / foreign ref → ``NotFoundException`` from the
+            SDK → idempotent success (``True``), no error;
+          - a tracked local handle is dropped only on confirmed-gone —
+            on an unconfirmed kill it is kept so ``close()`` can retry;
+          - connect/kill failures are logged and swallowed, returning
+            ``False`` (the destroy could not be confirmed) — the two-phase
+            ``destroy_intent`` / ``confirmed`` marker stays the CALLER's
+            concern (delivered in a later slice).
+        """
+        from e2b import AsyncSandbox
+        from e2b.exceptions import NotFoundException
+
+        try:
+            sandbox = await AsyncSandbox.connect(provider_ref, api_key=self._api_key)
+        except asyncio.CancelledError:
+            raise
+        except NotFoundException:
+            # Already destroyed (or a foreign ref): idempotent no-op success.
+            self._sandboxes.pop(provider_ref, None)
+            _log.debug("destroy_workspace_by_ref: sandbox %s already gone", provider_ref)
+            return True
+        except Exception:
+            _log.exception(
+                "destroy_workspace_by_ref: failed to reconnect to sandbox %s",
+                provider_ref,
+            )
+            return False
+
+        killed = await self._kill_sandbox_best_effort(sandbox, "destroy_workspace_by_ref")
+        if killed:
+            self._sandboxes.pop(provider_ref, None)
+        return killed
+
+    async def exec_command_stream(
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        environment: dict[str, str] | None = None,
+    ) -> ExecProcess:
+        """Stream a command's output as async chunks with a kill handle (ADR 040).
+
+        E2B implementation of the streaming-parity primitive: the command is
+        started as a background command (``commands.run(..., background=True,
+        on_stdout=..., on_stderr=...)`` — the same SDK API the legacy
+        node-runner path uses) and its output callbacks feed an internal
+        queue that ``process.chunks`` drains.
+
+        Lifecycle contract (mirrors the Docker implementation):
+          - decoded :class:`ExecStreamChunk` values on ``chunks``, in order;
+          - ``done`` fires when the stream ends (healthy or error) — also on
+            an early consumer close (same as Docker);
+          - ``exit_code`` stays ``None`` until the END of a HEALTHY stream
+            (including a non-zero command exit — a command failure is a
+            result, not a stream error);
+          - an engine/proxy drop mid-stream (or an end-eventless
+            termination) sets ``error`` and leaves ``exit_code`` ``None`` —
+            never a fabricated ``exit_code == 0``;
+          - ``kill()`` SIGKILLs the background command best-effort
+            (failures logged and swallowed); the resulting end event then
+            terminates ``chunks``.
+
+        The command connection is unbounded (``timeout=0`` — the SDK's
+        "do not limit the command connection time" value): the dispatch
+        layer owns stall/deadline kills through :meth:`ExecProcess.kill`,
+        exactly as it does for Docker's unbounded exec stream.
+        """
+        from e2b.sandbox.commands.command_handle import CommandExitException
+
+        sandbox = self._get_sandbox(provider_ref)
+        cmd_str = " ".join(shlex.quote(c) for c in command)
+        queue: asyncio.Queue[ExecStreamChunk | _StreamEnd] = asyncio.Queue()
+
+        async def _on_stdout(chunk: str) -> None:
+            await queue.put(ExecStreamChunk(stream="stdout", data=chunk))
+
+        async def _on_stderr(chunk: str) -> None:
+            await queue.put(ExecStreamChunk(stream="stderr", data=chunk))
+
+        handle = await asyncio.wait_for(
+            sandbox.commands.run(
+                cmd_str,
+                background=True,
+                envs=environment,
+                on_stdout=_on_stdout,
+                on_stderr=_on_stderr,
+                timeout=_STREAM_CMD_TIMEOUT,
+            ),
+            timeout=_STREAM_START_TIMEOUT,
+        )
+
+        process = ExecProcess(chunks=None, kill=None)  # type: ignore[arg-type]
+
+        async def _chunks() -> AsyncIterator[ExecStreamChunk]:
+            exit_code: int | None = None
+            error: str | None = None
+            try:
+                while True:
+                    item = await queue.get()
+                    if isinstance(item, _StreamEnd):
+                        exit_code = item.exit_code
+                        error = item.error
+                        break
+                    yield item
+            finally:
+                if error is not None:
+                    process.error = error
+                process.exit_code = exit_code
+                process.done.set()
+
+        async def _await_terminal() -> None:
+            """Resolve the command once and enqueue exactly one terminal marker.
+
+            The SDK resolves ``wait()`` only after every ``on_stdout``/
+            ``on_stderr`` callback has run (they are awaited inside the same
+            event-handler task), and the queue is FIFO — so the terminal
+            marker always lands after all output chunks.
+            """
+            try:
+                result = await handle.wait()
+            except asyncio.CancelledError:
+                raise
+            except CommandExitException as exc:
+                # Non-zero command exit: a HEALTHY stream end carrying the
+                # real exit code (specific exception before its bases).
+                await queue.put(_StreamEnd(exit_code=exc.exit_code, error=None))
+            except Exception as exc:
+                # Engine/proxy drop or an end-eventless termination: stream
+                # ERROR — exit_code must stay None (no zero-exit fabrication).
+                await queue.put(_StreamEnd(exit_code=None, error=_stream_error_message(exc)))
+            else:
+                await queue.put(_StreamEnd(exit_code=result.exit_code, error=None))
+
+        process.chunks = _chunks()
+        # Strong ref while in flight (asyncio holds only weak task refs);
+        # discarded automatically when the terminal marker has been queued.
+        waiter = asyncio.ensure_future(_await_terminal())
+        self._stream_waiters.add(waiter)
+        waiter.add_done_callback(lambda _t: self._stream_waiters.discard(waiter))
+
+        async def _kill() -> None:
+            try:
+                await asyncio.wait_for(handle.kill(), timeout=_KILL_TIMEOUT)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "exec_command_stream: failed to kill streamed command in sandbox %s",
+                    provider_ref,
+                )
+
+        process._kill = _kill
+        return process
+
     async def get_workspace_status(self, provider_ref: str) -> str:
         """Return the current status of the sandbox."""
         sandbox = self._sandboxes.get(provider_ref)
@@ -215,12 +418,18 @@ class E2BRuntimeProvider(RuntimeProvider):
             raise ValueError(f"Unknown sandbox: {provider_ref}")
         return sandbox
 
-    async def _kill_sandbox_best_effort(self, sandbox: Any, context: str) -> None:
+    async def _kill_sandbox_best_effort(self, sandbox: Any, context: str) -> bool:
         """Kill a sandbox during error cleanup without masking the cause.
 
         Logs and swallows kill failures (including a ``TimeoutError`` from the
         ``wait_for`` wrapper) so the caller can always re-raise the original
         exception that triggered cleanup.
+
+        Returns an outcome for the ADR 040 reclamation path: ``True`` when
+        the kill request completed (the sandbox was killed, or the API
+        reported it already gone — neither is an error), ``False`` when the
+        kill attempt failed (logged + swallowed). Cleanup callers ignore the
+        return value, as before.
         """
         try:
             await asyncio.wait_for(sandbox.kill(), timeout=_KILL_TIMEOUT)
@@ -232,6 +441,8 @@ class E2BRuntimeProvider(RuntimeProvider):
                 getattr(sandbox, "sandbox_id", "<unknown>"),
                 context,
             )
+            return False
+        return True
 
     async def _clone_repo(self, sandbox: Any, repo_url: str, repo_ref: str) -> None:
         """Clone a git repository inside the sandbox.
