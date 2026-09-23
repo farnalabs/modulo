@@ -29,6 +29,14 @@ from fastapi import HTTPException, status
 
 CODE_EVALS_DEFINITION_FROZEN: str = "evals.definition_frozen"
 
+# --- Freeze master switch ----------------------------------------------------
+# While ``True`` every create/edit entry point returns the typed freeze error.
+# Flip to ``False`` -- or delete this module and its call sites -- when chunk 3b
+# lands (CO-8) and writes are redirected to the new tables.  Tests that need to
+# exercise the still-live validation/DB code paths below the guard patch the
+# guard functions themselves rather than this constant.
+EVAL_DEFINITION_WRITE_FROZEN: bool = True
+
 # --- User-facing message (names chunk 3b as the remediation) -----------------
 
 _DETAIL: str = (
@@ -47,11 +55,14 @@ _MCP_ERROR: dict[str, Any] = {
 
 
 def raise_if_frozen() -> None:
-    """Raise ``HTTPException(409)`` if creation/editing is frozen.
+    """Raise ``HTTPException(409)`` while creation/editing is frozen.
 
     Call at the very top of REST create/edit handlers — before any validation
-    or DB work.
+    or DB work.  Returns without raising once the freeze is lifted
+    (``EVAL_DEFINITION_WRITE_FROZEN`` is ``False``).
     """
+    if not EVAL_DEFINITION_WRITE_FROZEN:
+        return
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail=_DETAIL,
@@ -59,9 +70,14 @@ def raise_if_frozen() -> None:
 
 
 def definition_frozen_response() -> dict[str, Any] | None:
-    """Return a typed MCP error dict if creation/editing is frozen, else ``None``.
+    """Return the typed MCP error dict while creation/editing is frozen, else ``None``.
 
     Call at the very top of MCP ``_create_eval_definition_impl`` /
     ``_update_eval_definition_impl`` — before any validation or DB work.
+    Returns ``None`` once the freeze is lifted (``EVAL_DEFINITION_WRITE_FROZEN``
+    is ``False``), which matches the MCP ``_impl`` convention where a ``None``
+    error means "continue".
     """
+    if not EVAL_DEFINITION_WRITE_FROZEN:
+        return None
     return dict(_MCP_ERROR)

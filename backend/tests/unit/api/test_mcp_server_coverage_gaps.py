@@ -1814,6 +1814,21 @@ class TestTriggerPipelinePaths(_AuthContext):
 
 
 class TestEvalDefinitionTools(_AdminContext):
+    @pytest.fixture(autouse=True)
+    def _bypass_eval_definition_freeze(self):
+        """Bypass the FAR-1100 chunk 3 → 3b eval-definition create/edit freeze.
+
+        This class verifies the still-live MCP create/update validation, auth,
+        scope, guardrail and DB-error-envelope paths.  The freeze guard runs
+        before all of them, so without this bypass every case would collapse to
+        a single ``definition_frozen`` assertion and the production paths would
+        lose coverage.  The freeze itself is verified directly in
+        tests/unit/api/test_eval_definition_freeze.py.  Remove when chunk 3b
+        lands (CO-8).
+        """
+        with patch.object(ms, "definition_frozen_response", return_value=None):
+            yield
+
     def test_assert_failure_behaviour_rejects_unknown(self) -> None:
         assert _assert_failure_behaviour("retry") is not None
 
@@ -1821,164 +1836,240 @@ class TestEvalDefinitionTools(_AdminContext):
         assert _assert_pass_threshold(1.5) is not None
 
     async def test_create_auth_expired(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard fires before auth, so an
-        # expired token now receives definition_frozen rather than
-        # auth_expired.  Revert when chunk 3b lands (CO-8).
-        result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=False)):
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
+        assert result["error"] == "auth_expired"
 
     async def test_create_rejects_blank_name(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard fires before validation.
-        result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="  ", eval_type="llm_judge")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="  ", eval_type="llm_judge")
+        assert result["error"] == "invalid_name"
 
     async def test_create_rejects_bad_failure_behaviour(self) -> None:
-        result = await create_eval_definition(
-            pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge", failure_behaviour="retry"
-        )
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await create_eval_definition(
+                pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge", failure_behaviour="retry"
+            )
+        assert result["error"] == "invalid_failure_behaviour"
 
     async def test_create_rejects_bad_pass_threshold(self) -> None:
-        result = await create_eval_definition(
-            pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge", pass_threshold=2.0
-        )
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await create_eval_definition(
+                pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge", pass_threshold=2.0
+            )
+        assert result["error"] == "invalid_pass_threshold"
 
     async def test_create_rejects_invalid_pipeline_id(self) -> None:
-        result = await create_eval_definition(pipeline_id="nope", name="n", eval_type="llm_judge")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await create_eval_definition(pipeline_id="nope", name="n", eval_type="llm_judge")
+        assert result["error"] == "invalid_id"
 
     async def test_create_rejects_invalid_node_id(self) -> None:
-        result = await create_eval_definition(
-            pipeline_id=str(uuid.uuid4()), node_id="nope", name="n", eval_type="llm_judge"
-        )
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await create_eval_definition(
+                pipeline_id=str(uuid.uuid4()), node_id="nope", name="n", eval_type="llm_judge"
+            )
+        assert result["error"] == "invalid_id"
 
     async def test_create_guardrail_validation_failure(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard fires before the guardrail
-        # validator.  Revert when chunk 3b lands (CO-8).
-        result = await create_eval_definition(
-            pipeline_id=str(uuid.uuid4()), name="n", eval_type="guardrail", config_json={}
-        )
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch(
+                "modulo.api.routes.evals._validate_guardrail_request",
+                side_effect=StarletteHTTPException(422, "bad guardrail"),
+            ),
+        ):
+            result = await create_eval_definition(
+                pipeline_id=str(uuid.uuid4()), name="n", eval_type="guardrail", config_json={}
+            )
+        assert result["error"] == "validation_failed"
 
     async def test_create_pipeline_not_found(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard fires before the pipeline
-        # lookup.  Revert when chunk 3b lands (CO-8).
-        result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=None)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.evals._validate_guardrail_request", return_value=None),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
+        assert result["error"] == "pipeline_not_found"
 
-    async def test_create_error_envelopes(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard short-circuits before any DB
-        # work, so every former error-envelope case collapses to the single
-        # definition_frozen error.  Revert to the parametrized matrix when
-        # chunk 3b lands (CO-8).
-        result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (IntegrityError("s", {}, Exception()), "conflict"),
+            (ProgrammingError("s", {}, Exception()), "migration_required"),
+            (SQLAlchemyError("down"), "database_unavailable"),
+            (RuntimeError("boom"), "internal_error"),
+        ],
+    )
+    async def test_create_error_envelopes(self, exc: Exception, expected: str) -> None:
+        session = _mock_session()
+        pipeline = MagicMock()
+        if isinstance(exc, IntegrityError):
+            session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
+            session.flush.side_effect = exc
+        else:
+            session.execute.side_effect = exc
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.evals._validate_guardrail_request", return_value=None),
+            patch("modulo.api.routes.evals._eval_def_to_dict", return_value={"id": "x"}),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
+        assert result["error"] == expected
 
     async def test_create_outer_http_exception(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard fires before serialisation.
-        result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        session = _mock_session()
+        pipeline = MagicMock()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.evals._validate_guardrail_request", return_value=None),
+            patch(
+                "modulo.api.routes.evals._eval_def_to_dict",
+                side_effect=StarletteHTTPException(500, "serialize fail"),
+            ),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
+        assert result["error"] == "validation_failed"
 
     async def test_update_auth_expired(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard fires before auth, so an
-        # expired token now receives definition_frozen rather than
-        # auth_expired.  Revert when chunk 3b lands (CO-8).
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()))
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=False)):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()))
+        assert result["error"] == "auth_expired"
 
     async def test_update_rejects_bad_eval_type(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard fires before validation.
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()), eval_type="bogus")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), eval_type="bogus")
+        assert result["error"] == "invalid_eval_type"
 
     async def test_update_rejects_bad_failure_behaviour(self) -> None:
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()), failure_behaviour="retry")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), failure_behaviour="retry")
+        assert result["error"] == "invalid_failure_behaviour"
 
     async def test_update_rejects_bad_pass_threshold(self) -> None:
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()), pass_threshold=-0.5)
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), pass_threshold=-0.5)
+        assert result["error"] == "invalid_pass_threshold"
 
     async def test_update_rejects_blank_name(self) -> None:
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="  ")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="  ")
+        assert result["error"] == "invalid_name"
 
     async def test_update_rejects_overlong_name(self) -> None:
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="x" * 256)
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="x" * 256)
+        assert result["error"] == "invalid_name"
 
     async def test_update_rejects_invalid_ids(self) -> None:
-        result = await update_eval_definition(eval_id="nope")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()), node_id="nope")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await update_eval_definition(eval_id="nope")
+        assert result["error"] == "invalid_id"
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), node_id="nope")
+        assert result["error"] == "invalid_id"
 
     async def test_update_not_found(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard fires before the DB lookup, so
-        # this returns definition_frozen instead of eval_definition_not_found.
-        # Revert when chunk 3b lands (CO-8).
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="n")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=None)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="n")
+        assert result["error"] == "eval_definition_not_found"
 
     async def test_update_full_success(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: editing is frozen — the guard fires
-        # before the DB load/version bump.  Revert to the original success
-        # assertion when chunk 3b lands (CO-8).
-        result = await update_eval_definition(
-            eval_id=str(uuid.uuid4()),
-            node_id=str(uuid.uuid4()),
-            name="new-name",
-            eval_type="llm_judge",
-            config_json={"k": "v"},
-            failure_behaviour="warn",
-            pass_threshold=0.5,
-            suite_id="suite-1",
-        )
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        eval_def = MagicMock()
+        eval_def.eval_type = "llm_judge"
+        eval_def.failure_behaviour = "warn"
+        eval_def.config_json = {}
+        eval_def.version = 1
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=eval_def)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.evals._validate_guardrail_request", return_value=None),
+            patch("modulo.api.routes.evals._eval_def_to_dict", return_value={"id": "x"}),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await update_eval_definition(
+                eval_id=str(uuid.uuid4()),
+                node_id=str(uuid.uuid4()),
+                name="new-name",
+                eval_type="llm_judge",
+                config_json={"k": "v"},
+                failure_behaviour="warn",
+                pass_threshold=0.5,
+                suite_id="suite-1",
+            )
+        assert result == {"id": "x"}
+        assert eval_def.version == 2
 
     async def test_update_guardrail_validation_failure(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard fires before the guardrail
-        # validator.  Revert when chunk 3b lands (CO-8).
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()), config_json={"action": "bogus"})
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        eval_def = MagicMock()
+        eval_def.eval_type = "guardrail"
+        eval_def.failure_behaviour = "warn"
+        eval_def.config_json = {}
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=eval_def)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch(
+                "modulo.api.routes.evals._validate_guardrail_request",
+                side_effect=StarletteHTTPException(422, "bad guardrail"),
+            ),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), config_json={"action": "bogus"})
+        assert result["error"] == "validation_failed"
 
     async def test_update_outer_http_exception(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard fires before serialisation.
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="n")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+        eval_def = MagicMock()
+        eval_def.eval_type = "llm_judge"
+        eval_def.failure_behaviour = "warn"
+        eval_def.config_json = {}
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=eval_def)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch(
+                "modulo.api.routes.evals._stamp_eval_definition_version",
+                side_effect=StarletteHTTPException(422, "stamp fail"),
+            ),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="n")
+        assert result["error"] == "validation_failed"
 
-    async def test_update_error_envelopes(self) -> None:
-        # FAR-1100 chunk 3 → 3b freeze: the guard short-circuits before any DB
-        # work, so every former error-envelope case collapses to the single
-        # definition_frozen error.  Revert to the parametrized matrix when
-        # chunk 3b lands (CO-8).
-        result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="n")
-        assert result["error"] == "definition_frozen"
-        assert "chunk 3b" in result["detail"]
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (IntegrityError("s", {}, Exception()), "conflict"),
+            (ProgrammingError("s", {}, Exception()), "migration_required"),
+            (SQLAlchemyError("down"), "database_unavailable"),
+            (RuntimeError("boom"), "internal_error"),
+        ],
+    )
+    async def test_update_error_envelopes(self, exc: Exception, expected: str) -> None:
+        session = _mock_session()
+        if isinstance(exc, IntegrityError):
+            session.execute.return_value = _make_execute_result(scalar_one_or_none=MagicMock())
+            session.flush.side_effect = exc
+        else:
+            session.execute.side_effect = exc
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="n")
+        assert result["error"] == expected
 
     async def test_delete_auth_expired(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=False)):

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -88,6 +88,20 @@ class TestFreezeGuardModule:
     def test_mcp_error_shape_matches_response(self) -> None:
         result = definition_frozen_response()
         assert result == _MCP_ERROR
+
+    def test_raise_if_frozen_is_noop_once_freeze_lifted(self) -> None:
+        with patch(
+            "modulo.core.eval_engine.eval_definition_freeze.EVAL_DEFINITION_WRITE_FROZEN",
+            False,
+        ):
+            raise_if_frozen()
+
+    def test_definition_frozen_response_returns_none_once_freeze_lifted(self) -> None:
+        with patch(
+            "modulo.core.eval_engine.eval_definition_freeze.EVAL_DEFINITION_WRITE_FROZEN",
+            False,
+        ):
+            assert definition_frozen_response() is None
 
 
 # ---------------------------------------------------------------------------
