@@ -57,6 +57,7 @@ frontend/coverage/
 # IDE
 .vscode/
 .idea/
+.obsidian/
 *.swp
 *.swo
 .DS_Store
