@@ -76,7 +76,12 @@ redis:
 (`postgres.enabled`, `redis.enabled` and the former `redisChart.enabled` were
 dead config and have been removed. Postgres is always external.)
 
+<a id="required-values"></a>
+
 ### Required Values
+
+This section is the canonical reference for the chart's mandatory values; other
+files point here instead of restating the failure modes.
 
 The chart **fails at `helm install`** if these values are not supplied (Helm's `required` function enforces this):
 
@@ -84,9 +89,9 @@ The chart **fails at `helm install`** if these values are not supplied (Helm's `
 |---|---|---|
 | `backend.env.SECRET_KEY` | JWT signing key — all API tokens are signed with this | Any string >= 32 bytes. Generate with: `openssl rand -base64 32` |
 | `backend.env.FERNET_KEY` | Connector credential encryption — stored secrets are encrypted at rest with this | URL-safe base64 Fernet key, >= 32 bytes. Generate with: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
-| `backend.env.SAQ_AUTH_USERNAME` / `SAQ_AUTH_PASSWORD` | SAQ system worker web-UI auth. **The saq-system worker fail-closes without them** — it crash-loops, `dispatcher_reconcile` never runs, and backend `/healthz/ready` stays 503 forever (the backend pod never becomes Ready). | Any strings. Generate with: `openssl rand -hex 16` |
+| `backend.env.SAQ_AUTH_USERNAME` / `SAQ_AUTH_PASSWORD` | SAQ system worker web-UI auth. **The saq-system worker fail-closes without them** — it crash-loops, `dispatcher_reconcile` never runs, and backend `/healthz/ready` stays 503 forever (the backend pod never becomes Ready). | **Non-empty strings.** Generate with: `openssl rand -hex 16`. The fail-closed check (`saq_worker._assert_system_auth_configured`) is truthiness-only, so an **empty string is rejected too** and crash-loops saq-system at boot. |
 
-Both keys in the first two rows are validated at runtime by Pydantic (`_MIN_KEY_LEN = 32` in `settings.py`). The chart renders them into the Kubernetes Secret and all workloads (`backend`, `saq-runner`, `saq-system`) consume them from there.
+The two keys in the first two rows are validated at runtime by Pydantic (`_MIN_KEY_LEN = 32` in `settings.py`); the SAQ auth pair is enforced by the worker's fail-closed boot check, not Pydantic. The chart renders all of them into the Kubernetes Secret and all workloads (`backend`, `saq-runner`, `saq-system`) consume them from there.
 
 **Optional but recommended:**
 

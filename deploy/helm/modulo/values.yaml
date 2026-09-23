@@ -83,9 +83,8 @@ postgres:
   # bootstrap_role can create/alter the app role.
   adminUsername: modulo
   # The cross-org system-cron role (LOGIN, BYPASSRLS) used by
-  # MODULO_SYSTEM_DATABASE_URL — dispatcher_reconcile refuses to run
-  # without it, and it gates /healthz/ready. bootstrap_role creates it
-  # with postgres.password (shared, same model as modulo_app).
+  # MODULO_SYSTEM_DATABASE_URL; created by bootstrap_role with the shared
+  # postgres.password. See README "Required Values" for why it is mandatory.
   systemUsername: modulo_system
   # Password reference: use existingSecret or set password (rendered into Secret).
   # Shared between app and admin roles; split if your setup requires it.

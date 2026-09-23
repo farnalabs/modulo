@@ -90,10 +90,9 @@ backend:
     MODULO_MAX_LOCAL_CONCURRENCY: "4"
     SAQ_WORKER_CONCURRENCY: "20"
     SAQ_REDIS_POOL_SIZE: "50"
-    # REQUIRED: the saq-system worker fail-closes without these
-    # (saq_worker._assert_system_auth_configured). Without them saq-system
-    # crash-loops, dispatcher_reconcile never runs, and backend
-    # /healthz/ready stays 503 — the pod never becomes Ready.
+    # REQUIRED: the saq-system worker fail-closes without non-empty values
+    # (saq_worker._assert_system_auth_configured is truthiness-only).
+    # See README "Required Values" for the full failure mode.
     SAQ_AUTH_USERNAME: "admin"
     SAQ_AUTH_PASSWORD: "change-me-saq-web-auth"
 
