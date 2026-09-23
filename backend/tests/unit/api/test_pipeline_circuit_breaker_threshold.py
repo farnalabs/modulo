@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -541,6 +542,64 @@ class TestMcpTools:
 
         assert "error" in result
         db_update.assert_not_awaited()
+
+    async def test_set_circuit_breaker_auth_failure(self) -> None:
+        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+
+        with patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=False)):
+            result = await set_pipeline_circuit_breaker(pipeline_id=str(_PIPELINE_ID), circuit_breaker_threshold=5)
+
+        assert result["error"] == "auth_expired"
+
+    async def test_set_circuit_breaker_invalid_pipeline_id(self) -> None:
+        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+
+        with patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await set_pipeline_circuit_breaker(pipeline_id="not-a-uuid", circuit_breaker_threshold=5)
+
+        assert result["error"] == "invalid_id"
+        assert result["field"] == "pipeline_id"
+
+    async def test_set_circuit_breaker_unparseable_id_without_error_dict(self) -> None:
+        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._parse_uuid_param", return_value=(None, None)),
+        ):
+            result = await set_pipeline_circuit_breaker(pipeline_id="whatever", circuit_breaker_threshold=5)
+
+        assert result == {"error": "invalid_id", "detail": "UUID parse failed"}
+
+    async def test_set_circuit_breaker_migration_required(self) -> None:
+        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch(
+                "modulo.api.mcp_server._pipeline_owner_team_id",
+                new=AsyncMock(side_effect=ProgrammingError("SELECT 1", {}, Exception("missing column"))),
+            ),
+        ):
+            result = await set_pipeline_circuit_breaker(pipeline_id=str(_PIPELINE_ID), circuit_breaker_threshold=5)
+
+        assert result["error"] == "migration_required"
+
+    async def test_set_circuit_breaker_unexpected_error(self) -> None:
+        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch(
+                "modulo.api.mcp_server._pipeline_owner_team_id",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+        ):
+            result = await set_pipeline_circuit_breaker(pipeline_id=str(_PIPELINE_ID), circuit_breaker_threshold=5)
+
+        assert result["error"] == "internal_error"
 
 
 # ---------------------------------------------------------------------------
