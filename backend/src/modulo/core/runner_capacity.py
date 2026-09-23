@@ -1216,7 +1216,14 @@ async def reconcile_runner_dispatch_markers(
         recovery_or, exclusion = _sweep_recoverability_predicate()
 
         try:
-            async with factory() as org_index_session:
+            # FAR-1202: both production factories (``saq_worker._make_session_factory``
+            # and ``cron_helpers._open_factory``) are ``autobegin=False`` (the DI
+            # convention), so the org-index query must run inside an explicit
+            # transaction — a bare ``session.execute`` raises ``InvalidRequestError:
+            # Autobegin is disabled on this Session`` and the sweep fails on every
+            # tick (observed via the advisory /healthz/ready runner_marker_sweep
+            # check). Matches the per-org pass below, which already begins explicitly.
+            async with factory() as org_index_session, org_index_session.begin():
                 org_result = await org_index_session.execute(text("SELECT id FROM organisations"))
                 org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
         except asyncio.CancelledError:
