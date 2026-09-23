@@ -597,6 +597,22 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > Removed the five scenarios from `PINNED_AWAITING_IMPLEMENTATION`.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-23):** implemented agent input/output schema
+> (re)assignment + detachment on `PATCH /api/v1/agents/{id}` and closed the
+> last `@awaiting-implementation` gap under `feat-schemas` — the "Remove schema
+> assignment" scenario in `agents/schema_assignment.feature` (pinned
+> `@awaiting-implementation`, never executed). `AgentUpdate` now exposes
+> `input_schema_id` / `output_schema_id` + version fields; an omitted version
+> resolves to the org's `latest` placeholder version (create parity), an explicit
+> `null` detaches both id and version, a version-only entry is dropped, and a
+> `(id, version)` pair that does not resolve to an org-owned schema version is a
+> 422 (`_resolve_schema_binding` / `_normalise_schema_updates` in
+> `api/routes/agents.py`). The BDD step `remove_input_schema` now drives the real
+> PATCH route and the scenario was removed from `PINNED_AWAITING_IMPLEMENTATION`;
+> unit coverage added (`test_update_agent_reassigns_input_output_schemas`,
+> `test_update_agent_detaches_output_schema`) replacing the old
+> immutable-schema test. `_ORPHANED_BDD_FEATURES` stays empty.
+
 > **Closed this walk (2026-09-23):** closed the four stale pipeline-level BDD
 > drafts tracked as `@awaiting-implementation` gaps under the feature graph —
 > every one was a placeholder whose behaviour was already shipped and covered by

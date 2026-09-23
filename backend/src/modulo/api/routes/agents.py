@@ -43,6 +43,7 @@ from modulo.db.crud.agent_runner_binding import (
     replace_agent_bindings,
 )
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.schema import SchemaVersion
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 from modulo.util import sanitise_log_value as _sanitise_log_value
@@ -121,6 +122,14 @@ class AgentUpdate(BaseModel):
     agent_commands: list[str] | None = Field(default=None)
     # FAR-900: Agent-level default schema_profile.
     schema_profile: SchemaProfile | None = None
+    # Agent input/output schema (re)assignment and detachment. ``None`` detaches
+    # the current binding (both id and version clear together); a UUID
+    # (re)binds. Matching the create semantics, an omitted version resolves to
+    # the org's "latest" placeholder version.
+    input_schema_id: uuid.UUID | None = None
+    input_schema_version: str | None = None
+    output_schema_id: uuid.UUID | None = None
+    output_schema_version: str | None = None
 
 
 class AgentResponse(BaseModel):
@@ -219,6 +228,57 @@ class PromptDiffResponse(BaseModel):
 class PromptRollbackResponse(BaseModel):
     agent: AgentResponse
     message: str
+
+
+async def _resolve_schema_binding(
+    session: AsyncSession,
+    *,
+    schema_id: uuid.UUID | None,
+    version: str | None,
+    org_id: uuid.UUID,
+) -> tuple[uuid.UUID | None, str | None]:
+    """Validate a requested input/output schema ref for an agent PATCH.
+
+    Mirrors the create path: an omitted version resolves to the org's ``latest``
+    placeholder version, and a ``None`` schema id is a detach (carries no
+    version). A non-``None`` id whose ``(id, version)`` pair does not resolve to
+    a schema version owned by *this* org is refused with 422 — the same
+    boundary the create endpoint enforces through its IntegrityError mapping.
+    """
+    if schema_id is None:
+        return None, None
+    resolved_version = version or "latest"
+    result = await session.execute(
+        select(SchemaVersion)
+        .where(
+            SchemaVersion.schema_id == schema_id,
+            SchemaVersion.version == resolved_version,
+            SchemaVersion.organisation_id == org_id,
+        )
+        .limit(1)
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Referenced schema version not found. Verify the IDs are correct.",
+        )
+    return schema_id, resolved_version
+
+
+def _normalise_schema_updates(updates: dict[str, Any]) -> dict[str, Any]:
+    """Drop ``input_schema_version``/``output_schema_version`` sent without an id.
+
+    A version-only entry cannot be bound to any schema (the (id, version, org)
+    FK needs the id), so it is dropped rather than silently applied. Id-only
+    entries are left for the route to resolve to ``latest``.
+    """
+    for id_key, version_key in (
+        ("input_schema_id", "input_schema_version"),
+        ("output_schema_id", "output_schema_version"),
+    ):
+        if id_key not in updates:
+            updates.pop(version_key, None)
+    return updates
 
 
 def _validate_generic_agent(
@@ -484,9 +544,26 @@ async def update_agent_endpoint(
     )
 
     updates = req.model_dump(exclude_unset=True)
+    _normalise_schema_updates(updates)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # Schema (re)assignment / detachment on PATCH (feat-schemas): an
+            # explicit schema-id key is validated and resolved before the write
+            # so a bad ref is a 422, not a 409 FK collision.
+            for id_key, version_key in (
+                ("input_schema_id", "input_schema_version"),
+                ("output_schema_id", "output_schema_version"),
+            ):
+                if id_key in updates:
+                    schema_id, resolved_version = await _resolve_schema_binding(
+                        session,
+                        schema_id=updates[id_key],
+                        version=updates.get(version_key),
+                        org_id=principal.organisation_id,
+                    )
+                    updates[id_key] = schema_id
+                    updates[version_key] = resolved_version
             updated = await update_agent(session, agent_id, updates)
             if updated is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)

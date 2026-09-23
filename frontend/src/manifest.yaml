@@ -5064,6 +5064,7 @@ features:
             - "[x] Schema versions are created (POST /api/v1/schemas/{id}/versions), listed (GET /api/v1/schemas/{id}/versions), and a version can be published or deprecated; deprecated versions emit graph-validator warnings but do not block existing pipeline runs"
             - "[x] Schema inference from sample data (POST /api/v1/schemas/infer) and from natural language (POST /api/v1/schemas/generate)"
             - "[x] Abstract schemas (abstract_name set) can be bound as input/output without a concrete definition; they act as type constraints satisfied at pipeline publish time"
+            - "[x] Agent input/output schema bindings are (re)assignable and detachable via PATCH /api/v1/agents/{id}: an omitted version resolves to the org's latest placeholder version, an explicit null clears both id and version, a version sent without an id is dropped, and a (id, version) pair that does not resolve to an org-owned schema version is a 422"
             - "[x] Schemas support collection installs (collection_install_id FK) and folder organisation (folder_id FK)"
 
             # Schema profiles (FAR-900)

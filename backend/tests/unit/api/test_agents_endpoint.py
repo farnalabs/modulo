@@ -297,14 +297,14 @@ def test_update_agent_max_input_length(client: TestClient) -> None:
     assert resp.json()["max_input_length"] == 10000
 
 
-def test_update_agent_cannot_change_input_output_schemas(client: TestClient) -> None:
-    """PATCH cannot change input/output schema references after create.
+def test_update_agent_reassigns_input_output_schemas(client: TestClient) -> None:
+    """PATCH reassigns input/output schema references after create.
 
-    ``AgentUpdate`` does not expose ``input_schema_id``/``output_schema_id``
-    (they are set only on create via ``AgentCreate``), so schema fields in a
-    PATCH body are ignored by Pydantic and never reach the CRUD update. The
-    agent's input/output schemas are therefore fixed after create — matching
-    the product-map "schemas are fixed after create (no PATCH support)" item.
+    ``AgentUpdate`` exposes ``input_schema_id``/``output_schema_id`` (plus the
+    matching version fields), so a PATCH can (re)bind an agent to a different
+    schema — closing the product-map "schemas are fixed after create (no PATCH
+    support)" gap. An omitted version resolves to the org's ``latest``
+    placeholder version exactly like create_agent_endpoint does.
     """
     agent = _make_agent()
     new_input = uuid.uuid4()
@@ -323,11 +323,38 @@ def test_update_agent_cannot_change_input_output_schemas(client: TestClient) -> 
             },
         )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["input_schema_id"] == str(_SCHEMA_ID)
-    assert resp.json()["output_schema_id"] == str(_SCHEMA_ID)
     updates = mock_update.call_args[0][2]
-    assert "input_schema_id" not in updates
-    assert "output_schema_id" not in updates
+    assert updates["input_schema_id"] == new_input
+    assert updates["input_schema_version"] == "latest"
+    assert updates["output_schema_id"] == new_output
+    assert updates["output_schema_version"] == "latest"
+
+
+def test_update_agent_detaches_output_schema(client: TestClient) -> None:
+    """PATCH with an explicit null detaches a schema binding (id + version).
+
+    Closing the same product-map gap: ``None`` clears both the id and its
+    version so the (id, version, org) FK stays consistent, and a stray
+    version-only entry is dropped instead of being silently applied.
+    """
+    agent = _make_agent()
+    with (
+        patch(f"{_AGENT_PATCH_PREFIX}get_agent", return_value=agent),
+        patch(f"{_AGENT_PATCH_PREFIX}update_agent", return_value=agent) as mock_update,
+        patch(f"{_AGENT_PATCH_PREFIX}set_rls_org"),
+    ):
+        resp = client.patch(
+            f"/api/v1/agents/{_AGENT_ID}",
+            json={
+                **_UPDATE_BODY,
+                "input_schema_id": None,
+                "input_schema_version": "should-be-dropped",
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    updates = mock_update.call_args[0][2]
+    assert updates["input_schema_id"] is None
+    assert updates["input_schema_version"] is None
 
 
 def test_update_agent_patch_returns_200_and_reflects_update(client: TestClient) -> None:
