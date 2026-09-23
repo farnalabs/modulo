@@ -1548,6 +1548,7 @@ def cron_trigger_with_expression(expression: str, request: pytest.FixtureRequest
     request.node._trigger_active = True
     request.node._cron_expression = expression
 
+
 @when(parsers.parse('I create a cron trigger for pipeline "{pipeline_name}" with expression "{expression}"'))
 def create_cron_trigger(
     pipeline_name: str, expression: str, client, request: pytest.FixtureRequest, patches: list[Any]
