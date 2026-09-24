@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import (
@@ -48,8 +48,9 @@ from modulo.api.team_scope import (
     validate_owner_team_for_create,
 )
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
 from modulo.auth.team_rbac import org_role_level
-from modulo.core.audit_logger import append_audit_event
+from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
     ScopeViolationError,
     agent_granted_connector_types,
@@ -89,10 +90,13 @@ from modulo.db.crud.hitl_gate_guard import (
     denial_http_status,
 )
 from modulo.db.crud.pipeline import (
+    CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
     CIRCUIT_BREAKER_THRESHOLD_MAX,
+    CircuitBreakerThresholdChangeDenied,
     PipelineHasActiveRunsError,
     archive_pipeline,
     check_pipeline_name_available,
+    circuit_breaker_threshold_change_allowed,
     clone_pipeline,
     create_pipeline,
     get_pipeline,
@@ -129,6 +133,9 @@ _CODE_PIPELINE_LIST = "pipeline.list"
 _CODE_ROUTES_PIPELINES = "routes.pipelines"
 _CODE_PIPELINE_GRAPH_UPDATE = "pipeline.graph.update"
 _CODE_PIPELINE_UPDATE = "pipeline.update"
+# FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
+# requires the same org-admin permission as the circuit-breaker reset.
+_CODE_COST_MANAGE = "cost.manage"
 _MSG_SNAPSHOT_NOT_FOUND = "Snapshot not found"
 
 
@@ -183,6 +190,21 @@ def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
     if principal.org_role is None:
         return False
     return org_role_level(principal.org_role) >= _ADMIN_LEVEL
+
+
+def _may_manage_cost(principal: TenantPrincipal) -> bool:
+    """FAR-1184: does the caller hold ``cost.manage`` (raises/clears the breaker)?
+
+    Uses the SAME authority as ``require_permission`` — the ADR 047 registry
+    (``resolve_required``) plus the org-role hierarchy check
+    (``assert_org_role``) — never an ad-hoc role comparison. Fail-closed: a
+    missing/unknown role raises ``PermissionDenied`` and resolves to False.
+    """
+    try:
+        assert_org_role(principal.org_role, resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
+    except PermissionDenied:
+        return False
+    return True
 
 
 async def _set_rls_context(session: AsyncSession, principal: TenantPrincipal) -> None:
@@ -378,6 +400,42 @@ async def _deny_hitl_gate(
     raise HTTPException(
         status_code=denial_http_status(exc.reason_code),
         detail=detail,
+    ) from None
+
+
+async def _deny_threshold_change(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID | None,
+    exc: CircuitBreakerThresholdChangeDenied,
+) -> NoReturn:
+    """FAR-1184: audit a refused threshold change, then raise the 403.
+
+    The denial is raised before the guarded write runs (or inside the
+    mutation transaction, which rolls back), so the
+    ``pipeline.circuit_breaker_threshold_change_denied`` event is written in
+    a FRESH transaction via ``append_audit_event_isolated`` — it must never
+    be lost with the rollback. Failure-isolated: an audit failure is logged
+    and never masks the 403. ``pipeline_id`` is None on create (no row yet).
+    """
+    await append_audit_event_isolated(
+        session,
+        principal,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        event_type=CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
+        payload={
+            "denied": True,
+            "previous_threshold_usd": float(exc.previous) if exc.previous is not None else None,
+            "new_threshold_usd": float(exc.new) if exc.new is not None else None,
+            "changed_by": str(principal.account_id),
+        },
+        log_key="routes.pipelines.circuit_breaker_threshold_change_denial_audit_failed",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=str(exc),
     ) from None
 
 
@@ -2220,6 +2278,18 @@ async def create_pipeline_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     try:
+        # FAR-1184: every surface that can set the threshold runs the ONE
+        # shared check. Create always starts from previous=None ("set where
+        # none exists" — allowed with pipeline.create), so this gate consults
+        # cost.manage but can only refuse if the rule ever tightens; the
+        # refusal path still audits + returns 403 like PATCH.
+        new_threshold = normalize_circuit_breaker_threshold(req.circuit_breaker_threshold)
+        if not circuit_breaker_threshold_change_allowed(
+            None,
+            new_threshold,
+            may_manage_cost=_may_manage_cost(principal),
+        ):
+            raise CircuitBreakerThresholdChangeDenied(previous=None, new=new_threshold)
         async with session.begin():
             await _set_rls_context(session, principal)
             await validate_owner_team_for_create(session, principal, req.owner_team_id)
@@ -2249,6 +2319,8 @@ async def create_pipeline_endpoint(
                 # The model default ({}) applies when omitted; an explicit value
                 # is persisted on the returned ORM row within this transaction.
                 pipeline.retry_policy = req.retry_policy
+    except CircuitBreakerThresholdChangeDenied as exc:
+        await _deny_threshold_change(session, principal=principal, pipeline_id=None, exc=exc)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -2781,10 +2853,33 @@ async def update_pipeline_endpoint(
     updates = req.model_dump(exclude_unset=True)
     has_graph = "graph_json" in updates
     updates.pop("graph_json", None)
+    # FAR-1184: normalise FIRST (Pydantic already validated the value; this
+    # canonicalises to the column's Decimal scale) so the permission
+    # comparison below never sees an unexpected value type — a bad value
+    # raises here, BEFORE any denial/permission logic, and never reaches
+    # `new <= previous`.
+    threshold_change = "circuit_breaker_threshold" in updates
+    new_threshold: Decimal | None = (
+        normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]) if threshold_change else None
+    )
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
             current = await _get_pipeline_or_404(session, pipeline_id)
+            # FAR-1184: raising or clearing the spend limit requires
+            # cost.manage (the same permission as the breaker reset). Lowering
+            # or setting where none exists keeps pipeline.update. Raised
+            # BEFORE any mutation; the denial audits + 403s via the except
+            # clause below.
+            if threshold_change and not circuit_breaker_threshold_change_allowed(
+                current.circuit_breaker_threshold,
+                new_threshold,
+                may_manage_cost=_may_manage_cost(principal),
+            ):
+                raise CircuitBreakerThresholdChangeDenied(
+                    previous=current.circuit_breaker_threshold,
+                    new=new_threshold,
+                )
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             await _assert_team_transition_allowed(session, principal, current, updates)
             # FAR-1163: a PATCH may set only one of default/max — validate the
@@ -2843,6 +2938,10 @@ async def update_pipeline_endpoint(
             pipeline_id=pipeline_id,
             exc=exc,
         )
+    except CircuitBreakerThresholdChangeDenied as exc:
+        # FAR-1184: the mutation transaction has rolled back (the denial was
+        # raised inside it) — audit the refusal fresh, then 403.
+        await _deny_threshold_change(session, principal=principal, pipeline_id=pipeline_id, exc=exc)
     except PipelineHasActiveRunsError as exc:
         _raise_active_runs_conflict(exc)
     except ProgrammingError as exc:

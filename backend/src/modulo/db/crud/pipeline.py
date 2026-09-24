@@ -92,6 +92,9 @@ _OWNER_CHANGED_EVENTS: dict[str, str] = {
     "business_owner_id": BUSINESS_OWNER_CHANGED_EVENT,
     "reliability_owner_id": RELIABILITY_OWNER_CHANGED_EVENT,
 }
+# FAR-1184: audit event written when a raise/clear of the threshold is refused
+# because the caller lacks ``cost.manage``.
+CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT = "pipeline.circuit_breaker_threshold_change_denied"
 _MSG_THRESHOLD_NOT_A_NUMBER = "circuit_breaker_threshold must be a number (USD) or null"
 
 
@@ -120,6 +123,71 @@ def normalize_circuit_breaker_threshold(value: Decimal | float | str | None) -> 
     if quantized > CIRCUIT_BREAKER_THRESHOLD_MAX:
         raise ValueError(f"circuit_breaker_threshold must be at most {CIRCUIT_BREAKER_THRESHOLD_MAX} (USD)")
     return quantized
+
+
+class CircuitBreakerThresholdChangeDenied(Exception):  # noqa: N818 — denial-vocabulary name (cf. PermissionDenied)
+    """FAR-1184: a raise/clear of ``circuit_breaker_threshold`` without ``cost.manage``.
+
+    Raised by the REST and MCP surfaces only AFTER
+    ``normalize_circuit_breaker_threshold`` has validated the new value and
+    ``circuit_breaker_threshold_change_allowed`` has refused the change. No
+    state change has occurred when this is raised (the guarded write has not
+    run / its transaction has rolled back). Carries the (previous, new) pair
+    so the surface can write the
+    ``pipeline.circuit_breaker_threshold_change_denied`` audit event before
+    returning its 403 (REST) / permission-denied result (MCP).
+    """
+
+    def __init__(self, *, previous: Decimal | None, new: Decimal | None) -> None:
+        self.previous = previous
+        self.new = new
+        super().__init__(
+            "Raising or clearing circuit_breaker_threshold requires the 'cost.manage' permission (org admin)"
+        )
+
+
+def circuit_breaker_threshold_change_allowed(
+    previous: Decimal | None,
+    new: Decimal | None,
+    *,
+    may_manage_cost: bool,
+) -> bool:
+    """FAR-1184: may this principal apply a ``circuit_breaker_threshold`` change?
+
+    ONE shared rule, applied on every surface that can set the threshold
+    (REST create + ``PATCH /pipelines/{id}``, the MCP ``create_pipeline`` +
+    ``set_pipeline_circuit_breaker`` tools, and ``modulo apply`` — which is
+    refused server-side by the REST gate and surfaces the 403 as an apply
+    failure):
+
+    * ``may_manage_cost`` (caller holds ``cost.manage``) — always allowed;
+    * setting a threshold where none exists, or lowering it — allowed with
+      ``pipeline.update`` alone (FAR-1184 rule 1);
+    * raising it, or clearing an EXISTING threshold (``new is None`` with
+      ``previous`` set) — refused without ``cost.manage`` (rule 2);
+    * an unchanged value — including create-without-a-threshold
+      (``None -> None``) — is a no-op, never a "clear".
+
+    Callers MUST pass values already through
+    ``normalize_circuit_breaker_threshold``: invalid input raises there,
+    BEFORE this check, so an unexpected type (e.g. a string) never reaches
+    the comparison — the denial path cannot be bypassed by a bad value type.
+    Fail-closed: a comparison against an unexpected stored type denies.
+    """
+    if may_manage_cost:
+        return True
+    if new is None:
+        # Clearing an EXISTING threshold needs cost.manage; nothing to clear
+        # (previous also None) is a no-op, not a clear.
+        return previous is None
+    if previous is None:
+        # Setting where none exists — allowed with pipeline.update.
+        return True
+    try:
+        return bool(new <= previous)
+    except TypeError:
+        # Fail closed: an unexpected stored type can never authorise a raise.
+        return False
 
 
 def _threshold_as_float(value: Decimal | None) -> float | None:
