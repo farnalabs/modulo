@@ -628,7 +628,7 @@ def _call_search_library(request, *, search: str | None = None, deny_node_tools:
     """Drive the REAL ``search_library`` tool with the DB/list seams patched.
 
     The real ``_check_agent_tool_scope`` gate runs for every call: a role at or
-    above the ``library.search`` viewer floor browses, and a node-level
+    above the ``resource.read_only`` viewer floor browses, and a node-level
     ``allowed_tools`` scope that excludes ``search_library`` (``deny_node_tools``)
     is denied with the pinned ``insufficient_scope`` error shape. Only the auth
     re-validation, ``list_primitives`` read and ``_session`` seams are patched.
@@ -671,7 +671,7 @@ def _call_search_library(request, *, search: str | None = None, deny_node_tools:
     return result
 
 
-@given("the organisation has {count:d} local primitives")
+@given(parsers.parse("the organisation has {count:d} local primitives"))
 def org_has_local_primitives(count: int, request):
     request.node._local_primitive_count = count
     request.node._primitives = [_make_library_primitive(f"Local Primitive {i}", index=i) for i in range(count)]

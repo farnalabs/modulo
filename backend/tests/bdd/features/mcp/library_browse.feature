@@ -5,8 +5,8 @@ Feature: MCP Library Browse
 
   The MCP server speaks JSON-RPC over the StreamableHTTP transport at POST /mcp —
   the legacy /mcp/tools/call HTTP surface no longer exists. The real shipped
-  library-browse surface is the `search_library` tool (read-only, mapped to the
-  `library.search` viewer permission in the centralized scope gate). These
+  library-browse surface is the `search_library` tool (read-only, pinned at the
+  `resource.read_only` viewer floor in the centralized scope gate). These
   scenarios call the REAL `search_library` tool handler directly with the request
   ContextVars hydrated by hand (the `trigger.feature` / `review_hitl.feature`
   re-anchor pattern), network-free and DB-free, with only the auth re-validation

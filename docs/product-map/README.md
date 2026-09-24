@@ -680,12 +680,12 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `capability_scope.allowed_tools` that excludes the tool is denied the
 > pinned `insufficient_scope` error by the REAL `_check_agent_tool_scope`
 > chokepoint before any DB read. Product change closing the wire gap the
-> scenarios describe: `search_library` now maps to the dedicated
-> `library.search` viewer permission in `core/mcp/scope_validator.py` (was
-> the generic `resource.read_only` fallback) and calls the shared
-> handler-level scope gate (mirroring `copy_library_primitive` @
-> `library.copy`), so the FAR-436 node-level `allowed_tools` narrowing can
-> restrict the browse surface. Removed the four scenarios from
+> scenarios describe: `search_library` (read-only allowlist, pinned at the
+> `resource.read_only` viewer floor in `core/mcp/scope_validator.py`) now
+> calls the shared handler-level scope gate (mirroring
+> `copy_library_primitive` @ `library.copy`), so the FAR-436 node-level
+> `allowed_tools` narrowing can restrict the browse surface. Removed the four
+> scenarios from
 > `PINNED_AWAITING_IMPLEMENTATION`; `_ORPHANED_BDD_FEATURES` stays empty and
 > no `@awaiting-implementation` scenarios remain under `feat-mcp`.
 

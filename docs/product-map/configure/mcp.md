@@ -126,8 +126,9 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
       payload stamps
 - [x] MCP library browse (2026-09-25): the `search_library` tool is the
       read-only library-browse surface (browse + text search + cursor
-      pagination over org / Native / community primitives). It maps to the
-      dedicated `library.search` viewer permission in the centralized scope
+      pagination over org / Native / community primitives). It stays on the
+      read-only allowlist (pinned at the `resource.read_only` viewer floor) in
+      the centralized scope
       gate (`core/mcp/scope_validator.py`) and — following the
       `copy_library_primitive` (library.copy @ runner) precedent — is now
       gated at the handler by the real `_check_agent_tool_scope` chokepoint:
@@ -171,9 +172,9 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   `capability_scope.allowed_tools` that excludes `search_library` is denied the
   pinned `insufficient_scope` error by the real `_check_agent_tool_scope`
   chokepoint before any DB read). Product change closing the wire gap the
-  scenarios describe: `search_library` moved from the generic
-  `resource.read_only` fallback onto the dedicated `library.search` permission
-  (viewer) in `core/mcp/scope_validator.py` and now calls the shared
+  scenarios describe: `search_library` stays on the read-only allowlist
+  (`resource.read_only`, viewer) in `core/mcp/scope_validator.py` and now
+  calls the shared
   `_check_agent_tool_scope` handler gate (mirroring `copy_library_primitive`),
   so the library-browse surface is explicitly scoped and the FAR-436 node-level
   allowed_tools narrowing can restrict it. Removed the four scenarios from
