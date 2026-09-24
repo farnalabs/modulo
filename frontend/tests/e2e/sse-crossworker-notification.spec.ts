@@ -12,8 +12,8 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
  * wired before the first event.
  */
 test.describe('SSE notification delivery', { tag: '@regression' }, () => {
-  test('an open page updates the notification badge from an SSE event without reloading', { tag: '@regression' }, async ({ page }) => {
-    await loginAsAdmin(page)
+  test('an open page updates the notification badge from an SSE event without reloading', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
 
     // Stateful unread count: 1 until the SSE event "creates" a notification.
     let unreadCount = 1
