@@ -6,6 +6,18 @@ vi.mock('@/lib/api/client', () => ({
   getAuthHeaders: vi.fn(() => ({ Authorization: 'Bearer test-token' })),
 }))
 
+/**
+ * Deterministically pin the reconnect half-jitter source. The composable draws
+ * its jitter fraction from crypto.getRandomValues (S2245); make it return
+ * `fraction` for the first 32-bit word so backoff timing is exact.
+ */
+function mockRandomFraction(fraction: number): void {
+  vi.spyOn(crypto, 'getRandomValues').mockImplementation(((array: Uint32Array) => {
+    array[0] = Math.floor(fraction * 0x100000000)
+    return array
+  }) as typeof crypto.getRandomValues)
+}
+
 let pushEvent: (eventType: string, data: Record<string, unknown>) => void
 let pushRawSse: (raw: string) => void
 let endStream: () => void
@@ -163,7 +175,7 @@ describe('eventBus', () => {
     // Regression for the old bug: the 10-attempt cap permanently killed the
     // stream during long outages. A retryable failure must NEVER give up.
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500, body: null } as unknown as Response)
     const { eventBus } = await import('../composables/useEventStream')
     eventBus.subscribe('run', vi.fn())
@@ -224,7 +236,7 @@ describe('classified reconnect (FAR-250)', () => {
 
   it.each([401, 403, 429])('stops retrying on %i and surfaces the reconnect banner', async (status: number) => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(fetch).mockResolvedValue({ ok: false, status, body: null } as unknown as Response)
 
@@ -250,7 +262,7 @@ describe('classified reconnect (FAR-250)', () => {
 
   it('reconnect() restarts the stream after a 4xx stop with a fresh token', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401, body: null } as unknown as Response)
 
@@ -273,7 +285,7 @@ describe('classified reconnect (FAR-250)', () => {
 
   it('keeps retrying after network errors forever', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     vi.mocked(fetch).mockRejectedValue(new TypeError('fetch failed'))
 
     const { eventBus } = await import('../composables/useEventStream')
@@ -287,7 +299,7 @@ describe('classified reconnect (FAR-250)', () => {
 
   it('uses half-jitter backoff: first retry lands at exp/2 when random()=0', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500, body: null } as unknown as Response)
 
     const { eventBus } = await import('../composables/useEventStream')
@@ -303,7 +315,7 @@ describe('classified reconnect (FAR-250)', () => {
 
   it('uses half-jitter backoff: first retry waits the full exp when random()=1', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0.9999999)
+    mockRandomFraction(0.9999999)
     vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500, body: null } as unknown as Response)
 
     const { eventBus } = await import('../composables/useEventStream')
@@ -319,7 +331,7 @@ describe('classified reconnect (FAR-250)', () => {
 
   it('fires the debounced onReconnect backfill exactly once after a successful reconnect', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
 
     const { eventBus } = await import('../composables/useEventStream')
     const backfill = vi.fn()
@@ -533,7 +545,7 @@ describe('reconnect backfill + reset (FAR-250 coverage)', () => {
 
   it('resets the backfill debounce when a second reconnect lands inside the window', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     const { eventBus } = await import('../composables/useEventStream')
     const backfill = vi.fn()
     const unsub = eventBus.subscribe('run', vi.fn())
@@ -553,7 +565,7 @@ describe('reconnect backfill + reset (FAR-250 coverage)', () => {
 
   it('logs and swallows an error thrown by a reconnect backfill subscriber', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { eventBus } = await import('../composables/useEventStream')
     const unsub = eventBus.subscribe('run', vi.fn())
@@ -573,7 +585,7 @@ describe('reconnect backfill + reset (FAR-250 coverage)', () => {
 
   it('retries when fetch rejects with an AbortError (zombie/dead stream)', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     const abortErr = new Error('aborted')
     abortErr.name = 'AbortError'
     vi.mocked(fetch).mockRejectedValue(abortErr)
@@ -589,7 +601,7 @@ describe('reconnect backfill + reset (FAR-250 coverage)', () => {
 
   it('does not schedule a reconnect when an abort lands after an explicit disconnect', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     const abortErr = new Error('aborted')
     abortErr.name = 'AbortError'
     vi.mocked(fetch).mockRejectedValue(abortErr)
@@ -620,7 +632,7 @@ describe('reconnect backfill + reset (FAR-250 coverage)', () => {
 
   it('disconnect() clears a pending backfill timer', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     const { eventBus } = await import('../composables/useEventStream')
     const backfill = vi.fn()
     const unsub = eventBus.subscribe('run', vi.fn())
@@ -646,7 +658,7 @@ describe('reconnect backfill + reset (FAR-250 coverage)', () => {
 
   it('resetEventStreamState() clears handlers, the backfill timer, and connection state', async () => {
     vi.useFakeTimers()
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomFraction(0)
     const { eventBus, resetEventStreamState } = await import('../composables/useEventStream')
     const unsub = eventBus.subscribe('run', vi.fn())
     eventBus.onReconnect(vi.fn())

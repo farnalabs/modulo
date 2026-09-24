@@ -59,6 +59,18 @@ function classifyHttpFailure(status: number | undefined): 'auth' | 'retry' {
   return 'retry'
 }
 
+/**
+ * CSPRNG-backed fraction in [0, 1) used for reconnect half-jitter. Sourced
+ * from crypto.getRandomValues, not Math.random (Sonar S2245) — every
+ * supported browser exposes WebCrypto, so there is deliberately no PRNG
+ * fallback (same convention as utils/password.ts).
+ */
+function secureRandomFraction(): number {
+  const buf = new Uint32Array(1)
+  crypto.getRandomValues(buf)
+  return buf[0] / 0x100000000
+}
+
 function scheduleReconnect(kind: 'auth' | 'retry'): void {
   connected.value = false
   if (kind === 'auth') {
@@ -72,7 +84,7 @@ function scheduleReconnect(kind: 'auth' | 'retry'): void {
   // Capped exponential backoff with half-jitter; NEVER gives up (the old
   // 10-attempt cap was the bug — long outages must self-heal).
   const exp = Math.min(BACKOFF_BASE_MS * 2 ** Math.min(reconnectAttempts - 1, 10), BACKOFF_MAX_MS)
-  const delay = exp / 2 + Math.random() * (exp / 2)
+  const delay = exp / 2 + secureRandomFraction() * (exp / 2)
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     doConnect()
