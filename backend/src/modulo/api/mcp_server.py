@@ -159,7 +159,7 @@ from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.account import AccountNotFoundError
 from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied, HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
-from modulo.db.crud.pipeline import get_pipeline
+from modulo.db.crud.pipeline import CircuitBreakerThresholdChangeDenied, get_pipeline
 from modulo.db.crud.run import WorkItemRefsRequiredError, get_run
 from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.crud.schema import create_schema as db_create_schema
@@ -436,6 +436,28 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
         key_scope=_ctx_key_scope.get(None),
         auth_type=_ctx_auth_type.get(None),
     )
+
+
+# FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
+# requires the same org-admin permission as the circuit-breaker reset.
+_CODE_COST_MANAGE = "cost.manage"  # nosec B105 — permission scope name, not a credential
+
+
+def _ctx_may_manage_cost() -> bool:
+    """FAR-1184: True when the request's role holds ``cost.manage`` (fail-closed).
+
+    Uses the SAME authority as every other permission check — the ADR 047
+    registry (``resolve_required``) plus the org-role hierarchy check
+    (``assert_org_role``). A missing/unknown role raises ``PermissionDenied``
+    and resolves to False, never True.
+    """
+    from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
+
+    try:
+        assert_org_role(_ctx_role_val(), resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
+    except PermissionDenied:
+        return False
+    return True
 
 
 def _team_scoped_key_mismatch(owner_team_id: uuid.UUID | None) -> bool:
@@ -1765,10 +1787,27 @@ async def create_pipeline(
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("create_pipeline")
-        from modulo.db.crud.pipeline import create_pipeline
+        from modulo.db.crud.pipeline import (
+            circuit_breaker_threshold_change_allowed,
+            create_pipeline,
+            normalize_circuit_breaker_threshold,
+        )
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
+
+        # FAR-1184: every surface that can set the threshold runs the ONE
+        # shared check. Create always starts from previous=None ("set where
+        # none exists"), so this consults cost.manage but can only refuse if
+        # the rule ever tightens; the refusal still audits + returns a
+        # permission-denied result like set_pipeline_circuit_breaker.
+        new_threshold = normalize_circuit_breaker_threshold(circuit_breaker_threshold)
+        if not circuit_breaker_threshold_change_allowed(
+            None,
+            new_threshold,
+            may_manage_cost=_ctx_may_manage_cost(),
+        ):
+            raise CircuitBreakerThresholdChangeDenied(previous=None, new=new_threshold)
 
         async with _session(org_id) as s:
             pipeline = await create_pipeline(
@@ -1801,6 +1840,13 @@ async def create_pipeline(
             "business_owner_id": _owner_id_str(pipeline.business_owner_id),
             "reliability_owner_id": _owner_id_str(pipeline.reliability_owner_id),
             "created_at": pipeline.created_at.isoformat() if pipeline.created_at else None,
+        }
+    except CircuitBreakerThresholdChangeDenied as exc:
+        await _append_mcp_threshold_denial_audit(org_id, None, exc)
+        return {
+            "error": "permission_denied",
+            "field": "circuit_breaker_threshold",
+            "detail": str(exc),
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -1845,13 +1891,60 @@ def _owner_id_str(value: Any) -> str | None:
     return str(value) if isinstance(value, uuid.UUID | str) else None
 
 
+async def _append_mcp_threshold_denial_audit(
+    org_id: uuid.UUID,
+    resource_id: uuid.UUID | None,
+    exc: CircuitBreakerThresholdChangeDenied,
+) -> None:
+    """FAR-1184: append the threshold-change-denied audit event for an MCP denial.
+
+    Runs in a fresh ``_session`` after the guarded write's transaction rolled
+    back (or before it ever ran), so the refusal is never lost. Best-effort:
+    an audit failure is logged but never masks the permission-denied result.
+    ``resource_id`` is None on ``create_pipeline`` (no row exists yet).
+    """
+    try:
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.db.crud.pipeline import CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT
+
+        async with _session(org_id) as s:
+            try:
+                actor_user_id = _ctx_user_id_val()
+            except McpAuthContextError:
+                actor_user_id = None
+            await append_audit_event(
+                s,
+                org_id=org_id,
+                event_type=CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
+                actor_user_id=actor_user_id,
+                resource_type="pipeline",
+                resource_id=resource_id,
+                payload_json={
+                    "denied": True,
+                    "previous_threshold_usd": float(exc.previous) if exc.previous is not None else None,
+                    "new_threshold_usd": float(exc.new) if exc.new is not None else None,
+                    "changed_by": str(actor_user_id) if actor_user_id is not None else None,
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "mcp.circuit_breaker_threshold_change_denial_audit_failed",
+            extra={"org_id": str(org_id)},
+        )
+
+
 @mcp.tool(
     description="Set or clear a pipeline's monthly spend circuit breaker (USD). "
     "circuit_breaker_threshold > 0 enables it: when the pipeline's calendar-month spend plus a run's "
     "cost would exceed the threshold, the run is rejected, all of the pipeline's triggers pause and "
     "admins are notified; an org admin resets it via POST "
     "/api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. Pass null to disable. "
-    "Every change is audited (pipeline.circuit_breaker_threshold_changed). Available on every plan."
+    "Lowering the threshold or setting the first one requires pipeline.update; RAISING it or "
+    "CLEARING an existing one requires the cost.manage (org admin) permission and is refused "
+    "otherwise (FAR-1184). Every change is audited (pipeline.circuit_breaker_threshold_changed); "
+    "refusals are audited as pipeline.circuit_breaker_threshold_change_denied. Available on every plan."
 )
 @_RETRY_DB
 async def set_pipeline_circuit_breaker(
@@ -1872,14 +1965,37 @@ async def set_pipeline_circuit_breaker(
         if threshold_error is not None:
             return threshold_error
 
-        from modulo.db.crud.pipeline import update_pipeline
+        from modulo.db.crud.pipeline import (
+            circuit_breaker_threshold_change_allowed,
+            get_pipeline,
+            normalize_circuit_breaker_threshold,
+            update_pipeline,
+        )
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
+        # FAR-1184: validated above; normalise to the column's Decimal scale
+        # BEFORE the permission comparison so an unexpected type never
+        # reaches `new <= previous`.
+        new_threshold = normalize_circuit_breaker_threshold(circuit_breaker_threshold)
         async with _session(org_id) as s:
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", pipeline_id)
+            current = await get_pipeline(s, pid)
+            # FAR-1184: raising/clearing the spend limit requires cost.manage;
+            # lowering or setting where none exists keeps pipeline.update.
+            # Raised BEFORE the mutation; the denial audits fresh + returns a
+            # permission-denied result via the except clause below.
+            if current is not None and not circuit_breaker_threshold_change_allowed(
+                current.circuit_breaker_threshold,
+                new_threshold,
+                may_manage_cost=_ctx_may_manage_cost(),
+            ):
+                raise CircuitBreakerThresholdChangeDenied(
+                    previous=current.circuit_breaker_threshold,
+                    new=new_threshold,
+                )
             pipeline = await update_pipeline(
                 s,
                 pid,
@@ -1895,6 +2011,13 @@ async def set_pipeline_circuit_breaker(
                 "circuit_breaker_threshold": _threshold_float(pipeline.circuit_breaker_threshold),
                 "circuit_breaker_tripped": bool(pipeline.circuit_breaker_tripped),
             }
+    except CircuitBreakerThresholdChangeDenied as exc:
+        await _append_mcp_threshold_denial_audit(org_id, pid, exc)
+        return {
+            "error": "permission_denied",
+            "field": "circuit_breaker_threshold",
+            "detail": str(exc),
+        }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:

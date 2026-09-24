@@ -145,3 +145,54 @@ class TestExecution:
         _run(_config(None), dry_run=False)
         payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
         assert "circuit_breaker_threshold" not in payload
+
+
+class TestServerSidePermissionRefusal:
+    """FAR-1184: apply surfaces the REST 403 (raise/clear needs cost.manage).
+
+    ``modulo apply`` authenticates as an API key and sends PATCH/POST to the
+    REST API — the shared raise/clear gate runs SERVER-SIDE, and the CLI
+    reports the 403 as a failed entity with the server's detail. The CLI
+    cannot determine ``cost.manage`` locally (it has only the key, no
+    permission map), so it fails closed by trusting the server's verdict.
+    """
+
+    _DENIAL_DETAIL = "Raising or clearing circuit_breaker_threshold requires the 'cost.manage' permission (org admin)"
+
+    @respx.mock
+    def test_update_raise_refused_by_server_fails_entity(self) -> None:
+        routes = _mock_current_with_pipelines([_existing(50.0)])
+        routes["pipeline_patch"].mock(return_value=httpx.Response(403, json={"detail": self._DENIAL_DETAIL}))
+
+        report = _run(_config("circuit_breaker_threshold: 75.5"), dry_run=False)
+
+        assert not _names(report, "updated")
+        failed = [e for e in report["failed"] if e["kind"] == "pipeline"]
+        assert failed
+        assert failed[0]["name"] == "sample"
+        assert "403" in failed[0]["error"]
+        assert "cost.manage" in failed[0]["error"]
+
+    @respx.mock
+    def test_update_clear_refused_by_server_fails_entity(self) -> None:
+        routes = _mock_current_with_pipelines([_existing(50.0)])
+        routes["pipeline_patch"].mock(return_value=httpx.Response(403, json={"detail": self._DENIAL_DETAIL}))
+
+        report = _run(_config("circuit_breaker_threshold: null"), dry_run=False)
+
+        assert not _names(report, "updated")
+        failed = [e for e in report["failed"] if e["kind"] == "pipeline"]
+        assert failed
+        assert failed[0]["name"] == "sample"
+        assert "cost.manage" in failed[0]["error"]
+
+    @respx.mock
+    def test_update_lower_still_applies(self) -> None:
+        # A lowering change gets a 200 from the server (operator-key path) —
+        # apply must record it as updated, not failed.
+        _mock_current_with_pipelines([_existing(75.5)])
+
+        report = _run(_config("circuit_breaker_threshold: 50"), dry_run=False)
+
+        assert _names(report, "updated") == ["sample"]
+        assert not report["failed"]
