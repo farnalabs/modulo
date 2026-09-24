@@ -668,6 +668,27 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `review_hitl.feature` citation + behaviour line to `feat-mcp`
 > (`configure/mcp.md`, manifest registry). `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-25):** closed the last pinned MCP legacy-
+> `/mcp/tools/call` draft under `feat-mcp` (`configure/mcp.md`). The four
+> `mcp/library_browse.feature` scenarios previously targeted the dead HTTP
+> surface (`@awaiting-implementation`, never ran); following the
+> `trigger.feature` / `review_hitl.feature` re-anchor pattern, they now drive
+> the REAL `search_library` tool handler directly (request ContextVars
+> hydrated by hand) — the list surface (`id` / `name` / `type` wire items),
+> the text-search passthrough reaching the real `list_primitives` seam, the
+> read-only posture, and the scope-gate denial: a node-level
+> `capability_scope.allowed_tools` that excludes the tool is denied the
+> pinned `insufficient_scope` error by the REAL `_check_agent_tool_scope`
+> chokepoint before any DB read. Product change closing the wire gap the
+> scenarios describe: `search_library` (read-only allowlist, pinned at the
+> `resource.read_only` viewer floor in `core/mcp/scope_validator.py`) now
+> calls the shared handler-level scope gate (mirroring
+> `copy_library_primitive` @ `library.copy`), so the FAR-436 node-level
+> `allowed_tools` narrowing can restrict the browse surface. Removed the four
+> scenarios from
+> `PINNED_AWAITING_IMPLEMENTATION`; `_ORPHANED_BDD_FEATURES` stays empty and
+> no `@awaiting-implementation` scenarios remain under `feat-mcp`.
+
 > **Closed this walk (2026-09-24):** closed `feat-runs`'s deferred run
 > recovery/retry BDD drafts (`build/runs.md` error-state coverage). The
 > run-level `/resume` / `/retry` endpoints those scenarios targeted never
