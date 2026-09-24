@@ -35,6 +35,7 @@ from modulo.core.notifier import (
     EVENT_HITL_APPROVE_SWEEP,
     EVENT_HITL_AWAITING,
     EVENT_HITL_OVERDUE,
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED,
     EVENT_RUN_FAILED,
     EVENT_RUN_STALLED,
     EVENT_SYSTEM_ANNOUNCEMENT,
@@ -167,6 +168,15 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
+    # FAR-1183 — org cost-controls auto-stop ("Auto-stop on budget exceeded") tripped.
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "triggers.auto_paused",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: {
         "level": "error",
         "scope": "admin",
@@ -208,6 +218,7 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_FEEDBACK_PENDING: "Feedback awaiting review",
     EVENT_SYSTEM_ANNOUNCEMENT: "System announcement",
     EVENT_TRIGGER_DEACTIVATED: "Ongoing trigger auto-deactivated — {pipeline_name}",
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED: "Triggers paused — budget exceeded",
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: "Guardrail enforcement gap — {guardrail}",
     EVENT_GUARDRAIL_KILL_SWITCH: "Guardrails downgraded to observe (kill-switch enabled)",
     EVENT_GUARDRAIL_UNEXPECTED_SKIP: "Guardrail skipped unexpectedly — {guardrail}",
@@ -235,6 +246,10 @@ _BODY_TEMPLATES: dict[str, str] = {
     EVENT_TRIGGER_DEACTIVATED: (
         'Ongoing trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery runs '
         "(threshold {threshold})."
+    ),
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED: (
+        "All pipeline triggers were auto-paused because {reason_label}: spend reached {spend_usd} USD "
+        "(limit {limit_usd} USD). In-flight runs are finishing; resume triggers from the admin org settings."
     ),
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: (
         'Guardrail "{guardrail}" could not be evaluated ({reason}) and is not enforcing. See the run for details.'
@@ -264,6 +279,7 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_FEEDBACK_PENDING: "/feedback/inbox",
     EVENT_SYSTEM_ANNOUNCEMENT: None,
     EVENT_TRIGGER_DEACTIVATED: None,
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED: None,
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: _RUN_DETAIL_URL,
     EVENT_GUARDRAIL_KILL_SWITCH: None,
     EVENT_GUARDRAIL_UNEXPECTED_SKIP: _RUN_DETAIL_URL,

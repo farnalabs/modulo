@@ -531,7 +531,7 @@ export default {
       "circuit_breaker": "Circuit Breaker",
       "automatically_stop_agent_runs_when_budget_exceeded": "Automatically stop agent runs when budget is exceeded",
       "auto_stop_on_budget_exceeded": "Auto-stop on budget exceeded",
-      "when_enabled_all_agent_runs_paused": "When enabled, all agent runs will be paused once the budget is exceeded",
+      "when_enabled_all_agent_runs_paused": "When enabled, if a run pushes the org over its daily spend limit or spend ceiling, all pipeline triggers are paused automatically (in-flight runs finish). Resuming is a manual admin action.",
       "billing_settings": "Billing Settings",
       "configure_currency_and_billing_period": "Configure currency and billing period for cost tracking",
       "currency": "Currency",
