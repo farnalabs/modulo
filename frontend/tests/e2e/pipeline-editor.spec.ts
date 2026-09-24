@@ -29,12 +29,12 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
   test.setTimeout(90_000)
 
   test.beforeEach(async ({ page }) => {
-    // The Remy floating panel (rendered where dev-mode is on) opens by default
+    // The Assistant floating panel (rendered where dev-mode is on) opens by default
     // and its fixed-position overlay intercepts clicks on interactive page
     // content. Force the panel closed before the app boots. Mirrors
     // json-viewer.spec.ts / view-modes-admin.spec.ts.
     await page.addInitScript(() => {
-      localStorage.setItem('remy-panel-state', 'closed')
+      localStorage.setItem('assistant-panel-state', 'closed')
     })
   })
 

@@ -36,14 +36,14 @@ const sampleViews = {
 test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
   test.beforeEach(async ({ page, env }) => {
     test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
-    // The Remy floating panel (rendered on staging where dev-mode is on) opens
+    // The Assistant floating panel (rendered on staging where dev-mode is on) opens
     // by default and its fixed-position overlay intercepts clicks on the
     // header's Create View button, timing out locator.click() with
     // "subtree intercepts pointer events". Force the panel closed before the
-    // app boots so it can never cover page controls. The small Remy FAB (shown
+    // app boots so it can never cover page controls. The small Assistant FAB (shown
     // only when the panel is closed) sits bottom-right and never overlaps.
     await page.addInitScript(() => {
-      localStorage.setItem('remy-panel-state', 'closed')
+      localStorage.setItem('assistant-panel-state', 'closed')
     })
   })
 

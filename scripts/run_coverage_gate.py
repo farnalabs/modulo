@@ -318,6 +318,15 @@ def _js_strip_line_comment(line: str) -> str:
     return re.sub(r"//[^\n]*$", "", line).strip()
 
 
+# A TypeScript type-only ``import``/``export`` statement.  These are erased by
+# the compiler (they emit no runtime code), so v8 never instruments them.
+# Counting them charged every changed line of a type-only barrel file
+# (``frontend/src/types/index.ts``) as 0% unmeasured — the file never appears
+# in the LCOV report at all, so it could never clear the gate.  This mirrors
+# the Python side's exclusion of non-executable (docstring/comment) lines.
+_TS_TYPE_ONLY_RE = re.compile(r"^\s*(?:import|export)\s+type\b")
+
+
 def _is_executable_js_line(line: str) -> bool:
     """Return True if a single JS/TS line carries executable code.
 
@@ -327,6 +336,10 @@ def _is_executable_js_line(line: str) -> bool:
     :func:`_iter_executable_js_lines`, which tracks block-comment state
     across the added lines; this single-line predicate treats such a line as
     non-executable unless it carries code before the ``/*``.
+
+    TypeScript type-only ``import type`` / ``export type`` statements are also
+    non-executable: the compiler erases them, so v8 never instruments them
+    (see :data:`_TS_TYPE_ONLY_RE`).
 
     This is a heuristic — it does not handle every edge case (e.g. ``//``
     inside a string literal), but it is correct for the vast majority of
@@ -340,7 +353,10 @@ def _is_executable_js_line(line: str) -> bool:
     if start != -1:
         end = stripped.find("*/", start + 2)
         stripped = stripped[:start] + stripped[end + 2 :] if end != -1 else stripped[:start]
-    return bool(_js_strip_line_comment(stripped))
+    stripped = _js_strip_line_comment(stripped)
+    if _TS_TYPE_ONLY_RE.match(stripped):
+        return False
+    return bool(stripped)
 
 
 def _py_multiline_opener(line: str) -> tuple[int, str] | None:

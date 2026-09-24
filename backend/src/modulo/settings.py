@@ -331,6 +331,14 @@ class Settings(BaseSettings):
     # is ready for production use.  Consumed in node_runner before host-side
     # ref resolution.
     modulo_workspace_inputs_enabled: bool = Field(False, alias="MODULO_WORKSPACE_INPUTS_ENABLED")
+    # FAR-1050 (E2B provider-conformance rewire): route the sandbox log
+    # probe (T6's four call sites) through the RuntimeProvider ABC when ON.
+    # OFF (default) keeps every gated site on the legacy direct path
+    # byte-for-byte; unset / set false + restart reverts in one flip. Read
+    # per call site via ``get_settings()`` (runtime read, patchable in
+    # tests) — never captured once at import. Design:
+    # docs/design/e2b-provider-conformance-rewire.md §2.
+    modulo_e2b_via_provider: bool = Field(default=False, alias="MODULO_E2B_VIA_PROVIDER")
     # ------------------------------------------------------------------
     # FAR-582: full sandbox stdout/stderr side-car artifact storage
     # ------------------------------------------------------------------

@@ -15,11 +15,12 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
+from modulo.api.constants import MSG_CSRF_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.middleware.csrf import CsrfMiddleware
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
-from modulo.api.routes.remy import clear_session_approvals_for_account
+from modulo.api.routes.assistant import clear_session_approvals_for_account
 from modulo.auth.dependencies import (
     OrganisationMembershipNotFound,
     get_current_user,
@@ -93,6 +94,26 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 _TOKEN_TYPE_BEARER = "bearer"
 
 
+async def _require_csrf_double_submit(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    """Double-submit CSRF gate for the cookie-only refresh/logout endpoints (FAR-1197).
+
+    ``modulo_csrf_exempt_paths`` exempts the whole ``/api/v1/auth`` prefix by
+    default (login must work pre-session), and the SPA no longer sends a Bearer
+    header on refresh/logout — so the app-level CsrfMiddleware alone cannot
+    protect these two routes. This route-local dependency enforces the same
+    double-submit rule (XSRF-TOKEN cookie vs X-CSRF-Token header, constant-time
+    compare), honouring the same ``modulo_csrf_enabled`` kill switch as the
+    middleware. Fails CLOSED: a missing cookie or header is a 403.
+    """
+    if not settings.modulo_csrf_enabled:
+        return
+    cookie = request.cookies.get(CsrfMiddleware.CSRF_COOKIE)
+    header = request.headers.get(CsrfMiddleware.CSRF_HEADER)
+    if not cookie or not header or not secrets.compare_digest(cookie, header):
+        _log.warning("auth.csrf_double_submit_rejected path=%s", request.url.path)
+        raise HTTPException(status_code=403, detail=MSG_CSRF_FAILED)
+
+
 class LoginRequest(BaseModel):
     email: str = Field(min_length=1)
     password: str = Field(min_length=1)
@@ -101,14 +122,9 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     access_token: str
-    refresh_token: str
     token_type: str = _TOKEN_TYPE_BEARER
     requires_bootstrap: bool = False
     must_change_password: bool = False
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str = Field(min_length=1)
 
 
 class DemoLoginResponse(BaseModel):
@@ -118,7 +134,6 @@ class DemoLoginResponse(BaseModel):
 
 class RefreshResponse(BaseModel):
     access_token: str
-    refresh_token: str
     token_type: str = _TOKEN_TYPE_BEARER
 
 
@@ -464,12 +479,13 @@ def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse
     requires_bootstrap = not ctx.memberships and ctx.account.is_system_admin
     content = LoginResponse(
         access_token=access_token,
-        refresh_token=refresh_token,
         requires_bootstrap=requires_bootstrap,
         must_change_password=bool(ctx.account.must_change_password),
     ).model_dump()
     response = JSONResponse(content=content)
-    _set_auth_cookies(response, access_token, settings)
+    # FAR-1197: the refresh token rides ONLY in the httpOnly modulo_refresh
+    # cookie — it never appears in the JSON body for the SPA to persist.
+    _set_auth_cookies(response, access_token, settings, refresh_token=refresh_token)
     return response
 
 
@@ -875,10 +891,10 @@ async def accept_invite(
 # ---------------------------------------------------------------------------
 
 
-def _parse_refresh_token(req: RefreshRequest, settings: Settings) -> _RefreshClaims:
+def _parse_refresh_token(refresh_token: str, settings: Settings) -> _RefreshClaims:
     """Decode and structurally validate a refresh token into typed claims."""
     try:
-        claims = decode_refresh_token_claims(req.refresh_token, settings.secret_key)
+        claims = decode_refresh_token_claims(refresh_token, settings.secret_key)
     except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1088,20 +1104,31 @@ def _mint_refresh_response(
         ttl_hours=settings.modulo_refresh_token_ttl_hours,
         client_kind=claims.client_kind,
     )
-    content = RefreshResponse(access_token=new_access, refresh_token=new_refresh).model_dump()
+    content = RefreshResponse(access_token=new_access).model_dump()
     response = JSONResponse(content=content)
-    _set_auth_cookies(response, new_access, settings)
+    # FAR-1197: the rotated refresh token rides ONLY in the httpOnly cookie.
+    _set_auth_cookies(response, new_access, settings, refresh_token=new_refresh)
     return response
 
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(_require_csrf_double_submit)])
 @handle_db_errors(_CODE_AUTH_REFRESH)
 async def refresh(
-    req: RefreshRequest,
+    request: Request,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
-    claims = _parse_refresh_token(req, settings)
+    cookie_token = request.cookies.get(REFRESH_COOKIE)
+    if not cookie_token:
+        # The SPA cannot read the httpOnly cookie, so it cannot send the token;
+        # a request without the cookie has nothing to refresh. Generic 401 (no
+        # token-existence oracle).
+        _log.warning("auth.refresh_cookie_missing")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
+    claims = _parse_refresh_token(cookie_token, settings)
 
     try:
         live_org_role, new_sequence, theft_detected, _reuse_replay = await _advance_refresh_sequence(
@@ -1207,15 +1234,22 @@ def _clear_account_session_approvals(claims: dict[str, object]) -> None:
         clear_session_approvals_for_account(account_id_val)
 
 
-@router.post("/logout")
+@router.post("/logout", dependencies=[Depends(_require_csrf_double_submit)])
 @handle_db_errors(_CODE_AUTH_LOGOUT)
 async def logout(
-    req: RefreshRequest,
+    request: Request,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
+    cookie_token = request.cookies.get(REFRESH_COOKIE)
+    if not cookie_token:
+        _log.warning("auth.logout_cookie_missing")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
     try:
-        claims = decode_refresh_token_claims(req.refresh_token, settings.secret_key)
+        claims = decode_refresh_token_claims(cookie_token, settings.secret_key)
     except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1403,18 +1437,39 @@ async def csrf_token(
         ) from None
 
 
+# FAR-1197: the refresh token lives ONLY in an httpOnly cookie. The JS SPA can
+# never read it, so an XSS cannot exfiltrate a long-lived credential.
+SESSION_COOKIE = "modulo_session"
+REFRESH_COOKIE = "modulo_refresh"
+
+
+def _refresh_cookie_ttl(settings: Settings) -> int:
+    return settings.modulo_refresh_token_ttl_hours * 3600
+
+
 def _set_auth_cookies(
-    response: Response, access_token: str, settings: Settings, *, max_age_seconds: int | None = None
+    response: Response,
+    access_token: str,
+    settings: Settings,
+    *,
+    max_age_seconds: int | None = None,
+    refresh_token: str | None = None,
 ) -> None:
-    """Set the session + CSRF cookies for a freshly minted access token.
+    """Set the session (+ optional refresh) cookies for a freshly minted access token.
 
     ``max_age_seconds`` overrides the default settings-derived TTL — the demo
     login uses it so the cookie lifetime matches the shorter demo token expiry.
+    ``refresh_token`` (set by password login, refresh rotation and SSO) is stored
+    in the ``modulo_refresh`` httpOnly cookie and never returned in a JSON body
+    (FAR-1197). The demo login issues no refresh token and deliberately omits it.
+    The CSRF token lives for as long as the refresh credential when one is
+    minted, so the double-submit header still validates after the short-lived
+    access cookie has expired.
     """
     secure = not settings.debug
     resolved_max_age = max_age_seconds if max_age_seconds is not None else settings.modulo_access_token_minutes * 60
     response.set_cookie(
-        key="modulo_session",
+        key=SESSION_COOKIE,
         value=access_token,
         httponly=True,
         samesite="strict",
@@ -1423,7 +1478,23 @@ def _set_auth_cookies(
         path="/",
     )
     csrf_token_value = secrets.token_hex(32)
-    _set_csrf_cookie(response, csrf_token_value, settings, max_age_seconds=max_age_seconds)
+    csrf_max_age = _refresh_cookie_ttl(settings) if refresh_token is not None else max_age_seconds
+    _set_csrf_cookie(response, csrf_token_value, settings, max_age_seconds=csrf_max_age)
+    if refresh_token is not None:
+        _set_refresh_cookie(response, refresh_token, settings)
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str, settings: Settings) -> None:
+    """Set the httpOnly modulo_refresh cookie (FAR-1197: JS can never read it)."""
+    response.set_cookie(
+        key=REFRESH_COOKIE,
+        value=refresh_token,
+        httponly=True,
+        samesite="strict",
+        secure=not settings.debug,
+        max_age=_refresh_cookie_ttl(settings),
+        path="/",
+    )
 
 
 def _set_csrf_cookie(response: Response, token: str, settings: Settings, *, max_age_seconds: int | None = None) -> None:
@@ -1440,15 +1511,16 @@ def _set_csrf_cookie(response: Response, token: str, settings: Settings, *, max_
 
 def _clear_auth_cookies(response: Response, settings: Settings) -> None:
     secure = not settings.debug
-    response.set_cookie(
-        key="modulo_session",
-        value="",
-        httponly=True,
-        samesite="strict",
-        secure=secure,
-        max_age=0,
-        path="/",
-    )
+    for key, httponly in ((SESSION_COOKIE, True), (REFRESH_COOKIE, True)):
+        response.set_cookie(
+            key=key,
+            value="",
+            httponly=httponly,
+            samesite="strict",
+            secure=secure,
+            max_age=0,
+            path="/",
+        )
     response.set_cookie(
         key="XSRF-TOKEN",
         value="",

@@ -128,7 +128,7 @@ compensation, and single-node self-correction. Built on the eval engine
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/guardrails`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
@@ -136,7 +136,7 @@ compensation, and single-node self-correction. Built on the eval engine
   `/settings/guardrails`: the whole-page view(s) `SettingsGuardrailsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-08: **product-map review pass** — added the FAR-664
@@ -151,7 +151,7 @@ compensation, and single-node self-correction. Built on the eval engine
 - 2026-08-30: **product-map review pass** — new behaviour
   tracker for the registered `feat-guardrails` manifest feature (route
   `/settings/guardrails`, previously absent from the feature graph and invisible
-  to Remy's docs indexer). Behaviours verified against
+  to Assistant's docs indexer). Behaviours verified against
   `core/guardrails/*` (engine, config-as-code, loop-intercept, compensation,
   correction), `api/routes/guardrail_config.py`, the kill-switch + override +
   config unit/integration suites, and the `guardrails` / `guardrail_config` BDD

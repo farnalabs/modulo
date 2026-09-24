@@ -70,8 +70,8 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
-        name="remy",
-        description="Remy in-app AI assistant",
+        name="assistant",
+        description="Assistant in-app AI assistant",
         tier="community",
     ),
     FeatureFlag(
@@ -178,8 +178,10 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="team",
     ),
     FeatureFlag(
-        name="remy_ui_driving",
-        description="Remy browser UI driving — allows Remy to navigate, click, and fill forms on your behalf.",
+        name="assistant_ui_driving",
+        description=(
+            "Assistant browser UI driving — allows Assistant to navigate, click, and fill forms on your behalf."
+        ),
         tier="community",
     ),
     FeatureFlag(

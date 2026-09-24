@@ -45,7 +45,16 @@ _ABC_METHODS = {
     "get_workspace_status",
     "close",
     "matches_provider_type",
+    "read_log_tail",
 }
+
+# Constructors / factories that return a runtime-provider hub. Seeded so a
+# file that aliases the factory or the hub class is still tracked. The broad
+# "ends with hub" heuristic this replaced also matched unrelated hubs
+# (``get_connector_hub``, ``get_model_backend_hub``), which made connector and
+# model-backend objects look like runtime providers and their legitimate
+# ``write``/``query`` calls fail the contract (FAR-1050 R1).
+_PROVIDER_HUB_FACTORIES = {"build_hub", "create_default_hub", "RuntimeProviderHub"}
 
 
 def _python_files() -> list[Path]:
@@ -150,7 +159,7 @@ def _is_provider_expr(node: ast.expr, names: set[str]) -> bool:
     if isinstance(node, ast.Call):
         func = node.func
         if isinstance(func, ast.Name):
-            return func.id in names or func.id.lower().endswith("hub")
+            return func.id in names or func.id in _PROVIDER_HUB_FACTORIES
         if isinstance(func, ast.Attribute):
             # hub.resolve(...), hub.get(...), build_hub(...)-style factories
             return func.attr in {"resolve", "get", "list_providers"} and _is_provider_expr(func.value, names)

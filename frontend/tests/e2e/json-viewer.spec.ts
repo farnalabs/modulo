@@ -22,13 +22,13 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
   test.setTimeout(90_000)
 
   test.beforeEach(async ({ page }) => {
-    // The Remy floating panel (rendered on staging where dev-mode is on) opens
+    // The Assistant floating panel (rendered on staging where dev-mode is on) opens
     // by default and its fixed-position overlay intercepts clicks on interactive
     // page content, timing out locator.click() with "subtree intercepts pointer
     // events". Force the panel closed before the app boots so it can never cover
     // the JsonViewer toolbar/expand controls. Mirrors view-modes-admin.spec.ts.
     await page.addInitScript(() => {
-      localStorage.setItem('remy-panel-state', 'closed')
+      localStorage.setItem('assistant-panel-state', 'closed')
     })
   })
 

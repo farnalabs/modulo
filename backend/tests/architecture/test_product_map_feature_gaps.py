@@ -16,7 +16,7 @@ This suite enforces the *reverse* invariant - the one that lets feature referenc
 drift silently: every ``feat-*`` literal used anywhere in the shipped code and tests
 must resolve against the product map (the manifest ``features:`` registry merged with
 the ``docs/product-map/`` entry ids). A feature used in code but missing from both
-layers is invisible to Remy's ``search_documentation`` indexer and to the feature graph;
+layers is invisible to Assistant's ``search_documentation`` indexer and to the feature graph;
 a feature-graph entry that goes stale, or a documented graph path that points nowhere,
 is a dangling reference.
 """
@@ -230,7 +230,7 @@ def test_graph_root_registry_routes_match_manifest():
     ``/admin/environments``, ``/admin/sandbox-concurrency`` and
     ``/environment-profiles*`` (routes that no longer exist in the manifest) and
     omitted ``/admin/runners/*``, ``/accept-invite`` and
-    ``/library/collections/*``. A reader (or Remy's docs indexer) following the
+    ``/library/collections/*``. A reader (or Assistant's docs indexer) following the
     graph root to a dead route is a dangling edge.
 
     Two invariants keep the lists honest:
@@ -239,7 +239,7 @@ def test_graph_root_registry_routes_match_manifest():
       tagged with the feature on that line (no stale/foreign routes);
     - **completeness** — every route the manifest exposes *publicly* (visibility is
       not ``private_preview``) is named on its feature's line. Features whose whole
-      surface is ``private_preview`` (``feat-remy``, ``feat-plugins``,
+      surface is ``private_preview`` (``feat-assistant``, ``feat-plugins``,
       ``feat-feedback``) still list their routes, so this only constrains public
       routes; deferred routes may legitimately be summarised in prose instead.
     """
@@ -612,7 +612,7 @@ def test_feature_references_resolve():
     Registry = the manifest ``features:`` registry merged with the
     ``docs/product-map/`` entry ids. A literal that resolves nowhere is a feature gap:
     the feature shipped (or its test documents a shipped behaviour) but no product-map
-    surface references it, so it is invisible to Remy's ``search_documentation`` indexer
+    surface references it, so it is invisible to Assistant's ``search_documentation`` indexer
     and to the feature graph. Register the feature in ``frontend/src/manifest.yaml`` (if
     it has routes) or add/restore a behaviour-tracker entry in ``docs/product-map/``
     (infra-only surfaces).
@@ -653,7 +653,7 @@ def _feature_literals_in_docs() -> dict[str, list[str]]:
 def test_documentation_feature_references_resolve():
     """Every ``feat-*`` literal in docs resolves against the product map.
 
-    Docs are consumed by Remy's ``search_documentation`` indexer and the feature
+    Docs are consumed by Assistant's ``search_documentation`` indexer and the feature
     graph's behaviour trackers carry typed ``depends-on`` edges between ``feat-*``
     nodes. A ``feat-*`` id used in documentation but missing from the manifest
     ``features:`` registry and from every ``docs/product-map/`` entry id is a dangling

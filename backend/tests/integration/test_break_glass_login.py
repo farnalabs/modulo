@@ -207,9 +207,11 @@ async def test_refresh_denied_after_break_glass_deactivation(client: AsyncClient
 
     login = await client.post("/api/v1/auth/login", json=_login_json(email))
     assert login.status_code == 200, login.text
-    refresh_token = login.json()["refresh_token"]
+    # FAR-1197: refresh token rides the httpOnly cookie, not the body.
+    refresh_token = login.cookies.get("modulo_refresh")
 
     await _deactivate(db_engine, acc_id)
 
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    client.cookies.set("modulo_refresh", refresh_token)
+    resp = await client.post("/api/v1/auth/refresh")
     assert resp.status_code == 401

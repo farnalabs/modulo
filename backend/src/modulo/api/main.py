@@ -43,6 +43,7 @@ from modulo.api.middleware.request_timeout import RequestTimeoutMiddleware
 from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
 from modulo.api.middleware.sensitive_mask import router as sensitive_router
 from modulo.api.routes.admin import router as admin_router
+from modulo.api.routes.admin_assistant import router as admin_assistant_router
 from modulo.api.routes.admin_capacity import router as admin_capacity_router
 from modulo.api.routes.admin_dev_mode import router as admin_dev_mode_router
 from modulo.api.routes.admin_email import router as admin_email_router
@@ -53,7 +54,6 @@ from modulo.api.routes.admin_monitor_config import router as admin_monitor_confi
 from modulo.api.routes.admin_notifications import router as admin_notifications_router
 from modulo.api.routes.admin_orgs import router as admin_orgs_router
 from modulo.api.routes.admin_rate_limits import router as admin_rate_limits_router
-from modulo.api.routes.admin_remy import router as admin_remy_router
 from modulo.api.routes.admin_rotation import router as admin_rotation_router
 from modulo.api.routes.admin_run_retention import router as admin_run_retention_router
 from modulo.api.routes.admin_runtime_config import router as admin_runtime_config_router
@@ -64,6 +64,7 @@ from modulo.api.routes.admin_triggers import router as admin_triggers_router
 from modulo.api.routes.agents import router as agents_router
 from modulo.api.routes.analytics import router as analytics_router
 from modulo.api.routes.api_keys import router as api_keys_router
+from modulo.api.routes.assistant import router as assistant_router
 from modulo.api.routes.audit import router as audit_router
 from modulo.api.routes.auth import router as auth_router
 from modulo.api.routes.community_library import router as community_library_router
@@ -109,7 +110,6 @@ from modulo.api.routes.product_analytics import router as product_analytics_rout
 from modulo.api.routes.product_analytics_identity import router as product_analytics_identity_router
 from modulo.api.routes.product_analytics_transparency import router as product_analytics_transparency_router
 from modulo.api.routes.registry import router as registry_router
-from modulo.api.routes.remy import router as remy_router
 from modulo.api.routes.run_ws import router as run_ws_router
 from modulo.api.routes.runners import router as runners_router
 from modulo.api.routes.runs import router as runs_router
@@ -1215,7 +1215,7 @@ app.include_router(determination_router)
 app.include_router(evals_router)
 app.include_router(admin_notifications_router)
 app.include_router(admin_orgs_router)
-app.include_router(admin_remy_router)
+app.include_router(admin_assistant_router)
 app.include_router(admin_monitor_config_router)
 app.include_router(admin_rotation_router)
 app.include_router(admin_run_retention_router)
@@ -1236,7 +1236,7 @@ app.include_router(error_forwarder_config_router)
 app.include_router(error_notification_rules_router)
 app.include_router(errors_router)
 app.include_router(events_router)
-app.include_router(remy_router)
+app.include_router(assistant_router)
 app.include_router(manifest_router)
 app.include_router(metrics_router)
 app.include_router(product_analytics_identity_router)

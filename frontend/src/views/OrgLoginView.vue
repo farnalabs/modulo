@@ -119,7 +119,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import { useMutation } from '../composables/useMutation'
 import { useLoginPrefs } from '../composables/useLoginPrefs'
-import { setAccessToken, setRefreshToken } from '../lib/api/client'
+import { setAccessToken } from '../lib/api/client'
 import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
 import SsoBrandMark from '../components/SsoBrandMark.vue'
@@ -203,7 +203,6 @@ const { loading: loadingLogin, error: loginError, mutate: login } = useMutation(
   }
   const data = await res.json()
   setAccessToken(data.access_token)
-  if (data.refresh_token) setRefreshToken(data.refresh_token)
   setMustChangePassword(data.must_change_password === true)
   // Successful login for this org — remember slug + method for next visit.
   // Best-effort: a storage failure must never block a successful login.

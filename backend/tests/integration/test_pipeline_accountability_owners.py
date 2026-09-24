@@ -12,7 +12,7 @@ Integration coverage against the real app on Testcontainers Postgres
   ``pipeline.reliability_owner_changed`` rows written on owner change/clear.
 
 The migration-applies assertions live in
-``test_migration_0257_pipeline_accountability_owners.py``.
+``test_migration_0258_pipeline_accountability_owners.py``.
 """
 
 from __future__ import annotations

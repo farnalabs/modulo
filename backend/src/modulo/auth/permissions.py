@@ -195,7 +195,7 @@ PERMISSIONS: dict[str, str] = {
     "admin.trigger_events": "admin",
     "admin.queue_metrics": "admin",
     "admin.notification.manage": "admin",
-    "admin.remy.manage": "admin",
+    "admin.assistant.manage": "admin",
     "admin.rotation.manage": "admin",
     "admin.sensitive.manage": "admin",
     "errors.resolve": "viewer",

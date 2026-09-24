@@ -31,7 +31,7 @@ function getLockChannel(): BroadcastChannel | null {
   if (_lockChannelInitialized) return _lockChannel
   _lockChannelInitialized = true
   if (typeof BroadcastChannel === 'undefined') return null
-  _lockChannel = new BroadcastChannel('remy-element-locks')
+  _lockChannel = new BroadcastChannel('assistant-element-locks')
   _lockChannel.addEventListener('message', (e: MessageEvent) => {
     const data = e.data || {}
     if (data.type === 'lock-request' && data.tabId !== TAB_ID) {

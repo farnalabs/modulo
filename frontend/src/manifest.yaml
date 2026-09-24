@@ -306,11 +306,11 @@ routes:
         <<: *community
         deprecated: false
 
-    /admin/remy:
-        name: admin-remy
-        breadcrumb: Remy Config
+    /admin/assistant:
+        name: admin-assistant
+        breadcrumb: Assistant config
         parent: /
-        product_map: [feat-remy]
+        product_map: [feat-assistant]
         sidebar_group: configure
         sidebar_order: 10
         type: form_page
@@ -318,11 +318,11 @@ routes:
         visibility: private_preview
         deprecated: false
 
-    /settings/remy:
-        name: settings-remy
-        breadcrumb: Remy Skills
+    /settings/assistant:
+        name: settings-assistant
+        breadcrumb: Assistant skills
         parent: /
-        product_map: [feat-remy]
+        product_map: [feat-assistant]
         sidebar_group: configure
         sidebar_order: 11
         type: form_page
@@ -855,11 +855,11 @@ routes:
         dynamic_params:
           - id
 
-    /remy:
-        name: remy-only
-        breadcrumb: Remy
+    /assistant:
+        name: assistant-only
+        breadcrumb: Assistant
         parent: /
-        product_map: [feat-remy]
+        product_map: [feat-assistant]
         sidebar_group:
         sidebar_order:
         type: page
@@ -1799,7 +1799,7 @@ elements:
       - testid: product-analytics-consent-prompt
         type: element
         dynamic_testid: false
-    /admin/remy:
+    /admin/assistant:
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -1812,126 +1812,126 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
-      - testid: remy-providers
+      - testid: assistant-providers
         type: element
         dynamic_testid: false
-      - testid: remy-custom-backends
+      - testid: assistant-custom-backends
         type: element
         dynamic_testid: false
-      - testid: remy-access-save
+      - testid: assistant-access-save
         type: button
         dynamic_testid: false
         label: Save Access List
-      - testid: remy-model-provider
+      - testid: assistant-model-provider
         type: select
         dynamic_testid: false
-      - testid: remy-model-name
+      - testid: assistant-model-name
         type: input
         dynamic_testid: false
-      - testid: remy-model-context
+      - testid: assistant-model-context
         type: input
         dynamic_testid: false
-      - testid: remy-allowed-providers
+      - testid: assistant-allowed-providers
         type: element
         dynamic_testid: false
-      - testid: remy-allowed-models
+      - testid: assistant-allowed-models
         type: input
         dynamic_testid: false
-      - testid: remy-model-save
+      - testid: assistant-model-save
         type: button
         dynamic_testid: false
-      - testid: remy-system-prompt
+      - testid: assistant-system-prompt
         type: textarea
         dynamic_testid: false
-      - testid: remy-prompt-save
+      - testid: assistant-prompt-save
         type: button
         dynamic_testid: false
-      - testid: remy-guidance
+      - testid: assistant-guidance
         type: textarea
         dynamic_testid: false
-      - testid: remy-guidance-save
+      - testid: assistant-guidance-save
         type: button
         dynamic_testid: false
-      - testid: remy-rate-limit-max-actions
+      - testid: assistant-rate-limit-max-actions
         type: input
         dynamic_testid: false
-      - testid: remy-rate-limit-window
+      - testid: assistant-rate-limit-window
         type: input
         dynamic_testid: false
-      - testid: remy-auto-execute-threshold
+      - testid: assistant-auto-execute-threshold
         type: input
         dynamic_testid: false
-      - testid: remy-nogo-page-patterns
+      - testid: assistant-nogo-page-patterns
         type: textarea
         dynamic_testid: false
-      - testid: remy-nogo-selector-patterns
+      - testid: assistant-nogo-selector-patterns
         type: textarea
         dynamic_testid: false
-      - testid: remy-allowed-selectors
+      - testid: assistant-allowed-selectors
         type: textarea
         dynamic_testid: false
-      - testid: remy-allowed-page-patterns
+      - testid: assistant-allowed-page-patterns
         type: textarea
         dynamic_testid: false
-      - testid: remy-safety-save
+      - testid: assistant-safety-save
         type: button
         dynamic_testid: false
-      - testid: remy-skills-add
+      - testid: assistant-skills-add
         type: button
         dynamic_testid: false
         label: Add Skill
-      - testid: remy-skills-delete-cancel
+      - testid: assistant-skills-delete-cancel
         type: button
         dynamic_testid: false
-      - testid: remy-skills-delete-confirm
+      - testid: assistant-skills-delete-confirm
         type: button
         dynamic_testid: false
-      - testid: remy-skills-form-active
+      - testid: assistant-skills-form-active
         type: input
         dynamic_testid: false
-      - testid: remy-skills-form-body
+      - testid: assistant-skills-form-body
         type: textarea
         dynamic_testid: false
-      - testid: remy-skills-form-cancel
+      - testid: assistant-skills-form-cancel
         type: button
         dynamic_testid: false
-      - testid: remy-skills-form-description
+      - testid: assistant-skills-form-description
         type: textarea
         dynamic_testid: false
-      - testid: remy-skills-form-name
+      - testid: assistant-skills-form-name
         type: input
         dynamic_testid: false
-      - testid: remy-skills-form-submit
+      - testid: assistant-skills-form-submit
         type: button
         dynamic_testid: false
-      - testid: remy-skills-form-triggers
+      - testid: assistant-skills-form-triggers
         type: input
         dynamic_testid: false
-      - testid: remy-tool-permissions
+      - testid: assistant-tool-permissions
         type: element
         dynamic_testid: false
-      - testid: remy-tool-perm-mode
+      - testid: assistant-tool-perm-mode
         type: select
         dynamic_testid: false
-      - testid: remy-tool-perms-save
+      - testid: assistant-tool-perms-save
         type: button
         dynamic_testid: false
-      - testid: remy-safety-limits
+      - testid: assistant-safety-limits
         type: element
         dynamic_testid: false
-      - testid: remy-skills
+      - testid: assistant-skills
         type: element
         dynamic_testid: false
-      - testid: remy-skill-toggle
+      - testid: assistant-skill-toggle
         type: button
         dynamic_testid: false
-      - testid: remy-skill-edit
+      - testid: assistant-skill-edit
         type: button
         dynamic_testid: false
-      - testid: remy-skill-delete
+      - testid: assistant-skill-delete
         type: button
         dynamic_testid: false
-      - testid: remy-primer-regenerate
+      - testid: assistant-primer-regenerate
         type: button
         dynamic_testid: false
     /admin/run-retention:
@@ -3214,38 +3214,38 @@ elements:
       - testid: filter-bar-search-wrapper
         type: element
         dynamic_testid: false
-    /remy:
-      - testid: remy-only-view
+    /assistant:
+      - testid: assistant-only-view
         type: element
         dynamic_testid: false
-      - testid: remy-only-return-home
+      - testid: assistant-only-return-home
         type: button
         dynamic_testid: false
-      - testid: remy-only-banner
+      - testid: assistant-only-banner
         type: element
         dynamic_testid: false
-      - testid: remy-only-unavailable
+      - testid: assistant-only-unavailable
         type: element
         dynamic_testid: false
-      - testid: remy-only-tab-bar
+      - testid: assistant-only-tab-bar
         type: element
         dynamic_testid: false
-      - testid: remy-only-new-tab
+      - testid: assistant-only-new-tab
         type: button
         dynamic_testid: false
-      - testid: remy-only-subtab-bar
+      - testid: assistant-only-subtab-bar
         type: element
         dynamic_testid: false
-      - testid: remy-only-empty
+      - testid: assistant-only-empty
         type: element
         dynamic_testid: false
-      - testid: remy-only-no-active
+      - testid: assistant-only-no-active
         type: element
         dynamic_testid: false
-      - testid: remy-only-chat
+      - testid: assistant-only-chat
         type: element
         dynamic_testid: false
-      - testid: remy-analytics-card
+      - testid: assistant-analytics-card
         type: element
         dynamic_testid: false
       - testid: analytics-chart
@@ -4184,35 +4184,35 @@ elements:
       - testid: rate-limits-table
         type: element
         dynamic_testid: false
-    /settings/remy:
-      - testid: remy-user-skills-add
+    /settings/assistant:
+      - testid: assistant-user-skills-add
         type: button
         dynamic_testid: false
-      - testid: remy-skills-delete-cancel
+      - testid: assistant-skills-delete-cancel
         type: button
         dynamic_testid: false
-      - testid: remy-skills-delete-confirm
+      - testid: assistant-skills-delete-confirm
         type: button
         dynamic_testid: false
-      - testid: remy-skills-form-active
+      - testid: assistant-skills-form-active
         type: input
         dynamic_testid: false
-      - testid: remy-skills-form-body
+      - testid: assistant-skills-form-body
         type: textarea
         dynamic_testid: false
-      - testid: remy-skills-form-cancel
+      - testid: assistant-skills-form-cancel
         type: button
         dynamic_testid: false
-      - testid: remy-skills-form-description
+      - testid: assistant-skills-form-description
         type: textarea
         dynamic_testid: false
-      - testid: remy-skills-form-name
+      - testid: assistant-skills-form-name
         type: input
         dynamic_testid: false
-      - testid: remy-skills-form-submit
+      - testid: assistant-skills-form-submit
         type: button
         dynamic_testid: false
-      - testid: remy-skills-form-triggers
+      - testid: assistant-skills-form-triggers
         type: input
         dynamic_testid: false
     /settings/runtime-config:
@@ -4977,6 +4977,7 @@ features:
         status: covered
         behaviours:
             - "[x] MCP HITL review (2026-09-24): the real `review_hitl` tool drives the claim-token parse guard, the `_check_agent_tool_scope` role-hierarchy scope gate (a `runner` is denied `hitl:review` -> `insufficient_scope`), the HITLManager approve/reject decision dispatch, and the `list_pending_hitl` pending-gate surface — five `mcp/review_hitl.feature` scenarios execute in CI against the real handler functions with auth re-validation + DB/HITLManager seams patched (the legacy `/mcp/tools/call` HTTP surface is gone; the FastMCP invoke/dispatch layer is not exercised)"
+            - "[x] MCP human-only gates (2026-09-24): the real `_check_human_only_gate` policy hook denies an API-key client every decision action (claim/approve/deliver_manual) on a human_only gate — the shared `human_only_denial` verdict (`human_only_gate` error carrying the MSG_HUMAN_ONLY_DENY browser-authentication detail) plus the FAR-634 `hitl.human_only_denied` denial audit; `list_pending_hitl` surfaces each pending gate's `human_only` flag (claim-stamped config preferred, snapshot-config fallback, fail-safe default True) so an agent can SEE which gates require a browser human; and decision audit attribution distinguishes client_type `browser` (REST browser principal) from client_type `mcp` (the `review_hitl` dispatch) — the three `mcp/human_only.feature` scenarios execute in CI against these real handler + policy seams"
     feat-model-backends:
         description: Model backend management and setup
         status: covered
@@ -5040,8 +5041,8 @@ features:
         description: Plugin registry
     feat-product-analytics:
         description: Product usage and adoption analytics for system administrators
-    feat-remy:
-        description: Remy assistant configuration and skills
+    feat-assistant:
+        description: Modulo assistant configuration and skills
     feat-runs:
         description: Run execution, history, detail, and output diffs
         status: covered

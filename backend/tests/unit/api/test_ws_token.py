@@ -23,6 +23,7 @@ from modulo.auth.jwt import (
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
+_CSRF = "ws-token-csrf"
 
 
 @pytest.fixture(autouse=True)
@@ -313,16 +314,18 @@ def test_refresh_removed_member_returns_401_without_advancing_sequence(mock_sess
             patch(
                 "modulo.api.routes.auth.resolve_role_from_membership",
                 new=AsyncMock(return_value=None),
-            ),
+            ) as _rls,
             patch(
                 "modulo.api.routes.auth.advance_sequence",
                 new=advance,
-            ),
+            ) as _adv,
         ):
-            resp = TestClient(app).post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": refresh_token},
-            )
+            # FAR-1197: refresh rides the httpOnly cookie transport; satisfy the
+            # route-local double-submit CSRF gate.
+            test_client = TestClient(app)
+            test_client.cookies.set("modulo_refresh", refresh_token)
+            test_client.cookies.set("XSRF-TOKEN", _CSRF)
+            resp = test_client.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": _CSRF})
         assert resp.status_code == 401
         advance.assert_not_awaited()
     finally:

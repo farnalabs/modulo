@@ -41,7 +41,7 @@ export default defineConfig({
     //
     // 1. Timeouts (from #817): the suite (641 tests) includes heavy view specs
     //    whose mount+settle takes >5s under concurrent worker load on the CI
-    //    runner (e.g. AdminRemyView pulls reka-ui + vue-query + many
+    //    runner (e.g. AdminAssistantView pulls reka-ui + vue-query + many
     //    subcomponents). The default 5000ms testTimeout caused intermittent
     //    "Test timed out" flakes that are purely wall-clock, not assertion
     //    failures. 15000ms is generous but still bounded; fast tests complete

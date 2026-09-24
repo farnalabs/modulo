@@ -28,7 +28,7 @@ from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.core.analytics import compute_delta
-from modulo.core.remy.config_service import RemyConfigService
+from modulo.core.assistant.config_service import AssistantConfigService
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
@@ -633,8 +633,8 @@ async def _load_config_warnings(session: AsyncSession, org_id: uuid.UUID) -> lis
         return config_warnings
 
     try:
-        remy_config = await RemyConfigService(session).get_config(org_id)
-        default_provider = remy_config.default_provider
+        assistant_config = await AssistantConfigService(session).get_config(org_id)
+        default_provider = assistant_config.default_provider
         default_provider_result = await session.execute(
             select(func.count())
             .select_from(ModelBackend)
@@ -648,19 +648,19 @@ async def _load_config_warnings(session: AsyncSession, org_id: uuid.UUID) -> lis
         if default_provider_count == 0 and mb_count > 1:
             config_warnings.append(
                 {
-                    "type": "remy_provider_not_configured",
+                    "type": "assistant_provider_not_configured",
                     "severity": "low",
                     "message": (
-                        f"Remy is configured to use {default_provider} but no API key is set "
-                        "for that provider. Remy will auto-detect the first configured "
-                        "provider. Change the default in Remy Config."
+                        f"Assistant is configured to use {default_provider} but no API key is set "
+                        "for that provider. Assistant will auto-detect the first configured "
+                        "provider. Change the default in Assistant Config."
                     ),
                     "action_label": f"Configure {default_provider}",
                     "action_url": "/admin/model-backends",
                 }
             )
     except Exception:
-        _log.warning("dashboard.config_warnings.remy_failed", exc_info=True)
+        _log.warning("dashboard.config_warnings.assistant_failed", exc_info=True)
     return config_warnings
 
 

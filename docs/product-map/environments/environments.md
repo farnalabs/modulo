@@ -97,7 +97,7 @@ into the Runners page as redirects.)
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/runners/concurrency`, `/admin/runners/profiles`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-11: **product-map review pass** — finished the
@@ -114,7 +114,7 @@ into the Runners page as redirects.)
   on `/admin/runners/profiles` / `/admin/runners/concurrency`, and the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`)
   now maps those two routes to the layout + tab + status-strip owning views, so
-  a newly shipped Runners-page testid can no longer drift invisible to Remy's
+  a newly shipped Runners-page testid can no longer drift invisible to Assistant's
   docs indexer / `/api/v1/manifest`.
 - 2026-09-11: **product-map review pass** — closed the
   remaining element-inventory drift on the Runners page: `runner-status-error`
@@ -124,14 +124,14 @@ into the Runners page as redirects.)
   `EnvironmentProfileForm.vue`) is now registered on `/admin/runners/profiles/new`
   and `/admin/runners/profiles/:id/edit`. Both whole-page views were added to the
   reverse testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`)
-  so a newly shipped Runners-page testid can no longer drift invisible to Remy's
+  so a newly shipped Runners-page testid can no longer drift invisible to Assistant's
   docs indexer / `/api/v1/manifest`.
 - 2026-09-10: **product-map review pass** — registered the
   `runner-status-error` testid of the `AdminRunnersView.vue` layout on
   `/admin/runners/profiles` and added that whole-page view to the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`),
   so the Runners page's reload-error surface can no longer ship invisible to
-  Remy's docs indexer / `/api/v1/manifest`.
+  Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-10: **product-map review pass** — reconciled this entry
   and the graph-root registry index with the FAR-591 D5 Runners page: the
   canonical routes are `/admin/runners/profiles{,/new,/:id/edit}` and

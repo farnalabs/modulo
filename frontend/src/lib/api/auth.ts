@@ -1,7 +1,12 @@
 import { getAutoLoginConfig } from '../../config/runtime'
 
 const TOKEN_KEY = 'modulo_access_token'
-const REFRESH_TOKEN_KEY = 'modulo_refresh_token'
+// FAR-1197: the refresh token is no longer persisted in localStorage. It rides
+// the httpOnly, Secure, SameSite=strict `modulo_refresh` cookie set by the
+// backend, so script-visible storage can never hold a long-lived token again.
+// The key string below only exists to scrub the legacy value written by
+// pre-FAR-1197 sessions.
+const LEGACY_REFRESH_TOKEN_KEY = 'modulo_refresh_token'
 // FAR-535: persisted marker that the current session came from the /demo
 // auto-login. Read by the demo-mode banner; cleared with the session.
 const DEMO_SESSION_KEY = 'modulo_demo_session'
@@ -39,6 +44,13 @@ function storeToken(key: string, token: string): void {
   localStorage.setItem(key, token)
 }
 
+// One-time migration: sessions that pre-date FAR-1197 may still have a
+// long-lived refresh token sitting in script-visible localStorage. Wipe it on
+// first load of the new module so no stale copy survives the upgrade.
+if (typeof localStorage !== 'undefined' && localStorage.getItem(LEGACY_REFRESH_TOKEN_KEY) !== null) {
+  localStorage.removeItem(LEGACY_REFRESH_TOKEN_KEY)
+}
+
 let _authListeners: Array<(token: string | null) => void> = []
 let _refreshingPromise: Promise<boolean> | null = null
 
@@ -60,15 +72,10 @@ function getAuthChannel(): BroadcastChannel | null {
   _authChannel.addEventListener('message', (e: MessageEvent) => {
     const data = e.data || {}
     if (data.type !== 'refresh') return
-    // A sibling tab rotated its session. Adopt the tokens it just persisted —
-    // but only into a live session: never adopt into a tab with no access token
-    // of its own, and never resurrect a session whose demo tombstone is set.
-    if (getAccessToken() === null) return
-    if (wasDemoSessionEnded()) return
-    const storedAccess = getAccessToken()
-    const storedRefresh = getRefreshToken()
-    if (storedAccess) setAccessToken(storedAccess)
-    if (storedRefresh) setRefreshToken(storedRefresh)
+    // FAR-1197: the refresh token rides the httpOnly `modulo_refresh` cookie,
+    // which the browser shares across tabs automatically — there is no longer
+    // a localStorage token for a sibling tab to adopt. The message stays as a
+    // wake-up signal for tabs listening on auth state changes.
   })
   return _authChannel
 }
@@ -151,7 +158,8 @@ export function clearAccessToken(options?: { demoEnded?: boolean }): void {
     markDemoSessionEnded()
   }
   localStorage.removeItem(TOKEN_KEY)
-  clearRefreshToken()
+  // Also wipe any legacy pre-FAR-1197 refresh token still lingering in storage.
+  localStorage.removeItem(LEGACY_REFRESH_TOKEN_KEY)
   setDemoSession(false)
   notifyListeners()
 }
@@ -169,17 +177,19 @@ export function getAccessToken(): string | null {
   return isValidToken(token) ? token : null
 }
 
-export function setRefreshToken(token: string): void {
-  storeToken(REFRESH_TOKEN_KEY, token)
-}
-
-export function getRefreshToken(): string | null {
-  const token = localStorage.getItem(REFRESH_TOKEN_KEY)
-  return isValidToken(token) ? token : null
-}
-
-function clearRefreshToken(): void {
-  localStorage.removeItem(REFRESH_TOKEN_KEY)
+// Read a single cookie value (document.cookie is script-readable for
+// non-httpOnly cookies — the CSRF double-submit cookie is exposed on purpose).
+function readCookie(name: string): string | null {
+  const match = document.cookie.match(`^(?:.*; )?${name}=([^;]*).*$`)
+  if (!match || !match[1]) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    // A malformed percent-escape in the cookie value (e.g. `%E0%A4`) makes
+    // decodeURIComponent throw URIError. Treat it as "no usable cookie" so a
+    // corrupt XSRF-TOKEN can never crash the refresh path.
+    return null
+  }
 }
 
 // Check whether the navigator.locks API is available (Web Locks are supported
@@ -190,79 +200,34 @@ function hasWebLocks(): boolean {
   )
 }
 
-// Bounded retry delays (ms) for 409 stale_refresh_token — DEFENSIVE BACKSTOP
-// ONLY. Under normal v6 server semantics a refresh-token reuse inside the
-// server's reuse-interval window is accepted and minted (200). A 409 only
-// arrives from an older server or a proxy/edge case — genuine token theft
-// (blacklisted family / sequence ahead of max) returns 401 and is handled by
-// the fatal-session path. On 409 the loop re-reads the shared localStorage
-// token (a sibling tab may have rotated while we waited) and retries with
-// bounded backoff before giving up.
-const STALE_RETRY_DELAYS = [150, 300, 600]
-
+// FAR-1197: the refresh endpoint is bodyless — the token rides the httpOnly
+// `modulo_refresh` cookie, and the route enforces a double-submit CSRF check
+// (XSRF-TOKEN cookie vs X-CSRF-Token header). The httpOnly cookie is attached
+// automatically by the browser; we only need to echo the CSRF cookie in the
+// header. Sibling tabs share the cookie jar, so a rotation by one tab is
+// instantly visible to the others — no cross-tab retry loop is needed.
 async function doRefresh(): Promise<boolean> {
   try {
-    // Capture the refresh token at entry so we can detect cross-tab rotation.
-    const entryRefreshToken = getRefreshToken()
-    if (!entryRefreshToken) return false
-
-    // --- 409 stale-token bounded retry loop (defensive backstop) ---
-    // Under v6 server semantics, a refresh-token reuse inside the server's
-    // reuse-interval window is minted normally (200) — a 409 is not the
-    // expected stale path. If a 409 does arrive (older server or a
-    // proxy/edge case — genuine theft returns 401), another tab may have
-    // rotated while we waited for the lock. Re-read localStorage (shared
-    // across tabs) and retry up to 3 times with a short backoff before
-    // giving up.
-    for (let attempt = 0; ; attempt++) {
-      // Before the POST, check if storage already has a newer token (sibling
-      // rotated while we were waiting for the lock or between retries).
-      const currentRefresh = getRefreshToken()
-      if (currentRefresh && currentRefresh !== entryRefreshToken) {
-        // A sibling already rotated — adopt its token.
-        setRefreshToken(currentRefresh)
-        broadcastRefreshAdopted()
-        return true
-      }
-
-      const refreshToken = getRefreshToken()
-      if (!refreshToken) return false
-
-      const resp = await fetch('/api/v1/auth/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      })
-
-      if (resp.ok) {
-        const data = await resp.json()
-        setAccessToken(data.access_token)
-        if (data.refresh_token) setRefreshToken(data.refresh_token)
-        broadcastRefreshAdopted()
-        return true
-      }
-
-      // 409 from /auth/refresh: DEFENSIVE BACKSTOP — under v6 semantics the
-      // server normally mints for a reuse inside the reuse-interval window (200).
-      // A 409 here means an older server or a proxy/edge case — genuine token
-      // theft (blacklisted family / sequence ahead of max) returns 401 and is
-      // handled by the fatal-session path. Re-read localStorage — a fresh
-      // token may have appeared — and retry with bounded backoff. Only fall
-      // through to `return false` after retries are exhausted.
-      if (resp.status === 409 && attempt < STALE_RETRY_DELAYS.length) {
-        await new Promise((r) => setTimeout(r, STALE_RETRY_DELAYS[attempt]))
-        continue
-      }
-
-      // Genuine failure (network, non-ok, non-409).
-      return false
+    const csrfToken = readCookie('XSRF-TOKEN')
+    const resp = await fetch('/api/v1/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+      headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {},
+    })
+    if (resp.ok) {
+      const data = await resp.json()
+      setAccessToken(data.access_token)
+      broadcastRefreshAdopted()
+      return true
     }
+    // 401 (dead session / stolen family) and any other failure fall through to
+    // the fatal-session path.
+    return false
   } catch (err) {
     console.warn('[auth] Token refresh failed:', err)
     return false
   }
 }
-
 export async function attemptTokenRefresh(): Promise<boolean> {
   if (_refreshingPromise) return _refreshingPromise
 

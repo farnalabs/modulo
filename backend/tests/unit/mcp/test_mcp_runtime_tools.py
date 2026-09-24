@@ -492,16 +492,25 @@ class TestListPendingHitl(_AuthContext):
         count_result.scalar_one.return_value = 2
         gates_result = MagicMock()
         gates_result.scalars.return_value = gates
-        # FAR-613: the description resolver runs two IN queries (runs for
-        # snapshot ids, snapshots for graphs) after the gate page loads.
-        # The fixture gates carry non-topology ids, so nothing resolves.
+        # FAR-613/FAR-609: both pending-gate resolvers run two IN queries
+        # (runs for snapshot ids, snapshots for graphs) after the gate page
+        # loads. The fixture gates carry non-topology ids, so nothing resolves.
         run_rows_result = MagicMock()
         run_rows_result.all.return_value = [(shared_run_id, uuid.uuid4())]
         snapshot_rows_result = MagicMock()
         snapshot_rows_result.all.return_value = []
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result, run_rows_result, snapshot_rows_result])
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                count_result,
+                gates_result,
+                run_rows_result,
+                snapshot_rows_result,
+                run_rows_result,
+                snapshot_rows_result,
+            ]
+        )
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await list_pending_hitl()
@@ -522,6 +531,10 @@ class TestListPendingHitl(_AuthContext):
         # FAR-613 briefing fields: unresolvable configs map to None.
         assert result["gates"][0]["description"] is None
         assert result["gates"][0]["context"] is None
+        # FAR-609: an unresolvable gate-config falls back to the fail-safe
+        # DEFAULT_HUMAN_ONLY (True) so MCP never under-reports a gate.
+        assert result["gates"][0]["human_only"] is True
+        assert result["gates"][1]["human_only"] is True
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -556,13 +569,25 @@ class TestListPendingHitl(_AuthContext):
         snapshot_rows_result.all.return_value = [(snapshot_id, graph)]
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result, run_rows_result, snapshot_rows_result])
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                count_result,
+                gates_result,
+                run_rows_result,
+                snapshot_rows_result,
+                run_rows_result,
+                snapshot_rows_result,
+            ]
+        )
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await list_pending_hitl()
 
         assert result["gates"][0]["description"] == "MCP briefing description."
         assert result["gates"][0]["context"] == context
+        # FAR-609: a snapshot config without an explicit human_only flag falls
+        # back to the fail-safe True default.
+        assert result["gates"][0]["human_only"] is True
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -605,7 +630,16 @@ class TestListPendingHitl(_AuthContext):
         snapshot_rows_result.all.return_value = []
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result, run_rows_result, snapshot_rows_result])
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                count_result,
+                gates_result,
+                run_rows_result,
+                snapshot_rows_result,
+                run_rows_result,
+                snapshot_rows_result,
+            ]
+        )
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await list_pending_hitl()

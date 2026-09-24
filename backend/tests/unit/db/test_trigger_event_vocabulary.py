@@ -119,11 +119,13 @@ _MIGRATION_PATH = (
 # chained onto 0253_runs_enforcement_mode_outcome, and
 # 0255_trigger_event_value_filter_label (FAR-1144) chained onto
 # 0254_eval_backfill_cutover, and 0256_pipeline_max_autonomy_level
-# (FAR-1163) chained onto 0255, and 0257_pipeline_accountability_owners
-# (FAR-1161) chained onto 0256 as the chain head. (_MIGRATION_NAME above
+# (FAR-1163) chained onto 0255, and 0257_rename_remy_to_assistant
+# (FAR-1196 Tier 3) chained onto 0256_pipeline_max_autonomy_level, and
+# 0258_pipeline_accountability_owners (FAR-1161) chained onto
+# 0257_rename_remy_to_assistant as the chain head. (_MIGRATION_NAME above
 # stays pinned to 0255 — that is the constraint-owning migration under test,
 # not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0257_pipeline_accountability_owners"
+_CHAIN_HEAD_MIGRATION_NAME = "0258_pipeline_accountability_owners"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

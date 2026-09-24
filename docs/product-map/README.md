@@ -7,7 +7,7 @@ layers:
    Shared Manifest). It registers every UI route, its `product_map: [feat-*]` references,
    sidebar grouping, permissions/tiers, testable `data-testid` elements, and the
    `features:` registry of allowed feature ids. The backend serves it at
-   `/api/v1/manifest`, the frontend router/nav consume it at build time, and Remy's
+   `/api/v1/manifest`, the frontend router/nav consume it at build time, and Assistant's
    `search_documentation` indexes each route's `product_map` refs.
 2. **`docs/product-map/`** — the feature graph (this directory). One behaviour-tracker
    entry per feature, keyed by the same `feat-*` id, describing expected behaviours,
@@ -23,7 +23,7 @@ reason: every registered feature is referenced by at least one shipped route, an
 `feat-*` reference anywhere in the codebase must resolve either to a registered manifest
 feature or to a behaviour-tracker entry below (enforced by
 `backend/tests/architecture/test_product_map.py`). If a feature ships, it appears in one
-of these two places — otherwise it is invisible to Remy and to this graph.
+of these two places — otherwise it is invisible to Assistant and to this graph.
 
 ## Entry format
 
@@ -104,7 +104,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 ### Configure
 - **feat-schemas** - Typed JSON schemas, schema editor, inference, and parameter schemas - routes: `/schemas`, `/schemas/editor/:id`, `/schemas/infer`, `/admin/parameter-schemas`
 - **feat-model-backends** - Model backend management and setup - routes: `/admin/model-backends`, `/setup/model-backend/:id`
-- **feat-remy** - Remy assistant configuration and skills - routes: `/admin/remy`, `/settings/remy`, `/remy`
+- **feat-assistant** - Modulo assistant configuration and skills - routes: `/admin/assistant`, `/settings/assistant`, `/assistant`
 - **feat-mcp** - Model Context Protocol tool configuration - routes: `/settings/mcp`
 - **feat-guardrails** - Guardrail policies - routes: `/settings/guardrails`
 - **feat-connectors** - External tool connectors - routes: `/admin/connectors`
@@ -145,7 +145,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk:** `feat-environments`, `feat-auth`, `feat-sso`, `feat-org`,
 > `feat-runtime`, `feat-system-config`, `feat-system-orgs`, `feat-connectors`,
 > `feat-lifecycle-maps`, `feat-feedback`, `feat-hitl`, `feat-router`, `feat-library`,
-> `feat-license`, `feat-mcp`, `feat-model-backends`, `feat-onboarding`, `feat-remy`,
+> `feat-license`, `feat-mcp`, `feat-model-backends`, `feat-onboarding`, `feat-assistant`,
 > `feat-schemas`, `feat-teams`, `feat-evals`, `feat-guardrails`, `feat-variants`,
 > `feat-product-analytics`, `feat-pipelines`, `feat-runs`, `feat-dashboard`,
 > `feat-costs`, `feat-notifications`, `feat-observability`, `feat-plugins`,
@@ -685,6 +685,31 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `PINNED_AWAITING_IMPLEMENTATION` and now execute in CI;
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-24):** closed `feat-mcp`'s `human_only` half of
+> the remaining legacy-`/mcp/tools/call` `@awaiting-implementation` debt
+> (`configure/mcp.md`). The three `mcp/human_only.feature` scenarios previously
+> targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned since 2026-08)
+> and never ran; following the `trigger.feature` / `review_hitl.feature`
+> re-anchor pattern, they now drive the REAL `review_hitl` / `list_pending_hitl`
+> handler seams directly (request ContextVars hydrated by hand): the REAL
+> `_check_human_only_gate` policy hook denies an API-key client on a `human_only`
+> gate with the shared `human_only_denial` verdict (pinned
+> `{"error": "human_only_gate", "detail": MSG_HUMAN_ONLY_DENY}`) and attempts
+> the FAR-634 `hitl.human_only_denied` denial audit; `list_pending_hitl` lists
+> the pending human-only gate with a real per-gate `human_only` flag; and the
+> FAR-611 decision-audit `client_type` attribution is exercised on both sides —
+> `browser` via the REST `hitl._client_type` for a browser principal and `mcp`
+> stamped by the MCP `_dispatch_hitl_action`. Product improvement closing the
+> wire gap the scenario describes: `list_pending_hitl` now surfaces each
+> pending gate's `human_only` flag via the new shared batched resolver
+> (`db/crud/hitl_gate_config.resolve_gate_human_only_map` — claim-stamped
+> fire-time config preferred, snapshot-config fallback, fail-safe
+> `DEFAULT_HUMAN_ONLY`), so an MCP agent can see which gates REQUIRE a browser
+> human before it attempts an action. Removed the three scenarios from
+> `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`) and they
+> now execute in CI; `_ORPHANED_BDD_FEATURES` stays empty. `library_browse`
+> remains the last pinned MCP legacy-`/mcp/tools/call` draft.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
@@ -713,7 +738,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-guardrails](configure/guardrails.md) => PRD N/A
 - [feat-mcp](configure/mcp.md) => PRD N/A
 - [feat-model-backends](configure/model-backends.md) => PRD N/A
-- [feat-remy](configure/remy.md) => PRD 8.23
+- [feat-assistant](configure/assistant.md) => PRD 8.23
 
 ### Core Platform
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6

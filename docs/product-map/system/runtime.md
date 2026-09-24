@@ -88,7 +88,7 @@ purging old run data.
   `#right` action slot (hk-refresh / admin-run-retention-* header actions), and
   wired the component into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`) so the header action
-  surface on both pages stays visible to Remy's docs indexer / `/api/v1/manifest`.
+  surface on both pages stays visible to Assistant's docs indexer / `/api/v1/manifest`.
 
 - 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
@@ -97,7 +97,7 @@ purging old run data.
   `/settings/rate-limits`, `/settings/runtime-config`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
@@ -106,7 +106,7 @@ purging old run data.
   `SettingsRateLimitsView.vue` / `SettingsRuntimeConfigView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The routes now map to their owning views so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — registered the
@@ -118,7 +118,7 @@ purging old run data.
   but its surface had no product-map home.
   `test_mapped_route_elements_cover_owning_view_testids` now maps both routes to
   their page views + `DbCapacityBanner.vue`, so the capacity banner cannot ship
-  invisible to Remy's docs indexer / `/api/v1/manifest`.
+  invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-11: **product-map review pass** — closed the
   `feat-runtime` element-inventory drift on the Runners concurrency tab: the
   effective-cap and preflight panels (`runner-concurrency-effective`,
@@ -127,7 +127,7 @@ purging old run data.
   renders above both runner tabs are now registered on `/admin/runners/concurrency`;
   `test_mapped_route_elements_cover_owning_view_testids` now maps that route to
   the layout + tab + status-strip owning views so the surface can no longer ship
-  invisible to Remy's docs indexer / `/api/v1/manifest`.
+  invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-07: **product-map review pass** — added this
   behaviour-tracker for `feat-runtime`, which previously had no
   `docs/product-map/` entry. Behaviours verified against the runtime config,

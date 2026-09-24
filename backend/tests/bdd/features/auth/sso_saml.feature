@@ -16,14 +16,14 @@ Feature: SSO SAML 2.0 Integration
     Given a first-time SAML user with email "newuser@example.com"
     When the SAML ACS endpoint receives a valid SAMLResponse
     Then the response status is 307
-    And the redirect URL contains access and refresh tokens
+    And the redirect URL contains an access token and the httpOnly refresh cookie
     And a new user account was provisioned
 
   Scenario: Existing SAML user is logged in without duplicate
     Given an existing SAML user with email "alice@example.com"
     When the SAML ACS endpoint receives a valid SAMLResponse
     Then the response status is 307
-    And the redirect URL contains access and refresh tokens
+    And the redirect URL contains an access token and the httpOnly refresh cookie
     And no duplicate account was created
 
   Scenario: Invalid SAML response is rejected

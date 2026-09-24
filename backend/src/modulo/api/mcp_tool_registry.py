@@ -1,7 +1,7 @@
 """MCP tool registry — single source of truth for tool definitions.
 
 Generates OpenAI-compatible tool definitions from the FastMCP tool registry,
-eliminating the hand-maintained mirror in remy.py.
+eliminating the hand-maintained mirror in assistant.py.
 
 Usage:
     from modulo.api.mcp_tool_registry import build_tool_registry, get_mcp_tool_definitions

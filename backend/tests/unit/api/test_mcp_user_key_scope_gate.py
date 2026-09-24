@@ -490,7 +490,7 @@ class TestHandlerEnforcement:
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="admin")),
         ):
-            result = await ms.create_api_key(name="From Remy", role="runner")
+            result = await ms.create_api_key(name="From Assistant", role="runner")
         assert "error" not in result
 
     @pytest.mark.asyncio

@@ -109,13 +109,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Import handles duplicate pipeline names with suffix",
         }
     ),
-    "tests/bdd/features/mcp/human_only.feature": frozenset(
-        {
-            "Audit logs distinguish MCP vs human actions",
-            "MCP can list but not act on human-only gates",
-            "MCP cannot bypass human-only gate",
-        }
-    ),
     "tests/bdd/features/mcp/library_browse.feature": frozenset(
         {
             "MCP library_browse is read-only",

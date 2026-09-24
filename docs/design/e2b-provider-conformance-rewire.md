@@ -112,9 +112,9 @@ Two docstring `AsyncSandbox` mentions (S8 line 8; S5 line 357) are `ast.Constant
   ```python
   # shape of every gated site (R1 shown; R2-R4 identical shape):
   if get_settings().modulo_e2b_via_provider:
-      tail = await provider.read_log_tail(sandbox_id, max_bytes=6000)   # ABC path
+      tail = await provider.read_log_tail(sandbox_id, max_bytes=6000)  # ABC path
   else:
-      tail = await _fetch_sandbox_log_tail(sandbox_id)                  # legacy direct path
+      tail = await _fetch_sandbox_log_tail(sandbox_id)  # legacy direct path
   ```
 
   The flag is read per call site via `get_settings()` (runtime read, patchable in tests, same pattern as `modulo_workspace_inputs_enabled`) - never captured once at import, so a runtime flip does not require stale-module gymnastics beyond a settings refresh.

@@ -15,14 +15,14 @@ Feature: SSO OIDC Integration
     Given a first-time OIDC user with email "newuser@example.com"
     When the OIDC callback returns a valid authorization code and state
     Then the response status is 307
-    And the redirect URL contains access and refresh tokens
+    And the redirect URL contains an access token and the httpOnly refresh cookie
     And a new user account was provisioned
 
   Scenario: Returning OIDC user is logged in without duplicate
     Given an existing OIDC user with email "alice@example.com"
     When the OIDC callback returns a valid authorization code and state
     Then the response status is 307
-    And the redirect URL contains access and refresh tokens
+    And the redirect URL contains an access token and the httpOnly refresh cookie
     And no duplicate account was created
 
   Scenario: State parameter guards against CSRF

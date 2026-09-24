@@ -3,7 +3,7 @@
 ``frontend/src/manifest.yaml`` is the single source of truth for the product
 surface — every page, sidebar group and sidebar order, plus the breadcrumb /
 parent / permission metadata that the frontend router, the ``/api/v1/manifest``
-endpoint and Remy's documentation indexer all read from it. Drift between the
+endpoint and Assistant's documentation indexer all read from it. Drift between the
 map and the real frontend router silently does two opposite things: a page
 that exists (e.g. onboarding, system-admin pages) is invisible to the product
 map, and a page the map advertises can be a dead redirect that no longer
@@ -242,7 +242,8 @@ def test_route_parent_hierarchy_is_acyclic_and_resolves():
             next_entry = routes[cursor]
             cursor = next_entry.get("parent") if isinstance(next_entry, dict) else None
     assert not invalid, (
-        "dangling or circular parent references break breadcrumbs and Remy's page hierarchy:\n" + "\n".join(invalid)
+        "dangling or circular parent references break breadcrumbs and Assistant's page hierarchy:\n"
+        + "\n".join(invalid)
     )
 
 
@@ -308,7 +309,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
     """Every static ``data-testid`` in a route's owning view is documented.
 
     The manifest is the single source of truth for the product surface, and
-    Remy's ``search_documentation`` tool builds its page inventory from it
+    Assistant's ``search_documentation`` tool builds its page inventory from it
     (ADR 008). ``test_element_testids_exist_in_frontend`` only guards the
     manifest -> frontend direction (documented elements must ship); this test
     guards the reverse direction for whole-page views so a newly shipped
@@ -321,7 +322,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
     The list covers every manifest route rendered by a single whole-page view
     component: each view's static ``data-testid`` literals must be registered
     in the product map ``elements`` inventory, or the surface it ships stays
-    invisible to Remy's docs indexer and to ``/api/v1/manifest``.
+    invisible to Assistant's docs indexer and to ``/api/v1/manifest``.
 
     Routes that compose a page from a layout plus route-per-tab (or per-tab
     leaf) components — e.g. the FAR-591 D5 Runners page — map to a tuple of
@@ -344,7 +345,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
     owns the gate's static testids — ``feature-gate`` / ``feature-gate-disabled``
     / ``feature-gate-lock`` / ``lock-icon`` — just like the FilterBar search
     surface. The gate wraps the page content, so a newly shipped control on the
-    entitlement card would otherwise stay invisible to Remy's docs indexer and
+    entitlement card would otherwise stay invisible to Assistant's docs indexer and
     to ``/api/v1/manifest`` on every gated route.
 
     A page header with an action slot owns the ``PageHeader`` right-slot
@@ -364,8 +365,8 @@ def test_mapped_route_elements_cover_owning_view_testids():
     correction proposal, a run-output diff leg, or a raw inferred schema) owns
     its static testids — ``json-viewer`` and the toolbar / string-toggle
     controls — because the viewer is part of the page surface whenever it is
-    shown. Likewise ``/remy`` embeds ``components/analytics/AnalyticsChart.vue``
-    through ``RemyChat.vue`` for analytics-chart turns, so the chart surface
+    shown. Likewise ``/assistant`` embeds ``components/analytics/AnalyticsChart.vue``
+    through ``AssistantChat.vue`` for analytics-chart turns, so the chart surface
     (``analytics-chart`` / ``analytics-chart-canvas`` / ``analytics-chart-empty``)
     is registered on the route.
 
@@ -398,7 +399,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         )
         assert not missing, (
             f"static data-testids in {', '.join(view_rels)} are missing from the product map "
-            f"elements for {route} (invisible to Remy's docs indexer / /api/v1/manifest):\n"
+            f"elements for {route} (invisible to Assistant's docs indexer / /api/v1/manifest):\n"
             + "\n".join(f"  {t}" for t in missing)
         )
 
@@ -472,8 +473,8 @@ OWNED_PAGES = {
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
-    "/admin/remy": (
-        "frontend/src/views/AdminRemyView.vue",
+    "/admin/assistant": (
+        "frontend/src/views/AdminAssistantView.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
@@ -614,7 +615,7 @@ OWNED_PAGES = {
         "frontend/src/components/LockIcon.vue",
     ),
     "/settings/license": "frontend/src/views/SettingsLicenseView.vue",
-    "/settings/remy": "frontend/src/views/UserRemySkillsView.vue",
+    "/settings/assistant": "frontend/src/views/UserAssistantSkillsView.vue",
     "/admin/model-backends": (
         "frontend/src/views/AdminModelBackendsView.vue",
         "frontend/src/components/FeatureGate.vue",
@@ -648,9 +649,9 @@ OWNED_PAGES = {
         "frontend/src/components/shared/FilterBar.vue",
         "frontend/src/components/pipelines/FolderTree.vue",
     ),
-    "/remy": (
-        "frontend/src/views/RemyOnlyView.vue",
-        "frontend/src/components/remy/RemyChat.vue",
+    "/assistant": (
+        "frontend/src/views/AssistantOnlyView.vue",
+        "frontend/src/components/assistant/AssistantChat.vue",
         "frontend/src/components/analytics/AnalyticsChart.vue",
     ),
     "/schemas": (
@@ -753,7 +754,7 @@ def test_registered_elements_render_on_their_route():
     proves the owning views' testids are registered -- but neither guards the
     "wrong route" drift direction: a testid registered on a route whose owning-view
     closure never renders it makes the product map advertise a surface the page
-    never ships, so Remy's ``search_documentation`` indexer and ``/api/v1/manifest``
+    never ships, so Assistant's ``search_documentation`` indexer and ``/api/v1/manifest``
     point a reader at a `data-testid` that can never match. The 2026-09-13 walk found
     exactly that on ``/admin/my-profile``: ``force-change-password-sign-out`` was
     documented there while its only render site is the app-level forced-password-gate

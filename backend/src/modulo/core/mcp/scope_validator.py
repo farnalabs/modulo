@@ -300,7 +300,7 @@ def resolve_tool_access(
             a regular JWT session, or an OAuth token), or ``None`` (unset —
             fails closed).
         auth_type: the credential class — ``'api_key'``, ``'jwt'`` (regular
-            JWT/Remy session), ``'oauth'``, or ``None`` (unset).
+            JWT/Assistant session), ``'oauth'``, or ``None`` (unset).
         allowed_tools: normalised node-level allow-list (``None`` =
             UNRESTRICTED; an explicit empty set is deny-by-default).
         kill_switch: True when the org's authz-enforce kill switch is ON

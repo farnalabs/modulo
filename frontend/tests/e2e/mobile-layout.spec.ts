@@ -188,13 +188,13 @@ async function checkAppShellFillsViewport(page: Page) {
 }
 
 // The only interactive element permitted to sit partially clipped at the mobile
-// viewport is the small floating Remy launcher button: it is a fixed-position
+// viewport is the small floating Assistant launcher button: it is a fixed-position
 // FAB whose persisted position may legitimately rest off-screen on narrow
 // screens, and it is always reachable by tapping. The expected clipped count is
 // DERIVED at runtime from the allowlisted elements actually present on the page
 // — never a hardcoded magic number. Any OTHER clipped interactive element is a
 // real clipping bug and fails the check.
-const CLIPPED_ALLOWLIST_SELECTOR = '.remy-floating-btn'
+const CLIPPED_ALLOWLIST_SELECTOR = '.assistant-floating-btn'
 
 // Check 4 — visible interactive elements must not be clipped off-screen.
 async function checkInteractiveNotClipped(page: Page) {
@@ -238,7 +238,7 @@ async function checkInteractiveNotClipped(page: Page) {
       // reachable when the drawer opens — never a clipping bug.
       if (rect.right <= 0) continue
       // Closed off-canvas panel resting fully off-screen right (e.g. the
-      // draggable Remy floating panel whose persisted position can sit
+      // draggable Assistant floating panel whose persisted position can sit
       // outside the viewport): reachable when dragged back — never a
       // clipping bug.
       if (rect.left >= window.innerWidth) continue
@@ -262,7 +262,7 @@ async function checkInteractiveNotClipped(page: Page) {
       clipped: clipped.slice(0, 10),
       allowlistedClipped: allowlistedClipped.slice(0, 10),
       // Derived expected-tolerance count: the allowlisted elements actually
-      // present on the page (typically the one Remy FAB). Used so the
+      // present on the page (typically the one Assistant FAB). Used so the
       // assertion reads against reality instead of a magic literal.
       allowlistCount: document.querySelectorAll(allowlistSelector).length,
       sampled: interactives.length > 500,

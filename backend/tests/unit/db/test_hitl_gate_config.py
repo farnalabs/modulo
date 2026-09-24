@@ -24,6 +24,7 @@ from modulo.db.crud.hitl_gate_config import (
     parse_hitl_gate_id,
     resolve_gate_description,
     resolve_gate_descriptions,
+    resolve_gate_human_only_map,
     resolve_hitl_gate_config,
     snapshot_gate_config_map,
 )
@@ -766,6 +767,133 @@ class TestResolveGateDescriptions:
         session = self._make_batched_session(run_rows=[], snapshot_rows=[])
 
         result = await resolve_gate_descriptions(session, gates=[], org_id=_ORG_ID)
+
+        assert result == {}
+        assert session.execute.await_count == 0
+
+
+class TestResolveGateHumanOnlyMap:
+    """FAR-609/610: batched per-gate ``human_only`` resolution for the MCP
+    ``list_pending_hitl`` surface — claim-stamped config preferred, batched
+    snapshot config fallback, and a fail-safe ``DEFAULT_HUMAN_ONLY`` (True)
+    whenever the flag cannot be resolved."""
+
+    def _make_batched_session(self, run_rows: list, snapshot_rows: list) -> AsyncMock:
+        async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+            result = MagicMock()
+            text = str(stmt)
+            if "pipeline_snapshots" in text:
+                result.all = MagicMock(return_value=snapshot_rows)
+            elif "runs" in text:
+                result.all = MagicMock(return_value=run_rows)
+            else:
+                raise AssertionError(f"Unexpected query in resolver: {text}")
+            return result
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=_execute)
+        return session
+
+    def _gate(self, run_id: uuid.UUID, gate_id: str, *, stamped: object = None) -> MagicMock:
+        gate = MagicMock()
+        gate.run_id = run_id
+        gate.gate_id = gate_id
+        gate.gate_config_json = stamped
+        return gate
+
+    async def test_stamped_config_short_circuits_without_queries(self) -> None:
+        gate = self._gate(_RUN_ID, _gate_id(), stamped={"human_only": True})
+        session = self._make_batched_session(run_rows=[], snapshot_rows=[])
+
+        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+
+        assert result == {(_RUN_ID, gate.gate_id): True}
+        assert session.execute.await_count == 0
+
+    async def test_stamped_config_explicit_false_opts_out(self) -> None:
+        gate = self._gate(_RUN_ID, _gate_id(), stamped={"human_only": False})
+        session = self._make_batched_session(run_rows=[], snapshot_rows=[])
+
+        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+
+        assert result == {(_RUN_ID, gate.gate_id): False}
+
+    async def test_unstamped_falls_back_to_snapshot_config(self) -> None:
+        graph = {
+            "nodes": [],
+            "edges": [
+                {
+                    "source": str(_SOURCE_ID),
+                    "target": str(_TARGET_ID),
+                    "hitl_gate_config": {"human_only": False},
+                }
+            ],
+        }
+        gate = self._gate(_RUN_ID, _gate_id())
+        session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
+
+        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+
+        assert result == {(_RUN_ID, gate.gate_id): False}
+
+    async def test_snapshot_config_without_key_fails_safe_true(self) -> None:
+        graph = {
+            "nodes": [],
+            "edges": [
+                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": {"label": "Sign-off"}},
+            ],
+        }
+        gate = self._gate(_RUN_ID, _gate_id())
+        session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
+
+        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+
+        assert result == {(_RUN_ID, gate.gate_id): True}
+
+    async def test_config_map_memoised_per_snapshot_within_one_call(self) -> None:
+        """Two pending gates sharing one run/snapshot re-use ONE config-map
+        walk, exactly like the description resolver (FAR-688)."""
+        graph = {
+            "nodes": [],
+            "edges": [
+                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": {"human_only": True}},
+            ],
+        }
+        gate_a = self._gate(_RUN_ID, _gate_id())
+        gate_b = self._gate(_RUN_ID, _gate_id())
+        session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
+
+        import unittest.mock
+
+        with unittest.mock.patch(
+            "modulo.db.crud.hitl_gate_config.snapshot_gate_config_map",
+            side_effect=snapshot_gate_config_map,
+        ) as map_mock:
+            result = await resolve_gate_human_only_map(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
+
+        assert map_mock.call_count == 1
+        assert result == {(_RUN_ID, gate_a.gate_id): True, (_RUN_ID, gate_b.gate_id): True}
+
+    async def test_missing_snapshot_row_fails_safe_true(self) -> None:
+        gate = self._gate(_RUN_ID, _gate_id())
+        session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[])
+
+        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+
+        assert result == {(_RUN_ID, gate.gate_id): True}
+
+    async def test_unresolvable_run_fails_safe_true(self) -> None:
+        gate = self._gate(_RUN_ID, _gate_id())
+        session = self._make_batched_session(run_rows=[(_RUN_ID, None)], snapshot_rows=[])
+
+        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+
+        assert result == {(_RUN_ID, gate.gate_id): True}
+
+    async def test_empty_gates_short_circuits_without_queries(self) -> None:
+        session = self._make_batched_session(run_rows=[], snapshot_rows=[])
+
+        result = await resolve_gate_human_only_map(session, gates=[], org_id=_ORG_ID)
 
         assert result == {}
         assert session.execute.await_count == 0

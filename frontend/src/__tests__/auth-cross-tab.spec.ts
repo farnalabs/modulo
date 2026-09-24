@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// FAR-819: cross-tab refresh adoption. jsdom does not implement
-// BroadcastChannel, so the production code under lib/api/auth.ts is never
-// exercised in the default test env. This suite stubs BroadcastChannel and
-// resets the module so the channel-creation + sibling-tab message-handler
-// paths are covered.
+// FAR-1197: cross-tab refresh is now automatic — the httpOnly `modulo_refresh`
+// cookie is shared by the browser's cookie jar, so there is no localStorage
+// token for a sibling tab to "adopt". BroadcastChannel machinery stays as a
+// wake-up signal. jsdom does not implement BroadcastChannel, so this suite
+// stubs the channel to cover the creation + post-hint paths.
 
+// FAR-1197 legacy scrub key — the module wipes any pre-upgrade refresh token
+// from script-visible storage on first load.
+const LEGACY_REFRESH_TOKEN_KEY = 'modulo_refresh_token'
 const TOKEN_KEY = 'modulo_access_token'
-const REFRESH_TOKEN_KEY = 'modulo_refresh_token'
-const DEMO_ENDED_KEY = 'modulo_demo_ended'
 
 class MockBroadcastChannel {
   static channels: MockBroadcastChannel[] = []
@@ -28,15 +29,12 @@ class MockBroadcastChannel {
 
   postMessage(data: unknown): void {
     // Per the BroadcastChannel spec, a channel does NOT receive its own
-    // messages — only sibling instances of the same name do.
+    // messages — deliver to every OTHER registered channel.
     for (const ch of MockBroadcastChannel.channels) {
-      if (ch !== this) {
-        for (const l of ch.listeners) l({ data } as MessageEvent)
-      }
+      if (ch === this) continue
+      for (const listener of ch.listeners) listener({ data } as MessageEvent)
     }
   }
-
-  close(): void {}
 }
 
 async function loadAuth(): Promise<typeof import('../lib/api/auth')> {
@@ -48,6 +46,10 @@ beforeEach(() => {
   localStorage.clear()
   MockBroadcastChannel.channels = []
   vi.stubGlobal('BroadcastChannel', MockBroadcastChannel)
+  Object.defineProperty(document, 'cookie', {
+    configurable: true,
+    get: () => 'XSRF-TOKEN=csrf-value; modulo_refresh=ref-cookie',
+  })
 })
 
 afterEach(() => {
@@ -55,35 +57,16 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-// Performs a successful refresh so the auth module opens its BroadcastChannel
-// and registers the sibling-tab message listener. Leaves no real session
-// token behind (cleared by the caller as needed before posting hints).
-async function registerChannel(auth: typeof import('../lib/api/auth')): Promise<void> {
-  const fetchMock = vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ access_token: 'seed-access', refresh_token: 'seed-refresh' }),
-  }))
-  vi.stubGlobal('fetch', fetchMock)
-  auth.setAccessToken('seed-access')
-  auth.setRefreshToken('seed-refresh')
-  await auth.attemptTokenRefresh()
-  // clearAccessToken() also clears the refresh token internally, leaving no
-  // real session behind so the caller can set its own tokens before posting.
-  auth.clearAccessToken()
-}
-
-describe('cross-tab refresh adoption', () => {
+describe('cross-tab refresh (cookie transport)', () => {
   it('opens a BroadcastChannel and posts a refresh hint after a successful refresh', async () => {
     const auth = await loadAuth()
     const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
-      json: async () => ({ access_token: 'new-access', refresh_token: 'new-refresh' }),
+      json: async () => ({ access_token: 'new-access' }),
     }))
     vi.stubGlobal('fetch', fetchMock)
     auth.setAccessToken('old-access')
-    auth.setRefreshToken('old-refresh')
 
     await expect(auth.attemptTokenRefresh()).resolves.toBe(true)
 
@@ -92,57 +75,50 @@ describe('cross-tab refresh adoption', () => {
     expect(channel.name).toBe('modulo-auth')
   })
 
-  it('adopts rotated tokens from a sibling tab when a live session exists', async () => {
+  it('sends no JSON body — the token rides the httpOnly cookie automatically', async () => {
     const auth = await loadAuth()
-    await registerChannel(auth)
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: 'new-access' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    auth.setAccessToken('old-access')
 
-    auth.setAccessToken('live-access')
-    auth.setRefreshToken('live-refresh')
+    await auth.attemptTokenRefresh()
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'X-CSRF-Token': 'csrf-value' },
+    })
+  })
+
+  it('a sibling hint is a wake-up only: it must not mutate local storage', async () => {
+    const auth = await loadAuth()
+    // Simulate the seed refresh registering the sibling listener.
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: 'seed-access' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    auth.setAccessToken('replaced-by-hint')
+    await auth.attemptTokenRefresh()
 
     const sibling = new MockBroadcastChannel('modulo-auth')
     sibling.postMessage({ type: 'refresh', tabId: 'other', ts: Date.now() })
 
-    expect(localStorage.getItem(TOKEN_KEY)).toBe('live-access')
-    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('live-refresh')
+    // Nothing is adopted or cleared: the cookie is shared automatically, so a
+    // hint must not write anything into this tab's storage.
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('seed-access')
   })
 
-  it('ignores a refresh hint when the local tab has no access token', async () => {
-    const auth = await loadAuth()
-    await registerChannel(auth)
+  it('scrubs the legacy localStorage refresh token on module load', async () => {
+    localStorage.setItem(LEGACY_REFRESH_TOKEN_KEY, 'pre-far-1197-token')
+    expect(localStorage.getItem(LEGACY_REFRESH_TOKEN_KEY)).toBe('pre-far-1197-token')
 
-    const sibling = new MockBroadcastChannel('modulo-auth')
-    sibling.postMessage({ type: 'refresh', tabId: 'other', ts: Date.now() })
+    await loadAuth()
 
-    expect(localStorage.getItem(TOKEN_KEY)).toBeNull()
-    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull()
-  })
-
-  it('ignores a refresh hint when the demo-ended tombstone is set', async () => {
-    const auth = await loadAuth()
-    await registerChannel(auth)
-
-    auth.setAccessToken('live-access')
-    auth.setRefreshToken('live-refresh')
-    localStorage.setItem(DEMO_ENDED_KEY, String(Date.now()))
-
-    const sibling = new MockBroadcastChannel('modulo-auth')
-    sibling.postMessage({ type: 'refresh', tabId: 'other', ts: Date.now() })
-
-    // Adoption must be blocked: the demo-ended tombstone must never resurrect
-    // a demo session into a real one.
-    expect(localStorage.getItem(TOKEN_KEY)).toBe('live-access')
-  })
-
-  it('ignores non-refresh broadcast messages', async () => {
-    const auth = await loadAuth()
-    await registerChannel(auth)
-
-    auth.setAccessToken('live-access')
-    auth.setRefreshToken('live-refresh')
-
-    const sibling = new MockBroadcastChannel('modulo-auth')
-    sibling.postMessage({ type: 'other', tabId: 'other' })
-
-    expect(localStorage.getItem(TOKEN_KEY)).toBe('live-access')
+    expect(localStorage.getItem(LEGACY_REFRESH_TOKEN_KEY)).toBeNull()
   })
 })

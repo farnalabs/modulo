@@ -5,7 +5,7 @@ OWN HITL email-alert preference — there is NO target parameter (the stage-1
 registry-introspection contract). Under an org-wide or run-scoped key the
 caller-scope classification denies both tools with the pinned
 ``{"error": "insufficient_scope", ...}`` shape (visible-but-failing in
-tools/list); JWT/OAuth callers and user-scoped keys are allowed; JWT/Remy
+tools/list); JWT/OAuth callers and user-scoped keys are allowed; JWT/Assistant
 callers are INCLUDING (documented trust level = the JWT-only REST UI).
 """
 
@@ -78,7 +78,7 @@ def _ctx() -> Any:
 
 
 class TestCallerScopeGate:
-    """Org keys + run-scoped keys Denied; JWT (Remy) callers allowed."""
+    """Org keys + run-scoped keys Denied; JWT (Assistant) callers allowed."""
 
     @pytest.mark.asyncio
     async def test_org_key_denied_get(self) -> None:
@@ -130,8 +130,8 @@ class TestCallerScopeGate:
         assert result["error"] == "insufficient_scope"
 
     @pytest.mark.asyncio
-    async def test_jwt_remy_caller_allowed(self) -> None:
-        """Identity-bound JWT (Remy) sessions are INCLUDED — the documented
+    async def test_jwt_assistant_caller_allowed(self) -> None:
+        """Identity-bound JWT (Assistant) sessions are INCLUDED — the documented
         trust level equals the JWT-only REST UI."""
         _set_credential(key_scope="user", auth_type="jwt", role="viewer")
         session = _mock_session()

@@ -136,7 +136,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   in the manifest `elements:` inventory for `/runs/diff`: the compared run-output
   legs render inline with `<JsonViewer :show-toolbar="true">`
   (`AgentOutputDiffView.vue`), so the viewer shipped in the DOM while staying
-  invisible to Remy's docs indexer / `/api/v1/manifest`. The component is now part
+  invisible to Assistant's docs indexer / `/api/v1/manifest`. The component is now part
   of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
@@ -145,13 +145,13 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   `page-header-right`) in the manifest `elements:` inventory for `/runs`, which
   renders the header's `#right` action slot, and wired the component into the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) so the
-  header action surface stays visible to Remy's docs indexer / `/api/v1/manifest`.
+  header action surface stays visible to Assistant's docs indexer / `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/runs` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
-  guard, so the runs-list search control the page ships stays visible to Remy's
+  guard, so the runs-list search control the page ships stays visible to Assistant's
   docs indexer and `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
@@ -159,7 +159,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   `/runs/diff`: the whole-page view(s) `AgentOutputDiffView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — closed the
@@ -170,7 +170,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   Detail page surface. They are now registered on `/runs/:id`, and
   `test_mapped_route_elements_cover_owning_view_testids` maps the route to
   `HitlBriefing.vue` alongside the previously-closed shared components, so a
-  newly shipped briefing testid can no longer drift invisible to Remy's docs
+  newly shipped briefing testid can no longer drift invisible to Assistant's docs
   indexer / `/api/v1/manifest`.
 - 2026-09-11: **product-map review pass** — closed the
   `/runs/:id` element-inventory drift for the shared components the Run Detail
@@ -182,7 +182,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   now registered on `/runs/:id`, and
   `test_mapped_route_elements_cover_owning_view_testids` now maps that route to
   the layout + those shared owning components, so a newly shipped run-detail /
-  json-viewer / gate testid can no longer drift invisible to Remy's docs
+  json-viewer / gate testid can no longer drift invisible to Assistant's docs
   indexer / `/api/v1/manifest`.
 - 2026-09-09: **product-map review pass** — closed the dead-BDD-file
   Known Gap recorded here on 2026-09-08: `run_lifecycle.feature` / `run_sequential.feature`
