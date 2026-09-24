@@ -58,4 +58,14 @@ describe('DashboardNotificationsPanel reconnect backfill (FAR-250)', () => {
 
     expect(h.mockFetchNotifications).toHaveBeenCalledTimes(1)
   })
+
+  it('unmounts before the reconnect handler is registered without throwing', async () => {
+    // Unmount in the same tick as mount, before the async onMounted body has
+    // assigned unsubReconnect: onUnmounted must tolerate the null handler.
+    const wrapper = mount(DashboardNotificationsPanel)
+    wrapper.unmount()
+    await flushPromises()
+
+    expect(wrapper.exists()).toBe(false)
+  })
 })

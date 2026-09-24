@@ -184,6 +184,21 @@ describe('NotificationBell (FAR-250)', () => {
     expect(wrapper.find('[data-testid="notification-unread-badge"]').exists()).toBe(true)
   })
 
+  it('treats a missing notification_opt_outs map as no opt-outs (nullish fallback)', async () => {
+    h.mockApiGet.mockResolvedValue({
+      data: { dashboard_level: 'warning' },
+      error: undefined,
+    })
+    await mountBell()
+    const handler = h.mockSubscribe.mock.calls[0][1] as (e: Record<string, unknown>) => void
+    h.mockFetchUnreadCount.mockClear()
+
+    handler(notificationEvent({ category: 'run_failed' }))
+    await flushPromises()
+
+    expect(h.mockFetchUnreadCount).toHaveBeenCalledTimes(1)
+  })
+
   it('shows the reconnect banner when the stream stopped on a 4xx, and restarts on click', async () => {
     const wrapper = await mountBell()
     expect(wrapper.find('[data-testid="sse-reconnect-banner"]').exists()).toBe(false)

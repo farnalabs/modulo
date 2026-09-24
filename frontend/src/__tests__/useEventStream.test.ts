@@ -587,6 +587,37 @@ describe('reconnect backfill + reset (FAR-250 coverage)', () => {
     expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(1)
   })
 
+  it('does not schedule a reconnect when an abort lands after an explicit disconnect', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const abortErr = new Error('aborted')
+    abortErr.name = 'AbortError'
+    vi.mocked(fetch).mockRejectedValue(abortErr)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    // Last handler leaves before the rejected fetch settles: disconnect() sets
+    // _disconnecting, so the AbortError must NOT schedule another attempt.
+    unsub()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(eventBus.state).toBe('idle')
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not schedule a reconnect when the stream ends after an explicit disconnect', async () => {
+    const { eventBus } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    await tick() // stream connected, reader.read() pending
+    unsub() // disconnect(): _disconnecting = true, state -> idle
+    endStream() // server closes the stream -> the try block completes normally
+    await tick()
+    await tick()
+
+    expect(eventBus.state).toBe('idle')
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+  })
+
   it('disconnect() clears a pending backfill timer', async () => {
     vi.useFakeTimers()
     vi.spyOn(Math, 'random').mockReturnValue(0)

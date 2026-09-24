@@ -135,7 +135,9 @@ function handleResourceChanged(data: string): void {
 async function doConnect(): Promise<void> {
   cleanup()
   abortController = new AbortController()
-  connectionState.value = connectionState.value === 'auth_failed' ? 'auth_failed' : 'connecting'
+  // connect() blocks while auth_failed and reconnect() clears it, so doConnect
+  // is only ever reached from a non-auth-stopped state.
+  connectionState.value = 'connecting'
   const timeoutId = setTimeout(() => abortController?.abort(), FETCH_TIMEOUT_MS)
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 
@@ -226,7 +228,9 @@ export const eventBus = {
   subscribe(resourceType: string, handler: EventHandler): () => void {
     if (!handlers.has(resourceType)) handlers.set(resourceType, new Set())
     handlers.get(resourceType)!.add(handler)
-    if (!abortController) connect()
+    // connect() owns the "already connected / auth-stopped" guards so a second
+    // subscriber cannot open a competing stream.
+    connect()
     return () => { eventBus.unsubscribe(resourceType, handler) }
   },
   unsubscribe(resourceType: string, handler: EventHandler): void {
