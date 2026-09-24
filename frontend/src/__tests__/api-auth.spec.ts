@@ -208,6 +208,28 @@ describe('attemptTokenRefresh', () => {
     expect(fetchMock.mock.calls[0]![1]!.body).toBeUndefined()
   })
 
+  it('omits the CSRF header when the XSRF cookie is absent', async () => {
+    // No XSRF-TOKEN cookie: readCookie returns null, so the request carries an
+    // empty header map rather than a stale/undefined X-CSRF-Token value.
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => '',
+    })
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: 'new-access' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(attemptTokenRefresh()).resolves.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {},
+    })
+  })
+
   it('deduplicates concurrent refresh attempts into a single request', async () => {
     setCsrfCookie('modulo_refresh=ref-cookie')
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({

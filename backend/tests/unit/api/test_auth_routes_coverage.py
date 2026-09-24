@@ -668,6 +668,17 @@ def test_logout_invalid_token_returns_401(client: tuple[TestClient, AsyncMock]) 
     assert resp.status_code == 401, resp.text
 
 
+def test_logout_missing_cookie_returns_401(client: tuple[TestClient, AsyncMock]) -> None:
+    http, _session = client
+    # CSRF pair is armed, but the httpOnly refresh cookie is absent, so the
+    # handler must reject before attempting to decode a token.
+    http.cookies.set("XSRF-TOKEN", _CSRF_VALUE)
+    resp = _post_logout(http)
+
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "Invalid or expired refresh token"
+
+
 def test_logout_happy_path_blacklists_family_and_clears_approvals(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with (

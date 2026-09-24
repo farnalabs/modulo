@@ -113,6 +113,20 @@ class TestSsoFrontendUrlDelegate:
         assert "modulo_refresh=rt-456" in set_cookies
         assert "HttpOnly" in set_cookies
 
+    def test_redirect_to_frontend_without_refresh_token_sets_no_cookie(self) -> None:
+        """FAR-1197: when the token payload has no refresh token, no cookie is set."""
+        settings = _base_settings(
+            modulo_frontend_url="",
+            modulo_public_url="https://app.example.com",
+        )
+        tokens = {"access_token": "at-only"}
+        resp = _redirect_to_frontend(tokens, settings)
+        assert resp.status_code == 307
+        assert resp.headers["location"] == "https://app.example.com/auth/callback#access_token=at-only"
+        set_cookies = "; ".join(resp.headers.getlist("set-cookie"))
+        assert "modulo_refresh" not in set_cookies
+        assert "XSRF-TOKEN" not in set_cookies
+
     def test_redirect_to_frontend_no_cors_dependency(self) -> None:
         """Redirect target is stable regardless of CORS list ordering."""
         settings = _base_settings(
