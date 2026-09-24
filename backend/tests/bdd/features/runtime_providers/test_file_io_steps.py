@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.runtime_provider import RuntimeProviderError, WorkspaceSpec, WorkspaceFileInfo
+from modulo.core.runtime_provider import RuntimeProviderError, WorkspaceFileInfo, WorkspaceSpec
 from modulo.core.runtime_provider.local import LocalRuntimeProvider
 
 scenarios("file_io.feature")
@@ -33,8 +34,7 @@ def _state(request: Any) -> dict:
     state = getattr(request.node, "_file_io_state", None)
     if state is None:
         raise RuntimeError(
-            "file_io BDD state not initialised — the Background 'a local "
-            "runtime workspace' step must run first"
+            "file_io BDD state not initialised — the Background 'a local runtime workspace' step must run first"
         )
     return state
 
@@ -102,7 +102,7 @@ def step_write_text(request: Any, text: str, path: str) -> None:
     _write(request, path, text.encode("utf-8"))
 
 
-@when(parsers.parse("I write {size:d} binary bytes to file \"{path}\""))
+@when(parsers.parse('I write {size:d} binary bytes to file "{path}"'))
 def step_write_binary(request: Any, size: int, path: str) -> None:
     _write(request, path, bytes(range(size)))
 
