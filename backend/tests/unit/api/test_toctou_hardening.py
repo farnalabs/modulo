@@ -37,6 +37,7 @@ from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.error_notification_rule import DeletedDefault, ErrorNotificationRule
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.journey import Journey
@@ -228,6 +229,7 @@ async def sqlite_engine() -> AsyncEngine:
             PipelineSnapshot.__table__,
             Journey.__table__,
             EvalDefinition.__table__,
+            Eval.__table__,
             EvalResult.__table__,
             AuditEvent.__table__,
             AuditChainHead.__table__,

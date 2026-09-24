@@ -1307,7 +1307,10 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_list_eval_definitions_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.eval_definition.list_eval_definitions", side_effect=RuntimeError("boom")),
+            patch(
+                "modulo.db.crud.pagination.CursorPaginator.paginate",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
         ):
             result = await list_eval_definitions()
         assert result["error"] == "internal_error"
@@ -1814,21 +1817,6 @@ class TestTriggerPipelinePaths(_AuthContext):
 
 
 class TestEvalDefinitionTools(_AdminContext):
-    @pytest.fixture(autouse=True)
-    def _bypass_eval_definition_freeze(self):
-        """Bypass the FAR-1100 chunk 3 → 3b eval-definition create/edit freeze.
-
-        This class verifies the still-live MCP create/update validation, auth,
-        scope, guardrail and DB-error-envelope paths.  The freeze guard runs
-        before all of them, so without this bypass every case would collapse to
-        a single ``definition_frozen`` assertion and the production paths would
-        lose coverage.  The freeze itself is verified directly in
-        tests/unit/api/test_eval_definition_freeze.py.  Remove when chunk 3b
-        lands (CO-8).
-        """
-        with patch.object(ms, "definition_frozen_response", return_value=None):
-            yield
-
     def test_assert_failure_behaviour_rejects_unknown(self) -> None:
         assert _assert_failure_behaviour("retry") is not None
 
@@ -1875,7 +1863,7 @@ class TestEvalDefinitionTools(_AdminContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.api.routes.evals._validate_guardrail_request",
+                "modulo.core.eval_engine.eval_definition_write.validate_guardrail_request",
                 side_effect=StarletteHTTPException(422, "bad guardrail"),
             ),
         ):
@@ -2022,7 +2010,7 @@ class TestEvalDefinitionTools(_AdminContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.api.routes.evals._validate_guardrail_request",
+                "modulo.core.eval_engine.eval_definition_write.validate_guardrail_request",
                 side_effect=StarletteHTTPException(422, "bad guardrail"),
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
@@ -2040,7 +2028,7 @@ class TestEvalDefinitionTools(_AdminContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.api.routes.evals._stamp_eval_definition_version",
+                "modulo.core.eval_engine.eval_definition_write.create_or_update_eval",
                 side_effect=StarletteHTTPException(422, "stamp fail"),
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
@@ -2106,15 +2094,12 @@ class TestEvalDefinitionTools(_AdminContext):
         ],
     )
     async def test_delete_error_envelopes(self, exc: Exception, expected: str) -> None:
-        eval_def = MagicMock()
-        eval_def.eval_type = "regex"
-        eval_def.name = "regex-eval"
+        # The eval-load query raises the injected DB error, so the tool-shell
+        # envelope mapping (IntegrityError->conflict, etc.) is exercised. The
+        # integrity-error-swallowed hard-delete branch is covered separately by
+        # test_eval_redirect_unit.py::test_hard_delete_blocked_by_decisions.
         session = _mock_session()
-        if isinstance(exc, IntegrityError):
-            session.execute.return_value = _make_execute_result(scalar_one_or_none=eval_def)
-            session.delete.side_effect = exc
-        else:
-            session.execute.side_effect = exc
+        session.execute.side_effect = exc
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),

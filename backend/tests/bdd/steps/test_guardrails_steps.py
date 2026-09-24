@@ -320,7 +320,7 @@ def bdd_bound_guardrail(name: str, pattern: str, field: str, ctx: dict[str, Any]
                 run_context_defaults={},
             )
         )
-        eval_def = EvalDefinitionRow(
+        eval_def = Eval(
             id=uuid.uuid4(),
             organisation_id=_ORG_ID,
             pipeline_id=_PIPELINE_ID,
@@ -334,7 +334,6 @@ def bdd_bound_guardrail(name: str, pattern: str, field: str, ctx: dict[str, Any]
                 "field": field,
                 "pattern": pattern,
             },
-            failure_behaviour="block",
             account_id=_ACCOUNT_ID,
         )
         session.add(eval_def)
