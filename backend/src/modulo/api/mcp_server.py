@@ -8711,7 +8711,12 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
     if snap is None:
         return f"error: Snapshot {snapshot_id} not found"
 
-    nodes = snap.graph_json.get("nodes", [])
+    # Mask credential-bearing node fields (env_vars, context_files,
+    # composite_parameter_values, parameter_overrides) exactly as the REST
+    # snapshot-detail and MCP get_pipeline_graph read paths do: snapshots
+    # store the graph with real stored values (mask echoes are resolved back
+    # to secrets on write), so raw serialization would leak them.
+    nodes = [mask_pipeline_graph_node(dict(n)) if isinstance(n, dict) else n for n in snap.graph_json.get("nodes", [])]
     edges = snap.graph_json.get("edges", [])
     result = f"Snapshot {snapshot_id} (v{snap.snapshot_version}) for pipeline {pipeline_id}\n"
     result += f"Nodes ({len(nodes)}):\n"

@@ -69,6 +69,7 @@ Masking is applied at these points:
 | `POST /api/v1/pipelines/{id}/save-as-composite` | `mask_pipeline_graph_node()` on every copied node | Secret env values are masked BEFORE the template is persisted, so the org-readable template storage never receives them in the clear |
 | MCP `get_pipeline_graph` tool | `mask_pipeline_graph_node()` on every node of the response | Same node masking as the REST graph read |
 | MCP `update_pipeline_graph` tool | `merge_masked_graph_nodes()` before the write; `mask_pipeline_graph_node()` on the response | Same read/write neutrality as the REST graph endpoint |
+| MCP `modulo://pipelines/{id}/snapshots/{snapshot_id}` resource | `mask_pipeline_graph_node()` on each node of `graph_json` before rendering | Same node masking as the REST snapshot detail |
 
 Graph READ masking must not corrupt data on WRITE: the graph endpoints are
 full-replace, so a PATCH round-tripping a masked GET would otherwise persist

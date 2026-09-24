@@ -9,6 +9,7 @@ Covers both sides of the masked graph round-trip:
   never persisted over the stored secrets.
 """
 
+import json
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -401,3 +402,67 @@ def test_snapshot_detail_masks_graph_nodes(client: TestClient) -> None:
     env = resp.json()["graph_json"]["nodes"][0]["env_vars"]
     assert env["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
     assert env["APP_URL"] == "https://example.com"
+
+
+# ---------------------------------------------------------------------------
+# MCP resource: modulo://pipelines/{id}/snapshots/{snapshot_id}
+# ---------------------------------------------------------------------------
+
+
+async def _call_mcp_snapshot_resource(snapshot: Any) -> str:
+    import modulo.api.mcp_server as ms
+
+    ms._ctx_org_id.set(_ORG_ID)
+    mock_session: Any = AsyncMock()
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+        patch.object(ms, "_session", return_value=session_cm),
+        patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+        patch(
+            "modulo.db.crud.pipeline_snapshot_versioning.get_snapshot_detail",
+            new=AsyncMock(return_value=snapshot),
+        ),
+    ):
+        return await ms.resource_pipeline_snapshot_detail(str(uuid.uuid4()), str(uuid.uuid4()))
+
+
+async def test_mcp_snapshot_detail_masks_node_credentials() -> None:
+    node = {
+        "id": "n1",
+        "node_type": "agent",
+        "agent_prompt": "bright prompt",
+        "agent_commands": ["run it"],
+        # Key tier (GITHUB_TOKEN is key-classified) AND value tier (the ghp_
+        # pattern under a non-sensitive key must still be redacted).
+        "env_vars": {
+            "GITHUB_TOKEN": _GHP_SECRET,
+            "DEPLOY_NOTES": f"rollback to v1 with {_GHP_SECRET}",
+            "APP_URL": "https://example.com",
+        },
+        "context_files": {"/tmp/creds.txt": f"token={_STRIPE_SECRET}"},
+        "composite_parameter_values": {"cfg": {"api_key": _STRIPE_SECRET}},
+        "parameter_overrides": {"nested": {"password": "hunter2-secret"}},
+    }
+    snapshot = SimpleNamespace(
+        id=uuid.uuid4(),
+        snapshot_version=2,
+        graph_json={"nodes": [node], "edges": []},
+        connector_bindings_json=[],
+    )
+
+    result = await _call_mcp_snapshot_resource(snapshot)
+
+    assert _GHP_SECRET not in result
+    assert _STRIPE_SECRET not in result
+    assert "hunter2-secret" not in result
+    # Masking preserves the node context itself — non-secret values still render.
+    assert "APP_URL" in result
+    assert "https://example.com" in result
+    # Value-tier redaction keeps the surrounding non-secret text intact.
+    assert "rollback to v1 with" in result
+    # The mask literal survives json.dumps() unicode-escaping in the node JSON.
+    assert json.dumps(SENSITIVE_VALUE_MASK)[1:-1] in result
