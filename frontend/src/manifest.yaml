@@ -4966,6 +4966,9 @@ features:
             - Attributed journeys on the read-only renderer are grouped per stage as before; only the unattributed list is paginated
     feat-mcp:
         description: Model Context Protocol tool configuration
+        status: covered
+        behaviours:
+            - "[x] MCP HITL review (2026-09-24): the real `review_hitl` tool drives the claim-token parse guard, the `_check_agent_tool_scope` role-hierarchy scope gate (a `runner` is denied `hitl:review` -> `insufficient_scope`), the HITLManager approve/reject decision dispatch, and the `list_pending_hitl` pending-gate surface — five `mcp/review_hitl.feature` scenarios execute in CI against the real handler functions with auth re-validation + DB/HITLManager seams patched (the legacy `/mcp/tools/call` HTTP surface is gone; the FastMCP invoke/dispatch layer is not exercised)"
     feat-model-backends:
         description: Model backend management and setup
         status: covered

@@ -22,6 +22,7 @@ unit-tests:
 bdd:
   - backend/tests/bdd/features/mcp/library_browse.feature
   - backend/tests/bdd/features/mcp/trigger.feature
+  - backend/tests/bdd/features/mcp/review_hitl.feature
   - backend/tests/bdd/features/mcp/mcp_oauth.feature
   - backend/tests/bdd/features/mcp/onboarding.feature
   - backend/tests/bdd/steps/test_alpha_mcp.py
@@ -82,6 +83,18 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
       and middleware seams (the tool handlers are invoked directly with the
       request ContextVars hydrated by hand, so the FastMCP invoke/dispatch layer
       itself is not exercised)
+- [x] MCP HITL review (2026-09-24): the `review_hitl` unified gate tool (claim /
+      approve / reject / deliver_manual) drives the REAL parse guard, scope gate
+      and decision dispatch — `approve`/`reject` require a claim token
+      (`claim_token_required` otherwise), the `_check_agent_tool_scope`
+      role-hierarchy chokepoint denies a `runner` `hitl:review` actions with the
+      pinned `insufficient_scope` error shape, and a successful decision reports
+      `{"status": "approved"|"rejected", "gate_id": ...}` through the real
+      HITLManager; `list_pending_hitl` returns the org's undecided gates with the
+      shared description resolver. Five `mcp/review_hitl.feature` scenarios
+      execute in CI against these real handler seams (auth re-validation + DB /
+      HITLManager seams patched), closing the last legacy `/mcp/tools/call`
+      `@awaiting-implementation` draft under the review surface
 - [x] Every API key carries an immutable caller scope (`org` | `user`,
       ADR 030/FAR-620): user-scoped keys act as their creator and are
       REST-JWT-minted only (flag + 10-key quota gated); MCP minting stays
@@ -107,6 +120,22 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   published as a distinct surface here.
 
 ## QA History
+- 2026-09-24: **product-map review pass** — closed the MCP HITL-review
+  `@awaiting-implementation` gap: the five `mcp/review_hitl.feature` scenarios
+  previously targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned
+  since 2026-08) and never ran. They are rewritten to drive the REAL
+  `review_hitl` / `list_pending_hitl` tool handler functions directly (request
+  ContextVars hydrated by hand), exercising the real `_parse_hitl_action`
+  claim-token guard (`claim_token_required`), the real `_check_agent_tool_scope`
+  role-hierarchy scope gate (a `runner` is denied `hitl:review` →
+  `insufficient_scope`), the real `_check_human_only_gate` policy hook and the
+  real HITLManager approve/reject decision dispatch (`approved` / `rejected` +
+  `gate_id`), plus the real pending-gate serialisation with the shared gate
+  description resolver — network-free and DB-free with only the auth
+  re-validation and DB/HITLManager seams patched. Removed the five scenarios
+  from `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
+  `_ORPHANED_BDD_FEATURES` stays empty. The `library_browse` / `human_only`
+  legacy-`/mcp/tools/call` drafts remain pinned as acknowledged gaps.
 - 2026-09-22: **product-map review pass** — closed the "no executing BDD for
   the trigger tool" gap: the five `mcp/trigger.feature` scenarios previously
   targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned
