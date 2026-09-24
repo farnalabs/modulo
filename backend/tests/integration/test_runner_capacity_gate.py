@@ -511,12 +511,19 @@ async def test_gate_contention_returns_retryable_within_lock_timeout(
         elapsed = time.monotonic() - started
         assert elapsed < 5.0, "the gate must degrade within the lock window, not hang"
     finally:
-        await blocker_session.execute(  # type: ignore[union-attr]
-            text("SELECT pg_advisory_unlock(:k1, :k2)"),
-            {"k1": k1, "k2": k2},
-        )
-        await blocker_session.rollback()  # type: ignore[union-attr]
-        await blocker_session.__aexit__(None, None, None)  # type: ignore[union-attr]
+        # Teardown is unconditional: if the unlock raises, still roll back the
+        # explicitly-opened transaction (autobegin=False) and close the session
+        # so the connection is never leaked.
+        try:
+            await blocker_session.execute(  # type: ignore[union-attr]
+                text("SELECT pg_advisory_unlock(:k1, :k2)"),
+                {"k1": k1, "k2": k2},
+            )
+        finally:
+            try:
+                await blocker_session.rollback()  # type: ignore[union-attr]
+            finally:
+                await blocker_session.__aexit__(None, None, None)  # type: ignore[union-attr]
 
 
 async def test_same_run_concurrent_dispatch_and_resume_no_deadlock(
