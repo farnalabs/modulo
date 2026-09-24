@@ -215,10 +215,10 @@ importers:
     optionalDependencies:
       '@datadog/browser-logs':
         specifier: ^7.12.0
-        version: 7.13.0(@datadog/browser-rum@7.13.0)
+        version: 7.14.0(@datadog/browser-rum@7.14.0)
       '@datadog/browser-rum':
         specifier: ^7.12.0
-        version: 7.13.0(@datadog/browser-logs@7.13.0)
+        version: 7.14.0(@datadog/browser-logs@7.14.0)
       '@grafana/faro-web-sdk':
         specifier: ^2.8.2
         version: 2.12.0
@@ -544,30 +544,30 @@ packages:
     resolution: {integrity: sha512-bPlN9S9O1A0euCpEWE4qnvB5YDuyYVsUTrxSgmAM1Is0j4tICHoVyOVAXfWMP/kS9ZrjvyIXWV2PmomiAXXqOw==}
     engines: {node: '>=20.19.0'}
 
-  '@datadog/browser-core@7.13.0':
-    resolution: {integrity: sha512-pLde6WSrJ3XMLx7Kh2W3uy2K4PGs69ZBwDVjxDeufgnQTBCs2QFd9RBUCy5EqKg7buyFya3qwoCLz3f2UWn0tQ==}
+  '@datadog/browser-core@7.14.0':
+    resolution: {integrity: sha512-9Nuu2swva6Of+uvQLw1700taX2ix/20enKQUo9zEQlVPvWyj2/N055d160WLiwR0oveuYt2kaZQWFomvmiWyvg==}
 
-  '@datadog/browser-logs@7.13.0':
-    resolution: {integrity: sha512-x+faqZjpj6Ji0jqkCStqeKPhpe8RdZALa2+ocr3CpMX0Ox6VH3SgICYTNIhRY0w5rvpZ6A1MSAiYGtEcRJveow==}
+  '@datadog/browser-logs@7.14.0':
+    resolution: {integrity: sha512-Am3Yox88mhuxQ81juEU6yxfwiihelBGwdxenfJDbJq/3dOlD4TsFTztuS07LJvy0YML8hL942acQOgKvXTfCEA==}
     peerDependencies:
-      '@datadog/browser-rum': 7.13.0
+      '@datadog/browser-rum': 7.14.0
     peerDependenciesMeta:
       '@datadog/browser-rum':
         optional: true
 
-  '@datadog/browser-rum-core@7.13.0':
-    resolution: {integrity: sha512-zHcCE5NqzFHJsdxv2fZlzvWBfkVXzhCQ+FpuVeCpzYHulPnv+5LKpGjXeHvOWNlUeC1bo29ECEF6q/ZlMTKgLA==}
+  '@datadog/browser-rum-core@7.14.0':
+    resolution: {integrity: sha512-4bO4uLc4/+TT7sBHv8i9csyoDvU3sqE/zJ3jwaQi8JfRtJs9UQkFaq/DXVKoPnYSJoMAmDt8H/fSr76r5YV3/Q==}
 
-  '@datadog/browser-rum@7.13.0':
-    resolution: {integrity: sha512-98bOoB7SYvcjQyOWb38I4TtS16Lm4IfPgWNYWDnq+LwCOEwQyQfCsZakvlpXGo3WpYdJA+DW7Jzulj+GEp8Cnw==}
+  '@datadog/browser-rum@7.14.0':
+    resolution: {integrity: sha512-QxdqN2tdkSFKDSSEdIltuYXLCWsUVz7k+4kU56qBIcaNQw5Dh4/KtfmfAHJRaj2F+6+BAhii72/kiD16wASxAQ==}
     peerDependencies:
-      '@datadog/browser-logs': 7.13.0
+      '@datadog/browser-logs': 7.14.0
     peerDependenciesMeta:
       '@datadog/browser-logs':
         optional: true
 
-  '@datadog/js-core@0.0.14':
-    resolution: {integrity: sha512-JRWzc1ko80kwyTcNdUAY40iO9xZrj0yy8tBbJgUydnja6IpB4mF8+HkSgzhGzjiqCmrtnJsqNlRVBamP8F9nFw==}
+  '@datadog/js-core@0.0.15':
+    resolution: {integrity: sha512-1EPXrwFXkBxsi/9XIp56kzgRkW1wbG8r33mdQndUJd3IiCjHhAWDc1D4ocYAcBlUqXicwO4g354OdE7Lb0nEMA==}
 
   '@epic-web/invariant@1.0.0':
     resolution: {integrity: sha512-lrTPqgvfFQtR/eY/qkIzp98OGdNJu0m5ji3q/nJI8v3SXkRKEnWiOxMmbvcSoAIzv/cGiuvRy57k4suKQSAdwA==}
@@ -3920,35 +3920,35 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.1': {}
 
-  '@datadog/browser-core@7.13.0':
+  '@datadog/browser-core@7.14.0':
     dependencies:
-      '@datadog/js-core': 0.0.14
+      '@datadog/js-core': 0.0.15
     optional: true
 
-  '@datadog/browser-logs@7.13.0(@datadog/browser-rum@7.13.0)':
+  '@datadog/browser-logs@7.14.0(@datadog/browser-rum@7.14.0)':
     dependencies:
-      '@datadog/browser-core': 7.13.0
-      '@datadog/js-core': 0.0.14
+      '@datadog/browser-core': 7.14.0
+      '@datadog/js-core': 0.0.15
     optionalDependencies:
-      '@datadog/browser-rum': 7.13.0(@datadog/browser-logs@7.13.0)
+      '@datadog/browser-rum': 7.14.0(@datadog/browser-logs@7.14.0)
     optional: true
 
-  '@datadog/browser-rum-core@7.13.0':
+  '@datadog/browser-rum-core@7.14.0':
     dependencies:
-      '@datadog/browser-core': 7.13.0
-      '@datadog/js-core': 0.0.14
+      '@datadog/browser-core': 7.14.0
+      '@datadog/js-core': 0.0.15
     optional: true
 
-  '@datadog/browser-rum@7.13.0(@datadog/browser-logs@7.13.0)':
+  '@datadog/browser-rum@7.14.0(@datadog/browser-logs@7.14.0)':
     dependencies:
-      '@datadog/browser-core': 7.13.0
-      '@datadog/browser-rum-core': 7.13.0
-      '@datadog/js-core': 0.0.14
+      '@datadog/browser-core': 7.14.0
+      '@datadog/browser-rum-core': 7.14.0
+      '@datadog/js-core': 0.0.15
     optionalDependencies:
-      '@datadog/browser-logs': 7.13.0(@datadog/browser-rum@7.13.0)
+      '@datadog/browser-logs': 7.14.0(@datadog/browser-rum@7.14.0)
     optional: true
 
-  '@datadog/js-core@0.0.14':
+  '@datadog/js-core@0.0.15':
     optional: true
 
   '@epic-web/invariant@1.0.0': {}
