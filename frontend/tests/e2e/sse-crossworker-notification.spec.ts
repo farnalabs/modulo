@@ -40,6 +40,11 @@ test.describe('SSE notification delivery', { tag: '@regression' }, () => {
         body: JSON.stringify({ items: [], total: 0, page: 1, page_size: 50 }),
       }),
     )
+    // Hold the SSE frame until the test has observed the pre-event badge. The
+    // stream opens on page load, so without this gate the event can land (and
+    // flip the badge to 2) before the "starts at 1" assertion ever observes 1.
+    let releaseEvent!: () => void
+    const eventGate = new Promise<void>((resolve) => { releaseEvent = resolve })
     // SSE stream: connected frame + one notification event, then close.
     const notificationEvent = {
       type: 'notification',
@@ -52,7 +57,8 @@ test.describe('SSE notification delivery', { tag: '@regression' }, () => {
       created_at: '2026-09-23T12:00:00+00:00',
       event_id: 'notification:e2e-notification-1:created',
     }
-    await page.route('**/api/v1/events*', (route) => {
+    await page.route('**/api/v1/events*', async (route) => {
+      await eventGate
       // The notification now exists server-side; the handler's refetch sees it.
       unreadCount = 2
       return route.fulfill({
@@ -72,6 +78,7 @@ test.describe('SSE notification delivery', { tag: '@regression' }, () => {
 
     // ...the SSE event arrives on the already-open page and the badge updates
     // with NO navigation/reload.
+    releaseEvent()
     await expect(page.getByTestId('notification-unread-badge')).toHaveText('2')
   })
 })
