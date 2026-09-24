@@ -460,6 +460,36 @@ entities:
         assert "graph_json" not in patch_payload
 
     @respx.mock
+    def test_update_sends_declared_max_autonomy_level(self) -> None:
+        """FAR-1163: a DECLARED ceiling is PATCHed (declare = manage); it must
+        reach the API so an apply can raise a UI-set ceiling."""
+        existing_id = "00000000-0000-0000-0000-0000000000aa"
+        existing = _pipeline_item("sample", existing_id)
+        existing["max_concurrent_runs"] = 3
+        routes = _mock_current_with_pipelines([existing])
+        config = parse_apply_documents(
+            """
+api_version: modulo.dev/v1
+entities:
+  pipelines:
+    - name: sample
+      description: Sample pipeline
+      max_concurrent_runs: 3
+      max_autonomy_level: fully_autonomous
+"""
+        )
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        updated_names = [e["name"] for e in report["updated"] if e["kind"] == "pipeline"]
+        assert updated_names == ["sample"]
+        assert routes["pipeline_patch"].call_count == 1
+        patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        update = PipelineUpdate.model_validate(patch_payload)
+        assert update.max_autonomy_level == "fully_autonomous"
+
+    @respx.mock
     def test_update_with_graph_drift_sends_graph_json(self) -> None:
         existing_id = "00000000-0000-0000-0000-0000000000aa"
         existing = _pipeline_item("sample", existing_id)

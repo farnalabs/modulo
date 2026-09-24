@@ -452,6 +452,42 @@ class TestMcpTools:
         assert result["field"] == "circuit_breaker_threshold"
         session_factory.assert_not_called()
 
+    async def test_create_pipeline_forwards_max_autonomy_level(self) -> None:
+        """FAR-1163: a valid ceiling is validated and forwarded to the CRUD."""
+        from modulo.api.mcp_server import create_pipeline as mcp_create_pipeline
+
+        created = _response_pipeline(Decimal("30.000000"))
+        db_create = AsyncMock(return_value=created)
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch(f"{_CRUD}create_pipeline", new=db_create),
+        ):
+            result = await mcp_create_pipeline(
+                name="p",
+                default_autonomy_level="manual_approval",
+                max_autonomy_level="fully_autonomous",
+            )
+
+        assert db_create.await_args.kwargs["max_autonomy_level"] == "fully_autonomous"
+        assert result["id"] == str(_PIPELINE_ID)
+
+    async def test_create_pipeline_rejects_invalid_max_autonomy_level(self) -> None:
+        """FAR-1163: a ceiling below the default is rejected before any DB work."""
+        from modulo.api.mcp_server import create_pipeline as mcp_create_pipeline
+
+        session_factory = MagicMock()
+        with patch("modulo.api.mcp_server._session", new=session_factory):
+            result = await mcp_create_pipeline(
+                name="p",
+                default_autonomy_level="fully_autonomous",
+                max_autonomy_level="manual_approval",
+            )
+
+        assert result["error"] == "invalid_max_autonomy_level"
+        assert "must be >=" in result["detail"]
+        session_factory.assert_not_called()
+
     async def test_set_circuit_breaker_updates_with_audit_context(self) -> None:
         from modulo.api.mcp_server import set_pipeline_circuit_breaker
 

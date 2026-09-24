@@ -1458,6 +1458,109 @@ describe('PipelineEditorView — run dialog', () => {
     expect(wrapper.find('[data-testid="pipeline-editor-save-error"]').text()).toContain('network_down')
     wrapper.unmount()
   })
+
+  it('sends null when the autonomy ceiling is cleared (inherit option)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline', max_autonomy_level: 'notify_on_complete' }
+    vm.maxAutonomyInput = 'notify_on_complete'
+    await nextTick()
+
+    const select = wrapper.find('[data-testid="pipeline-editor-max-autonomy"]')
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockReset()
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockResolvedValue({ data: {}, error: undefined })
+
+    // '' is the inherit option — it must send null, never the literal ''.
+    await select.setValue('')
+    await flushPromises()
+    await nextTick()
+
+    const patch = vi.mocked(api.PATCH).mock.calls.find((c) => 'max_autonomy_level' in ((c[1] as any).body ?? {}))
+    expect(patch).toBeTruthy()
+    expect((patch as unknown[] | undefined)![1]).toEqual(expect.objectContaining({
+      body: { max_autonomy_level: null },
+    }))
+    expect(vm.maxAutonomyInput).toBeNull()
+    expect(vm.pipeline.max_autonomy_level).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('uses the non-422 failure message and reverts to null with no loaded pipeline', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    vm.pipeline = null
+    vm.maxAutonomyInput = null
+    await nextTick()
+
+    const select = wrapper.find('[data-testid="pipeline-editor-max-autonomy"]')
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockReset()
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockResolvedValue({ data: {}, error: undefined })
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockImplementationOnce(() =>
+      Promise.resolve({ data: null, error: { detail: 'server exploded' }, response: { status: 500 } }))
+
+    await select.setValue('fully_autonomous')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-save-error"]').text()).toContain('server exploded')
+    expect((select.element as HTMLSelectElement).value).toBe('')
+    expect(vm.maxAutonomyInput).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('does not touch a null pipeline after a successful ceiling PATCH', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    vm.pipeline = null
+    vm.maxAutonomyInput = null
+    await nextTick()
+
+    const select = wrapper.find('[data-testid="pipeline-editor-max-autonomy"]')
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockReset()
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockResolvedValue({ data: {}, error: undefined })
+
+    await select.setValue('notify_on_complete')
+    await flushPromises()
+    await nextTick()
+
+    expect(vm.maxAutonomyInput).toBe('notify_on_complete')
+    expect(wrapper.find('[data-testid="pipeline-editor-save-error"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('reverts to null on a network failure with no loaded pipeline', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+
+    vm.pipeline = null
+    vm.maxAutonomyInput = null
+    await nextTick()
+
+    const select = wrapper.find('[data-testid="pipeline-editor-max-autonomy"]')
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockReset()
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockResolvedValue({ data: {}, error: undefined })
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockImplementationOnce(() => Promise.reject(new Error('network_down_2')))
+
+    await select.setValue('notify_on_complete')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-save-error"]').text()).toContain('network_down_2')
+    expect((select.element as HTMLSelectElement).value).toBe('')
+    expect(vm.maxAutonomyInput).toBeNull()
+    wrapper.unmount()
+  })
 })
 
 describe('PipelineEditorView — edge properties panel', () => {

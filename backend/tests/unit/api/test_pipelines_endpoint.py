@@ -575,6 +575,32 @@ def test_update_pipeline_accepts_valid_ceiling_and_emits_audit(client: TestClien
     assert audit_kwargs["payload_json"]["new_level"] == "fully_autonomous"
 
 
+def test_update_pipeline_unchanged_ceiling_emits_no_audit(client: TestClient) -> None:
+    """FAR-1163: a PATCH that repeats the persisted ceiling is a no-op, not a
+    change event — ``_maybe_audit_autonomy_change`` skips unchanged fields."""
+    current = _make_pipeline()
+    current.default_autonomy_level = "manual_approval"
+    current.max_autonomy_level = "notify_on_complete"
+    updated = _make_pipeline()
+    updated.default_autonomy_level = "manual_approval"
+    updated.max_autonomy_level = "notify_on_complete"
+
+    with (
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=updated),
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event") as mock_audit,
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"max_autonomy_level": "notify_on_complete"},
+        )
+
+    assert resp.status_code == 200
+    mock_audit.assert_not_awaited()
+
+
 def test_update_pipeline_rejects_invalid_ceiling_level(client: TestClient) -> None:
     resp = client.patch(
         f"/api/v1/pipelines/{_PIPELINE_ID}",

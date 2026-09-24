@@ -211,6 +211,28 @@ async def test_noop_when_org_id_missing(monkeypatch: pytest.MonkeyPatch) -> None
     assert set_ctx.await_count == 0
 
 
+async def test_append_helper_noop_without_session_or_org() -> None:
+    """The shared append helper no-ops when either the session factory or the
+    org id is missing — callers that run without a session must not be
+    penalised (mirrors the emitters' own guards)."""
+    await at._append_run_autonomy_event(
+        None,
+        org_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        event_type=at.AUTONOMY_LEVEL_APPLIED,
+        payload_json={},
+        failure_message="ignored",
+    )
+    await at._append_run_autonomy_event(
+        _session_factory,
+        org_id=None,
+        run_id=uuid.uuid4(),
+        event_type=at.AUTONOMY_LEVEL_APPLIED,
+        payload_json={},
+        failure_message="ignored",
+    )
+
+
 async def test_nullable_fields_are_serialized_as_none(monkeypatch: pytest.MonkeyPatch) -> None:
     import modulo.core.audit_logger as al
 
