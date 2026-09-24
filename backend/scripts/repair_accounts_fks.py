@@ -27,7 +27,7 @@ Rebuild the table so it gets a fresh catalog entry:
   2. INSERT INTO accounts_new SELECT * FROM accounts
   3. DROP TABLE accounts
   4. ALTER TABLE accounts_new RENAME TO accounts
-  5. re-apply grants + ownership, then re-add all 46 FK constraints.
+  5. re-apply grants + ownership, then re-add every FK listed in ``ACCOUNTS_FKS``.
 
 This script is the version-controlled, repeatable form of that manual repair.
 It is a DOCUMENTED repair tool -- it is never run automatically.
@@ -67,28 +67,44 @@ ON_DELETE_RESTRICT = "RESTRICT"
 ON_DELETE_CASCADE = "CASCADE"
 
 # (child_table, constraint_name, fk_column, on_delete_action) -- snapshot of
-# the 46 FKs referencing public.accounts (prod, 2026-08-04). Keep in sync with
-# the migrations when the schema changes.
+# the FKs referencing public.accounts. Originally captured from prod on
+# 2026-08-04 (46 FKs); re-synced against the migrations on 2026-09-24 (61
+# FKs: chat_sessions renamed by 0136, stages table dropped by 0108, and FKs
+# added by 0109/0110 reconciliation plus 0115/0132/0170/0177/0189/0217/0250).
+# Keep in sync with the migrations when the schema changes.
 ACCOUNTS_FKS: tuple[tuple[str, str, str, str], ...] = (
+    ("agent_runner_bindings", "agent_runner_bindings_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("agents", "agents_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
+    ("agents", "fk_agents_created_by", "created_by", ON_DELETE_SET_NULL),
+    ("agents", "fk_agents_updated_by", "updated_by", ON_DELETE_SET_NULL),
+    ("agents", "fk_agents_deleted_by", "deleted_by", ON_DELETE_SET_NULL),
     ("audit_events", "audit_events_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
-    ("chat_sessions", "chat_sessions_user_id_fkey", "user_id", ON_DELETE_CASCADE),
+    ("chat_sessions", "chat_sessions_account_id_fkey", "account_id", ON_DELETE_CASCADE),
     ("composite_templates", "composite_templates_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("connector_instances", "connector_instances_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
+    ("connector_instances", "fk_connector_instances_created_by", "created_by", ON_DELETE_SET_NULL),
+    ("connector_instances", "fk_connector_instances_updated_by", "updated_by", ON_DELETE_SET_NULL),
+    ("connector_instances", "fk_connector_instances_deleted_by", "deleted_by", ON_DELETE_SET_NULL),
     ("dismissals", "dismissals_dismissed_by_user_id_fkey", "dismissed_by_user_id", ON_DELETE_CASCADE),
     ("environment_profiles", "environment_profiles_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("error_groups", "error_groups_assigned_to_fkey", "assigned_to", ON_DELETE_SET_NULL),
     ("eval_definitions", "eval_definitions_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
+    ("evals", "evals_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("feedback_records", "feedback_records_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("hitl_claims", "hitl_claims_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
+    ("hitl_claims", "fk_hitl_claims_decided_by_accounts", "decided_by", ON_DELETE_SET_NULL),
+    ("invitations", "invitations_invited_by_fkey", "invited_by", ON_DELETE_RESTRICT),
     ("library_primitives", "library_primitives_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
+    ("lifecycle_map_stages", "lifecycle_map_stages_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("lifecycle_maps", "lifecycle_maps_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
+    ("lifecycle_maps", "lifecycle_maps_updated_by_fkey", "updated_by", ON_DELETE_SET_NULL),
     ("mcp_setup_tokens", "fk_mcp_setup_tokens_created_by", "created_by", ON_DELETE_RESTRICT),
     ("model_backends", "model_backends_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("node_categories", "node_categories_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("node_observations", "node_observations_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
     ("nodes", "nodes_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("notification_endpoints", "notification_endpoints_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
+    ("notification_preferences", "notification_preferences_account_id_fkey", "account_id", ON_DELETE_CASCADE),
     ("notifications", "notifications_target_user_id_fkey", "target_user_id", ON_DELETE_SET_NULL),
     ("oauth_authorization_codes", "fk_oauth_authorization_codes_account_id", "account_id", ON_DELETE_CASCADE),
     ("oauth_clients", "oauth_clients_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
@@ -118,9 +134,11 @@ ACCOUNTS_FKS: tuple[tuple[str, str, str, str], ...] = (
     ("runs", "runs_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
     ("saved_views", "saved_views_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("scheduled_reports", "scheduled_reports_created_by_fkey", "created_by", ON_DELETE_SET_NULL),
+    ("scheduled_reports", "fk_scheduled_reports_updated_by", "updated_by", ON_DELETE_SET_NULL),
+    ("scheduled_reports", "fk_scheduled_reports_deleted_by", "deleted_by", ON_DELETE_SET_NULL),
+    ("schema_folders", "schema_folders_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("schemas", "schemas_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("schema_versions", "schema_versions_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
-    ("stages", "stages_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
     ("system_config", "fk_system_config_updated_by", "updated_by", ON_DELETE_SET_NULL),
     ("team_memberships", "team_memberships_account_id_fkey", "account_id", ON_DELETE_CASCADE),
     ("teams", "teams_account_id_fkey", "account_id", ON_DELETE_RESTRICT),
@@ -257,7 +275,7 @@ async def _cmd_check(conn: asyncpg.Connection) -> int:
     probe_ok, probe_msg = await _run_fk_probe(conn)
     print(probe_msg)
     if not missing and not unexpected and probe_ok:
-        print("RESULT: accounts catalog looks healthy (all 46 FKs present, no drift, probe passed).")
+        print(f"RESULT: accounts catalog looks healthy (all {len(ACCOUNTS_FKS)} FKs present, no drift, probe passed).")
         return 0
     if missing or not probe_ok:
         print("RESULT: repair needed.")
@@ -343,7 +361,7 @@ async def _rename_accounts_objects(conn: asyncpg.Connection) -> None:
 async def _cmd_rebuild(conn: asyncpg.Connection, confirmed: bool = False) -> int:
     """Transactional rebuild of accounts with a fresh catalog entry."""
     print("WARNING: rebuild-accounts DROPs and recreates the accounts table.")
-    print("It is destructive. Run 'check' first, ensure all 46 FKs are absent,")
+    print(f"It is destructive. Run 'check' first, ensure all {len(ACCOUNTS_FKS)} FKs are absent,")
     print("and take a fresh backup before proceeding.")
     if not confirmed:
         print("ERROR: destructive action requires explicit confirmation.", file=sys.stderr)
@@ -382,12 +400,12 @@ async def _cmd_rebuild(conn: asyncpg.Connection, confirmed: bool = False) -> int
         await _apply_grants(conn)
     after = await conn.fetchval("SELECT count(*) FROM public.accounts")
     print(f"Rebuild complete: {before} rows copied, {after} rows in the rebuilt table.")
-    print("Next step: run 'add-fks' to restore the 46 FK constraints.")
+    print(f"Next step: run 'add-fks' to restore the {len(ACCOUNTS_FKS)} FK constraints.")
     return 0
 
 
 async def _cmd_add_fks(conn: asyncpg.Connection) -> int:
-    """Add any of the 46 FKs that are missing, skipping orphaned children."""
+    """Add any missing FK from ACCOUNTS_FKS, skipping orphaned children."""
     added: list[str] = []
     already: list[str] = []
     skipped_orphans: list[str] = []
