@@ -535,3 +535,89 @@ def test_module_getattr_unknown_attribute_raises() -> None:
 
     with pytest.raises(AttributeError, match="has no attribute"):
         events.__getattr__("DoesNotExist")
+
+
+# ---------------------------------------------------------------------------
+# subscribe_pattern (FAR-250 worker subscription)
+# ---------------------------------------------------------------------------
+
+
+async def test_subscribe_pattern_psubscribes_to_prefixed_pattern(
+    broker: RedisEventBroker, mock_redis: MagicMock
+) -> None:
+    mock_pubsub = MagicMock()
+    mock_pubsub.psubscribe = AsyncMock()
+    mock_redis.pubsub.return_value = mock_pubsub
+
+    result = await broker.subscribe_pattern("resource:*")
+
+    mock_redis.pubsub.assert_called_once()
+    mock_pubsub.psubscribe.assert_awaited_once_with(f"{CHANNEL_PREFIX}resource:*")
+    assert result is mock_pubsub
+
+
+async def test_subscribe_pattern_auto_connects_when_not_connected() -> None:
+    with patch("modulo.core.events.redis_broker.aioredis.from_url") as mock_from_url:
+        mock_client = MagicMock()
+        mock_client.pubsub.return_value = MagicMock(psubscribe=AsyncMock())
+        mock_from_url.return_value = mock_client
+
+        broker = RedisEventBroker("redis://test:6379/0")
+        broker._pub = MagicMock()
+        # _sub is None by default — subscribe_pattern() will call connect()
+        await broker.subscribe_pattern("resource:*")
+
+        assert mock_from_url.call_count == 1
+        assert broker._sub is mock_client
+
+
+async def test_subscribe_pattern_with_no_connection_raises_runtime_error() -> None:
+    """subscribe_pattern() with no established _sub must raise RuntimeError."""
+    broker = RedisEventBroker("redis://test:6379/0")
+    broker._sub = None
+    broker._pub = MagicMock()
+    with (
+        patch.object(RedisEventBroker, "connect", new=AsyncMock()),
+        pytest.raises(RuntimeError, match="not established"),
+    ):
+        await broker.subscribe_pattern("resource:*")
+
+
+async def test_subscribe_pattern_error_closes_old_connection(broker: RedisEventBroker, mock_redis: MagicMock) -> None:
+    """When psubscribe() raises, the old connection must be closed before clearing _sub."""
+    mock_pubsub = MagicMock()
+    mock_pubsub.psubscribe = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
+    mock_redis.pubsub.return_value = mock_pubsub
+
+    with pytest.raises(ConnectionError):
+        await broker.subscribe_pattern("resource:*")
+
+    mock_redis.close.assert_awaited_once_with(close_connection_pool=True)
+    assert broker._sub is None
+
+
+async def test_subscribe_pattern_reraises_cancellation_without_clearing_connection() -> None:
+    """A cancelled psubscribe must leave the connection intact."""
+    broker = RedisEventBroker("redis://test:6379/0")
+    started = asyncio.Event()
+    client = MagicMock(spec=["publish", "close", "pubsub"])
+    mock_pubsub = MagicMock()
+
+    async def _blocking_psubscribe(*_args: object, **_kwargs: object) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    mock_pubsub.psubscribe = _blocking_psubscribe
+    client.pubsub.return_value = mock_pubsub
+    client.close = AsyncMock()
+    broker._pub = MagicMock()
+    broker._sub = client
+
+    task = asyncio.create_task(broker.subscribe_pattern("resource:*"))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    client.close.assert_not_called()
+    assert broker._sub is client

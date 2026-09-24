@@ -179,6 +179,36 @@ class RedisEventBroker:
             raise
         return pubsub
 
+    async def subscribe_pattern(self, pattern: str) -> PubSub:
+        """Return a PubSub object pattern-subscribed to ``{CHANNEL_PREFIX}{pattern}``.
+
+        Used by the SAQ worker subscription loop (FAR-250): workers hold a
+        ``resource:*`` pattern subscription but never relay messages. Same
+        caller contract as :meth:`subscribe` (iterate ``listen()``, then
+        unsubscribe/close).
+        """
+        if self._sub is None:
+            await self.connect()
+        async with self._lock:
+            sub = self._sub
+        if sub is None:
+            raise RuntimeError(
+                f"Redis subscriber connection not established for pattern {pattern}. Call connect() first."
+            )
+        pubsub = sub.pubsub()
+        try:
+            await pubsub.psubscribe(f"{CHANNEL_PREFIX}{pattern}")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("redis_broker.subscribe_pattern_failed", extra={"pattern": pattern})
+            async with self._lock:
+                old = self._sub
+                self._sub = None
+            await self._close_client_after_error(old, "redis_broker.sub_close_failed_after_error")
+            raise
+        return pubsub
+
     async def close(self) -> None:
         """Close both Redis connections."""
         async with self._lock:

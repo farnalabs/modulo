@@ -19,18 +19,30 @@ import pytest
 from modulo.connectors._rate_bucket import _CONSUME_LUA
 
 
+def _lua51_available() -> bool:
+    """True when ``lupa`` and its Lua 5.1 runtime are importable."""
+    return importlib.util.find_spec("lupa") is not None and importlib.util.find_spec("lupa.lua51") is not None
+
+
 def _compile_via_lupa() -> str | None:
     """Return an error string if the script fails to compile, else ``None``.
 
-    Uses ``lupa`` (a real embedded Lua VM). ``loadstring`` exists in Lua 5.1 /
-    LuaJIT; Lua 5.2+ renamed it to ``load``. We accept whichever the runtime
-    provides so the check is robust across lupa builds.
+    Uses ``lupa``'s embedded Lua **5.1** runtime — the Lua version Redis
+    actually executes scripts with. Pinning the version is deliberate: ``lupa``
+    2.x ships several Lua runtimes (5.1-5.5), and creating one runtime after a
+    different one has already been loaded in the same process can segfault the
+    interpreter. ``fakeredis`` (a test dependency used elsewhere in the unit
+    suite) imports ``lupa.lua51`` at import time, so selecting lupa's default
+    (5.5) here crashed the pytest-xdist worker whenever both modules ran in one
+    process. Lua 5.1 also matches Redis, so it is the faithful VM for the
+    check. ``loadstring`` exists in Lua 5.1 / LuaJIT; Lua 5.2+ renamed it to
+    ``load``, so the runtime probe below keeps the check robust.
     """
-    if importlib.util.find_spec("lupa") is None:
-        return None  # signal "no Lua VM available"
-    from lupa import LuaRuntime
+    if not _lua51_available():
+        return None  # signal "no Lua 5.1 VM available"
+    from lupa import lua51
 
-    lua = LuaRuntime(unpack_returned_tuples=True)
+    lua = lua51.LuaRuntime(unpack_returned_tuples=True)
     check = (
         "function(s)\n"
         "  local f, err\n"
@@ -42,8 +54,8 @@ def _compile_via_lupa() -> str | None:
 
 
 @pytest.mark.skipif(
-    importlib.util.find_spec("lupa") is None,
-    reason="lupa (real Lua VM) not installed; cannot compile-check the Lua script",
+    not _lua51_available(),
+    reason="lupa Lua 5.1 VM not installed; cannot compile-check the Lua script",
 )
 def test_consume_lua_compiles() -> None:
     """``_CONSUME_LUA`` must be valid Lua — a syntax error fails closed at runtime."""

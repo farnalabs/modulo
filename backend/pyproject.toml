@@ -555,6 +555,10 @@ root_package = "modulo"
 dev = [
     "bandit>=1.9.4",
     "factory-boy>=3.3.3",
+    # In-process Redis double for the FAR-250 relay integration tests
+    # (subscribe-before-publish, echo suppression, backfill dedupe) — no
+    # real Redis server required in the unit suite.
+    "fakeredis>=2.26.0",
     "httpx>=0.28.1",
     # Starlette 1.x TestClient imports httpx2; keep this even without direct repo imports.
     "httpx2>=2.0.0",

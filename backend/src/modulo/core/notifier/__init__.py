@@ -70,6 +70,56 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
+# FAR-250: fire-and-forget post-commit SSE broadcast tasks (kept referenced
+# so the event loop does not garbage-collect them mid-flight).
+_sse_broadcast_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _on_sse_broadcast_done(task: asyncio.Task[Any]) -> None:
+    _sse_broadcast_tasks.discard(task)
+    if task.cancelled():
+        _log.warning("notifier.sse_broadcast_task_cancelled")
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log.warning("notifier.sse_broadcast_failed", exc_info=exc)
+
+
+def _fire_notification_sse_broadcast(org_id: uuid.UUID, notification: Any) -> None:
+    """Post-commit, fire-and-forget Redis broadcast for one created notification.
+
+    This is THE single Redis message per create (FAR-250): the originating
+    process already delivered locally via the ``after_insert`` listener, and
+    the listener's Redis leg is suppressed for notifications. The payload
+    carries only ``{notification_id, category, created_at}`` on the envelope
+    — never content. Failures are logged, never raised (Redis being down
+    must not fail a committed notification).
+    """
+    from modulo.core.events.event_bus import get_event_bus
+    from modulo.core.events.listeners import next_event_version
+    from modulo.core.events.notification_events import build_notification_event
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _log.warning(
+            "notifier.sse_broadcast_skipped_no_loop",
+            extra={"org_id": str(org_id), "notification_id": str(notification.id)},
+        )
+        return
+
+    org_id_str = str(org_id)
+    event = build_notification_event(
+        org_id=org_id_str,
+        notification_id=notification.id,
+        category=str(notification.category),
+        created_at=notification.created_at,
+        version=next_event_version(org_id_str),
+    )
+    task = loop.create_task(get_event_bus().broadcast_redis_only(org_id_str, event))
+    _sse_broadcast_tasks.add(task)
+    task.add_done_callback(_on_sse_broadcast_done)
+
 
 def endpoint_events_to_list(raw_events: object) -> list[str]:
     """Normalise ``NotificationEndpoint.events`` (a list or JSON string) to a list of strings.
@@ -430,14 +480,26 @@ class Notifier:
                 result = await self._dispatch_endpoint_pinned(ep, event_type, body, run_id, retain_payload)
                 results.append(result)
 
-        # Create in-app notification record alongside webhook dispatches
+        # Create in-app notification record alongside webhook dispatches.
+        # FAR-250: the cross-worker SSE broadcast fires POST-COMMIT from here
+        # (fire-and-forget) — the `session.begin()` block below commits on
+        # normal exit, so a rollback skips the broadcast entirely
+        # (rollback-no-phantom) and each create emits exactly ONE Redis
+        # message (the listener's own Redis leg is suppressed for
+        # notifications; its local delivery is untouched).
+        notification = None
         try:
+            from modulo.core.events.notification_events import NOTIFIER_SESSION_KEY
             from modulo.core.notifier.event_mapper import NotificationEventMapper
 
             mapper = NotificationEventMapper()
             async with self._session_factory() as session, session.begin():
+                # Mark this session notifier-owned: the after_insert listener
+                # then suppresses ITS Redis leg for the notification row (the
+                # post-commit broadcast below is the single Redis message).
+                session.info[NOTIFIER_SESSION_KEY] = True
                 await set_rls_org(session, org_id)
-                await mapper.create_from_event(
+                notification = await mapper.create_from_event(
                     session,
                     org_id=org_id,
                     event_type=event_type,
@@ -449,6 +511,9 @@ class Notifier:
             _log.exception(
                 "notifier.in_app_notification_failed", extra={"event_type": event_type, "org_id": str(org_id)}
             )
+        else:
+            if notification is not None:
+                _fire_notification_sse_broadcast(org_id, notification)
 
         return results
 
