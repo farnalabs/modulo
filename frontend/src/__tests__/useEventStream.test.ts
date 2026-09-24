@@ -6,6 +6,18 @@ vi.mock('@/lib/api/client', () => ({
   getAuthHeaders: vi.fn(() => ({ Authorization: 'Bearer test-token' })),
 }))
 
+/**
+ * Deterministically pin the reconnect half-jitter source. The composable draws
+ * its jitter fraction from crypto.getRandomValues (S2245); make it return
+ * `fraction` for the first 32-bit word so backoff timing is exact.
+ */
+function mockRandomFraction(fraction: number): void {
+  vi.spyOn(crypto, 'getRandomValues').mockImplementation(((array: Uint32Array) => {
+    array[0] = Math.floor(fraction * 0x100000000)
+    return array
+  }) as typeof crypto.getRandomValues)
+}
+
 let pushEvent: (eventType: string, data: Record<string, unknown>) => void
 let pushRawSse: (raw: string) => void
 let endStream: () => void
@@ -159,20 +171,21 @@ describe('eventBus', () => {
     vi.useRealTimers()
   })
 
-  it('stops reconnecting after the maximum number of attempts', async () => {
+  it('keeps retrying on a non-ok response forever (FAR-250: no attempt cap)', async () => {
+    // Regression for the old bug: the 10-attempt cap permanently killed the
+    // stream during long outages. A retryable failure must NEVER give up.
     vi.useFakeTimers()
-    vi.mocked(fetch).mockResolvedValue({ ok: false, body: null } as unknown as Response)
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockRandomFraction(0)
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500, body: null } as unknown as Response)
     const { eventBus } = await import('../composables/useEventStream')
     eventBus.subscribe('run', vi.fn())
     await vi.advanceTimersByTimeAsync(0)
     expect(fetch).toHaveBeenCalledTimes(1)
-    await vi.advanceTimersByTimeAsync(200_000)
-    expect(fetch).toHaveBeenCalledTimes(11)
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Max reconnect attempts'))
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(fetch).toHaveBeenCalledTimes(11)
-    errorSpy.mockRestore()
+    await vi.advanceTimersByTimeAsync(300_000)
+    // Comfortably past the old cap of 11 total attempts (1 + 10 retries).
+    expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(11)
+    expect(eventBus.state).toBe('reconnecting')
+    expect(eventBus.reconnectRequired).toBe(false)
     vi.useRealTimers()
   })
 
@@ -212,6 +225,153 @@ describe('eventBus', () => {
     const event = { type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' }
     triggerEvent(event)
     await vi.waitFor(() => expect(handler).toHaveBeenCalledWith(event))
+  })
+})
+
+describe('classified reconnect (FAR-250)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it.each([401, 403, 429])('stops retrying on %i and surfaces the reconnect banner', async (status: number) => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(eventBus.state).toBe('auth_failed')
+    expect(eventBus.reconnectRequired).toBe(true)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Stopping stream'))
+
+    // No retries ever — a fresh token / freed connection cap is required.
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    // New subscribers must NOT auto-restart while auth-stopped.
+    eventBus.subscribe('other', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    unsub()
+  })
+
+  it('reconnect() restarts the stream after a 4xx stop with a fresh token', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(eventBus.reconnectRequired).toBe(true)
+
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      body: { getReader: () => ({ read: () => new Promise(() => {}), cancel: vi.fn().mockResolvedValue(undefined) }) },
+    } as unknown as Response)
+    eventBus.reconnect()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(eventBus.state).toBe('connected')
+    expect(eventBus.reconnectRequired).toBe(false)
+  })
+
+  it('keeps retrying after network errors forever', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    vi.mocked(fetch).mockRejectedValue(new TypeError('fetch failed'))
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(11)
+    expect(eventBus.state).toBe('reconnecting')
+  })
+
+  it('uses half-jitter backoff: first retry lands at exp/2 when random()=0', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(499)
+    expect(fetch).toHaveBeenCalledTimes(1) // not yet — delay floor is 500ms
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetch).toHaveBeenCalledTimes(2) // fires at exactly 500ms
+  })
+
+  it('uses half-jitter backoff: first retry waits the full exp when random()=1', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0.9999999)
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500, body: null } as unknown as Response)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(600)
+    expect(fetch).toHaveBeenCalledTimes(1) // floor 500, ceiling 1000 — not yet at 600 with high jitter
+    await vi.advanceTimersByTimeAsync(400)
+    expect(fetch).toHaveBeenCalledTimes(2) // by 1000ms ceiling
+  })
+
+  it('fires the debounced onReconnect backfill exactly once after a successful reconnect', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    const backfill = vi.fn()
+    const unsub = eventBus.subscribe('run', vi.fn())
+    const offBackfill = eventBus.onReconnect(backfill)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(eventBus.connected).toBe(true)
+    // First successful connect is NOT a reconnect — no backfill yet.
+    expect(backfill).not.toHaveBeenCalled()
+
+    endStream() // server closes -> retry path (500ms with random=0)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(eventBus.connected).toBe(true) // reconnected (retry fired at t+500)
+
+    // Debounce window: not fired before 1500ms after the reconnect...
+    await vi.advanceTimersByTimeAsync(1499)
+    expect(backfill).not.toHaveBeenCalled()
+    // ...fired exactly once after it.
+    await vi.advanceTimersByTimeAsync(1)
+    expect(backfill).toHaveBeenCalledTimes(1)
+    // A second reconnect schedules its own debounced batch — one call per
+    // reconnect window (the debounce coalesces bursts inside a window).
+    endStream()
+    await vi.advanceTimersByTimeAsync(500)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(backfill).toHaveBeenCalledTimes(2)
+
+    offBackfill()
+    unsub()
+  })
+
+  it('shares ONE stream across subscribers (module singleton)', async () => {
+    const { eventBus } = await import('../composables/useEventStream')
+    const unsubA = eventBus.subscribe('run', vi.fn())
+    await tick()
+    const unsubB = eventBus.subscribe('pipeline', vi.fn())
+    await tick()
+    expect(fetch).toHaveBeenCalledTimes(1) // second subscriber did not open a second stream
+    unsubA()
+    unsubB()
   })
 })
 
@@ -374,5 +534,142 @@ describe('useDirtyTracker', () => {
 
     tracker.markClean('item-1')
     expect(spy).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('reconnect backfill + reset (FAR-250 coverage)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('resets the backfill debounce when a second reconnect lands inside the window', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    const { eventBus } = await import('../composables/useEventStream')
+    const backfill = vi.fn()
+    const unsub = eventBus.subscribe('run', vi.fn())
+    const off = eventBus.onReconnect(backfill)
+    await vi.advanceTimersByTimeAsync(0)
+
+    endStream()
+    await vi.advanceTimersByTimeAsync(500) // reconnect 1 -> schedules the backfill
+    endStream()
+    await vi.advanceTimersByTimeAsync(500) // reconnect 2 inside the window -> clears + reschedules
+    await vi.advanceTimersByTimeAsync(1500)
+
+    expect(backfill).toHaveBeenCalledTimes(1) // coalesced into a single batch
+    off()
+    unsub()
+  })
+
+  it('logs and swallows an error thrown by a reconnect backfill subscriber', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { eventBus } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    const off = eventBus.onReconnect(() => {
+      throw new Error('backfill boom')
+    })
+    await vi.advanceTimersByTimeAsync(0)
+
+    endStream()
+    await vi.advanceTimersByTimeAsync(500)
+    await vi.advanceTimersByTimeAsync(1500)
+
+    expect(errorSpy).toHaveBeenCalledWith('[EventBus] Reconnect backfill handler error', expect.any(Error))
+    off()
+    unsub()
+  })
+
+  it('retries when fetch rejects with an AbortError (zombie/dead stream)', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    const abortErr = new Error('aborted')
+    abortErr.name = 'AbortError'
+    vi.mocked(fetch).mockRejectedValue(abortErr)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(eventBus.state).toBe('reconnecting')
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it('does not schedule a reconnect when an abort lands after an explicit disconnect', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    const abortErr = new Error('aborted')
+    abortErr.name = 'AbortError'
+    vi.mocked(fetch).mockRejectedValue(abortErr)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    // Last handler leaves before the rejected fetch settles: disconnect() sets
+    // _disconnecting, so the AbortError must NOT schedule another attempt.
+    unsub()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(eventBus.state).toBe('idle')
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not schedule a reconnect when the stream ends after an explicit disconnect', async () => {
+    const { eventBus } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    await tick() // stream connected, reader.read() pending
+    unsub() // disconnect(): _disconnecting = true, state -> idle
+    endStream() // server closes the stream -> the try block completes normally
+    await tick()
+    await tick()
+
+    expect(eventBus.state).toBe('idle')
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+  })
+
+  it('disconnect() clears a pending backfill timer', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    const { eventBus } = await import('../composables/useEventStream')
+    const backfill = vi.fn()
+    const unsub = eventBus.subscribe('run', vi.fn())
+    const off = eventBus.onReconnect(backfill)
+    await vi.advanceTimersByTimeAsync(0)
+
+    endStream()
+    await vi.advanceTimersByTimeAsync(500) // reconnect -> schedules the backfill timer
+    unsub() // last handler leaves -> disconnect() clears the pending timer
+    off()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(backfill).not.toHaveBeenCalled()
+    expect(eventBus.state).toBe('idle')
+  })
+
+  it('useEventStream() returns the shared connected/connectionState refs', async () => {
+    const { useEventStream } = await import('../composables/useEventStream')
+    const result = useEventStream()
+    expect(result.connected.value).toBe(false)
+    expect(result.connectionState.value).toBe('idle')
+  })
+
+  it('resetEventStreamState() clears handlers, the backfill timer, and connection state', async () => {
+    vi.useFakeTimers()
+    mockRandomFraction(0)
+    const { eventBus, resetEventStreamState } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    eventBus.onReconnect(vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    endStream()
+    await vi.advanceTimersByTimeAsync(500) // reconnect leaves a pending backfill timer
+
+    resetEventStreamState() // clears the pending backfill timer
+    expect(eventBus.state).toBe('idle')
+
+    resetEventStreamState() // second call: no pending timer
+    unsub()
   })
 })

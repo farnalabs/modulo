@@ -437,4 +437,8 @@ __all__ = [
     #     the production dispatch/reclamation caller lands in the next FAR-1050 slice,
     #     so vulture sees no production call site yet ---
     "destroy_workspace_by_ref",
+    # --- FAR-250 SSE relay public surface (test-referenced; the production
+    #     call sites are the relay tests' stand-ins for ops/diagnostic use) ---
+    "wait_ready",  # EventRelay: awaits the subscribe-confirmation signal
+    "get_active_relay",  # relay singleton accessor (diagnostic/test-referenced)
 ]

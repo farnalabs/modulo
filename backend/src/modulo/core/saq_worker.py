@@ -1727,6 +1727,11 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
         "dequeue_timeout": _DEQUEUE_TIMEOUT,
         "timers": dict(_TIMERS),
         "after_process": _after_process_hook,
+        # FAR-250: register SQLAlchemy listeners + configure the EventBus
+        # Redis broker, and hold a non-relaying Redis subscription. Flows
+        # through both `Worker(**settings())` (run_system_web) and the plain
+        # `python -m saq ...runs_settings` CLI — saq awaits async callables.
+        "startup": _startup_event_bus_hook,
         # Instance identity for worker metadata shared with the health gate —
         # platform-neutral resolver at call time (ADR 043 / FAR-1194).
         "metadata": {"hostname": resolve_instance_identity()},
@@ -1737,6 +1742,59 @@ async def _after_process_hook(ctx: dict[str, Any]) -> None:
     from modulo.core.error_tracking.saq_hooks import after_process
 
     await after_process(ctx)
+
+
+async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
+    """SAQ ``startup`` hook: wire the worker into the event pipeline (FAR-250).
+
+    1. ``register_listeners()`` so worker-side ORM inserts publish locally
+       and (for non-notification resources) to Redis.
+    2. ``configure_event_bus(RedisEventBroker(settings.redis_url))`` so those
+       publishes reach other processes.
+    3. Spawn the connect+subscribe loop as a background task with backoff —
+       workers subscribe but NEVER relay (the web process owns the pump).
+
+    LAZY and FAIL-OPEN end to end: every step is try/except log-and-continue.
+    A Redis blip at boot must NEVER crash the worker (``policy="always"``
+    crash-loop risk) — the worker keeps serving jobs and the background task
+    re-attempts connect+subscribe until it succeeds.
+    """
+    from modulo.core.events import configure_event_bus, register_listeners
+
+    try:
+        register_listeners()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_worker.event_listeners_register_failed")
+
+    settings = get_settings()
+    if not settings.redis_url:
+        _log.info("saq_worker.event_bus_skipped_no_redis_url")
+        return
+
+    try:
+        from modulo.core.events.redis_broker import RedisEventBroker
+
+        broker = RedisEventBroker(settings.redis_url)
+        await configure_event_bus(redis_broker=broker)
+        _log.info("saq_worker.event_bus_redis_enabled")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Broker init / configure failure: log and continue WITHOUT the
+        # subscription task — local listener delivery still works.
+        _log.exception("saq_worker.event_bus_configure_failed")
+        return
+
+    try:
+        from modulo.core.events.worker_subscription import spawn_worker_event_subscription
+
+        spawn_worker_event_subscription(broker)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_worker.event_subscription_spawn_failed")
 
 
 def _make_session_factory() -> Any:

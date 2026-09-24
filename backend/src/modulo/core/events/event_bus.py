@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import threading
+import uuid
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -17,6 +18,11 @@ type _SubscriberMap = dict[str, list[asyncio.Queue[dict[str, Any]]]]
 
 _background_tasks: set[asyncio.Task[Any]] = set()
 _bus_init_lock: threading.Lock = threading.Lock()
+
+# Per-process identity stamped onto every Redis payload (FAR-250) so the
+# web-process relay can drop its own echoes instead of double-delivering
+# events this process already fanned out locally.
+LOCAL_PRODUCER_ID: str = uuid.uuid4().hex
 
 
 class EventBus:
@@ -47,8 +53,19 @@ class EventBus:
         resource_id: str,
         action: str,
         version: int,
+        *,
+        broadcast_redis: bool = True,
+        extra: dict[str, Any] | None = None,
     ) -> None:
-        """Fan-out a resource-change event to all subscribers of the org."""
+        """Fan-out a resource-change event to all subscribers of the org.
+
+        *broadcast_redis* controls the cross-process Redis leg only — the
+        local fan-out always happens (FAR-250: the local ``after_insert``
+        delivery is the lifeline when Redis is down). Notification creates
+        pass ``broadcast_redis=False``: the notifier's post-commit publish
+        owns the single Redis message per create (no double-publish).
+        *extra* carries notification-only payload fields (never content).
+        """
         event: dict[str, Any] = {
             "type": resource_type,
             "id": resource_id,
@@ -56,6 +73,23 @@ class EventBus:
             "version": version,
             "org_id": org_id,
         }
+        if extra:
+            event.update(extra)
+        await self.deliver_local(event)
+        if broadcast_redis:
+            self._redis_broadcast_if_configured(org_id, event)
+
+    async def deliver_local(self, event: dict[str, Any]) -> None:
+        """Fan an already-formed event out to local subscribers only.
+
+        No Redis re-broadcast — used by the web-process relay to inject
+        remote events without creating a cross-process echo loop, and by
+        :meth:`publish` for the shared local path.
+        """
+        org_id = event.get("org_id")
+        if not isinstance(org_id, str) or not org_id:
+            _log.warning("event_bus.deliver_local_missing_org_id")
+            return
         dead: list[asyncio.Queue[dict[str, Any]]] = []
         async with self._lock:
             queues = list(self._subscribers.get(org_id, []))
@@ -65,7 +99,25 @@ class EventBus:
             except asyncio.QueueFull:
                 dead.append(q)
         await self._remove_dead_queues(org_id, dead)
-        self._redis_broadcast_if_configured(org_id, event)
+
+    async def broadcast_redis_only(self, org_id: str, event: dict[str, Any]) -> None:
+        """Publish *event* to Redis without any local fan-out (FAR-250).
+
+        The notifier's post-commit path uses this: the originating process
+        already delivered locally via the ``after_insert`` listener, so only
+        the cross-process Redis message is emitted here — exactly one Redis
+        message per created notification.
+        """
+        broker = self._redis_broker
+        if broker is None:
+            _log.warning("event_bus.redis_broadcast_skipped", extra={"org_id": org_id})
+            return
+        await self._redis_broadcast(broker, org_id, event)
+
+    @property
+    def redis_broker(self) -> RedisEventBroker | None:
+        """The configured Redis broker, if any (used by the SSE relay)."""
+        return self._redis_broker
 
     async def _remove_dead_queues(
         self,
@@ -101,9 +153,14 @@ class EventBus:
         task.add_done_callback(_background_tasks.discard)
 
     async def _redis_broadcast(self, broker: RedisEventBroker, org_id: str, event: dict[str, Any]) -> None:
-        """Fire-and-forget: publish event to Redis channel (best-effort)."""
+        """Fire-and-forget: publish event to Redis channel (best-effort).
+
+        Stamps ``producer_id`` onto the Redis payload (never onto the local
+        event) so relays in other processes can drop their own echoes.
+        """
+        payload = {**event, "producer_id": LOCAL_PRODUCER_ID}
         try:
-            await broker.publish(f"resource:{org_id}", event)
+            await broker.publish(f"resource:{org_id}", payload)
         except asyncio.CancelledError:
             raise
         except Exception:
