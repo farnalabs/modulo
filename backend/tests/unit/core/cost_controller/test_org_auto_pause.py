@@ -9,8 +9,6 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from modulo.core.cost_controller import org_auto_pause
 from modulo.core.cost_controller.org_auto_pause import (
     AUTO_PAUSE_REASON_DAILY_LIMIT,

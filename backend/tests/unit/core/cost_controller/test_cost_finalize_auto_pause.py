@@ -12,10 +12,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.cost_controller import finalize
-from modulo.core.cost_controller import org_auto_pause
+from modulo.core.cost_controller import finalize, org_auto_pause
 from modulo.core.cost_controller.finalize import _handle_limit_refused, _ledger_block
-from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
 
