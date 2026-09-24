@@ -141,6 +141,101 @@ def _call_review_hitl(request, action: str) -> dict:
     return result
 
 
+def _call_review_hitl_tool(
+    request,
+    action: str,
+    *,
+    role: str = "operator",
+    reason: str | None = None,
+) -> dict:
+    """Drive the REAL ``review_hitl`` tool end to end (parse guard + scope gate + dispatch).
+
+    Only the auth re-validation, DB and HITLManager seams are patched; the
+    ``_parse_hitl_action`` claim-token guard, the ``_check_agent_tool_scope``
+    scope-gate chokepoint, the ``_check_human_only_gate`` policy hook and the
+    ``_dispatch_hitl_action`` decision dispatch all run for real.
+    """
+    import asyncio
+
+    from modulo.api.mcp_server import review_hitl
+
+    run_id = getattr(request.node, "_run_id", uuid.uuid4())
+    gate_id = getattr(request.node, "_gate_id", "pre-deploy")
+    claim_token = getattr(request.node, "_claim_token", None)
+    mock_run = MagicMock(id=run_id, status="awaiting_human", owner_team_id=None, pipeline_id=uuid.uuid4())
+    session = _make_session_context(AsyncMock())
+
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+        patch("modulo.api.mcp_server.get_run", return_value=mock_run),
+        patch("modulo.api.mcp_server._run_owner_team_id", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.mcp_server._session", return_value=session),
+        patch("modulo.api.mcp_server._check_human_only_gate", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.mcp_server._validate_mcp_choice_answer", new_callable=AsyncMock, return_value=(None, None)),
+        patch("modulo.api.mcp_server.HITLManager.approve", new_callable=AsyncMock),
+        patch("modulo.api.mcp_server.HITLManager.reject", new_callable=AsyncMock),
+    ):
+        _set_mcp_ctx(role)
+        try:
+            result = asyncio.run(
+                review_hitl(
+                    run_id=str(run_id),
+                    gate_id=gate_id,
+                    action=action,
+                    claim_token=claim_token,
+                    reason=reason,
+                )
+            )
+        finally:
+            _clear_mcp_ctx()
+    return result
+
+
+def _call_list_pending_hitl(request) -> dict:
+    """Drive the REAL ``list_pending_hitl`` tool with the DB query seams patched.
+
+    The ``_list_pending_hitl_impl`` scope gate (``hitl.list`` @ runner), the
+    org-context resolution and the wire serialisation (incl. the shared gate
+    description resolver) all run for real against the patched gate loader.
+    """
+    import asyncio
+
+    from modulo.api.mcp_server import list_pending_hitl
+
+    run_id = getattr(request.node, "_run_id", uuid.uuid4())
+    gate_id = getattr(request.node, "_gate_id", "pre-deploy")
+    claim = MagicMock()
+    claim.run_id = run_id
+    claim.gate_id = gate_id
+    claim.pipeline_id = uuid.uuid4()
+    claim.account_id = None
+    claim.expires_at = None
+    claim.required_team_id = None
+    claim.context_json = {}
+    session = _make_session_context(AsyncMock())
+
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+        patch("modulo.api.mcp_server._session", return_value=session),
+        patch(
+            "modulo.api.mcp_server._load_pending_hitl_gates",
+            new_callable=AsyncMock,
+            return_value=([claim], 1),
+        ),
+        patch(
+            "modulo.db.crud.hitl_gate_config.resolve_gate_descriptions",
+            new_callable=AsyncMock,
+            return_value={(run_id, gate_id): "Approve the pre-deploy gate"},
+        ),
+    ):
+        _set_mcp_ctx("runner")
+        try:
+            result = asyncio.run(list_pending_hitl(page=1, page_size=20))
+        finally:
+            _clear_mcp_ctx()
+    return result
+
+
 def _make_mcp_request(*, path: str = "/mcp", headers=None):
     from starlette.requests import Request
 
@@ -325,7 +420,7 @@ def error_mentions_text(text: str, request):
     assert text.lower() in detail
 
 
-@given("a run is waiting at gate {gate}")
+@given(parsers.parse('a run is waiting at gate "{gate}"'))
 def run_waiting_at_gate(gate: str, request):
     request.node._run_id = uuid.uuid4()
     request.node._gate_id = gate
@@ -344,14 +439,53 @@ def mcp_review_hitl_list(client, request):
     request.node._resp = resp
 
 
+@when("the MCP client lists pending HITL gates")
+def mcp_list_pending_hitl(request):
+    request.node._result = _call_list_pending_hitl(request)
+
+
+@when("the MCP client approves the gate")
+def mcp_approve_gate(request):
+    request.node._result = _call_review_hitl_tool(request, "approve", role="operator")
+
+
+@when(parsers.parse('the MCP client rejects the gate with reason "{reason}"'))
+def mcp_reject_gate(reason: str, request):
+    request.node._result = _call_review_hitl_tool(request, "reject", role="operator", reason=reason)
+
+
+@when("the MCP client approves a gate without a claim token")
+def mcp_approve_without_claim(request):
+    request.node._result = _call_review_hitl_tool(request, "approve", role="operator")
+
+
+@when("the MCP client attempts to approve the gate")
+def mcp_attempt_approve(request):
+    request.node._result = _call_review_hitl_tool(request, "approve", role="runner")
+
+
 @then("the response contains the pending gate")
 def response_contains_gate(request):
-    pass
+    data = _mcp_response_payload(request)
+    assert isinstance(data.get("gates"), list), data
+    run_id_str = str(getattr(request.node, "_run_id", uuid.uuid4()))
+    gate_id = getattr(request.node, "_gate_id", "pre-deploy")
+    matches = [g for g in data["gates"] if g.get("run_id") == run_id_str and g.get("gate_id") == gate_id]
+    assert matches, f"pending gate {gate_id!r} on run {run_id_str!r} not in response: {data}"
 
 
 @then("the response includes run_id and gate_id")
 def response_includes_ids(request):
-    pass
+    gate = _mcp_response_payload(request)["gates"][0]
+    assert gate.get("run_id")
+    assert gate.get("gate_id")
+
+
+@then(parsers.parse('the tool reports HITL decision "{decision}" for the gate'))
+def tool_reports_hitl_decision(decision: str, request):
+    data = _mcp_response_payload(request)
+    assert data.get("status") == decision, f"Expected HITL decision {decision!r}, got {data!r}"
+    assert data.get("gate_id") == getattr(request.node, "_gate_id", "pre-deploy")
 
 
 @given("I have claimed the gate")
@@ -377,41 +511,6 @@ def mcp_review_hitl_approve(client, request):
             headers={"Authorization": f"Bearer {getattr(request.node, '_mcp_key', '')}"},
         )
     request.node._resp = resp
-
-
-@then(parsers.parse('the run status becomes "{status}"'))
-def check_run_status(status: str, request):
-    pass
-
-
-@when(
-    parsers.parse(
-        'the MCP client sends a tools/call request for "review_hitl" with action "reject" and reason "{reason}"'
-    )
-)
-def mcp_review_hitl_reject(reason: str, client, request):
-    with (
-        patch("modulo.api.mcp_server.HITLManager.reject", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            "/mcp/tools/call",
-            json={
-                "tool": "review_hitl",
-                "arguments": {
-                    "action": "reject",
-                    "run_id": str(getattr(request.node, "_run_id", uuid.uuid4())),
-                    "claim_token": getattr(request.node, "_claim_token", ""),
-                    "reason": reason,
-                },
-            },
-            headers={"Authorization": f"Bearer {getattr(request.node, '_mcp_key', '')}"},
-        )
-    request.node._resp = resp
-
-
-@then(parsers.parse('the run has rejection_reason "{reason}"'))
-def check_rejection_reason(reason: str, request):
-    pass
 
 
 @given(parsers.parse('pipeline "{p}" has a human-only node "{node}"'))

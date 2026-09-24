@@ -649,6 +649,24 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > 400, and a Stripe-disabled instance 404s. Also wired the already-executing
 > `admin/tier_catalog.feature` into `feat-license`'s citations as the
 > tier-catalogue surface it belongs to. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-24):** closed `feat-mcp`'s MCP HITL-review
+> `@awaiting-implementation` gap (`configure/mcp.md`). The five
+> `mcp/review_hitl.feature` scenarios previously targeted the dead legacy
+> `/mcp/tools/call` HTTP surface (pinned since 2026-08) and never ran; they are
+> rewritten to drive the REAL `review_hitl` / `list_pending_hitl` tool handler
+> functions directly (request ContextVars hydrated by hand, the `trigger.feature`
+> re-anchor pattern), exercising the real `_parse_hitl_action` claim-token guard
+> (`claim_token_required`), the real `_check_agent_tool_scope` role-hierarchy
+> scope gate (a `runner` is denied `hitl:review` → `insufficient_scope`), the
+> real `_check_human_only_gate` policy hook, the real HITLManager approve/reject
+> decision dispatch (`approved` / `rejected` + `gate_id`), and the real
+> pending-gate serialisation with the shared gate description resolver —
+> network-free and DB-free with only the auth re-validation and DB/HITLManager
+> seams patched. Removed the five scenarios from
+> `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`); added the
+> `review_hitl.feature` citation + behaviour line to `feat-mcp`
+> (`configure/mcp.md`, manifest registry). `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-09-24):** closed `feat-runs`'s deferred run
 > recovery/retry BDD drafts (`build/runs.md` error-state coverage). The

@@ -124,15 +124,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "MCP without library:browse scope is blocked",
         }
     ),
-    "tests/bdd/features/mcp/review_hitl.feature": frozenset(
-        {
-            "MCP approves a gate",
-            "MCP cannot approve without claim",
-            "MCP lists pending gates",
-            "MCP rejects a gate",
-            "MCP without hitl:review scope is blocked",
-        }
-    ),
     "tests/bdd/features/ui/eval_dashboard.feature": frozenset(
         {
             "Compare two runs side-by-side",
