@@ -1119,11 +1119,11 @@ async def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
 
     try:
-        hub = RuntimeProviderHub()
-        await hub.initialise({"e2b": {"type": "e2b", "api_key": api_key}})
+        provider_hub = RuntimeProviderHub()
+        await provider_hub.initialise({"e2b": {"type": "e2b", "api_key": api_key}})
     except Exception:
         return None
-    return hub.get("e2b")
+    return provider_hub.get("e2b")
 
 
 async def _read_log_tail_via_provider(sandbox_id: str | None, *, max_bytes: int = 6000) -> str:
