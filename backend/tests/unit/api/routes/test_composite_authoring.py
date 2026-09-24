@@ -452,3 +452,73 @@ class TestCompositeDetectParams:
             json={"nodes": []},
         )
         assert resp.status_code in (401, 403)
+
+
+class TestSaveAsCompositeMasking:
+    """FAR-1181: save-as-composite must not persist raw secrets.
+
+    Composite templates are readable by every org member, so the node
+    credentials copied from the source pipeline are masked at save time
+    (mask_pipeline_graph_node) — template storage never receives them in the
+    clear.
+    """
+
+    _SECRET = "ghp_" + "0123456789abcdef" * 2 + "fedcba98"
+
+    def test_save_as_composite_masks_secret_fields_before_persisting(self, client: TestClient) -> None:
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        pipeline = _make_pipeline_mock(
+            graph_nodes_json=[
+                {
+                    "id": "00000000-0000-0000-0000-000000000010",
+                    "node_type": "agent",
+                    "agent_id": str(_AGENT_ID),
+                    "label": "Agent 1",
+                    "env_vars": {"GITHUB_TOKEN": self._SECRET, "APP_URL": "https://example.com"},
+                    "context_files": {"/tmp/creds.txt": f"token={self._SECRET}"},
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000011",
+                    "node_type": "manual",
+                    "label": "Manual 1",
+                    "env_vars": {"PLAIN": "not-sensitive"},
+                },
+            ],
+        )
+        template = _make_template(name="Secret Composite", version="0.1.0")
+        create_mock = AsyncMock(return_value=template)
+        empty_execute = MagicMock()
+        empty_execute.scalars.return_value.all.return_value = []
+
+        with (
+            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("modulo.api.routes.pipelines.create_composite_template", new=create_mock),
+        ):
+            assert _mock_session is not None
+            _mock_session.execute = AsyncMock(return_value=empty_execute)
+            resp = client.post(
+                f"/api/v1/pipelines/{_PIPELINE_ID}/save-as-composite",
+                json={
+                    "name": "Secret Composite",
+                    "selected_node_ids": [
+                        "00000000-0000-0000-0000-000000000010",
+                        "00000000-0000-0000-0000-000000000011",
+                    ],
+                },
+            )
+        assert resp.status_code == 201
+        graph = create_mock.call_args.kwargs["sub_pipeline_graph_json"]
+        assert set(graph.keys()) == {"nodes", "edges"}
+        persisted_first = graph["nodes"][0]
+        assert persisted_first["env_vars"] == {
+            "GITHUB_TOKEN": SENSITIVE_VALUE_MASK,
+            "APP_URL": "https://example.com",
+        }
+        assert persisted_first["context_files"] == {"/tmp/creds.txt": "token=" + SENSITIVE_VALUE_MASK}
+        # Non-sensitive env keys pass through untouched (no over-masking).
+        assert graph["nodes"][1]["env_vars"] == {"PLAIN": "not-sensitive"}
+        # The source pipeline node dict is not mutated by the save.
+        assert pipeline.graph_nodes_json[0]["env_vars"]["GITHUB_TOKEN"] == self._SECRET

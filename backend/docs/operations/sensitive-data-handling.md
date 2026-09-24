@@ -65,17 +65,19 @@ Masking is applied at these points:
 | `GET /api/v1/pipelines/{id}/snapshots/{snapshot_id}` | `mask_pipeline_graph_node()` on each node of `graph_json` | Same node masking as the graph read |
 | Snapshot diff endpoint | `mask_pipeline_graph_node()` on `nodes_added` / `nodes_removed` and the diffed graphs | Same node masking |
 
+| `GET /api/v1/composite-templates/...` (list / get / create / patch / restore / editor GET+PUT) | `mask_pipeline_graph_node()` on every node of `sub_pipeline_graph_json` (via `_mask_sub_pipeline_graph` / `_mask_template_response`) | Same node masking as the pipeline graph read; the editor PUT and the PATCH endpoint resolve mask echoes against the stored template nodes via `merge_masked_graph_nodes()` |
+| `POST /api/v1/pipelines/{id}/save-as-composite` | `mask_pipeline_graph_node()` on every copied node | Secret env values are masked BEFORE the template is persisted, so the org-readable template storage never receives them in the clear |
+| MCP `get_pipeline_graph` tool | `mask_pipeline_graph_node()` on every node of the response | Same node masking as the REST graph read |
+| MCP `update_pipeline_graph` tool | `merge_masked_graph_nodes()` before the write; `mask_pipeline_graph_node()` on the response | Same read/write neutrality as the REST graph endpoint |
+
 Graph READ masking must not corrupt data on WRITE: the graph endpoints are
 full-replace, so a PATCH round-tripping a masked GET would otherwise persist
 the mask literals over the stored secrets. `merge_masked_graph_nodes()`
 resolves mask echoes against the stored graph before a graph write commits —
 an echoed value is restored from storage, an echo with no stored counterpart
-is dropped (fail closed), and keys the caller removed stay removed.
-
-**Known gap (accepted risk):** the MCP `get_pipeline_graph` /
-`update_pipeline_graph` tools bypass the REST read/write masking — a read
-returns raw env values and a write can persist mask literals. Tracked in the
-FAR-1181 delivery report for a follow-up.
+is dropped (fail closed), and keys the caller removed stay removed. The same
+invariant holds on the MCP tool surface and on the composite-template editor /
+PATCH surfaces.
 
 ### 2. Log redaction
 

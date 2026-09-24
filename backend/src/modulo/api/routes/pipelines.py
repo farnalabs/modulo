@@ -3161,7 +3161,10 @@ async def save_as_composite_endpoint(
                 account_id=principal.account_id,
                 name=req.name,
                 description=req.description,
-                sub_pipeline_graph_json={"nodes": [dict(n) for n in sub_nodes], "edges": sub_edges},
+                sub_pipeline_graph_json={
+                    "nodes": [mask_pipeline_graph_node(dict(n)) for n in sub_nodes],
+                    "edges": sub_edges,
+                },
                 parameter_ports_json=detected_ports,
                 version="0.1.0",
             )
