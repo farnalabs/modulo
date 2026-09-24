@@ -123,7 +123,7 @@ async def test_audit_failure_is_fail_open() -> None:
     notify.assert_not_awaited()
 
 
-async def test_reason_labels_cover_both_reasons() -> None:
+def test_reason_labels_cover_both_reasons() -> None:
     from modulo.core.cost_controller.org_auto_pause import _REASON_LABELS
 
     assert _REASON_LABELS[AUTO_PAUSE_REASON_DAILY_LIMIT]
