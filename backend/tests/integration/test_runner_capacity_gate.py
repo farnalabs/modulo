@@ -149,7 +149,7 @@ async def _seed_run(
     started_at: datetime | None = None,
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
     values: dict[str, Any] = {
         "id": run_id,
         "organisation_id": org_id,
@@ -192,7 +192,7 @@ async def _run_row(
     org_id: uuid.UUID,
     run_id: uuid.UUID,
 ) -> dict[str, Any]:
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
         result = await session.execute(
@@ -245,7 +245,7 @@ async def test_gate_admits_exactly_cap_of_concurrent_dispatches(
     org_id, user_id = await _seed_org_account(db_engine, "D8Cap2", cap=2)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeD8", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     runs: list[tuple[uuid.UUID, str]] = []
     for _ in range(20):
@@ -314,7 +314,7 @@ async def test_gate_flag_off_absent_key_is_no_gate(
     org_id, user_id = await _seed_org_account(db_engine, "D8FlagOff", cap=None)  # absent key
     pipe = await _seed_pipeline(db_engine, org_id, "PipeFlagOff", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     for _ in range(6):
         run_id = await _seed_run(db_engine, org_id, pipe, snap)
@@ -342,7 +342,7 @@ async def test_gate_flag_on_default_caps_docker_tier_only(
     org_id, user_id = await _seed_org_account(db_engine, "D8Default", cap=None)  # absent key
     pipe = await _seed_pipeline(db_engine, org_id, "PipeDefault", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     # 3 legacy tier-less markers + 1 explicit runner_docker marker = 4 slots.
     # The tier-less shape predates D8/FAR-995, so it is seeded as raw JSON —
@@ -390,7 +390,7 @@ async def test_gate_excludes_own_marker_on_redispatch(
     org_id, user_id = await _seed_org_account(db_engine, "D8Self", cap=1)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeSelf", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     claim = "tok-self-1"
     run_id = await _seed_run(
@@ -415,7 +415,7 @@ async def test_abandoned_awaiting_human_holds_no_slot(
     org_id, user_id = await _seed_org_account(db_engine, "D8Hitl", cap=1)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitl", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     await _seed_run(db_engine, org_id, pipe, snap, status="awaiting_human", marker=build_dispatch_marker("k", "e2b"))
 
@@ -442,7 +442,7 @@ async def test_hitl_tombstone_is_written_and_capacity_neutral(
     org_id, user_id = await _seed_org_account(db_engine, "D8Tomb", cap=1)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeTomb", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     claim = "tok-tomb"
     parked = await _seed_run(db_engine, org_id, pipe, snap, marker=build_dispatch_marker("k", "e2b"), claim_token=claim)
@@ -480,12 +480,17 @@ async def test_gate_contention_returns_retryable_within_lock_timeout(
     org_id, user_id = await _seed_org_account(db_engine, "D8Contend", cap=5)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeContend", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
     run_id = await _seed_run(db_engine, org_id, pipe, snap)
 
     k1, k2 = runner_capacity_lock_keys(org_id)
-    blocker_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    blocker_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
     blocker_session = await blocker_factory().__aenter__()
+    # autobegin=False (FAR-1202 — production session shape): open the
+    # transaction explicitly before executing. pg_advisory_lock is
+    # session-scoped so it stays held for the whole contention window even
+    # though the transaction below remains open until the finally block.
+    await blocker_session.begin()  # type: ignore[union-attr]
     await blocker_session.execute(  # type: ignore[union-attr]
         text("SELECT pg_advisory_lock(:k1, :k2)"),
         {"k1": k1, "k2": k2},
@@ -506,11 +511,19 @@ async def test_gate_contention_returns_retryable_within_lock_timeout(
         elapsed = time.monotonic() - started
         assert elapsed < 5.0, "the gate must degrade within the lock window, not hang"
     finally:
-        await blocker_session.execute(  # type: ignore[union-attr]
-            text("SELECT pg_advisory_unlock(:k1, :k2)"),
-            {"k1": k1, "k2": k2},
-        )
-        await blocker_session.__aexit__(None, None, None)  # type: ignore[union-attr]
+        # Teardown is unconditional: if the unlock raises, still roll back the
+        # explicitly-opened transaction (autobegin=False) and close the session
+        # so the connection is never leaked.
+        try:
+            await blocker_session.execute(  # type: ignore[union-attr]
+                text("SELECT pg_advisory_unlock(:k1, :k2)"),
+                {"k1": k1, "k2": k2},
+            )
+        finally:
+            try:
+                await blocker_session.rollback()  # type: ignore[union-attr]
+            finally:
+                await blocker_session.__aexit__(None, None, None)  # type: ignore[union-attr]
 
 
 async def test_same_run_concurrent_dispatch_and_resume_no_deadlock(
@@ -529,7 +542,7 @@ async def test_same_run_concurrent_dispatch_and_resume_no_deadlock(
     org_id, user_id = await _seed_org_account(db_engine, "D8Stress", cap=5)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeStress", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     run_id = await _seed_run(db_engine, org_id, pipe, snap)
     claim = f"tok-{run_id.hex[:12]}"
@@ -598,7 +611,7 @@ async def _sweep(db_engine: AsyncEngine) -> dict[str, Any]:
     # hermeticity only — production still uses the single global dedup key.
     n = next(_SWEEP_LOCK_SEQ)
     with unittest.mock.patch.object(_rc, "runner_marker_sweep_lock_keys", return_value=(n, -n)):
-        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
         return await reconcile_runner_dispatch_markers(factory)
 
 
@@ -666,7 +679,7 @@ async def test_sweep_terminal_anomaly_codes_exempt(
 
 async def _backdate_updated_at(db_engine: AsyncEngine, org_id: uuid.UUID, run_id: uuid.UUID, hours: float) -> None:
     """Backdate ``runs.updated_at`` (the legacy marker's staleness fallback)."""
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
         await session.execute(
@@ -795,7 +808,7 @@ async def test_gate_two_org_isolation(
     snap_a = await _seed_snapshot(db_engine, org_a, pipe_a)
     pipe_b = await _seed_pipeline(db_engine, org_b, "PipeB", user_b)
     snap_b = await _seed_snapshot(db_engine, org_b, pipe_b)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     # Org A saturates its cap of 1 with a live running marker.
     await _seed_run(db_engine, org_a, pipe_a, snap_a, marker=build_dispatch_marker("k", "e2b"))
@@ -838,7 +851,7 @@ async def test_sweep_two_org_isolation_byte_identical_live_fence(
     org1_run = await _seed_run(db_engine, org1, pipe1, snap1, status="complete", marker=stale_marker)
     org2_run = await _seed_run(db_engine, org2, pipe2, snap2, marker=build_dispatch_marker("k", "e2b"))
 
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     async def _row_full(org_id: uuid.UUID, run_id: uuid.UUID) -> dict[str, Any]:
         async with factory() as session, session.begin():
@@ -919,7 +932,7 @@ async def test_gate_flag_off_population_and_tombstone_are_pre_d8(
     org_id, user_id = await _seed_org_account(db_engine, "D8PreD8", cap=1)
     pipe = await _seed_pipeline(db_engine, org_id, "PipePreD8", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     claim = "tok-pred8"
     parked = await _seed_run(
@@ -969,7 +982,7 @@ async def test_count_tombstone_exclusion_matches_state_field_precisely(
     org_id, user_id = await _seed_org_account(db_engine, "D8Precise", cap=1)
     pipe = await _seed_pipeline(db_engine, org_id, "PipePrecise", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     tricky_marker = json.dumps({"state": "dispatching", "attempt_key": "x-cleared_at_hitl-y"})
     tricky_run = await _seed_run(db_engine, org_id, pipe, snap, marker=tricky_marker)
