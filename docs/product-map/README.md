@@ -650,6 +650,23 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `admin/tier_catalog.feature` into `feat-license`'s citations as the
 > tier-catalogue surface it belongs to. `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-24):** closed `feat-runs`'s deferred run
+> recovery/retry BDD drafts (`build/runs.md` error-state coverage). The
+> run-level `/resume` / `/retry` endpoints those scenarios targeted never
+> shipped — recovery is per-node via
+> `POST /api/v1/runs/{run_id}/nodes/{node_id}/recover` — so
+> `errors/retry.feature` was deleted (its retry-from-node /
+> retry-on-success semantics are the replay / already-completed-409 cases now
+> locked by the recovery surface) and `errors/recovery.feature` now drives the
+> REAL recover-node route with only the `recover_node` + `dispatch_run` seams
+> patched (replay/skip resume with the dispatch payload assertion, HITL-gate
+> node 422, node-missing 404, already-completed 409, non-recoverable state
+> 409, concurrent recovery 409, failed-resume-enqueue 500, and the
+> non-operator 403 gate). The 5 `recovery.feature` + 5 `retry.feature`
+> `@awaiting-implementation` scenarios were removed from
+> `PINNED_AWAITING_IMPLEMENTATION` and now execute in CI;
+> `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
