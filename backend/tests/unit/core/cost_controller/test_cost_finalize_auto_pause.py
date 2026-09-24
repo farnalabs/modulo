@@ -7,10 +7,13 @@ limit — and never for a per-run ceiling or a team-scope-only refusal.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from modulo.core.cost_controller import finalize, org_auto_pause
 from modulo.core.cost_controller.finalize import _handle_limit_refused, _ledger_block
@@ -213,4 +216,182 @@ async def test_daily_limit_team_scope_only_does_not_pause() -> None:
         )
 
     assert run.ledger_refused_at is not None
+    auto_pause.assert_not_awaited()
+
+
+def _org_session(org: MagicMock | None, day_spend: Decimal | None) -> AsyncMock:
+    """A session whose Organisation lookup returns ``org`` and day-total ``day_spend``."""
+
+    def _execute(stmt):
+        text = str(stmt)
+        result = MagicMock()
+        if "organisations" in text:
+            result.scalar_one_or_none = MagicMock(return_value=org)
+        elif "org_daily_run_counts" in text:
+            result.scalar_one_or_none = MagicMock(return_value=day_spend)
+        else:
+            result.scalar_one_or_none = MagicMock(return_value=None)
+        return result
+
+    s = AsyncMock()
+    s.execute = AsyncMock(side_effect=_execute)
+    s.flush = AsyncMock()
+    return s
+
+
+async def test_org_ceiling_auto_pause_failure_is_fail_open() -> None:
+    """A pause assist-failure on the ceiling path never fails the terminal write."""
+    run = _make_run()
+    org = _make_org(spend_ceiling_cents=100, org_cumulative_spend_cents=100)
+    session = _session_for(run, org)
+
+    with patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock(side_effect=RuntimeError("boom"))):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("2.00"),
+            owner_team_id=None,
+            run_date=date(2026, 9, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
+
+    assert run.status == "cost_ceiling_exceeded"
+
+
+async def test_org_ceiling_auto_pause_cancellation_propagates() -> None:
+    run = _make_run()
+    org = _make_org(spend_ceiling_cents=100, org_cumulative_spend_cents=100)
+    session = _session_for(run, org)
+
+    with (
+        patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock(side_effect=asyncio.CancelledError)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("2.00"),
+            owner_team_id=None,
+            run_date=date(2026, 9, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
+
+
+async def test_ledger_block_limit_refused_routes_through_auto_pause() -> None:
+    """A daily-limit refusal surfaced by ``_ledger_block`` reaches ``_handle_limit_refused``."""
+    run = _make_run()
+    org = _make_org()  # no ceiling → the daily-ledger write is reached
+    session = _session_for(run, org)
+
+    with (
+        patch.object(
+            finalize,
+            "_record_ledger_with_retry",
+            new=AsyncMock(return_value=(False, "daily_limit_exceeded: organisation")),
+        ),
+        patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock()) as auto_pause,
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("2.00"),
+            owner_team_id=None,
+            run_date=date(2026, 9, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
+
+    assert run.ledger_refused_at is not None
+    auto_pause.assert_awaited_once()
+    assert auto_pause.await_args.kwargs["reason"] == "daily_spend_limit"
+
+
+async def test_daily_limit_auto_pause_failure_is_fail_open() -> None:
+    run = _make_run()
+    org = _make_org()
+    org.daily_spend_limit = Decimal("10.00")
+    session = _org_session(org, Decimal("9.00"))
+
+    with patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock(side_effect=RuntimeError("boom"))):
+        await _handle_limit_refused(
+            session,
+            run,
+            run.id,
+            owner_team_id=None,
+            org_id=org.id,
+            reason="daily_limit_exceeded: organisation",
+            total=Decimal("2.00"),
+        )
+
+    assert run.ledger_refused_at is not None
+
+
+async def test_daily_limit_auto_pause_cancellation_propagates() -> None:
+    run = _make_run()
+    org = _make_org()
+    org.daily_spend_limit = Decimal("10.00")
+    session = _org_session(org, Decimal("9.00"))
+
+    with (
+        patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock(side_effect=asyncio.CancelledError)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _handle_limit_refused(
+            session,
+            run,
+            run.id,
+            owner_team_id=None,
+            org_id=org.id,
+            reason="daily_limit_exceeded: organisation",
+            total=Decimal("2.00"),
+        )
+
+
+async def test_daily_limit_missing_org_skips_pause() -> None:
+    run = _make_run()
+    org = _make_org()
+    session = _org_session(None, None)  # org row no longer resolves
+
+    with patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock()) as auto_pause:
+        await _handle_limit_refused(
+            session,
+            run,
+            run.id,
+            owner_team_id=None,
+            org_id=org.id,
+            reason="daily_limit_exceeded: organisation",
+            total=Decimal("2.00"),
+        )
+
+    auto_pause.assert_not_awaited()
+
+
+async def test_limit_refused_none_reason_skips_pause() -> None:
+    run = _make_run()
+    org = _make_org()
+    session = AsyncMock()
+    session.flush = AsyncMock()
+
+    with patch.object(finalize, "_auto_pause_org_triggers", new=AsyncMock()) as auto_pause:
+        await _handle_limit_refused(
+            session,
+            run,
+            run.id,
+            owner_team_id=None,
+            org_id=org.id,
+            reason=None,
+            total=Decimal("1.00"),
+        )
+
     auto_pause.assert_not_awaited()
