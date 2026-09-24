@@ -13,6 +13,7 @@ surface (REST create + PATCH, MCP create + set), with the
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -32,6 +33,7 @@ from modulo.core.cost_controller import check_pipeline_circuit_breaker
 from modulo.db.crud.pipeline import (
     CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
     CIRCUIT_BREAKER_THRESHOLD_CHANGED_EVENT,
+    CircuitBreakerThresholdChangeDenied,
     circuit_breaker_threshold_change_allowed,
     create_pipeline,
     normalize_circuit_breaker_threshold,
@@ -968,6 +970,68 @@ class TestMcpTools:
         db_create.assert_not_awaited()
         denial_audit.assert_awaited_once()
         assert denial_audit.await_args.kwargs["event_type"] == CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT
+
+
+class TestMcpThresholdDenialAuditBestEffort:
+    """FAR-1184: the MCP refusal audit never masks the permission-denied result.
+
+    Exercised directly (the denial surfaces above always supply a tenant
+    context and a successful audit) so the failure arms are covered: an unset
+    user context degrades to an anonymous actor, a generic audit failure is
+    logged rather than raised, and task cancellation still propagates.
+    """
+
+    def teardown_method(self) -> None:
+        from modulo.api.mcp_server import _ctx_user_id
+
+        _ctx_user_id.set(None)
+
+    @staticmethod
+    def _denial() -> CircuitBreakerThresholdChangeDenied:
+        return CircuitBreakerThresholdChangeDenied(previous=Decimal("50.000000"), new=Decimal("100.000000"))
+
+    async def test_missing_user_context_audits_anonymously(self) -> None:
+        from modulo.api.mcp_server import _append_mcp_threshold_denial_audit, _ctx_user_id
+
+        _ctx_user_id.set(None)
+        audit = AsyncMock()
+        with (
+            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        ):
+            await _append_mcp_threshold_denial_audit(_ORG_ID, None, self._denial())
+
+        audit.assert_awaited_once()
+        assert audit.await_args.kwargs["actor_user_id"] is None
+        assert audit.await_args.kwargs["payload_json"]["changed_by"] is None
+
+    async def test_audit_failure_is_logged_not_raised(self) -> None:
+        from modulo.api.mcp_server import _append_mcp_threshold_denial_audit
+
+        with (
+            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch(
+                "modulo.core.audit_logger.append_audit_event",
+                new=AsyncMock(side_effect=RuntimeError("audit backend down")),
+            ),
+            patch("modulo.api.mcp_server._log") as log,
+        ):
+            await _append_mcp_threshold_denial_audit(_ORG_ID, _PIPELINE_ID, self._denial())
+
+        log.exception.assert_called_once()
+
+    async def test_cancellation_propagates(self) -> None:
+        from modulo.api.mcp_server import _append_mcp_threshold_denial_audit
+
+        with (
+            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch(
+                "modulo.core.audit_logger.append_audit_event",
+                new=AsyncMock(side_effect=asyncio.CancelledError),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _append_mcp_threshold_denial_audit(_ORG_ID, _PIPELINE_ID, self._denial())
 
 
 # ---------------------------------------------------------------------------
