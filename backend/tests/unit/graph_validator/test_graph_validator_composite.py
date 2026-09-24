@@ -190,3 +190,33 @@ async def test_sub_edge_without_gate_config_is_valid() -> None:
     result = await _run_for_sub_graph(sub_graph)
     assert "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED" not in _codes(result)
     assert result.is_valid
+
+
+async def test_sandbox_sub_node_unpinned_git_content_ref_is_error() -> None:
+    """Composite sandbox sub-node git content refs obey the same pin gate (FAR-220).
+
+    An unpinned sub-node ref would expand verbatim into run snapshots without
+    ever passing the top-level sandbox check — fail closed at template save.
+    """
+    sha = "a" * 40
+    sub_graph = {
+        "nodes": [
+            {
+                "id": "a",
+                "node_type": "sandbox_agent",
+                "template_id": "opencode",
+                "agent_commands": ["opencode run"],
+                "agent_prompt": "git+https://github.com/example/repo@main#prompts/x.md",
+            }
+        ],
+        "edges": [],
+    }
+    result = await _run_for_sub_graph(sub_graph)
+    assert "GIT_CONTENT_REF_UNPINNED" in _codes(result)
+    assert not result.is_valid
+
+    pinned_prompt = f"git+https://github.com/example/repo@{sha}#prompts/x.md"
+    sub_graph["nodes"][0]["agent_prompt"] = pinned_prompt
+    result2 = await _run_for_sub_graph(sub_graph)
+    assert "GIT_CONTENT_REF_UNPINNED" not in _codes(result2)
+    assert "GIT_CONTENT_REF_INVALID" not in _codes(result2)

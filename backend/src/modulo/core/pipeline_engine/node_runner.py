@@ -7262,11 +7262,77 @@ def _persist_full_stderr_artifact(
     }
 
 
+async def _resolve_sandbox_git_content_config(config: _SandboxNodeConfig) -> _SandboxNodeConfig:
+    """FAR-220: replace whole-field git content refs with their pinned content.
+
+    Runs at the agent_command rendering point BEFORE dispatch, so every
+    provider path (Bundled Runner, legacy E2B) receives resolved fields:
+
+    * a non-ref field passes through untouched (zero cost for inline content);
+    * a pinned ``git+<repo>@<sha>#<path>`` ref is fetched at that exact commit
+      and the file content replaces the ref (the fetched content then flows
+      through the normal Jinja render for llm mode / verbatim for script mode);
+    * an UNPINNED ref or a fetch failure raises a typed
+      :class:`GitContentRefError` / :class:`GitContentFetchError` — fail
+      closed: the node errors with an observed message instead of dispatching
+      the raw ref string to the agent;
+    * a command that is NOT itself a ref but CONTAINS a ``git+`` token raises
+      :class:`GitContentRefError` (M1 fail-closed) — the joined string of a
+      mixed ``agent_commands`` list would otherwise dispatch the raw ref
+      literal to the shell. Defence in depth for save-gate bypasses (e.g. MCP
+      ``update_pipeline_graph``). A prompt that merely MENTIONS ``git+``
+      mid-string is legitimate inline text and is not affected: only the
+      command field (the string executed by the shell) carries this check.
+
+    The resolved pin (repo/sha/path) is logged by the resolver for audit; the
+    pinned SHA itself is already resident in the run snapshot (graph-save
+    validation rejects unpinned refs, and ``modulo apply`` pins before write).
+    """
+    from modulo.core.pipeline_engine.git_content import (
+        GIT_CONTENT_PREFIX,
+        GitContentRefError,
+        is_git_content_ref,
+        resolve_git_content_field,
+    )
+
+    prompt = config.agent_prompt_template
+    command = config.agent_command
+    # M1 fail-closed: a raw git+ token anywhere in the command that is not a
+    # whole-field ref means a mixed/embedded ref would reach the shell as a
+    # literal. Raise BEFORE any fetch so the error names the field without a
+    # network round-trip.
+    if GIT_CONTENT_PREFIX in command and not is_git_content_ref(command):
+        msg = (
+            f"agent_command of sandbox_agent node {config.node_id!r} carries a "
+            f"{GIT_CONTENT_PREFIX} git content token but is not a whole-field git content "
+            "ref — git content refs must be the whole field, not one command of several "
+            f"(got {command.strip()[:160]!r})"
+        )
+        raise GitContentRefError(msg)
+    if not (is_git_content_ref(prompt) or is_git_content_ref(command)):
+        return config
+    resolved_prompt = await resolve_git_content_field(
+        prompt,
+        node_id=config.node_id,
+        field="agent_prompt",
+    )
+    resolved_command = await resolve_git_content_field(
+        command,
+        node_id=config.node_id,
+        field="agent_command",
+    )
+    return _dc_replace(config, agent_prompt_template=resolved_prompt, agent_command=resolved_command)
+
+
 async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
     state: dict[str, Any],
     *,
     config: _SandboxNodeConfig,
 ) -> dict[str, Any]:
+    # FAR-220: resolve git-sourced content refs BEFORE the config is
+    # destructured / dispatched (covers both the Bundled Runner early-return
+    # path and the legacy E2B render path below).
+    config = await _resolve_sandbox_git_content_config(config)
     # Destructure the immutable config back to the local names the dispatch
     # body uses, so the body is unchanged from the pre-dataclass form. Only the
     # SIGNATURE narrows to a single config object — the running body behaves

@@ -475,6 +475,16 @@ def _check_composite_sandbox_sub_node(
             f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has no template_id",
             node_id=node_id,
         )
+    # FAR-220: git-sourced content refs expand into run snapshots verbatim, so
+    # a composite sub-node's refs must satisfy the same whole-field + parse +
+    # pin gate as a top-level sandbox node (an unpinned or mixed-list sub-node
+    # ref would reach a snapshot without ever passing the top-level check).
+    _check_sandbox_git_content_values(
+        sub,
+        node_id,
+        result,
+        f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}'",
+    )
 
 
 def _check_composite_sub_edges(
@@ -1001,6 +1011,92 @@ def _check_sandbox_wallclock_budget(node: dict[str, Any], nid: str, result: Vali
             f"Sandbox agent node '{nid}' wallclock_budget_seconds is invalid: {exc}",
             node_id=nid,
         )
+
+
+def _check_sandbox_git_content_values(
+    node: dict[str, Any],
+    nid: str,
+    result: ValidationResult,
+    context: str,
+) -> None:
+    """Git-sourced content refs (FAR-220): whole-field rule + parse + pin.
+
+    Shared by top-level sandbox nodes and composite template sub-nodes.
+    ``context`` prefixes the message (e.g. the node id, or the owning
+    composite template). Three fail-closed errors:
+
+    - ``GIT_CONTENT_REF_NOT_WHOLE_FIELD`` — a list content field
+      (``agent_commands``) has MORE THAN ONE item and any item carries a
+      ``git+`` token. List items are joined into a single shell string before
+      dispatch, so a ref can only be honoured as the SOLE item of the field
+      (whole-field semantics): among several commands the raw ref would reach
+      the shell unresolved, or — ref-first — the joined string would parse as
+      one ref whose path swallows the join operator and the remaining commands.
+    - ``GIT_CONTENT_REF_INVALID`` — the value starts with ``git+`` but is not
+      a well-formed ``git+<repo>[@<ref>]#<path>`` ref (there is no partial
+      accept: a misparsed declarative ref would dispatch the raw ref string).
+    - ``GIT_CONTENT_REF_UNPINNED`` — well-formed but the ref is movable
+      (branch/tag/HEAD). Stored graphs must carry the resolved commit SHA so
+      every run snapshot surfaces the pin for audit; ``modulo apply`` resolves
+      and pins movable refs at plan time before writing.
+    """
+    from modulo.core.pipeline_engine.git_content import (
+        GIT_CONTENT_LIST_FIELDS,
+        GIT_CONTENT_PREFIX,
+        GitContentRefError,
+        git_content_values,
+        is_git_content_ref,
+        parse_git_content_ref,
+    )
+
+    for key in GIT_CONTENT_LIST_FIELDS:
+        items = node.get(key)
+        if not isinstance(items, list) or len(items) <= 1:
+            continue
+        for index, item in enumerate(items):
+            if isinstance(item, str) and GIT_CONTENT_PREFIX in item:
+                result.error(
+                    "GIT_CONTENT_REF_NOT_WHOLE_FIELD",
+                    f"{context} {key}[{index}] contains a git content ref among "
+                    f"{len(items)} commands — git content refs must be the whole "
+                    f"field, not one command of several (use a single-item {key} "
+                    "list whose only entry is the ref, or inline the content)",
+                    node_id=nid,
+                )
+                break
+
+    for label, value in git_content_values(node):
+        if not is_git_content_ref(value):
+            continue
+        try:
+            ref = parse_git_content_ref(value)
+        except GitContentRefError as exc:
+            result.error(
+                "GIT_CONTENT_REF_INVALID",
+                f"{context} {label} has an invalid git content ref: {exc}",
+                node_id=nid,
+            )
+            continue
+        if not ref.is_pinned:
+            result.error(
+                "GIT_CONTENT_REF_UNPINNED",
+                f"{context} {label} git content ref {value.strip()!r} is not pinned to a commit "
+                "SHA — stored graphs must use git+<repo>@<40-hex-sha>#<path> so run snapshots "
+                "carry the resolved SHA for audit ('modulo apply' resolves and pins movable refs "
+                "automatically)",
+                node_id=nid,
+            )
+
+
+def _check_sandbox_git_content(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 16 (FAR-220): git-sourced content refs are whole-field, parse, pinned.
+
+    Covers the three content fields a ``sandbox_agent`` node may reference git
+    content through: ``agent_prompt``, ``script_command``, and
+    ``agent_commands`` (which must carry a ref, if any, as its sole item).
+    Inline (non-``git+``) content is untouched.
+    """
+    _check_sandbox_git_content_values(node, nid, result, f"Sandbox agent node '{nid}'")
 
 
 def _check_sandbox_managed_inputs(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
@@ -2835,6 +2931,8 @@ class GraphValidator:
             (FAR-212 PR B), and no non-sandbox node carries them.
         11. agent_commands list items must not end with a heredoc terminator
             (FAR-664) — the join operator would corrupt the terminator.
+        16. git-sourced content refs (FAR-220) parse and are SHA-pinned so
+            run snapshots surface the resolved commit for audit.
         """
         _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
@@ -2861,6 +2959,7 @@ class GraphValidator:
             _check_sandbox_git_credentials(node, nid, result)
             _check_sandbox_wallclock_budget(node, nid, result)
             _check_sandbox_managed_inputs(node, nid, result)
+            _check_sandbox_git_content(node, nid, result)
 
     # ------------------------------------------------------------------
     # Node idempotency

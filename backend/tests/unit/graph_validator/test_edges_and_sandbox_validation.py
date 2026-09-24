@@ -881,3 +881,116 @@ def test_send_budget_malformed_values_skipped():
     GraphValidator._check_node_send_budget(graph, result)
     assert "NODE_SEND_BUDGET_OVERSUBSCRIBED" not in _codes(result)
     assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# _check_sandbox_agent_config — git-sourced content refs (FAR-220)
+# ---------------------------------------------------------------------------
+
+_GIT_SHA = "a" * 40
+_GIT_REPO = "https://github.com/example/repo.git"
+
+
+def _git_content_codes(result: ValidationResult) -> set[str]:
+    return {i.code for i in result.issues if i.code.startswith("GIT_CONTENT_")}
+
+
+def test_sandbox_pinned_git_content_ref_is_valid():
+    """A SHA-pinned git+ ref on agent_prompt passes the save gate."""
+    node = _sandbox_node(agent_prompt=f"git+{_GIT_REPO}@{_GIT_SHA}#prompts/x.md")
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [node], "edges": []}, result)
+    assert not _git_content_codes(result)
+
+
+def test_sandbox_unpinned_git_content_ref_errors():
+    """A movable ref cannot be stored — the run snapshot would carry no pin."""
+    node = _sandbox_node(agent_prompt=f"git+{_GIT_REPO}@main#prompts/x.md")
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [node], "edges": []}, result)
+    assert "GIT_CONTENT_REF_UNPINNED" in _codes(result)
+    assert not result.is_valid
+
+
+def test_sandbox_headless_git_content_ref_errors():
+    """A ref with no @<ref> at all means HEAD — unpinned, rejected at save."""
+    node = _sandbox_node(agent_prompt=f"git+{_GIT_REPO}#prompts/x.md")
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [node], "edges": []}, result)
+    assert "GIT_CONTENT_REF_UNPINNED" in _codes(result)
+
+
+def test_sandbox_malformed_git_content_ref_errors():
+    """git+ prefix without a well-formed ref is a hard error (no partial accept)."""
+    node = _sandbox_node(agent_prompt=f"git+{_GIT_REPO}@main")
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [node], "edges": []}, result)
+    assert "GIT_CONTENT_REF_INVALID" in _codes(result)
+    assert not result.is_valid
+
+
+def test_sandbox_git_ref_in_agent_commands_item():
+    """Each agent_commands item is scanned: pinned ok, movable rejected."""
+    pinned = _sandbox_node(agent_commands=[f"git+{_GIT_REPO}@{_GIT_SHA}#drivers/run.py"])
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [pinned], "edges": []}, result)
+    assert not _git_content_codes(result)
+
+    movable = _sandbox_node(agent_commands=[f"git+{_GIT_REPO}@main#drivers/run.py"])
+    result2 = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [movable], "edges": []}, result2)
+    assert "GIT_CONTENT_REF_UNPINNED" in _codes(result2)
+
+
+def test_sandbox_script_mode_git_ref():
+    """script_command follows the same parse + pin gate (drivers from git)."""
+    pinned = _sandbox_node(
+        mode="script",
+        script_command=f"git+{_GIT_REPO}@{_GIT_SHA}#drivers/run.py",
+        agent_prompt=None,
+        agent_commands=None,
+    )
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [pinned], "edges": []}, result)
+    assert not _git_content_codes(result)
+
+    movable = _sandbox_node(
+        mode="script",
+        script_command=f"git+{_GIT_REPO}@main#drivers/run.py",
+        agent_prompt=None,
+        agent_commands=None,
+    )
+    result2 = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [movable], "edges": []}, result2)
+    assert "GIT_CONTENT_REF_UNPINNED" in _codes(result2)
+
+
+def test_sandbox_inline_content_mentioning_git_plus_is_untouched():
+    """Inline content that merely mentions the ref form is not treated as a ref."""
+    node = _sandbox_node(agent_prompt="Use git+<repo>#<path> for git-sourced prompts")
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [node], "edges": []}, result)
+    assert not _git_content_codes(result)
+
+
+def test_sandbox_mixed_list_git_content_ref_rejected():
+    """A git content ref must be the WHOLE agent_commands field (M1).
+
+    The renderer substitutes whole joined fields, so a ref sitting among
+    several commands would dispatch the raw ref literal to the shell (or, when
+    ref-first, swallow the join operator into the ref path) — rejected at save
+    in either list position.
+    """
+    ref = f"git+{_GIT_REPO}@{_GIT_SHA}#drivers/run.py"
+
+    ref_second = _sandbox_node(agent_commands=["cd /workspace", ref])
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [ref_second], "edges": []}, result)
+    assert "GIT_CONTENT_REF_NOT_WHOLE_FIELD" in _git_content_codes(result)
+    assert not result.is_valid
+
+    ref_first = _sandbox_node(agent_commands=[ref, "cd /workspace"])
+    result2 = ValidationResult()
+    GraphValidator._check_sandbox_agent_config({"nodes": [ref_first], "edges": []}, result2)
+    assert "GIT_CONTENT_REF_NOT_WHOLE_FIELD" in _git_content_codes(result2)
+    assert not result2.is_valid

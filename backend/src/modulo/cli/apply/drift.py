@@ -63,6 +63,73 @@ def _diff_graph(
     return detail
 
 
+def _diff_git_content(
+    desired_graph: dict[str, Any],
+    current_graph: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Git-sourced content (FAR-220) drift: per-field desired/current pairs.
+
+    Only fields where EITHER side is a ``git+`` ref and the two sides differ
+    are reported — the whole-graph hash already flags the node as modified;
+    this names WHICH content field drifted and with which values, so an
+    operator sees the actual commit move (``@<old-sha> -> @<new-sha>``) rather
+    than just a node id. Inline-vs-inline content changes are left to the
+    generic node breakdown (not git content).
+
+    Both graphs are the canonical normalised shape (same source as the plan
+    hash), so string comparison is the drift decision — identical to the hash.
+    """
+    from modulo.core.pipeline_engine.git_content import GIT_CONTENT_SCALAR_FIELDS, is_git_content_ref
+
+    def _pick(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        return {str(element.get("id")): element for element in (graph.get("nodes") or [])}
+
+    def _render(value: Any) -> str:
+        """Absent side renders as ``(none)`` — never the literal ``None`` (Minor 5)."""
+        return "(none)" if value is None else str(value)
+
+    desired_nodes = _pick(desired_graph)
+    current_nodes = _pick(current_graph)
+    entries: list[dict[str, str]] = []
+    for node_id in sorted(desired_nodes.keys() & current_nodes.keys()):
+        desired_node = desired_nodes[node_id]
+        current_node = current_nodes[node_id]
+        for field in GIT_CONTENT_SCALAR_FIELDS:
+            desired_value = desired_node.get(field)
+            current_value = current_node.get(field)
+            if not (is_git_content_ref(desired_value) or is_git_content_ref(current_value)):
+                continue
+            if desired_value == current_value:
+                continue
+            entries.append(
+                {
+                    "node": node_id,
+                    "field": field,
+                    "desired": _render(desired_value),
+                    "current": _render(current_value),
+                }
+            )
+        desired_commands = desired_node.get("agent_commands")
+        current_commands = current_node.get("agent_commands")
+        if isinstance(desired_commands, list) and isinstance(current_commands, list):
+            for index in range(max(len(desired_commands), len(current_commands))):
+                desired_item = desired_commands[index] if index < len(desired_commands) else None
+                current_item = current_commands[index] if index < len(current_commands) else None
+                if not (is_git_content_ref(desired_item) or is_git_content_ref(current_item)):
+                    continue
+                if desired_item == current_item:
+                    continue
+                entries.append(
+                    {
+                        "node": node_id,
+                        "field": f"agent_commands[{index}]",
+                        "desired": _render(desired_item),
+                        "current": _render(current_item),
+                    }
+                )
+    return entries
+
+
 def _diff_fields(desired: dict[str, Any], current: dict[str, Any]) -> dict[str, list[str]]:
     """Top-level add/remove/modify breakdown between two managed-field views.
 
@@ -117,8 +184,11 @@ def build_drift_detail(
 
     - a drifted pipeline whose whole-graph hash differs gets a node/edge
       breakdown (``{"nodes": {added/removed/modified}, "edges": {...}}``)
-      keyed by pipeline name — a graph-less or top-level-only updated
-      pipeline gets no entry (legacy shape, unchanged);
+      keyed by pipeline name — plus, when git-sourced content fields
+      (FAR-220) differ, a ``"git_content"`` list of
+      ``{node, field, desired, current}`` entries naming the actual commit
+      move; a graph-less or top-level-only updated pipeline gets no entry
+      (legacy shape, unchanged);
     - a drifted schema / model backend / trigger gets a managed-field
       breakdown (``{"fields": {added/removed/modified}}``) keyed
       ``"<kind>:<name>"`` so a schema or trigger named like a pipeline can
@@ -139,7 +209,13 @@ def build_drift_detail(
         current = (current_entities.get(KIND_PIPELINE) or {}).get(name) or {}
         current_graph: dict[str, Any] = current.get("graph") or {"nodes": [], "edges": []}
         breakdown = _diff_graph(view["graph"], current_graph)
-        if any(side for field in breakdown.values() for side in field.values()):
+        graph_changed = any(side for field in breakdown.values() for side in field.values())
+        # FAR-220: name the git-sourced content fields that drifted (commit
+        # moves) alongside the generic node/edge breakdown.
+        git_content = _diff_git_content(view["graph"], current_graph)
+        if git_content:
+            breakdown["git_content"] = git_content
+        if graph_changed or git_content:
             detail[name] = breakdown
 
     # Non-pipeline field breakdown (keyed "<kind>:<name>").

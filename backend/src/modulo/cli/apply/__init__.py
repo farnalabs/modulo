@@ -70,8 +70,9 @@ def render_table(report: dict[str, Any]) -> str:
     Drift reports (``mode == "drift"``) are explicitly labelled: each verb
     is prefixed (``drift create`` / ``drift update``), the summary line reads
     ``drift summary``, and ``drift_detail`` renders a graph breakdown line
-    for drifted pipelines and a managed-field breakdown line for drifted
-    schemas / model backends / triggers.
+    for drifted pipelines (plus per-field git-sourced content commit moves,
+    FAR-220) and a managed-field breakdown line for drifted schemas / model
+    backends / triggers.
     """
     drift_mode = report.get("mode") == "drift"
     verbs = {
@@ -99,6 +100,13 @@ def render_table(report: dict[str, Any]) -> str:
             continue
         nodes, edges = breakdown["nodes"], breakdown["edges"]
         lines.append(f"drift detail pipeline {key!r}: graph {_counts(nodes)} nodes, {_counts(edges)} edges")
+        # FAR-220: full current -> desired values (the pinned commit SHAs)
+        # so the operator sees the actual commit move, not just the node id.
+        lines.extend(
+            f"drift detail git-content {key!r} node {entry['node']} {entry['field']}: "
+            f"{entry['current']!r} -> {entry['desired']!r}"
+            for entry in breakdown.get("git_content") or ()
+        )
     counts = {s: len(report.get(s, [])) for s in ("created", "updated", "unchanged", "blocked", "failed")}
     label = "drift summary" if drift_mode else "summary"
     lines.append(
