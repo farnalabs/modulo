@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.routes.auth import REFRESH_COOKIE
 from modulo.api.routes.auth import router as auth_router
 from modulo.api.routes.health import router as health_router
 from modulo.auth.passwords import hash_password
@@ -113,7 +114,11 @@ def test_login_success(client: TestClient) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert "access_token" in body
-    assert "refresh_token" in body
+    # FAR-1197: the refresh token rides ONLY in the httpOnly modulo_refresh
+    # cookie — it must never appear in the JSON body the SPA could persist.
+    assert "refresh_token" not in body
+    assert REFRESH_COOKIE in resp.cookies
+    assert resp.cookies[REFRESH_COOKIE]
     assert body["token_type"] == "bearer"
     assert body["access_token"]
     assert body["must_change_password"] is False
