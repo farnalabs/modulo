@@ -12,7 +12,7 @@ Integration coverage against the real app on Testcontainers Postgres
   ``pipeline.reliability_owner_changed`` rows written on owner change/clear.
 
 The migration-applies assertions live in
-``test_migration_0256_pipeline_accountability_owners.py``.
+``test_migration_0257_pipeline_accountability_owners.py``.
 """
 
 from __future__ import annotations
@@ -98,6 +98,8 @@ async def owners_data(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uu
     * ``outsider``       — account exists, NO membership in test_org
     * ``out_of_team``    — active org member, NOT a member of the team
     * ``team_id``        — owner team for visibility='team' pipelines
+    * ``team2_id``       — a SECOND team ``eligible`` is NOT a member of
+                           (scope-change tests move a pipeline here)
     """
     eligible = await _seed_account(db_engine, org_id=test_org, tag="eligible")
     inactive = await _seed_account(db_engine, org_id=test_org, tag="inactive", active=False)
@@ -118,6 +120,10 @@ async def owners_data(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uu
         )
         await add_team_member(session, org_id=test_org, team_id=team.id, account_id=eligible, role="runner")
         team_id = team.id
+        team2 = await create_team(
+            session, org_id=test_org, name=f"FAR-1161 Team B {uuid.uuid4().hex[:6]}", account_id=test_user
+        )
+        team2_id = team2.id
 
     return {
         "eligible": eligible,
@@ -125,6 +131,7 @@ async def owners_data(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uu
         "outsider": outsider,
         "out_of_team": out_of_team,
         "team_id": team_id,
+        "team2_id": team2_id,
     }
 
 
@@ -475,3 +482,100 @@ async def test_api_patch_rejects_out_of_team_owner_on_team_pipeline(
     )
     assert patch.status_code == 422, patch.text
     assert "not a member of the pipeline's owner team" in patch.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Scope-change re-validation (F2): a PATCH that moves the scope must
+# re-validate the STORED owners even when the owner keys are omitted.
+# ---------------------------------------------------------------------------
+
+
+async def test_api_patch_owner_team_change_revalidates_stored_owner(
+    integration_client: AsyncClient,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    owners_data: dict[str, Any],
+) -> None:
+    """Moving owner_team_id strands an out-of-new-team owner -> 422, no write.
+
+    Sequence from the review finding: a team-visible pipeline holds a valid
+    ``business_owner_id`` in team 1; a later PATCH changes ``owner_team_id``
+    to team 2 and OMITS the owner keys. The stored owner is not a member of
+    team 2, so the update must fail closed (422 naming the field) and leave
+    BOTH the owner and the scope unchanged — never persist the stranded owner.
+    """
+    headers = _auth_headers(test_org, test_user)
+    create = await integration_client.post(
+        "/api/v1/pipelines",
+        headers=headers,
+        json={
+            "name": f"owners-scope-team-{uuid.uuid4().hex[:8]}",
+            "visibility": "team",
+            "owner_team_id": str(owners_data["team_id"]),
+            "business_owner_id": str(owners_data["eligible"]),
+        },
+    )
+    assert create.status_code == 201, create.text
+    pipeline_id = create.json()["id"]
+
+    # Scope-only PATCH: no business_owner_id / reliability_owner_id keys.
+    patch = await integration_client.patch(
+        f"/api/v1/pipelines/{pipeline_id}",
+        headers=headers,
+        json={"owner_team_id": str(owners_data["team2_id"])},
+    )
+    assert patch.status_code == 422, patch.text
+    detail = patch.json()["detail"]
+    assert "business_owner_id" in detail
+    assert "not a member of the pipeline's owner team" in detail
+
+    # The stored owner AND the scope are unchanged (the update was rejected).
+    read = await integration_client.get(f"/api/v1/pipelines/{pipeline_id}", headers=headers)
+    assert read.status_code == 200, read.text
+    body = read.json()
+    assert body["business_owner_id"] == str(owners_data["eligible"])
+    assert body["owner_team_id"] == str(owners_data["team_id"])
+    assert body["visibility"] == "team"
+
+
+async def test_api_patch_visibility_flip_to_team_revalidates_stored_owner(
+    integration_client: AsyncClient,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    owners_data: dict[str, Any],
+) -> None:
+    """Flipping visibility to 'team' strands an org-only owner -> 422, no write.
+
+    The stored owner is a valid ORG-scope owner (active org member) but not a
+    member of the owner team the PATCH introduces. Flipping the scope without
+    touching the owner keys must fail closed and leave visibility and the
+    owner unchanged.
+    """
+    headers = _auth_headers(test_org, test_user)
+    create = await integration_client.post(
+        "/api/v1/pipelines",
+        headers=headers,
+        json={
+            "name": f"owners-scope-vis-{uuid.uuid4().hex[:8]}",
+            "business_owner_id": str(owners_data["out_of_team"]),
+        },
+    )
+    assert create.status_code == 201, create.text
+    pipeline_id = create.json()["id"]
+
+    # Scope-only PATCH: flip to team visibility; no owner keys.
+    patch = await integration_client.patch(
+        f"/api/v1/pipelines/{pipeline_id}",
+        headers=headers,
+        json={"visibility": "team", "owner_team_id": str(owners_data["team_id"])},
+    )
+    assert patch.status_code == 422, patch.text
+    detail = patch.json()["detail"]
+    assert "business_owner_id" in detail
+    assert "not a member of the pipeline's owner team" in detail
+
+    read = await integration_client.get(f"/api/v1/pipelines/{pipeline_id}", headers=headers)
+    assert read.status_code == 200, read.text
+    body = read.json()
+    assert body["visibility"] == "org"
+    assert body["business_owner_id"] == str(owners_data["out_of_team"])

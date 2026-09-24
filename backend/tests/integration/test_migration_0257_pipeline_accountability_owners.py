@@ -1,4 +1,4 @@
-"""Migration 0256: pipeline accountability-owner columns (FAR-1161 data layer).
+"""Migration 0257: pipeline accountability-owner columns (FAR-1161 data layer).
 
 Runs against the migrated testcontainer (test_initial_migration harness):
 asserts the two nullable UUID columns exist on ``pipelines``, both are

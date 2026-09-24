@@ -14,8 +14,8 @@ operator assigns them, and deleting an account must not delete the pipeline
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0256_pipeline_accountability_owners"
-down_revision: str | None = "0255_trigger_event_value_filter_label"
+revision: str = "0257_pipeline_accountability_owners"
+down_revision: str | None = "0256_pipeline_max_autonomy_level"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

@@ -440,19 +440,50 @@ async def update_pipeline(
     # FAR-1161: fail-closed owner eligibility against the EFFECTIVE (post-update)
     # visibility/owner-team — a PATCH may change all three in one payload, and
     # the invariant must hold on the resulting pipeline, not the stale one.
-    # Validated BEFORE apply_updates so an ineligible owner never mutates the row
-    # (the 422 rolls the transaction back regardless; this keeps the in-memory
-    # object clean for any later code in the same transaction).
+    #
+    # Scope-change re-validation (review finding): when the update contains
+    # ``visibility`` or ``owner_team_id`` — the same presence test the route's
+    # team-transition gate uses — the STORED owners are re-validated too, not
+    # just the ones the payload carries. A team move or visibility flip can
+    # strand an already-stored owner outside the new scope even when the owner
+    # keys are omitted; that combination fails CLOSED with the same 422 the
+    # owner-assignment path raises (naming the offending field), never a
+    # silent auto-clear. All validation runs BEFORE apply_updates so an
+    # out-of-scope owner never mutates the row (the 422 rolls the transaction
+    # back regardless; this keeps the in-memory object clean for any later
+    # code in the same transaction).
     owner_updates = {f: updates[f] for f in ACCOUNTABILITY_OWNER_FIELDS if f in updates}
-    if owner_updates:
-        effective_visibility = updates.get("visibility", pipeline.visibility)
+    scope_changed = "visibility" in updates or "owner_team_id" in updates
+    fields_to_validate = set(owner_updates)
+    if scope_changed:
+        fields_to_validate.update(ACCOUNTABILITY_OWNER_FIELDS)
+    # Guard the whole block: an update that touches neither owners nor scope
+    # must not read scope attributes off partial stand-in rows at all.
+    if fields_to_validate:
+        # getattr defaults: real rows always carry both columns; partial
+        # test stand-ins (SimpleNamespace) may not, and a scope-less default
+        # only reaches the team gate when a real owner is being validated.
+        # Non-str scope (absent stand-in attribute, explicit null) behaves as
+        # org scope in the gate below — the same as `visibility != "team"`.
+        _raw_visibility = updates.get("visibility", getattr(pipeline, "visibility", None))
+        effective_visibility = _raw_visibility if isinstance(_raw_visibility, str) else "org"
         # .get is correct here: an explicit owner_team_id=None (clear) is in
         # the dict, so .get returns None rather than the pipeline default.
-        effective_owner_team = updates.get("owner_team_id", pipeline.owner_team_id)
-        for _field, _new_owner in owner_updates.items():
+        effective_owner_team = updates.get("owner_team_id", getattr(pipeline, "owner_team_id", None))
+        for _field in sorted(fields_to_validate):
+            if _field in owner_updates:
+                # Payload-carried owner: same unconditional pass-through as before.
+                _candidate = owner_updates[_field]
+            else:
+                # Stored owner re-checked because the scope changed. Real rows
+                # are UUID | None by column type; partial test stand-ins
+                # expose non-column attribute children — treat those as
+                # "unassigned" rather than feed a non-UUID into the query.
+                _stored = getattr(pipeline, _field, None)
+                _candidate = _stored if isinstance(_stored, uuid.UUID | None) else None
             await validate_accountability_owner(
                 session,
-                owner_account_id=_new_owner,
+                owner_account_id=_candidate,
                 field=_field,
                 org_id=org_id if org_id is not None else pipeline.organisation_id,
                 visibility=effective_visibility,
