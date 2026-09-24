@@ -800,7 +800,7 @@ async def reset_circuit_breaker(
                 org_id=current_user.organisation_id,
                 pipeline_id=pipeline_id,
             )
-            if not reset:
+            if reset is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
             await append_audit_event(
                 session,
@@ -809,7 +809,11 @@ async def reset_circuit_breaker(
                 actor_user_id=current_user.account_id,
                 resource_type="pipeline",
                 resource_id=pipeline_id,
-                payload_json={"pipeline_id": str(pipeline_id), "reset_by": str(current_user.account_id)},
+                payload_json={
+                    "pipeline_id": str(pipeline_id),
+                    "reset_by": str(current_user.account_id),
+                    "triggers_reactivated": reset,
+                },
                 request_id=getattr(current_user, "request_id", None),
             )
     except ProgrammingError:
@@ -838,7 +842,7 @@ async def reset_circuit_breaker(
     return CircuitBreakerResetResponse(
         pipeline_id=str(pipeline_id),
         circuit_breaker_tripped=False,
-        triggers_reactivated=0,
+        triggers_reactivated=reset,
     )
 
 
