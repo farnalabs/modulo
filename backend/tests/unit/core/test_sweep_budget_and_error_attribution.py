@@ -293,6 +293,36 @@ class TestRunnerSweepsErrorAttribution:
         assert "Docker daemon unreachable" in error_str
 
     @pytest.mark.asyncio
+    async def test_workspace_reconcile_engineless_skip_persists_clean_stats(self) -> None:
+        """FAR-1201: the engine-less skip envelope flows through the wrapper as
+        a NORMAL outcome — fresh stats, NO error key, no re-raise (so SAQ
+        retries never engage), and the skip reason rides the job result."""
+        skip_envelope = {
+            "scanned": 0,
+            "orphans_destroyed": 0,
+            "skipped": "no Docker endpoint configured (MODULO_DOCKER_HOST unset)",
+        }
+        with (
+            patch("modulo.core.saq_worker._get_async_engine", return_value=MagicMock()),
+            patch(
+                "modulo.core.bundled_runner.runner_reconciler.reconcile_runner_workspaces",
+                new_callable=AsyncMock,
+                return_value=skip_envelope,
+            ),
+            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+        ):
+            from modulo.core.saq_worker import runner_workspace_reconcile
+
+            result = await runner_workspace_reconcile({})  # no exception -> no SAQ retry
+
+        mock_persist.assert_called_once()
+        stats_blob = mock_persist.call_args[0][1]
+        assert "error" not in stats_blob
+        assert stats_blob["scanned"] == 0
+        assert stats_blob["orphans_destroyed"] == 0
+        assert result["skipped"].startswith("no Docker endpoint configured")
+
+    @pytest.mark.asyncio
     async def test_slot_reconciliation_error_includes_exception(self) -> None:
         """slot_reconciliation persists exception type + message."""
         from modulo.core.run_admission import SlotReconciliationError
