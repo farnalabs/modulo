@@ -23,6 +23,7 @@ bdd:
   - backend/tests/bdd/features/mcp/library_browse.feature
   - backend/tests/bdd/features/mcp/trigger.feature
   - backend/tests/bdd/features/mcp/review_hitl.feature
+  - backend/tests/bdd/features/mcp/human_only.feature
   - backend/tests/bdd/features/mcp/mcp_oauth.feature
   - backend/tests/bdd/features/mcp/onboarding.feature
   - backend/tests/bdd/steps/test_alpha_mcp.py
@@ -95,6 +96,28 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
       execute in CI against these real handler seams (auth re-validation + DB /
       HITLManager seams patched), closing the last legacy `/mcp/tools/call`
       `@awaiting-implementation` draft under the review surface
+- [x] MCP human-only gate enforcement (2026-09-24): the REAL `review_hitl`
+      policy hook `_check_human_only_gate` denies an API-key/MCP principal every
+      decision action (claim/approve/deliver_manual) on a `human_only` gate —
+      the shared `human_only_denial` verdict returns the pinned
+      `{"error": "human_only_gate", "detail": ...}` error shape (fail-closed
+      even when the config is unresolvable but the gate fired) and every denial
+      appends the FAR-634 `hitl.human_only_denied` audit event; `reject` is not
+      an escape hatch because `claim` is itself denied, so an agent can neither
+      claim nor decide such a gate. `list_pending_hitl` additionally surfaces a
+      per-gate `human_only` flag via the shared batched flag resolver
+      (`db/crud/hitl_gate_config.resolve_gate_human_only_map` — claim-stamped
+      fire-time config preferred, snapshot-config fallback, fail-safe
+      `DEFAULT_HUMAN_ONLY` default) so an MCP client can SEE which pending gates
+      require a browser human before attempting an action. The three
+      `mcp/human_only.feature` scenarios execute in CI against these real
+      handler + policy seams — the denial path (`review_hitl` approve on a
+      seeded `{"human_only": true}` gate), the list path (gate listed with
+      `human_only: true`), and the FAR-611 decision-audit attribution
+      (`client_type` `browser` for a REST browser principal via
+      `hitl._client_type` vs `mcp` stamped by the MCP `_dispatch_hitl_action`)
+      — with only the auth re-validation and DB / config-resolution /
+      HITLManager seams patched
 - [x] Every API key carries an immutable caller scope (`org` | `user`,
       ADR 030/FAR-620): user-scoped keys act as their creator and are
       REST-JWT-minted only (flag + 10-key quota gated); MCP minting stays
@@ -136,6 +159,26 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   from `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
   `_ORPHANED_BDD_FEATURES` stays empty. The `library_browse` / `human_only`
   legacy-`/mcp/tools/call` drafts remain pinned as acknowledged gaps.
+- 2026-09-24: **product-map review pass** — closed the `human_only` half of the
+  remaining MCP gap: the three `mcp/human_only.feature` scenarios previously
+  targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned since
+  2026-08) and never ran. Following the `trigger.feature` / `review_hitl.feature`
+  re-anchor pattern, they now drive the REAL `review_hitl` / `list_pending_hitl`
+  handler seams directly (request ContextVars hydrated by hand): the REAL
+  `_check_human_only_gate` policy hook produces the pinned
+  `{"error": "human_only_gate", "detail": MSG_HUMAN_ONLY_DENY}` verdict with the
+  FAR-634 `hitl.human_only_denied` denial audit attempted; `list_pending_hitl`
+  lists the human-only gate with its real per-gate `human_only` flag; and the
+  FAR-611 decision-audit `client_type` attribution is exercised on both sides
+  (`browser` via the REST `hitl._client_type` for a browser principal, `mcp`
+  stamped by the MCP `_dispatch_hitl_action`). Added the per-gate `human_only`
+  flag to the `list_pending_hitl` wire via the new shared batched resolver
+  `db/crud/hitl_gate_config.resolve_gate_human_only_map` (claim-stamped config
+  preferred, snapshot fallback, fail-safe `DEFAULT_HUMAN_ONLY`), so an MCP
+  client can SEE which pending gates require a browser human before acting.
+  Removed the three scenarios from `PINNED_AWAITING_IMPLEMENTATION`;
+  `_ORPHANED_BDD_FEATURES` stays empty. `library_browse` remains pinned as an
+  acknowledged gap.
 - 2026-09-22: **product-map review pass** — closed the "no executing BDD for
   the trigger tool" gap: the five `mcp/trigger.feature` scenarios previously
   targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned

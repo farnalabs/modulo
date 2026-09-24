@@ -172,7 +172,7 @@ def _call_review_hitl_tool(
         patch("modulo.api.mcp_server._session", return_value=session),
         patch("modulo.api.mcp_server._check_human_only_gate", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.mcp_server._validate_mcp_choice_answer", new_callable=AsyncMock, return_value=(None, None)),
-        patch("modulo.api.mcp_server.HITLManager.approve", new_callable=AsyncMock),
+        patch("modulo.api.mcp_server.HITLManager.approve", new_callable=AsyncMock) as mock_approve,
         patch("modulo.api.mcp_server.HITLManager.reject", new_callable=AsyncMock),
     ):
         _set_mcp_ctx(role)
@@ -188,22 +188,26 @@ def _call_review_hitl_tool(
             )
         finally:
             _clear_mcp_ctx()
+    request.node._approve = mock_approve
     return result
 
 
-def _call_list_pending_hitl(request) -> dict:
+def _call_list_pending_hitl(request, *, gate_config: dict | None = None, gate_id: str | None = None) -> dict:
     """Drive the REAL ``list_pending_hitl`` tool with the DB query seams patched.
 
     The ``_list_pending_hitl_impl`` scope gate (``hitl.list`` @ runner), the
     org-context resolution and the wire serialisation (incl. the shared gate
-    description resolver) all run for real against the patched gate loader.
+    description resolver AND the per-gate ``human_only`` flag resolver) all run
+    for real against the patched gate loader.
     """
     import asyncio
 
     from modulo.api.mcp_server import list_pending_hitl
 
     run_id = getattr(request.node, "_run_id", uuid.uuid4())
-    gate_id = getattr(request.node, "_gate_id", "pre-deploy")
+    gate_id = (
+        gate_id or getattr(request.node, "_gate_id", None) or getattr(request.node, "_human_node", None) or "pre-deploy"
+    )
     claim = MagicMock()
     claim.run_id = run_id
     claim.gate_id = gate_id
@@ -212,6 +216,7 @@ def _call_list_pending_hitl(request) -> dict:
     claim.expires_at = None
     claim.required_team_id = None
     claim.context_json = {}
+    claim.gate_config_json = gate_config
     session = _make_session_context(AsyncMock())
 
     with (
@@ -227,6 +232,11 @@ def _call_list_pending_hitl(request) -> dict:
             new_callable=AsyncMock,
             return_value={(run_id, gate_id): "Approve the pre-deploy gate"},
         ),
+        patch(
+            "modulo.db.crud.hitl_gate_config._batch_load_snapshot_graphs",
+            new_callable=AsyncMock,
+            return_value=({}, {}),
+        ),
     ):
         _set_mcp_ctx("runner")
         try:
@@ -234,6 +244,80 @@ def _call_list_pending_hitl(request) -> dict:
         finally:
             _clear_mcp_ctx()
     return result
+
+
+def _call_review_hitl_on_human_only_gate(request, action: str) -> dict:
+    """Drive the REAL ``review_hitl`` tool through the REAL ``_check_human_only_gate``.
+
+    The parse guard and the role-hierarchy scope gate run for real (operator
+    role, claim token supplied), and ``_check_human_only_gate`` — the shared
+    FAR-610 policy hook — runs for real against a SEEDED gate-config resolution
+    (``{"human_only": True}``): ``human_only_denial`` produces the shared
+    ``MSG_HUMAN_ONLY_DENY`` verdict and the denial returns the
+    ``{"error": "human_only_gate", "detail": ...}`` error dict. The FAR-634
+    denial-audit append (a DB write) is the only seam captured — asserted, not
+    patched away.
+    """
+    import asyncio
+
+    from modulo.api.mcp_server import review_hitl
+
+    run_id = getattr(request.node, "_run_id", uuid.uuid4())
+    gate_id = getattr(request.node, "_gate_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
+    mock_run = MagicMock(id=run_id, status="awaiting_human", owner_team_id=None, pipeline_id=uuid.uuid4())
+    session = _make_session_context(AsyncMock())
+
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+        patch("modulo.api.mcp_server.get_run", return_value=mock_run),
+        patch("modulo.api.mcp_server._run_owner_team_id", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.mcp_server._session", return_value=session),
+        patch(
+            "modulo.db.crud.hitl_gate_config.resolve_hitl_gate_config",
+            new_callable=AsyncMock,
+            return_value={"human_only": True},
+        ),
+        patch(
+            "modulo.api.mcp_server._append_hitl_human_only_denied_audit",
+            new_callable=AsyncMock,
+        ) as mock_denial_audit,
+    ):
+        _set_mcp_ctx("operator")
+        try:
+            result = asyncio.run(
+                review_hitl(
+                    run_id=str(run_id),
+                    gate_id=gate_id,
+                    action=action,
+                    claim_token="claim_token_123",
+                )
+            )
+        finally:
+            _clear_mcp_ctx()
+    request.node._denial_audit = mock_denial_audit
+    return result
+
+
+def _browser_principal_client_type() -> str:
+    """The REAL REST HITL audit attribution for a browser principal (FAR-611).
+
+    ``_client_type`` in ``api/routes/hitl.py`` maps a browser-authenticated JWT
+    principal (``via_api_key=False``, ``client_kind=browser``) to the
+    ``"browser"`` audit stamp. Constructing the frozen ``TenantPrincipal`` and
+    running the real function exercises the only browser attribution path.
+    """
+    from modulo.api.routes.hitl import _client_type
+    from modulo.auth.jwt import TenantPrincipal
+
+    principal = TenantPrincipal(
+        username="alice",
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
+        org_role="operator",
+        via_api_key=False,
+        client_kind="browser",
+    )
+    return _client_type(principal)
 
 
 def _make_mcp_request(*, path: str = "/mcp", headers=None):
@@ -384,7 +468,7 @@ def response_is_error(request):
     assert data.get("isError") is True
 
 
-@then(parsers.parse('the error message mentions "{text}"'))
+@then(parsers.parse('the error mentions "{text}"'))
 def error_mentions(text: str, request):
     data = _mcp_response_payload(request)
     content = str(data.get("detail", data.get("error", data))).lower()
@@ -413,35 +497,17 @@ def mcp_tool_call_generic(tool: str, client, request):
     request.node._resp = resp
 
 
-@then(parsers.parse('the error mentions "{text}"'))
-def error_mentions_text(text: str, request):
-    data = _mcp_response_payload(request)
-    detail = str(data.get("detail", data.get("error", data))).lower()
-    assert text.lower() in detail
-
-
 @given(parsers.parse('a run is waiting at gate "{gate}"'))
 def run_waiting_at_gate(gate: str, request):
     request.node._run_id = uuid.uuid4()
     request.node._gate_id = gate
 
 
-@when(parsers.parse('the MCP client sends a tools/call request for "review_hitl" with action "list"'))
-def mcp_review_hitl_list(client, request):
-    resp = client.post(
-        "/mcp/tools/call",
-        json={
-            "tool": "review_hitl",
-            "arguments": {"action": "list"},
-        },
-        headers={"Authorization": f"Bearer {getattr(request.node, '_mcp_key', '')}"},
-    )
-    request.node._resp = resp
-
-
 @when("the MCP client lists pending HITL gates")
 def mcp_list_pending_hitl(request):
-    request.node._result = _call_list_pending_hitl(request)
+    # The pending gate's fire-time stamped config carries human_only=true, so
+    # the REAL claim-stamped path of resolve_gate_human_only_map is exercised.
+    request.node._result = _call_list_pending_hitl(request, gate_config={"human_only": True})
 
 
 @when("the MCP client approves the gate")
@@ -469,7 +535,7 @@ def response_contains_gate(request):
     data = _mcp_response_payload(request)
     assert isinstance(data.get("gates"), list), data
     run_id_str = str(getattr(request.node, "_run_id", uuid.uuid4()))
-    gate_id = getattr(request.node, "_gate_id", "pre-deploy")
+    gate_id = getattr(request.node, "_gate_id", None) or getattr(request.node, "_human_node", None) or "pre-deploy"
     matches = [g for g in data["gates"] if g.get("run_id") == run_id_str and g.get("gate_id") == gate_id]
     assert matches, f"pending gate {gate_id!r} on run {run_id_str!r} not in response: {data}"
 
@@ -493,26 +559,6 @@ def claimed_gate(request):
     request.node._claim_token = "claim_token_123"
 
 
-@when(parsers.parse('the MCP client sends a tools/call request for "review_hitl" with action "approve"'))
-def mcp_review_hitl_approve(client, request):
-    with (
-        patch("modulo.api.mcp_server.HITLManager.approve", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            "/mcp/tools/call",
-            json={
-                "tool": "review_hitl",
-                "arguments": {
-                    "action": "approve",
-                    "run_id": str(getattr(request.node, "_run_id", uuid.uuid4())),
-                    "claim_token": getattr(request.node, "_claim_token", ""),
-                },
-            },
-            headers={"Authorization": f"Bearer {getattr(request.node, '_mcp_key', '')}"},
-        )
-    request.node._resp = resp
-
-
 @given(parsers.parse('pipeline "{p}" has a human-only node "{node}"'))
 def human_only_pipeline(p: str, node: str, request):
     request.node._pipeline_name = p
@@ -525,21 +571,44 @@ def run_waiting_human(node: str, request):
     request.node._human_node = node
 
 
-@then(parsers.parse('the error mentions "human-only"'))
-def error_human_only(request):
-    data = request.node._resp.json()
-    content = str(data.get("content", data.get("error", ""))).lower()
-    assert "human" in content
+@then(parsers.parse('the pending gate indicates "human_only" true'))
+def pending_gate_requires_human(request):
+    data = _mcp_response_payload(request)
+    run_id_str = str(getattr(request.node, "_run_id", uuid.uuid4()))
+    gate_id = getattr(request.node, "_gate_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
+    gates = data.get("gates", [])
+    gate = next(
+        (g for g in gates if g.get("run_id") == run_id_str and g.get("gate_id") == gate_id),
+        None,
+    )
+    assert gate is not None, f"pending gate {gate_id!r} not in response: {data}"
+    assert gate.get("human_only") is True, f"expected human_only=true on {gate!r}, got: {data}"
 
 
-@then(parsers.parse('the response indicates "requires_human" true'))
-def response_requires_human(request):
-    pass
+@when("the MCP client approves the human-only gate")
+def mcp_approve_human_only_gate(request):
+    request.node._result = _call_review_hitl_on_human_only_gate(request, "approve")
 
 
-@then(parsers.parse('the audit event shows actor type "{atype}"'))
-def audit_actor_type(atype: str, request):
-    pass
+@then(parsers.parse('the denial appends a "hitl.human_only_denied" audit event'))
+def denial_audit_appended(request):
+    from modulo.db.crud.hitl_gate_config import MSG_HUMAN_ONLY_DENY
+
+    mock_denial_audit = getattr(request.node, "_denial_audit", None)
+    assert mock_denial_audit is not None, "denial audit seam was not captured"
+    mock_denial_audit.assert_awaited_once()
+    assert mock_denial_audit.await_args.kwargs["verdict"] == MSG_HUMAN_ONLY_DENY
+
+
+@then(parsers.parse('the decision audit event records actor type "{atype}"'))
+def decision_audit_actor_type(atype: str, request):
+    if atype == "mcp":
+        mock_approve = getattr(request.node, "_approve", None)
+        assert mock_approve is not None, "HITLManager.approve seam was not captured"
+        mock_approve.assert_awaited_once()
+        assert mock_approve.await_args.kwargs["client_type"] == "mcp"
+    else:
+        assert _browser_principal_client_type() == "browser"
 
 
 @given("the organisation has {count:d} local primitives")

@@ -3827,9 +3827,18 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
         # resolver (same normalisation + the FAR-688 unified context-first
         # precedence the REST pending endpoints use) while the session is
         # open. Context comes from the claim row itself.
-        from modulo.db.crud.hitl_gate_config import resolve_gate_descriptions
+        from modulo.db.crud.hitl_gate_config import (
+            resolve_gate_descriptions,
+            resolve_gate_human_only_map,
+        )
 
         description_by_gate = await resolve_gate_descriptions(s, gates=gates, org_id=org_id)
+        # FAR-609/610: tell the agent client which pending gates REQUIRE a
+        # browser human — human_only gates cannot be claimed or decided through
+        # MCP. Resolved via the shared batched flag map (claim-stamped config
+        # preferred; snapshot config fallback; fail-safe True default) so an
+        # agent can see before it attempts an action.
+        human_only_by_gate = await resolve_gate_human_only_map(s, gates=gates, org_id=org_id)
     return {
         "gates": [
             {
@@ -3841,6 +3850,7 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
                 "required_team_id": str(g.required_team_id) if g.required_team_id else None,
                 "description": description_by_gate.get((g.run_id, g.gate_id)),
                 "context": g.context_json if isinstance(g.context_json, dict) else None,
+                "human_only": human_only_by_gate.get((g.run_id, g.gate_id)),
             }
             for g in gates
         ],
