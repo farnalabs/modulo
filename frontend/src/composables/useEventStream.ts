@@ -79,14 +79,18 @@ function scheduleReconnect(kind: 'auth' | 'retry'): void {
   }, delay)
 }
 
-function connect(): void {
-  if (abortController) return
-  if (connectionState.value === 'auth_failed') return // banner restart required
-  _disconnecting = false
+function clearReconnectTimer(): void {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
+}
+
+function connect(): void {
+  if (abortController) return
+  if (connectionState.value === 'auth_failed') return // banner restart required
+  _disconnecting = false
+  clearReconnectTimer()
   connectionState.value = 'connecting'
   doConnect()
 }
@@ -184,10 +188,7 @@ async function doConnect(): Promise<void> {
 }
 
 function cleanup(): void {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
-  }
+  clearReconnectTimer()
   if (abortController) {
     abortController.abort()
     abortController = null
@@ -272,16 +273,24 @@ export function useEventStream(options?: { resourceType?: string; onEvent?: Even
 
 export { dispatchToStore }
 
+/**
+ * Reset all module-level stream state. Used by the HMR dispose hook so a hot
+ * reload does not leak handlers, a pending backfill timer, or a stale
+ * connection state. Exported so the reset can be exercised directly in tests
+ * (the HMR branch itself never executes under vitest).
+ */
+export function resetEventStreamState(): void {
+  cleanup()
+  clearAllHandlers()
+  backfillSubscribers.clear()
+  if (backfillTimer) {
+    clearTimeout(backfillTimer)
+    backfillTimer = null
+  }
+  connectionState.value = 'idle'
+  _everConnected = false
+}
+
 if (import.meta.hot) {
-  import.meta.hot.dispose(() => {
-    cleanup()
-    clearAllHandlers()
-    backfillSubscribers.clear()
-    if (backfillTimer) {
-      clearTimeout(backfillTimer)
-      backfillTimer = null
-    }
-    connectionState.value = 'idle'
-    _everConnected = false
-  })
+  import.meta.hot.dispose(resetEventStreamState)
 }

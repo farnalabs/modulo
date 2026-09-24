@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from unittest.mock import AsyncMock
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -514,3 +515,160 @@ class TestSSERoute:
         assert exc_info.value.status_code == status.HTTP_429_TOO_MANY_REQUESTS
         assert "user" in exc_info.value.detail.lower()
         assert bus._subscribers.get(org_id) is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-250: relay wiring, backfill loader, connection helper edges
+# ---------------------------------------------------------------------------
+
+
+async def test_backfill_loader_reads_recent_notifications(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_make_backfill_loader() re-reads recent notifications and shapes events."""
+    from modulo.api.routes import events as ev
+
+    org = uuid.uuid4()
+    row = MagicMock()
+    row.id = uuid.uuid4()
+    row.category = "run_failed"
+    row.created_at = datetime(2026, 9, 23, 12, 0, tzinfo=UTC)
+
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [row]
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    monkeypatch.setattr(ev, "get_or_create_engine", MagicMock())
+    monkeypatch.setattr(ev, "get_or_create_session_factory", MagicMock(return_value=factory))
+    monkeypatch.setattr(ev, "set_rls_org", AsyncMock())
+
+    loader = ev._make_backfill_loader()
+    events = await loader(str(org))
+
+    assert len(events) == 1
+    assert events[0]["type"] == "notification"
+    assert events[0]["notification_id"] == str(row.id)
+    assert events[0]["category"] == "run_failed"
+
+
+async def test_org_has_clients_reflects_tracked_connections() -> None:
+    from modulo.api.routes import events as ev
+
+    assert ev._org_has_clients("org-none") is False
+    ev._active_connections["org-has"] = {asyncio.Queue()}
+    assert ev._org_has_clients("org-has") is True
+
+
+async def test_test_reset_connections_schedules_relay_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In a running loop, the test reset schedules relay teardown."""
+    from modulo.api.routes import events as ev
+
+    reset = AsyncMock()
+    monkeypatch.setattr(ev.relay_mod, "reset_relay_for_tests", reset)
+    ev._active_connections["org-r"] = {asyncio.Queue()}
+    ev._queue_users[1] = "u"
+
+    ev._test_reset_connections()
+    for _ in range(100):
+        if not ev._relay_reset_tasks:
+            break
+        await asyncio.sleep(0.01)
+
+    assert ev._active_connections == {}
+    assert ev._queue_users == {}
+    reset.assert_awaited_once()
+
+
+async def test_ensure_relay_returns_configured_relay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_ensure_relay() configures the relay when the bus has a Redis broker."""
+    from modulo.api.routes import events as ev
+
+    bus = MagicMock()
+    bus.redis_broker = MagicMock()
+    fake_relay = MagicMock()
+    configure = AsyncMock(return_value=fake_relay)
+    monkeypatch.setattr(ev, "get_event_bus", lambda: bus)
+    monkeypatch.setattr(ev.relay_mod, "configure_relay", configure)
+
+    got = await ev._ensure_relay()
+
+    assert got is fake_relay
+    configure.assert_awaited_once()
+
+
+async def _run_sse_with_relay(monkeypatch: pytest.MonkeyPatch, fake_relay: MagicMock) -> object:
+    """Invoke the SSE route with _ensure_relay stubbed to *fake_relay*."""
+    from modulo.api.routes import events as ev
+
+    monkeypatch.setattr(ev, "_ensure_relay", AsyncMock(return_value=fake_relay))
+    principal = _make_principal()
+    settings = _make_settings()
+    settings.modulo_sse_zombie_timeout_seconds = 5.0
+    settings.modulo_sse_max_connections_per_org = 10
+    settings.modulo_sse_max_connections_per_user = 10
+    request = AsyncMock()
+    request.is_disconnected = AsyncMock(return_value=True)
+    return await ev.sse_event_stream(request=request, settings=settings, principal=principal)
+
+
+async def test_sse_route_acquires_and_releases_relay(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_relay = MagicMock()
+    fake_relay.acquire = AsyncMock()
+    fake_relay.release = AsyncMock()
+
+    resp = await _run_sse_with_relay(monkeypatch, fake_relay)
+    async for _ in resp.body_iterator:  # type: ignore[attr-defined]
+        pass
+
+    fake_relay.acquire.assert_awaited_once()
+    fake_relay.release.assert_awaited_once()
+
+
+async def test_sse_route_relay_acquire_cancellation_cleans_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_relay = MagicMock()
+    fake_relay.acquire = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_sse_with_relay(monkeypatch, fake_relay)
+
+
+async def test_sse_route_relay_acquire_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_relay = MagicMock()
+    fake_relay.acquire = AsyncMock(side_effect=RuntimeError("relay boom"))
+    fake_relay.release = AsyncMock()
+
+    resp = await _run_sse_with_relay(monkeypatch, fake_relay)
+    async for _ in resp.body_iterator:  # type: ignore[attr-defined]
+        pass
+
+    # The relay was dropped after acquire failed -> no release attempted.
+    fake_relay.release.assert_not_awaited()
+
+
+async def test_sse_route_relay_release_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_relay = MagicMock()
+    fake_relay.acquire = AsyncMock()
+    fake_relay.release = AsyncMock(side_effect=RuntimeError("release boom"))
+
+    resp = await _run_sse_with_relay(monkeypatch, fake_relay)
+    async for _ in resp.body_iterator:  # type: ignore[attr-defined]
+        pass  # must not raise
+
+    fake_relay.release.assert_awaited_once()
+
+
+async def test_sse_route_relay_release_cancellation_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_relay = MagicMock()
+    fake_relay.acquire = AsyncMock()
+    fake_relay.release = AsyncMock(side_effect=asyncio.CancelledError())
+
+    resp = await _run_sse_with_relay(monkeypatch, fake_relay)
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in resp.body_iterator:  # type: ignore[attr-defined]
+            pass

@@ -117,6 +117,12 @@ describe('NotificationBell (FAR-250)', () => {
     expect(badge.text()).toBe('7')
   })
 
+  it('caps the badge at "99+" when the unread count exceeds 99', async () => {
+    h.mockFetchUnreadCount.mockResolvedValue(150)
+    const wrapper = await mountBell()
+    expect(wrapper.find('[data-testid="notification-unread-badge"]').text()).toBe('99+')
+  })
+
   it('refetches the unread count when a non-opted-out notification event arrives', async () => {
     const wrapper = await mountBell()
     const handler = h.mockSubscribe.mock.calls[0][1] as (e: Record<string, unknown>) => void

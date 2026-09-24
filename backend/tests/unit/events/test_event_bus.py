@@ -400,3 +400,73 @@ async def test_configure_event_bus_propagates_cancellation_from_close() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await eb.configure_event_bus(redis_broker=MagicMock())
+
+
+# ---------------------------------------------------------------------------
+# deliver_local / broadcast_redis_only (FAR-250)
+# ---------------------------------------------------------------------------
+
+
+async def test_deliver_local_without_org_id_warns(caplog: pytest.LogCaptureFixture) -> None:
+    """A malformed event with no/blank org_id is dropped with a warning."""
+    bus = EventBus()
+    with caplog.at_level(logging.WARNING, logger="modulo.core.events.event_bus"):
+        await bus.deliver_local({"type": "run", "id": "r-1"})
+        await bus.deliver_local({"org_id": "", "type": "run", "id": "r-1"})
+    assert "event_bus.deliver_local_missing_org_id" in caplog.text
+
+
+async def test_broadcast_redis_only_without_broker_warns(caplog: pytest.LogCaptureFixture) -> None:
+    """broadcast_redis_only with no broker is a logged no-op (fail-open)."""
+    bus = EventBus()
+    with caplog.at_level(logging.WARNING, logger="modulo.core.events.event_bus"):
+        await bus.broadcast_redis_only("org-1", _event(rid="r-1", version=0))
+    assert "event_bus.redis_broadcast_skipped" in caplog.text
+
+
+async def test_broadcast_redis_only_publishes_with_broker() -> None:
+    """broadcast_redis_only emits one Redis message and stamps producer_id."""
+    broker = MagicMock()
+    broker.publish = AsyncMock()
+    bus = EventBus(redis_broker=broker)
+
+    await bus.broadcast_redis_only("org-1", _event(rid="r-1", version=0))
+
+    broker.publish.assert_awaited_once()
+    channel, payload = broker.publish.await_args.args
+    assert channel == "resource:org-1"
+    assert payload["producer_id"] == eb.LOCAL_PRODUCER_ID
+
+
+async def test_publish_with_broadcast_redis_false_skips_redis_leg() -> None:
+    """broadcast_redis=False keeps the local fan-out but schedules no Redis task."""
+    broker = MagicMock()
+    broker.publish = AsyncMock()
+    bus = EventBus(redis_broker=broker)
+    q = await bus.subscribe("org-1")
+
+    await bus.publish("org-1", "run", "r-1", "created", version=0, broadcast_redis=False)
+
+    assert _drain(q)[0]["id"] == "r-1"
+    assert not eb._background_tasks
+    broker.publish.assert_not_awaited()
+
+
+async def test_publish_with_extra_merges_fields_into_event() -> None:
+    """publish(extra=...) merges notification-only fields onto the envelope."""
+    bus = EventBus()
+    q = await bus.subscribe("org-1")
+
+    await bus.publish(
+        "org-1",
+        "notification",
+        "n-1",
+        "created",
+        version=0,
+        broadcast_redis=False,
+        extra={"notification_id": "n-1", "category": "run_failed"},
+    )
+
+    event = _drain(q)[0]
+    assert event["notification_id"] == "n-1"
+    assert event["category"] == "run_failed"

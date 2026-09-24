@@ -524,3 +524,109 @@ describe('useDirtyTracker', () => {
     expect(spy).toHaveBeenCalledTimes(3)
   })
 })
+
+describe('reconnect backfill + reset (FAR-250 coverage)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('resets the backfill debounce when a second reconnect lands inside the window', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const { eventBus } = await import('../composables/useEventStream')
+    const backfill = vi.fn()
+    const unsub = eventBus.subscribe('run', vi.fn())
+    const off = eventBus.onReconnect(backfill)
+    await vi.advanceTimersByTimeAsync(0)
+
+    endStream()
+    await vi.advanceTimersByTimeAsync(500) // reconnect 1 -> schedules the backfill
+    endStream()
+    await vi.advanceTimersByTimeAsync(500) // reconnect 2 inside the window -> clears + reschedules
+    await vi.advanceTimersByTimeAsync(1500)
+
+    expect(backfill).toHaveBeenCalledTimes(1) // coalesced into a single batch
+    off()
+    unsub()
+  })
+
+  it('logs and swallows an error thrown by a reconnect backfill subscriber', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { eventBus } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    const off = eventBus.onReconnect(() => {
+      throw new Error('backfill boom')
+    })
+    await vi.advanceTimersByTimeAsync(0)
+
+    endStream()
+    await vi.advanceTimersByTimeAsync(500)
+    await vi.advanceTimersByTimeAsync(1500)
+
+    expect(errorSpy).toHaveBeenCalledWith('[EventBus] Reconnect backfill handler error', expect.any(Error))
+    off()
+    unsub()
+  })
+
+  it('retries when fetch rejects with an AbortError (zombie/dead stream)', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const abortErr = new Error('aborted')
+    abortErr.name = 'AbortError'
+    vi.mocked(fetch).mockRejectedValue(abortErr)
+
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(eventBus.state).toBe('reconnecting')
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it('disconnect() clears a pending backfill timer', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const { eventBus } = await import('../composables/useEventStream')
+    const backfill = vi.fn()
+    const unsub = eventBus.subscribe('run', vi.fn())
+    const off = eventBus.onReconnect(backfill)
+    await vi.advanceTimersByTimeAsync(0)
+
+    endStream()
+    await vi.advanceTimersByTimeAsync(500) // reconnect -> schedules the backfill timer
+    unsub() // last handler leaves -> disconnect() clears the pending timer
+    off()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(backfill).not.toHaveBeenCalled()
+    expect(eventBus.state).toBe('idle')
+  })
+
+  it('useEventStream() returns the shared connected/connectionState refs', async () => {
+    const { useEventStream } = await import('../composables/useEventStream')
+    const result = useEventStream()
+    expect(result.connected.value).toBe(false)
+    expect(result.connectionState.value).toBe('idle')
+  })
+
+  it('resetEventStreamState() clears handlers, the backfill timer, and connection state', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const { eventBus, resetEventStreamState } = await import('../composables/useEventStream')
+    const unsub = eventBus.subscribe('run', vi.fn())
+    eventBus.onReconnect(vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    endStream()
+    await vi.advanceTimersByTimeAsync(500) // reconnect leaves a pending backfill timer
+
+    resetEventStreamState() // clears the pending backfill timer
+    expect(eventBus.state).toBe('idle')
+
+    resetEventStreamState() // second call: no pending timer
+    unsub()
+  })
+})

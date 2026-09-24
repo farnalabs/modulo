@@ -10,6 +10,7 @@ carries only ``{notification_id, category, created_at}`` — never content.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -19,7 +20,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 import modulo.core.notifier as notifier_mod
-from modulo.core.events.notification_events import NOTIFIER_SESSION_KEY
+from modulo.core.events.notification_events import NOTIFIER_SESSION_KEY, _isoformat
 from modulo.core.notifier import Notifier
 
 _ORG = uuid.UUID("8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70")
@@ -162,3 +163,61 @@ class TestDispatchInlineWiring:
 
         await _drain_broadcast_tasks()
         fake_bus.broadcast_redis_only.assert_not_awaited()
+
+
+class TestSseBroadcastDoneCallback:
+    """FAR-250: the fire-and-forget task callback must never leak or crash."""
+
+    async def test_cancelled_task_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        async def _forever() -> None:
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(_forever())
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        notifier_mod._sse_broadcast_tasks.add(task)
+
+        with caplog.at_level("WARNING", logger="modulo.core.notifier"):
+            notifier_mod._on_sse_broadcast_done(task)
+
+        assert task not in notifier_mod._sse_broadcast_tasks
+        assert "notifier.sse_broadcast_task_cancelled" in caplog.text
+
+    async def test_failed_task_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        async def _boom() -> None:
+            raise RuntimeError("redis down")
+
+        task = asyncio.create_task(_boom())
+        with contextlib.suppress(RuntimeError):
+            await task
+        notifier_mod._sse_broadcast_tasks.add(task)
+
+        with caplog.at_level("WARNING", logger="modulo.core.notifier"):
+            notifier_mod._on_sse_broadcast_done(task)
+
+        assert task not in notifier_mod._sse_broadcast_tasks
+        assert "notifier.sse_broadcast_failed" in caplog.text
+
+
+def test_isoformat_none_datetime_and_string_passthrough() -> None:
+    """_isoformat handles None, datetime, and already-serialised string values."""
+    assert _isoformat(None) is None
+    dt = datetime(2026, 9, 23, 12, 0, 0, tzinfo=UTC)
+    assert _isoformat(dt) == dt.isoformat()
+    # Non-datetime, non-None values (e.g. a pre-serialised string) pass through.
+    assert _isoformat("2026-09-23T12:00:00+00:00") == "2026-09-23T12:00:00+00:00"
+
+
+def test_notification_event_fields_falls_back_to_now_when_created_at_missing() -> None:
+    """A target whose created_at is not yet populated falls back to now()."""
+    from modulo.core.events.notification_events import notification_event_fields
+
+    target = MagicMock()
+    target.created_at = None
+    target.category = "run_failed"
+
+    fields = notification_event_fields(target, "n-1")
+
+    assert fields["created_at"] is not None
+    assert fields["category"] == "run_failed"

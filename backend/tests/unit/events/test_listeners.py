@@ -13,7 +13,7 @@ import asyncio
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import create_engine
@@ -568,5 +568,56 @@ class TestNotificationListenerPayload:
             await _drain_tasks()
 
         fake_bus.publish.assert_not_awaited()
+        session.close()
+        session.get_bind().dispose()  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# _deliver_pending / _resolve_session edge paths (FAR-250 coverage)
+# ---------------------------------------------------------------------------
+
+
+def test_deliver_pending_without_running_loop_warns(caplog: pytest.LogCaptureFixture) -> None:
+    """A queued event delivered with no running loop warns and is not lost."""
+    session = _bare_session()
+    try:
+        _queue_for_commit(session, _pending())
+        with caplog.at_level("WARNING", logger="modulo.core.events.listeners"):
+            listeners._deliver_pending(session)
+        assert "event_listener.no_running_loop" in caplog.text
+    finally:
+        session.close()
+        session.get_bind().dispose()  # type: ignore[attr-defined]
+
+
+def test_resolve_session_object_session_raises_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """object_session raising (detached/mock target) falls through to no session."""
+    monkeypatch.setattr(listeners, "object_session", MagicMock(side_effect=RuntimeError("boom")))
+    assert listeners._resolve_session(object()) is None
+
+
+def test_resolve_session_non_session_value_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-Session object_session result (mock target) returns None."""
+    monkeypatch.setattr(listeners, "object_session", MagicMock(return_value=MagicMock()))
+    assert listeners._resolve_session(object()) is None
+
+
+def test_deliver_pending_with_no_pending_is_noop() -> None:
+    """after_commit with an empty queue returns immediately (no loop needed)."""
+    session = _bare_session()
+    try:
+        listeners._deliver_pending(session)  # no pending queued
+    finally:
+        session.close()
+        session.get_bind().dispose()  # type: ignore[attr-defined]
+
+
+def test_on_soft_rollback_without_pending_is_noop() -> None:
+    """An outermost rollback with no queued events logs nothing and returns."""
+    session = _bare_session()
+    try:
+        assert session.in_transaction() is False
+        listeners._on_soft_rollback(session, MagicMock())
+    finally:
         session.close()
         session.get_bind().dispose()  # type: ignore[attr-defined]

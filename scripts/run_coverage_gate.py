@@ -166,6 +166,16 @@ _EXCLUDE_PATTERNS: list[str] = [
     # counting its thousands of generated lines here as "0% unmeasured" would
     # fail the gate on any PR that regenerates the API types.
     "**/schema.ts",
+    # TypeScript declaration modules (``frontend/src/types/**``) contain only
+    # ``interface``/``type`` declarations. Types are erased at compile time, so
+    # these modules emit no runtime statements and are never instrumented by
+    # v8 — they never appear in the frontend LCOV report. Without this
+    # exclusion the gate charged every added type field as an unmeasured line
+    # at 0% (observed on PR #945, where ``frontend/src/types/events.ts`` added
+    # five fields), failing a PR whose only "uncovered" lines were erased
+    # types. Mirrors the ``**/schema.ts`` rationale: no executable code, no
+    # coverage to measure.
+    "frontend/src/types/**",
     "**/locales/**",
     "tests/**",
     "test_*/**",

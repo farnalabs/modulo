@@ -534,6 +534,23 @@ def test_schema_ts_is_excluded_from_the_gate():
     assert mod._is_excluded("frontend/src/lib/api/client.ts") is False
 
 
+def test_type_declaration_modules_are_excluded_from_the_gate():
+    """Type-only modules emit no runtime code and are never in the LCOV report.
+
+    Regression for PR #945: ``frontend/src/types/events.ts`` added five
+    interface fields, which the gate charged as five unmeasured lines at 0%
+    even though TS erases them at compile time (v8 never instruments the
+    module).  Type declaration modules must be out of scope; runtime code
+    elsewhere under ``src/`` stays gated.
+    """
+    assert mod._is_excluded("frontend/src/types/events.ts") is True
+    assert mod._is_excluded("frontend/src/types/index.ts") is True
+    assert mod._is_excluded("frontend/src/types/nested/deep.ts") is True
+    # Runtime modules must still be gated.
+    assert mod._is_excluded("frontend/src/composables/useEventStream.ts") is False
+    assert mod._is_excluded("frontend/src/components/NotificationBell.vue") is False
+
+
 def test_changed_production_files_uses_merge_base_range():
     """Regression: ``git diff`` must use the three-dot merge-base range.
 

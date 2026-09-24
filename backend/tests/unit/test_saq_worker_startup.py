@@ -253,3 +253,215 @@ class TestWorkerEventSubscription:
         with pytest.raises(asyncio.CancelledError):
             await task
         assert ok.closed  # pubsub cleaned up in finally
+
+
+class _ReturningPubSub:
+    """Pattern subscription whose listen() returns cleanly after one frame.
+
+    Subsequent listen() calls block forever so the resubscribe loop does not
+    spin (the real broker always returns a fresh pubsub whose listen() blocks).
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self._calls = 0
+
+    async def listen(self):
+        self._calls += 1
+        if self._calls > 1:
+            await asyncio.Event().wait()
+        yield {"type": "psubscribe", "pattern": "modulo:events:resource:*"}
+
+    async def unsubscribe(self) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _UnsubRaisesPubSub:
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    async def unsubscribe(self) -> None:
+        raise self._exc
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _NoAclosePubSub:
+    def __init__(self, close_exc: BaseException | None = None) -> None:
+        self.closed = False
+        self._exc = close_exc
+
+    async def unsubscribe(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        if self._exc is not None:
+            raise self._exc
+        self.closed = True
+
+
+class _NoUnsubPubSub:
+    """Pubsub with neither unsubscribe nor close (exercises the getattr guards)."""
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _NoCloseAtAllPubSub:
+    async def unsubscribe(self) -> None:
+        return None
+
+
+class TestWorkerEventSubscriptionEdges:
+    async def test_listen_returning_cleanly_resubscribes_with_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr(ws, "_BACKOFF_BASE_SECONDS", 0.01)
+        broker = MagicMock()
+        broker.connect = AsyncMock()
+        broker.subscribe_pattern = AsyncMock(return_value=_ReturningPubSub())
+
+        with caplog.at_level("WARNING", logger="modulo.core.events.worker_subscription"):
+            task = asyncio.create_task(ws.run_worker_event_subscription(broker))
+            for _ in range(200):
+                if "worker_event_subscription.listen_ended" in caplog.text:
+                    break
+                await asyncio.sleep(0.01)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert "worker_event_subscription.listen_ended" in caplog.text
+
+    async def test_close_pubsub_unsubscribe_exception_swallowed(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level("DEBUG", logger="modulo.core.events.worker_subscription"):
+            await ws._close_pubsub(_UnsubRaisesPubSub(RuntimeError("boom")))
+        assert "worker_event_subscription.unsubscribe_failed" in caplog.text
+
+    async def test_close_pubsub_unsubscribe_cancellation_propagates(self) -> None:
+        with pytest.raises(asyncio.CancelledError):
+            await ws._close_pubsub(_UnsubRaisesPubSub(asyncio.CancelledError()))
+
+    async def test_close_pubsub_falls_back_to_close_without_aclose(self) -> None:
+        ps = _NoAclosePubSub()
+        await ws._close_pubsub(ps)
+        assert ps.closed is True
+
+    async def test_close_pubsub_close_exception_swallowed(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level("DEBUG", logger="modulo.core.events.worker_subscription"):
+            await ws._close_pubsub(_NoAclosePubSub(RuntimeError("close boom")))
+        assert "worker_event_subscription.close_failed" in caplog.text
+
+    async def test_close_pubsub_without_unsubscribe_or_close_is_noop(self) -> None:
+        await ws._close_pubsub(_NoUnsubPubSub())  # must not raise
+        await ws._close_pubsub(_NoCloseAtAllPubSub())  # must not raise
+
+
+class TestSpawnWorkerEventSubscription:
+    def test_spawn_without_running_loop_returns_none(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level("WARNING", logger="modulo.core.events.worker_subscription"):
+            assert ws.spawn_worker_event_subscription(MagicMock()) is None
+        assert "worker_event_subscription.spawn_skipped_no_loop" in caplog.text
+
+    async def test_spawn_returns_held_task_and_discards_on_done(self) -> None:
+        broker = MagicMock()
+
+        async def _block() -> None:
+            await asyncio.Event().wait()
+
+        broker.connect = _block
+        broker.subscribe_pattern = AsyncMock()
+
+        task = ws.spawn_worker_event_subscription(broker)
+        assert task is not None
+        await asyncio.sleep(0.01)
+        assert task in ws._held_tasks
+
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        # The done callback removed the finished task from the held set.
+        assert task not in ws._held_tasks
+
+    async def test_on_task_done_logs_failure(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        async def _boom() -> None:
+            raise RuntimeError("subscription boom")
+
+        task = asyncio.create_task(_boom())
+        with contextlib.suppress(RuntimeError):
+            await task
+        ws._held_tasks.add(task)
+
+        with caplog.at_level("WARNING", logger="modulo.core.events.worker_subscription"):
+            ws._on_task_done(task)
+
+        assert task not in ws._held_tasks
+        assert "worker_event_subscription.task_failed" in caplog.text
+
+
+class TestStartupHookCancellationPropagates:
+    async def test_register_listeners_cancellation_propagates(self) -> None:
+        with (
+            patch("modulo.core.events.register_listeners", side_effect=asyncio.CancelledError()),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw._startup_event_bus_hook({})
+
+    async def test_configure_event_bus_cancellation_propagates(self) -> None:
+        with (
+            patch("modulo.core.events.register_listeners"),
+            patch(
+                "modulo.core.events.configure_event_bus",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw._startup_event_bus_hook({})
+
+    async def test_spawn_cancellation_propagates(self) -> None:
+        with (
+            patch("modulo.core.events.register_listeners"),
+            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch(
+                "modulo.core.events.worker_subscription.spawn_worker_event_subscription",
+                side_effect=asyncio.CancelledError(),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw._startup_event_bus_hook({})
+
+
+async def test_on_task_done_successful_task_is_silent(caplog: pytest.LogCaptureFixture) -> None:
+    async def _ok() -> None:
+        return None
+
+    task = asyncio.create_task(_ok())
+    await task
+    ws._held_tasks.add(task)
+
+    with caplog.at_level("WARNING", logger="modulo.core.events.worker_subscription"):
+        ws._on_task_done(task)
+
+    assert task not in ws._held_tasks
+    assert "worker_event_subscription.task_failed" not in caplog.text
