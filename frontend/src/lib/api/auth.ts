@@ -181,7 +181,15 @@ export function getAccessToken(): string | null {
 // non-httpOnly cookies — the CSRF double-submit cookie is exposed on purpose).
 function readCookie(name: string): string | null {
   const match = document.cookie.match(`^(?:.*; )?${name}=([^;]*).*$`)
-  return match && match[1] ? decodeURIComponent(match[1]) : null
+  if (!match || !match[1]) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    // A malformed percent-escape in the cookie value (e.g. `%E0%A4`) makes
+    // decodeURIComponent throw URIError. Treat it as "no usable cookie" so a
+    // corrupt XSRF-TOKEN can never crash the refresh path.
+    return null
+  }
 }
 
 // Check whether the navigator.locks API is available (Web Locks are supported
@@ -192,12 +200,12 @@ function hasWebLocks(): boolean {
   )
 }
 
-// FAR-1197: the refresh endpoint is bodyless � the token rides the httpOnly
+// FAR-1197: the refresh endpoint is bodyless — the token rides the httpOnly
 // `modulo_refresh` cookie, and the route enforces a double-submit CSRF check
 // (XSRF-TOKEN cookie vs X-CSRF-Token header). The httpOnly cookie is attached
 // automatically by the browser; we only need to echo the CSRF cookie in the
 // header. Sibling tabs share the cookie jar, so a rotation by one tab is
-// instantly visible to the others � no cross-tab retry loop is needed.
+// instantly visible to the others — no cross-tab retry loop is needed.
 async function doRefresh(): Promise<boolean> {
   try {
     const csrfToken = readCookie('XSRF-TOKEN')

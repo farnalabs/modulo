@@ -230,6 +230,28 @@ describe('attemptTokenRefresh', () => {
     })
   })
 
+  it('treats a malformed XSRF cookie value as absent instead of throwing', async () => {
+    // A corrupted percent-escape makes decodeURIComponent throw URIError; the
+    // refresh path must fall back to no CSRF header rather than crash.
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => 'XSRF-TOKEN=%E0%A4; modulo_refresh=ref-cookie',
+    })
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: 'new-access' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(attemptTokenRefresh()).resolves.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {},
+    })
+  })
+
   it('deduplicates concurrent refresh attempts into a single request', async () => {
     setCsrfCookie('modulo_refresh=ref-cookie')
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
