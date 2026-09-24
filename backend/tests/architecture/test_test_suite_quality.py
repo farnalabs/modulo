@@ -1000,6 +1000,27 @@ def _all_nodes(tree: ast.AST) -> tuple[ast.AST, ...]:
     return tuple(ast.walk(tree))
 
 
+def _warm_caches() -> None:
+    """Parse and walk every test module ONCE at import time.
+
+    The cold full parse of ~1.5k modules costs minutes on Windows (antivirus
+    re-scans each open), which blew the per-test ``--timeout`` budget of
+    whichever lens ran first — pytest-timeout's thread method then aborted the
+    whole session mid-``read_text``. Collection is NOT covered by the per-test
+    timeout, so paying the shared-cache cost at import keeps every lens body
+    in the seconds range. Each module instance warms its own
+    ``functools.cache`` (the scope-tests module imports this file as a
+    separate top-level instance; its tests never call ``_parse``).
+    """
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is not None:
+            _all_nodes(tree)
+
+
+_warm_caches()
+
+
 def test_no_always_pass_or_fail_assertions():
     """Assertions against a literal that can never fail (or can never pass)
     are dead code — they report a test as green regardless of behavior. This

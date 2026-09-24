@@ -35,6 +35,7 @@ from modulo.db.crud.hitl_gate_guard import (
     resolve_effective_privilege,
 )
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.crud.pipeline_owner import ACCOUNTABILITY_OWNER_FIELDS, validate_accountability_owner
 from modulo.db.crud.run import count_active_runs_for_pipeline
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
@@ -84,6 +85,13 @@ def validate_max_concurrent_runs(value: int) -> int:
 CIRCUIT_BREAKER_THRESHOLD_MAX = Decimal("99999999.999999")
 _CIRCUIT_BREAKER_QUANTUM = Decimal("0.000001")
 CIRCUIT_BREAKER_THRESHOLD_CHANGED_EVENT = "pipeline.circuit_breaker_threshold_changed"
+# FAR-1161: accountability-owner assignment/change/clear audit events.
+BUSINESS_OWNER_CHANGED_EVENT = "pipeline.business_owner_changed"
+RELIABILITY_OWNER_CHANGED_EVENT = "pipeline.reliability_owner_changed"
+_OWNER_CHANGED_EVENTS: dict[str, str] = {
+    "business_owner_id": BUSINESS_OWNER_CHANGED_EVENT,
+    "reliability_owner_id": RELIABILITY_OWNER_CHANGED_EVENT,
+}
 _MSG_THRESHOLD_NOT_A_NUMBER = "circuit_breaker_threshold must be a number (USD) or null"
 
 
@@ -116,6 +124,45 @@ def normalize_circuit_breaker_threshold(value: Decimal | float | str | None) -> 
 
 def _threshold_as_float(value: Decimal | None) -> float | None:
     return float(value) if value is not None else None
+
+
+async def audit_accountability_owner_change(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None,
+    field: str,
+    previous: uuid.UUID | None,
+    new: uuid.UUID | None,
+    request_id: str | None = None,
+) -> bool:
+    """Append the ``pipeline.*_owner_changed`` audit event when the value changed.
+
+    Covers ALL three transitions (FAR-1161): assignment (previous None ->
+    new id), change (id -> id), and clear (id -> None). A no-op write (same
+    value) records nothing, mirroring the circuit-breaker/autonomy audits.
+
+    Returns ``True`` when an event was written.
+    """
+    if previous == new:
+        return False
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type=_OWNER_CHANGED_EVENTS[field],
+        actor_user_id=actor_user_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json={
+            "field": field,
+            "previous_owner_id": str(previous) if previous is not None else None,
+            "new_owner_id": str(new) if new is not None else None,
+            "changed_by": str(actor_user_id) if actor_user_id is not None else None,
+        },
+        request_id=request_id,
+    )
+    return True
 
 
 async def audit_circuit_breaker_threshold_change(
@@ -171,6 +218,8 @@ async def create_pipeline(
     stale_run_timeout_minutes: int = 30,
     folder_id: uuid.UUID | None = None,
     circuit_breaker_threshold: Decimal | float | None = None,
+    business_owner_id: uuid.UUID | None = None,
+    reliability_owner_id: uuid.UUID | None = None,
     request_id: str | None = None,
 ) -> Pipeline:
     if folder_id is not None:
@@ -186,6 +235,20 @@ async def create_pipeline(
             raise ValueError(f"Folder not found in this organisation: {folder_id}")
     max_concurrent_runs = validate_max_concurrent_runs(max_concurrent_runs)
     threshold = normalize_circuit_breaker_threshold(circuit_breaker_threshold)
+    # FAR-1161: fail-closed eligibility check on every owner assignment
+    # (HTTPException 422 propagates through the route's handle_db_errors).
+    for _field, _owner in (
+        ("business_owner_id", business_owner_id),
+        ("reliability_owner_id", reliability_owner_id),
+    ):
+        await validate_accountability_owner(
+            session,
+            owner_account_id=_owner,
+            field=_field,
+            org_id=org_id,
+            visibility=visibility,
+            owner_team_id=owner_team_id,
+        )
     pipeline = Pipeline(
         organisation_id=org_id,
         name=name,
@@ -193,6 +256,8 @@ async def create_pipeline(
         description=description,
         visibility=visibility,
         owner_team_id=owner_team_id,
+        business_owner_id=business_owner_id,
+        reliability_owner_id=reliability_owner_id,
         max_concurrent_runs=max_concurrent_runs,
         lock_wait_timeout_seconds=lock_wait_timeout_seconds,
         node_timeout_seconds=node_timeout_seconds,
@@ -216,6 +281,20 @@ async def create_pipeline(
             new=threshold,
             request_id=request_id,
         )
+    # FAR-1161: assignment on CREATE is an owner change (previous None -> id).
+    for _field in ACCOUNTABILITY_OWNER_FIELDS:
+        _new_owner = business_owner_id if _field == "business_owner_id" else reliability_owner_id
+        if _new_owner is not None:
+            await audit_accountability_owner_change(
+                session,
+                org_id=org_id,
+                pipeline_id=pipeline.id,
+                actor_user_id=account_id,
+                field=_field,
+                previous=None,
+                new=_new_owner,
+                request_id=request_id,
+            )
     return pipeline
 
 
@@ -358,6 +437,59 @@ async def update_pipeline(
             **updates,
             "circuit_breaker_threshold": normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]),
         }
+    # FAR-1161: fail-closed owner eligibility against the EFFECTIVE (post-update)
+    # visibility/owner-team — a PATCH may change all three in one payload, and
+    # the invariant must hold on the resulting pipeline, not the stale one.
+    #
+    # Scope-change re-validation (review finding): when the update contains
+    # ``visibility`` or ``owner_team_id`` — the same presence test the route's
+    # team-transition gate uses — the STORED owners are re-validated too, not
+    # just the ones the payload carries. A team move or visibility flip can
+    # strand an already-stored owner outside the new scope even when the owner
+    # keys are omitted; that combination fails CLOSED with the same 422 the
+    # owner-assignment path raises (naming the offending field), never a
+    # silent auto-clear. All validation runs BEFORE apply_updates so an
+    # out-of-scope owner never mutates the row (the 422 rolls the transaction
+    # back regardless; this keeps the in-memory object clean for any later
+    # code in the same transaction).
+    owner_updates = {f: updates[f] for f in ACCOUNTABILITY_OWNER_FIELDS if f in updates}
+    scope_changed = "visibility" in updates or "owner_team_id" in updates
+    fields_to_validate = set(owner_updates)
+    if scope_changed:
+        fields_to_validate.update(ACCOUNTABILITY_OWNER_FIELDS)
+    # Guard the whole block: an update that touches neither owners nor scope
+    # must not read scope attributes off partial stand-in rows at all.
+    if fields_to_validate:
+        # getattr defaults: real rows always carry both columns; partial
+        # test stand-ins (SimpleNamespace) may not, and a scope-less default
+        # only reaches the team gate when a real owner is being validated.
+        # Non-str scope (absent stand-in attribute, explicit null) behaves as
+        # org scope in the gate below — the same as `visibility != "team"`.
+        _raw_visibility = updates.get("visibility", getattr(pipeline, "visibility", None))
+        effective_visibility = _raw_visibility if isinstance(_raw_visibility, str) else "org"
+        # .get is correct here: an explicit owner_team_id=None (clear) is in
+        # the dict, so .get returns None rather than the pipeline default.
+        effective_owner_team = updates.get("owner_team_id", getattr(pipeline, "owner_team_id", None))
+        for _field in sorted(fields_to_validate):
+            if _field in owner_updates:
+                # Payload-carried owner: same unconditional pass-through as before.
+                _candidate = owner_updates[_field]
+            else:
+                # Stored owner re-checked because the scope changed. Real rows
+                # are UUID | None by column type; partial test stand-ins
+                # expose non-column attribute children — treat those as
+                # "unassigned" rather than feed a non-UUID into the query.
+                _stored = getattr(pipeline, _field, None)
+                _candidate = _stored if isinstance(_stored, uuid.UUID | None) else None
+            await validate_accountability_owner(
+                session,
+                owner_account_id=_candidate,
+                field=_field,
+                org_id=org_id if org_id is not None else pipeline.organisation_id,
+                visibility=effective_visibility,
+                owner_team_id=effective_owner_team,
+            )
+    previous_owners: dict[str, uuid.UUID | None] = {f: getattr(pipeline, f) for f in owner_updates}
     old_team_id = pipeline.owner_team_id
     apply_updates(pipeline, updates)
     if threshold_changing:
@@ -368,6 +500,18 @@ async def update_pipeline(
             actor_user_id=account_id,
             previous=previous_threshold,
             new=updates["circuit_breaker_threshold"],
+            request_id=request_id,
+        )
+    # FAR-1161: audit assignment/change/clear of each accountability owner.
+    for _field, _previous in previous_owners.items():
+        await audit_accountability_owner_change(
+            session,
+            org_id=org_id if org_id is not None else pipeline.organisation_id,
+            pipeline_id=pipeline_id,
+            actor_user_id=account_id,
+            field=_field,
+            previous=_previous,
+            new=owner_updates[_field],
             request_id=request_id,
         )
     new_team_id = pipeline.owner_team_id

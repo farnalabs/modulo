@@ -7,6 +7,13 @@ agents). The resolved graph payload is normalised through the REAL API node /
 edge models (the same validators the server runs on save) so the desired
 canonical view matches the server's read-back byte-for-byte and the plan hash
 is stable across runs.
+
+Owner refs (FAR-1161): config pipelines reference accountability owners by
+EMAIL; the executor resolves emails to account ids via the org member
+directory (``/admin/users``, fetched lazily only when an owner email is
+declared). An email that does not resolve — or a directory the credential
+cannot read — BLOCKS the pipeline at plan time with a specific reason; a
+declared owner is never silently nulled.
 """
 
 from __future__ import annotations
@@ -122,6 +129,41 @@ def resolve_graph(
     return {"nodes": nodes_payload, "edges": edges_payload}
 
 
+def resolve_owner_ids(
+    entity: PipelineEntity,
+    current_entities: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """Resolve the entity's declared owner emails to account ids (FAR-1161).
+
+    Returns ``(business_owner_id, reliability_owner_id)`` — None where no
+    email is declared (declarative omission means null). Raises
+    ApplyEntityResolutionError (loud, caller blocks/fails the entity) when a
+    declared email does not resolve to an ACTIVE member of the org, or when
+    the member directory could not be read at all (``users_error``) — a
+    declared owner is never silently nulled.
+    """
+    users_error = current_entities.get("users_error")
+    declared = entity.business_owner_email or entity.reliability_owner_email
+    if users_error and declared:
+        raise ApplyEntityResolutionError(f"cannot resolve owner emails: {users_error}")
+    users_map = current_entities.get("users") or {}
+    resolved: list[str | None] = []
+    for field, email in (
+        ("business_owner_email", entity.business_owner_email),
+        ("reliability_owner_email", entity.reliability_owner_email),
+    ):
+        if not email:
+            resolved.append(None)
+            continue
+        owner_id = users_map.get(str(email).strip().lower())
+        if owner_id is None:
+            raise ApplyEntityResolutionError(
+                f"{field} {email!r} does not resolve to an active member of this organisation"
+            )
+        resolved.append(str(owner_id))
+    return resolved[0], resolved[1]
+
+
 def build_desired_views(
     entity_set: EntitySet,
     current_entities: dict[str, dict[str, dict[str, Any]]],
@@ -131,13 +173,14 @@ def build_desired_views(
     *,
     git_resolver: Callable[[GitContentRef], str] | None = None,
 ) -> tuple[dict[str, list[tuple[str, dict[str, Any]]]], list[tuple[str, str, str]]]:
-    """Plan-phase resolution for pipeline entities (agent refs + git content refs + shape).
+    """Plan-phase resolution for pipeline entities (agent refs + git content refs + owner emails + shape).
 
     Failures are per-entity blocked entries; later entities still plan. An
     AMBIGUOUS name (duplicate rows in the fetched org list — pipelines or
     agents) blocks the affected entity: name-based upsert cannot pick a row.
     *git_resolver* threads into :func:`resolve_graph` for FAR-220 movable
     ``git+`` refs (None = the default ``git ls-remote`` resolver).
+    An unresolvable declared owner email blocks the affected entity (FAR-1161).
     """
     agents = current_entities.get("agents") or {}
     ambiguous_pipelines = current_entities.get("ambiguous_pipeline_names") or {}
@@ -176,7 +219,21 @@ def build_desired_views(
         except ValueError as exc:
             blocked.append((KIND_PIPELINE, entity.name, f"invalid pipeline graph: {exc}"))
             continue
-        desired[KIND_PIPELINE].append((entity.name, entity.managed_view(graph=graph)))
+        try:
+            business_owner_id, reliability_owner_id = resolve_owner_ids(entity, current_entities)
+        except ApplyEntityResolutionError as exc:
+            blocked.append((KIND_PIPELINE, entity.name, str(exc)))
+            continue
+        desired[KIND_PIPELINE].append(
+            (
+                entity.name,
+                entity.managed_view(
+                    graph=graph,
+                    business_owner_id=business_owner_id,
+                    reliability_owner_id=reliability_owner_id,
+                ),
+            )
+        )
     return desired, blocked
 
 
@@ -195,6 +252,12 @@ def apply_pipelines(
     top-level fields; graph_json is included only when the graph hash
     differs from the fetched current graph (a graph write snapshots the
     pipeline, so an unchanged graph must not churn snapshots).
+
+    The accountability-owner keys (FAR-1161) are ALWAYS sent on both POST
+    and PATCH: the resolved id, or null when the config declares no owner
+    (declarative omission means null — an explicit null clears a UI/API-set
+    owner; the REST PATCH keys on presence, so omitting them would wrongly
+    leave the live owner untouched).
 
     Returns the pipeline name -> id map (current + created), consumed by the
     trigger phase to resolve (pipeline, name) identities. When a JUST-CREATED
@@ -216,12 +279,15 @@ def apply_pipelines(
                 entity = _find(entities[KIND_PIPELINE], entry["name"])
                 assert isinstance(entity, PipelineEntity)
                 graph = resolve_graph(entity, agents, git_resolver=git_resolver) if entity.graph is not None else None
+                business_owner_id, reliability_owner_id = resolve_owner_ids(entity, current_entities)
                 if status == "created":
                     create_payload: dict[str, Any] = {
                         "name": entity.name,
                         "description": entity.description,
                         "max_concurrent_runs": entity.max_concurrent_runs,
                         "max_autonomy_level": entity.max_autonomy_level,
+                        "business_owner_id": business_owner_id,
+                        "reliability_owner_id": reliability_owner_id,
                     }
                     if entity.manages_circuit_breaker:
                         create_payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
@@ -241,6 +307,8 @@ def apply_pipelines(
                 patch_payload: dict[str, Any] = {
                     "description": entity.description,
                     "max_concurrent_runs": entity.max_concurrent_runs,
+                    "business_owner_id": business_owner_id,
+                    "reliability_owner_id": reliability_owner_id,
                 }
                 if status == "updated" and entity.manages_circuit_breaker:
                     patch_payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
@@ -272,4 +340,5 @@ __all__ = [
     "build_desired_views",
     "normalize_current_graph",
     "resolve_graph",
+    "resolve_owner_ids",
 ]

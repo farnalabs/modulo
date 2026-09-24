@@ -46,6 +46,18 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
     )
+    # FAR-1161: accountability owners — DISTINCT from owner_team_id (the
+    # tenancy/visibility boundary). Nullable: assigned per-pipeline by an
+    # operator; FK SET NULL so deleting an account clears the reference
+    # rather than the pipeline. Assignment is gated by the eligibility
+    # invariant (active org member + team member when visibility='team') in
+    # ``db.crud.pipeline_owner``.
+    business_owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+    )
+    reliability_owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+    )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
     lock_wait_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")

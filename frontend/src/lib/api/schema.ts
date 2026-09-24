@@ -15144,6 +15144,16 @@ export interface components {
              * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included).
              */
             circuit_breaker_threshold?: number | null;
+            /**
+             * Business Owner Id
+             * @description Accountable business owner (FAR-1161). Must be an active member of this organisation and, when visibility is 'team', a member of owner_team_id. null = unassigned.
+             */
+            business_owner_id?: string | null;
+            /**
+             * Reliability Owner Id
+             * @description Accountable reliability/SRE owner (FAR-1161). Must be an active member of this organisation and, when visibility is 'team', a member of owner_team_id. null = unassigned.
+             */
+            reliability_owner_id?: string | null;
         };
         /** PipelineFolderMoveRequest */
         PipelineFolderMoveRequest: {
@@ -15579,6 +15589,10 @@ export interface components {
             owner_team_id?: string | null;
             /** Folder Id */
             folder_id?: string | null;
+            /** Business Owner Id */
+            business_owner_id?: string | null;
+            /** Reliability Owner Id */
+            reliability_owner_id?: string | null;
             /**
              * Connector Rebind Required
              * @default false
@@ -15676,6 +15690,16 @@ export interface components {
              * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included). Send null to disable; omit to leave unchanged.
              */
             circuit_breaker_threshold?: number | null;
+            /**
+             * Business Owner Id
+             * @description Business accountability owner id. Omit to leave unchanged; null clears.
+             */
+            business_owner_id?: string | null;
+            /**
+             * Reliability Owner Id
+             * @description Reliability accountability owner id. Omit to leave unchanged; null clears.
+             */
+            reliability_owner_id?: string | null;
         };
         /** PlanInfo */
         PlanInfo: {

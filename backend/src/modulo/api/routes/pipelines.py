@@ -585,6 +585,26 @@ class PipelineCreate(TeamVisibilityMixin):
         le=float(CIRCUIT_BREAKER_THRESHOLD_MAX),
         description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION,
     )
+    # FAR-1161: accountability owners (distinct from owner_team_id). Ids only —
+    # the same response shape as created_by/owner_team_id/folder_id. The server
+    # rejects an ineligible owner (not an active org member, or not a member of
+    # owner_team_id when visibility='team') with a 422.
+    business_owner_id: uuid.UUID | None = Field(
+        None,
+        description=(
+            "Accountable business owner (FAR-1161). Must be an active member of this "
+            "organisation and, when visibility is 'team', a member of owner_team_id. "
+            "null = unassigned."
+        ),
+    )
+    reliability_owner_id: uuid.UUID | None = Field(
+        None,
+        description=(
+            "Accountable reliability/SRE owner (FAR-1161). Must be an active member of "
+            "this organisation and, when visibility is 'team', a member of owner_team_id. "
+            "null = unassigned."
+        ),
+    )
 
     @field_validator("circuit_breaker_threshold", mode="before")
     @classmethod
@@ -696,6 +716,18 @@ class PipelineUpdate(TeamVisibilityMixin):
         le=float(CIRCUIT_BREAKER_THRESHOLD_MAX),
         description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION + " Send null to disable; omit to leave unchanged.",
     )
+    # FAR-1161: accountability owners. Omit to leave unchanged; send null to
+    # clear. Eligibility (active org member + team membership when
+    # visibility='team') is enforced server-side against the EFFECTIVE
+    # post-update visibility/owner team.
+    business_owner_id: uuid.UUID | None = Field(
+        None,
+        description="Business accountability owner id. Omit to leave unchanged; null clears.",
+    )
+    reliability_owner_id: uuid.UUID | None = Field(
+        None,
+        description="Reliability accountability owner id. Omit to leave unchanged; null clears.",
+    )
 
     @field_validator("circuit_breaker_threshold", mode="before")
     @classmethod
@@ -794,6 +826,11 @@ class PipelineResponse(BaseModel):
     archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None
     folder_id: uuid.UUID | None = None
+    # FAR-1161: accountability owners — ids only, matching created_by /
+    # owner_team_id / folder_id (no embedded related-entity summary pattern
+    # exists on this response). Additive, backward-compatible.
+    business_owner_id: uuid.UUID | None = None
+    reliability_owner_id: uuid.UUID | None = None
     # Set on PATCH /pipelines/{id} responses when owner_team_id changed: the
     # UI warns the user to re-save the graph so connectors/model backends are
     # rebound for the new team (PRD §9.3 ownership transfer).
@@ -842,6 +879,15 @@ class PipelineResponse(BaseModel):
     @classmethod
     def _coerce_circuit_breaker_tripped_at(cls, value: Any) -> datetime | None:
         return value if isinstance(value, datetime) else None
+
+    # FAR-1161: owner ids read defensively like the breaker columns above —
+    # partial ORM stand-ins (tests, MagicMock rows) expose non-column
+    # attributes that must serialise as "unassigned" (None), never 500.
+    # Real UUIDs and UUID-shaped strings pass through for pydantic to coerce.
+    @field_validator("business_owner_id", "reliability_owner_id", mode="before")
+    @classmethod
+    def _coerce_owner_id(cls, value: Any) -> Any:
+        return value if isinstance(value, uuid.UUID | str) else None
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -2195,6 +2241,8 @@ async def create_pipeline_endpoint(
                 stale_run_timeout_minutes=req.stale_run_timeout_minutes,
                 folder_id=req.folder_id,
                 circuit_breaker_threshold=req.circuit_breaker_threshold,
+                business_owner_id=req.business_owner_id,
+                reliability_owner_id=req.reliability_owner_id,
                 request_id=getattr(principal, "request_id", None),
             )
             if req.retry_policy is not None:

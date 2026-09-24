@@ -405,6 +405,21 @@ class PipelineEntity(BaseModel):
     opt-in rule: it is managed ONLY when the key is declared. An explicit
     ``null`` disables the breaker; omitting the key leaves a UI/API-set
     threshold untouched (no drift, no write).
+
+    Accountability owners (FAR-1161): ``business_owner_email`` /
+    ``reliability_owner_email`` reference a member of the target org by
+    EMAIL (users are not apply-managed entities, so the human-writable email
+    is the config key; the executor resolves it to an account id at plan time
+    via the org member directory — GET /admin/users, fetched lazily only when
+    an owner email is declared). Unlike the circuit breaker these are managed
+    UNCONDITIONALLY with declarative omission semantics: **omitting the key
+    means null** — an apply run whose config does not declare an owner CLEARS
+    any UI/API-set owner for that pipeline (consistent with
+    description/max_concurrent_runs, and a deliberate mirror of the other
+    managed fields). An email that does not resolve to an active member of
+    the org — or a directory a credential cannot read — BLOCKS the pipeline
+    at plan time (exit 1) with a specific reason; it is never silently
+    nulled.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -421,6 +436,24 @@ class PipelineEntity(BaseModel):
         ),
     )
     graph: ApplyGraph | None = None
+    business_owner_email: str | None = Field(
+        default=None,
+        max_length=320,
+        description=(
+            "Accountable business owner, referenced by the member's email. "
+            "Managed unconditionally (omission means null and CLEARS a set owner); "
+            "an email that does not resolve to an org member blocks this pipeline."
+        ),
+    )
+    reliability_owner_email: str | None = Field(
+        default=None,
+        max_length=320,
+        description=(
+            "Accountable reliability/SRE owner, referenced by the member's email. "
+            "Managed unconditionally (omission means null and CLEARS a set owner); "
+            "an email that does not resolve to an org member blocks this pipeline."
+        ),
+    )
     stdout_retention_config: dict[str, Any] | None = Field(
         default=None,
         description=(
@@ -481,17 +514,31 @@ class PipelineEntity(BaseModel):
 
         return validate_stdout_retention_config(v)
 
-    def managed_view(self, *, graph: dict[str, Any] | None = None) -> dict[str, Any]:
+    def managed_view(
+        self,
+        *,
+        graph: dict[str, Any] | None = None,
+        business_owner_id: str | None = None,
+        reliability_owner_id: str | None = None,
+    ) -> dict[str, Any]:
         """Canonical managed-field view used for hashing.
 
         The live graph view is passed in by the executor AFTER agent-name
         resolution + server-shape normalisation (see pipeline_apply); the
         static method returns the graph-free baseline.
+
+        ``business_owner_id`` / ``reliability_owner_id`` are the RESOLVED
+        account ids (resolved from the declared emails by the executor and
+        passed in the same way as the graph) so the desired side hashes in
+        the same id-space the API returns. Both keys are ALWAYS present:
+        omission means null (declarative clear).
         """
         view: dict[str, Any] = {
             "description": self.description,
             "max_concurrent_runs": self.max_concurrent_runs,
             "stdout_retention_config": self.stdout_retention_config,
+            "business_owner_id": business_owner_id,
+            "reliability_owner_id": reliability_owner_id,
         }
         if self.manages_circuit_breaker:
             view["circuit_breaker_threshold"] = quantize_circuit_breaker_threshold(self.circuit_breaker_threshold)

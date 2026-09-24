@@ -253,6 +253,12 @@ class ApplyExecutor:
         graph the models reject is contained — the pipeline is demoted to
         blocked (``unreadable_graph_pipelines``) and the rest still plans.
 
+        The owner-email directory (/admin/users, FAR-1161) is also fetched
+        LAZILY — only when a declared pipeline names an owner email — and a
+        directory failure is contained the same way: stored as
+        ``users_error`` so only the owner-declaring pipelines block with
+        that specific reason.
+
         Triggers are keyed by ``pipeline/name`` (pre-name rows and triggers
         whose pipeline is invisible are unmanaged by apply); the ``agents``
         entry maps agent name -> id for node ref resolution. Duplicate-name
@@ -311,6 +317,31 @@ class ApplyExecutor:
             agents_list = self._get_paginated("/agents")
         if wants_triggers:
             triggers_list = self._get_paginated("/triggers")
+        # FAR-1161: owner emails resolve to account ids via the org member
+        # directory (/admin/users). LAZILY fetched only when a declared
+        # pipeline actually names an owner email (configs without owners
+        # never need it). A directory fetch failure (403 for a non-admin
+        # credential, 404, ...) is STORED, not raised: only the pipelines
+        # that declare an owner email are blocked with that specific reason
+        # and the rest of the config still plans (per-entity containment,
+        # mirroring unreadable_graph_pipelines). Network errors propagate
+        # like every other fetch.
+        needs_users = any(
+            entity.business_owner_email or entity.reliability_owner_email for entity in config.entities.pipelines
+        )
+        users: dict[str, str] = {}
+        users_error: str | None = None
+        if needs_users:
+            try:
+                users_list = self._get_paginated("/admin/users")
+                users = {
+                    str(item.get("email")).lower(): str(item["id"])
+                    for item in users_list
+                    if item.get("email") and item.get("id")
+                }
+            except ApplyHttpError as exc:
+                users_error = str(exc)
+                _log.warning("apply.fetch_users_failed: %s", users_error)
 
         ambiguous_agent_names = _duplicate_name_counts(agents_list)
         agents = {
@@ -374,6 +405,8 @@ class ApplyExecutor:
             KIND_PIPELINE: pipelines,
             KIND_TRIGGER: triggers,
             "agents": agents,
+            "users": users,
+            "users_error": users_error,
             "ambiguous_agent_names": ambiguous_agent_names,
             "ambiguous_pipeline_names": ambiguous_pipeline_names,
             "duplicate_trigger_keys": duplicate_trigger_keys,
@@ -640,6 +673,8 @@ def _empty_current() -> dict[str, Any]:
         KIND_PIPELINE: {},
         KIND_TRIGGER: {},
         "agents": {},
+        "users": {},
+        "users_error": None,
         "ambiguous_agent_names": {},
         "ambiguous_pipeline_names": {},
         "duplicate_trigger_keys": set(),
