@@ -4879,6 +4879,10 @@ features:
             - "[x] The pipeline circuit breaker is Community-tier: setting the threshold and the admin reset carry no plan feature gate (Modulo never paywalls basic safety); the reset stays behind the org-admin cost.manage permission (403 for operators and below)"
             - "[x] The pipeline editor toolbar has a 'Monthly spend circuit breaker (USD)' field (empty = disabled) and shows a 'Circuit breaker tripped' badge with a Reset action rendered only for org admins (PipelineEditorViewCircuitBreaker.spec.ts)"
 
+            # Org cost-controls auto-stop (FAR-1183)
+            - "[x] The admin cost-controls 'Auto-stop on budget exceeded' toggle is wired: when it is on and a run crosses the org DAILY spend limit (org-scope refusal) or the org spend ceiling, the org-wide trigger pause engages automatically on that run (in-flight runs finish; per-run-ceiling and team-scope refusals never pause) (test_org_auto_pause.py, test_cost_finalize_auto_pause.py)"
+            - "[x] The auto-pause writes an org.triggers_auto_paused audit event (reason daily_spend_limit|spend_ceiling, spend + limit cents, run id) and emits an org_triggers_auto_paused admin notification through the existing notifier; it is idempotent (never un-pauses — resuming stays the manual audited admin toggle) and fail-open (a pause failure never fails the terminal write)"
+
             # Cost components + formula engine (ADR 019)
             - "[x] Cost-component CRUD lives under /api/v1/admin/costs/components (list / create / update / delete) with an org-level component cap and 409 on a duplicate name"
             - "[x] Component authoring is cross-field validated: self_reported components require a null formula, calculated components require a formula, a rate component requires a source or a registered rate fallback (only e2b_rate), and reserved component names / report keys are rejected (test_cost_components_crud.py)"

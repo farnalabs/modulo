@@ -67,6 +67,13 @@ from modulo.core.cost_controller.breakdown.params import (
     coerce_reported_token,
     is_proven_zero_model_token_fields,
 )
+from modulo.core.cost_controller.org_auto_pause import (
+    AUTO_PAUSE_REASON_DAILY_LIMIT,
+    AUTO_PAUSE_REASON_SPEND_CEILING,
+)
+from modulo.core.cost_controller.org_auto_pause import (
+    maybe_auto_pause_org_triggers as _auto_pause_org_triggers,
+)
 from modulo.core.cost_controller.system_config import (
     acquire_kv_lock,
     read_system_config,
@@ -93,6 +100,7 @@ from modulo.core.node_output_split import (
 )
 from modulo.core.run_outputs_dualwrite import guard_dual_write
 from modulo.core.spend_ceiling import (
+    ORG_CEILING_EXCEEDED,
     cents_from_usd,
     evaluate_spend_ceilings,
 )
@@ -107,6 +115,7 @@ from modulo.db.lifecycle_refs import (
 )
 from modulo.db.models.agent import Agent
 from modulo.db.models.cost_component import CostComponent
+from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.journey import Journey
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -1263,6 +1272,24 @@ async def _ledger_block(
                 },
             )
             record_limit_refused("spend_ceiling")
+            # FAR-1183 — the org's cost-controls "Auto-stop on budget exceeded"
+            # toggle: when ON, an org-ceiling crossing auto-engages the
+            # org-wide trigger pause on the run that trips it (per-run ceiling
+            # refusals are a single-run cap and never pause the org).
+            if decision.reason == ORG_CEILING_EXCEEDED:
+                try:
+                    await _auto_pause_org_triggers(
+                        session,
+                        org=org_row,
+                        reason=AUTO_PAUSE_REASON_SPEND_CEILING,
+                        spend_cents=decision.projected_org_cumulative_cents,
+                        limit_cents=org_row.spend_ceiling_cents,
+                        run_id=run_id,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception("cost_ledger.org_auto_pause_failed", extra={"run_id": str(run_id)})
             await session.flush()
             return
         # Success: accrue this run's cost into the org's lifetime consumed total.
@@ -1289,7 +1316,7 @@ async def _ledger_block(
         ok, reason = False, "whole_tx_abort"
 
     if _is_limit_refused(ok, reason):
-        await _handle_limit_refused(session, locked, run_id, owner_team_id)
+        await _handle_limit_refused(session, locked, run_id, owner_team_id, org_id, reason, total)
         return
 
     if not ok:
@@ -1318,12 +1345,56 @@ async def _handle_limit_refused(
     locked: Run,
     run_id: uuid.UUID,
     owner_team_id: uuid.UUID | None,
+    org_id: uuid.UUID,
+    reason: str | None,
+    total: Decimal,
 ) -> None:
     """LIMIT-REFUSED — expected healthy enforcement, NOT a ledger failure."""
     locked.ledger_refused_at = datetime.now(UTC)
     record_limit_refused(str(owner_team_id or "none"))
     _log.info("cost_ledger.limit_reached", extra={"run_id": str(run_id)})
     await session.flush()
+    # FAR-1183 — the org's cost-controls "Auto-stop on budget exceeded" toggle:
+    # when ON, an org-scope daily-limit crossing auto-engages the org-wide
+    # trigger pause on the run that crosses it. A team-scope-only refusal is
+    # not an org event and never auto-pauses. Fail-open: a pause failure must
+    # not fail the terminal write.
+    if reason is None or "organisation" not in reason:
+        return
+    try:
+        from modulo.db.soft_delete import include_soft_deleted
+
+        org_row = (
+            await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))
+        ).scalar_one_or_none()
+        if org_row is None:
+            return
+        day_spend = (
+            await session.execute(
+                select(OrgDailyRunCount.total_spend_usd).where(
+                    OrgDailyRunCount.organisation_id == org_id,
+                    OrgDailyRunCount.team_id.is_(None),
+                    OrgDailyRunCount.run_date == locked.created_at.date(),
+                )
+            )
+        ).scalar_one_or_none()
+        # The refusal check ran BEFORE this run's cost was written to the
+        # ledger; the trip value is the day's approved spend plus this run's
+        # cost — the daily total at the moment the limit was crossed.
+        day_spend_cents = cents_from_usd(Decimal(str(day_spend or 0))) or 0
+        spend_cents = day_spend_cents + (cents_from_usd(total) or 0)
+        await _auto_pause_org_triggers(
+            session,
+            org=org_row,
+            reason=AUTO_PAUSE_REASON_DAILY_LIMIT,
+            spend_cents=spend_cents,
+            limit_cents=cents_from_usd(org_row.daily_spend_limit),
+            run_id=run_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("cost_ledger.org_auto_pause_failed", extra={"run_id": str(run_id)})
 
 
 async def _handle_ledger_write_failure(

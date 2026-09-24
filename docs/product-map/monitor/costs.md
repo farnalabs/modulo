@@ -82,7 +82,16 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
       reset as `pipeline.circuit_breaker_reset`. Enforcement reads the live
       pipeline row (not the run snapshot), so a change applies to the next run.
       The org-level "Auto-stop on budget exceeded" (`circuit_breaker_enabled`)
-      cost-control toggle is a separate, currently inert setting (FAR-1183).
+      cost-control toggle is a separate, org-scope control (FAR-1183): when it is
+      on and a run crosses the org DAILY spend limit (org-scope refusal) or the
+      org spend ceiling, the org-wide trigger pause engages automatically on that
+      run — in-flight runs finish, a per-run-ceiling or team-scope-only refusal
+      never pauses, an `org.triggers_auto_paused` audit event (reason
+      `daily_spend_limit` | `spend_ceiling`, the spend + limit cents, run id) is
+      written plus an `org_triggers_auto_paused` admin notification, the pause is
+      idempotent (never auto-un-pauses; resuming stays the manual, audited admin
+      toggle), and the whole step is fail-open. Toggle-off behaviour is unchanged
+      (test_org_auto_pause.py, test_cost_finalize_auto_pause.py).
 - [x] `GET /export?period=this_month|last_month|7d|30d|90d&group_by=team|pipeline|model`
       streams a CSV attachment with a `costs-export-{period}.csv` disposition;
       `team` reuses the daily-ledger grouping (historical shape), `pipeline`
