@@ -2343,6 +2343,9 @@ async def _insert_eval_definition(
     """
     try:
         async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
             try:
                 eval_row = await create_or_update_eval(
                     session,
