@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import event
-from sqlalchemy.orm import Session, object_session
+from sqlalchemy.orm import Session, SessionTransaction, object_session
 
 from modulo.core.events.event_bus import get_event_bus
 from modulo.core.events.notification_events import (
@@ -215,18 +215,33 @@ def _deliver_pending(session: Session) -> None:
         _schedule_event_publish(loop, snap)
 
 
-def _on_soft_rollback(session: Session, outter: bool) -> None:
-    """``after_soft_rollback`` hook: drop pending events on an outermost rollback.
+def _on_soft_rollback(session: Session, previous_transaction: SessionTransaction) -> None:
+    """``after_soft_rollback`` hook: drop pending events on the OUTERMOST rollback only.
 
-    Only the OUTERMOST rollback clears the queue (rollback-no-phantom).
-    Inner savepoint rollbacks (``begin_nested``) are common in this codebase
-    for bounded retries — clearing the whole queue there would silently drop
-    events from earlier flushes that still commit with the outer transaction.
+    SQLAlchemy invokes this as ``after_soft_rollback(session,
+    previous_transaction)`` (see ``SessionEvents.after_soft_rollback``): the
+    second argument is the just-closed ``SessionTransaction`` marker and is
+    ALWAYS a truthy object — never a bool. (An earlier revision misread it as
+    an ``outter: bool`` flag, so ``if not outter`` never fired and EVERY
+    rollback — including inner ``begin_nested()`` savepoint rollbacks —
+    silently cleared the queue, losing events whose rows still commit with the
+    outer transaction.)
+
+    Outermost-ness is therefore derived from real session state: after an
+    inner savepoint rollback the enclosing transaction is still on the stack
+    (``session.in_transaction()`` is True) and the queue must survive — the
+    ``begin_nested()`` bounded-retry paths (audit_logger, cost_controller
+    finalize, bundled_runner health_probe) roll back savepoints while the
+    outer transaction still commits. Only when the root transaction has closed
+    (``in_transaction()`` False) is the queue dropped (rollback-no-phantom).
+
     A savepoint-scoped insert that later rolls back while the outer
     transaction commits can therefore still emit — a known, narrow residual
     accepted in favour of never losing events on the dominant savepoint paths.
     """
-    if not outter:
+    if session.in_transaction():
+        # Inner savepoint rollback: an enclosing transaction still holds the
+        # stack and will deliver the queue on its commit. Keep pending events.
         return
     dropped: list[_PendingEvent] = session.info.pop(_PENDING_KEY, [])
     if dropped:

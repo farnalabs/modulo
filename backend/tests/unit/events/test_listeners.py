@@ -412,19 +412,61 @@ class TestCommitDeferredDelivery:
             session.close()
             session.get_bind().dispose()  # type: ignore[attr-defined]
 
-    def test_inner_savepoint_rollback_keeps_pending(self) -> None:
-        """Documented residual: only the OUTERMOST rollback clears the queue.
+    async def test_inner_savepoint_rollback_keeps_pending(
+        self,
+        fake_bus: AsyncMock,
+    ) -> None:
+        """An INNER ``begin_nested()`` savepoint rollback must keep the queue.
 
-        ``begin_nested`` bounded-retry paths are common here; clearing on an
-        inner rollback would drop events from earlier flushes that still
-        commit with the outer transaction.
+        Drives a REAL savepoint rollback through the registered
+        ``after_soft_rollback`` hook — SQLAlchemy invokes it as
+        ``(session, previous_transaction)`` where the second argument is a
+        truthy ``SessionTransaction``, never ``outter=False``. Pending events
+        queued by an earlier flush survive the inner rollback and are still
+        delivered by the enclosing transaction's commit (the dominant
+        ``begin_nested()`` bounded-retry shape in this codebase).
         """
         session = _bare_session()
-        _queue_for_commit(session, _pending())
-        listeners._on_soft_rollback(session, outter=False)
-        assert session.info.get(listeners._PENDING_KEY) is not None
-        session.close()
-        session.get_bind().dispose()  # type: ignore[attr-defined]
+        try:
+            with patch.object(listeners, "get_event_bus", return_value=fake_bus):
+                _queue_for_commit(session, _pending())  # registers the real event hooks
+                session.begin()
+                session.begin_nested().rollback()  # inner savepoint rollback -> fires the hook
+                queued = session.info.get(listeners._PENDING_KEY)
+                assert queued is not None, "inner savepoint rollback must not drop pending events"
+                assert len(queued) == 1
+
+                session.commit()  # enclosing transaction still owns the queue
+                await _drain_tasks()
+
+            fake_bus.publish.assert_awaited_once()
+            assert fake_bus.publish.await_args.kwargs["resource_id"] == "run-1"
+        finally:
+            session.close()
+            session.get_bind().dispose()  # type: ignore[attr-defined]
+
+    def test_outermost_rollback_drops_pending_via_event_hook(self) -> None:
+        """The OUTERMOST rollback clears the queue through the same real hook.
+
+        Sequence: queue -> inner savepoint rollback (keeps) -> root rollback
+        (drops). Proves the hook distinguishes the two rollback kinds by real
+        session state, not by the second argument's truthiness.
+        """
+        session = _bare_session()
+        try:
+            _queue_for_commit(session, _pending())  # registers the real event hooks
+            session.begin()
+            session.begin_nested().rollback()  # inner savepoint rollback
+            assert session.info.get(listeners._PENDING_KEY) is not None, (
+                "inner savepoint rollback must keep pending events"
+            )
+            session.rollback()  # outermost rollback -> fires the hook again
+            assert session.info.get(listeners._PENDING_KEY) is None, (
+                "outermost rollback must drop pending events (rollback-no-phantom)"
+            )
+        finally:
+            session.close()
+            session.get_bind().dispose()  # type: ignore[attr-defined]
 
 
 class TestNotificationListenerPayload:
