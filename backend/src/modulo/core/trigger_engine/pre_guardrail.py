@@ -47,7 +47,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.guardrails import GuardrailAction, run_interception_pass
+from modulo.core.guardrails import GuardrailAction, run_interception_pass, to_engine_definition
 
 _log = logging.getLogger(__name__)
 
@@ -116,7 +116,6 @@ async def _load_guardrail_definitions(
 
     Reads from the ``evals`` table (chunk 3b cutover).
     """
-    from modulo.core.eval_engine import EvalDefinition, EvalType
     from modulo.db.models.eval import Eval
 
     result = await session.execute(
@@ -134,21 +133,7 @@ async def _load_guardrail_definitions(
         # contract always returns a list; a non-list result means no guardrails
         # are bound, which is exactly what a stub session should observe.
         return []
-    return [
-        EvalDefinition(
-            id=row.id,
-            org_id=row.organisation_id,
-            pipeline_id=row.pipeline_id,
-            node_id=str(row.node_id) if row.node_id else None,
-            name=row.name or "",
-            eval_type=EvalType(row.eval_type),
-            config=dict(row.config_json or {}),
-            failure_behaviour="warn",
-            pass_threshold=float(row.pass_threshold) if row.pass_threshold is not None else None,
-            suite_id=row.suite_id,
-        )
-        for row in rows
-    ]
+    return [to_engine_definition(row) for row in rows]
 
 
 async def run_pre_trigger_guardrail_pass(

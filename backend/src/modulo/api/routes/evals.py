@@ -2349,20 +2349,7 @@ async def _insert_eval_definition(
                     detail=f"PolicyGate binding violation: {exc}",
                 ) from exc
             # Build a legacy-compatible dict for the caller
-            return {
-                "id": eval_row.id,
-                "pipeline_id": eval_row.pipeline_id,
-                "node_id": eval_row.node_id,
-                "name": eval_row.name,
-                "eval_type": eval_row.eval_type,
-                "config_json": eval_row.config_json,
-                "failure_behaviour": "warn",
-                "pass_threshold": eval_row.pass_threshold,
-                "suite_id": eval_row.suite_id,
-                "account_id": eval_row.account_id,
-                "version": eval_row.version,
-                "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
-            }
+            return _eval_def_to_dict(eval_row, failure_behaviour_override="warn")
     except HTTPException:
         raise
     except IntegrityError:

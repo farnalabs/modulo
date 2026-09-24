@@ -36,9 +36,9 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
-from modulo.core.eval_engine import EvalDefinition, EvalType
+from modulo.core.eval_engine import EvalDefinition
 from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
-from modulo.core.guardrails import GuardrailConfigError
+from modulo.core.guardrails import GuardrailConfigError, to_engine_definition
 from modulo.core.guardrails.config import (
     ConfigChange,
     GuardrailConfigSet,
@@ -155,21 +155,7 @@ async def _load_guardrail_definitions(session: AsyncSession, org_id: uuid.UUID) 
         .scalars()
         .all()
     )
-    return [
-        EvalDefinition(
-            id=row.id,
-            org_id=row.organisation_id,
-            pipeline_id=row.pipeline_id,
-            node_id=str(row.node_id) if row.node_id else None,
-            name=row.name or "",
-            eval_type=EvalType(row.eval_type),
-            config=dict(row.config_json or {}),
-            failure_behaviour="warn",
-            pass_threshold=float(row.pass_threshold) if row.pass_threshold is not None else None,
-            suite_id=row.suite_id,
-        )
-        for row in rows
-    ]
+    return [to_engine_definition(row) for row in rows]
 
 
 def _applied_config_set(pin: GuardrailPin | None) -> GuardrailConfigSet:
@@ -240,9 +226,7 @@ async def _load_pipeline_guardrail_rows_by_name(
     """Load one pipeline's live guardrail rows keyed by the config id (name).
 
     Reads from the ``evals`` table (chunk 3b cutover). The shared CRUD
-    ``load_pipeline_guardrail_rows`` still reads legacy ``eval_definitions``;
-    this function is the chunk-3b-local replacement for the reconciliation
-    path.
+    ``load_pipeline_guardrail_rows`` now also reads ``evals``.
     """
     result = await session.execute(
         select(Eval).where(
