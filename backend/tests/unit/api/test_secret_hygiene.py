@@ -80,7 +80,7 @@ class TestIsSensitiveKey:
         assert _is_sensitive_key("fernet_key") is True
 
     def test_nested_key_with_sensitive_segment(self) -> None:
-        assert _is_sensitive_key("remy_config:org123:api_key") is True
+        assert _is_sensitive_key("assistant_config:org123:api_key") is True
 
     def test_nested_key_with_secret_in_segment(self) -> None:
         assert _is_sensitive_key("a:b:secret_key") is True
@@ -89,7 +89,7 @@ class TestIsSensitiveKey:
         assert _is_sensitive_key("APP_NAME") is False
 
     def test_non_sensitive_nested_key(self) -> None:
-        assert _is_sensitive_key("remy_config:org123:enabled") is False
+        assert _is_sensitive_key("assistant_config:org123:enabled") is False
 
     def test_case_insensitive(self) -> None:
         assert _is_sensitive_key("FERNET_KEY") is True
@@ -161,16 +161,16 @@ class TestGetOrgConfigMasking(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_list_config.return_value = [
-            _make_config(key="remy_config:org123:api_key", value="secret-value"),
-            _make_config(key="remy_config:org123:enabled", value="true"),
+            _make_config(key="assistant_config:org123:api_key", value="secret-value"),
+            _make_config(key="assistant_config:org123:enabled", value="true"),
         ]
         mock_session.return_value = make_session_context(AsyncMock())
 
-        result = await get_org_config(section="remy")
+        result = await get_org_config(section="assistant")
 
         assert result["count"] == 1
-        assert "remy_config:org123:api_key" not in result["results"]
-        assert "remy_config:org123:enabled" in result["results"]
+        assert "assistant_config:org123:api_key" not in result["results"]
+        assert "assistant_config:org123:enabled" in result["results"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")

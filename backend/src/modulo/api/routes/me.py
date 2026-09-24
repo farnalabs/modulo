@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.api.routes.admin_remy import (
+from modulo.api.routes.admin_assistant import (
     SkillCreate,
     SkillResponse,
     SkillUpdate,
@@ -24,11 +24,11 @@ from modulo.api.routes.admin_remy import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength, verify_password
-from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
-from modulo.core.remy.context_source_service import (
+from modulo.core.assistant.context_source_service import (
+    AssistantContextSourceService,
     ContextSourceResponseItem,
-    RemyContextSourceService,
 )
+from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
 from modulo.db.crud.account import (
     AccountNotFoundError,
     get_account_by_id,
@@ -36,7 +36,7 @@ from modulo.db.crud.account import (
     update_account_preferences,
 )
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
-from modulo.db.models.remy_skill import RemySkill
+from modulo.db.models.assistant_skill import AssistantSkill
 from modulo.db.rls import set_rls_org
 
 _CODE_ROUTES_ME = "routes.me"
@@ -302,10 +302,10 @@ async def change_password(
     return {"detail": "Password changed successfully"}
 
 
-# ── User-level Remy Skills ────────────────────────────────────────────
+# ── User-level Assistant Skills ────────────────────────────────────────────
 
 
-@router.get("/me/remy/skills")
+@router.get("/me/assistant/skills")
 @handle_db_errors("me.list_user_skills")
 async def list_user_skills(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -325,7 +325,7 @@ async def list_user_skills(
     return [_skill_to_response(s) for s in skills]
 
 
-@router.post("/me/remy/skills", status_code=status.HTTP_201_CREATED)
+@router.post("/me/assistant/skills", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("me.create_user_skill")
 async def create_user_skill(
     req: SkillCreate,
@@ -335,7 +335,7 @@ async def create_user_skill(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            skill = RemySkill(
+            skill = AssistantSkill(
                 id=uuid.uuid4(),
                 organisation_id=None,
                 account_id=current_user.account_id,
@@ -357,7 +357,7 @@ async def create_user_skill(
     return _skill_to_response(skill)
 
 
-@router.put("/me/remy/skills/{skill_id}")
+@router.put("/me/assistant/skills/{skill_id}")
 @handle_db_errors("me.update_user_skill")
 async def update_user_skill(
     skill_id: uuid.UUID,
@@ -390,7 +390,7 @@ async def update_user_skill(
     return _skill_to_response(skill)
 
 
-@router.delete("/me/remy/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/me/assistant/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("me.delete_user_skill")
 async def delete_user_skill(
     skill_id: uuid.UUID,
@@ -417,7 +417,7 @@ class ContextSourceModeUpdate(BaseModel):
     source_mode: str = Field(..., pattern=r"^(always_on|tool|off)$")
 
 
-@router.get("/me/remy/context-sources")
+@router.get("/me/assistant/context-sources")
 @handle_db_errors("me.get_user_context_sources")
 async def get_user_context_sources(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -425,7 +425,7 @@ async def get_user_context_sources(
 ) -> list[ContextSourceResponseItem]:
     try:
         async with session.begin():
-            service = RemyContextSourceService(session)
+            service = AssistantContextSourceService(session)
             config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
             user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
@@ -438,7 +438,7 @@ async def get_user_context_sources(
     return service.build_effective_items(config.context_sources, user_overrides)
 
 
-@router.put("/me/remy/context-sources/{source_key}")
+@router.put("/me/assistant/context-sources/{source_key}")
 @handle_db_errors("me.set_user_context_source")
 async def set_user_context_source(
     source_key: str,
@@ -448,7 +448,7 @@ async def set_user_context_source(
 ) -> list[ContextSourceResponseItem]:
     try:
         async with session.begin():
-            service = RemyContextSourceService(session)
+            service = AssistantContextSourceService(session)
             await service.set_user_override(
                 current_user.organisation_id,
                 current_user.account_id,
@@ -467,7 +467,7 @@ async def set_user_context_source(
     return service.build_effective_items(config.context_sources, user_overrides)
 
 
-@router.delete("/me/remy/context-sources", status_code=status.HTTP_200_OK)
+@router.delete("/me/assistant/context-sources", status_code=status.HTTP_200_OK)
 @handle_db_errors("me.reset_user_context_sources")
 async def reset_user_context_sources(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -475,7 +475,7 @@ async def reset_user_context_sources(
 ) -> list[ContextSourceResponseItem]:
     try:
         async with session.begin():
-            service = RemyContextSourceService(session)
+            service = AssistantContextSourceService(session)
             await service.reset_user_overrides(current_user.organisation_id, current_user.account_id)
             config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:

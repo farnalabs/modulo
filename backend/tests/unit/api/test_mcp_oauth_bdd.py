@@ -1100,7 +1100,7 @@ class TestOAuthMiddlewareAccountBinding:
 
 class TestOAuthMiddlewareInvalidTokens:
     """McpAuthMiddleware OAuth path returns 401 for bad tokens and falls back
-    to the regular-JWT path for non-OAuth tokens (Remy)."""
+    to the regular-JWT path for non-OAuth tokens (Assistant)."""
 
     _CTX_VARS = (_ctx_user_id, _ctx_role, _ctx_org_id, _ctx_auth_type, _ctx_auth_token, _ctx_key_id)
 
@@ -1162,7 +1162,7 @@ class TestOAuthMiddlewareInvalidTokens:
     @pytest.mark.asyncio
     async def test_non_oauth_jwt_falls_back_to_regular_jwt_path(self) -> None:
         """A token without purpose=oauth_access is not an OAuth token; the
-        middleware falls back to the regular-JWT (Remy) path and accepts it."""
+        middleware falls back to the regular-JWT (Assistant) path and accepts it."""
         from modulo.auth.jwt import create_access_token
 
         regular = create_access_token(
@@ -1180,7 +1180,7 @@ class TestOAuthMiddlewareInvalidTokens:
                 live_role="admin",
             )
             assert response.status_code == 200
-            # FAR-620: a regular JWT (Remy) session carries auth_type 'jwt'
+            # FAR-620: a regular JWT (Assistant) session carries auth_type 'jwt'
             # (previously conflated with 'oauth') and caller scope 'user'.
             assert _ctx_auth_type.get() == "jwt"
             from modulo.api.mcp_server import _ctx_key_scope

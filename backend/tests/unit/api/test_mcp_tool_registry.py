@@ -1,7 +1,7 @@
 """Unit tests for modulo.api.mcp_tool_registry — MCP tool-definition cache.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the module that is
-the single source of truth for OpenAI-compatible tool definitions. The remy
+the single source of truth for OpenAI-compatible tool definitions. The assistant
 agentic loop calls ``await build_tool_registry()`` then
 ``get_mcp_tool_definitions()`` on every stream request so the tool schema sent
 to the model is generated once from FastMCP's registered tools instead of a
@@ -157,7 +157,7 @@ class TestGetMcpToolDefinitions:
         assert [d["function"]["name"] for d in get_mcp_tool_definitions()] == ["a", "b", "c"]
 
     async def test_async_usage_from_routes(self, fake_mcp: SimpleNamespace) -> None:
-        """Mirror the remy agentic-loop call pattern: await build, then read."""
+        """Mirror the assistant agentic-loop call pattern: await build, then read."""
         fake_mcp._tool_manager._tools = {"foo": _make_tool(name="foo")}
         await build_tool_registry()
         tools_param = get_mcp_tool_definitions()

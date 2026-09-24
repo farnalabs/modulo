@@ -48,7 +48,7 @@ __all__ = [
     "VertexAIBackend",
     "VllmBackend",
     "WatsonXBackend",
-    # --- Remy route dynamic backend dispatch (remy.py _BACKEND_IMPORTS, resolved via importlib + getattr) ---
+    # --- Remy route dynamic backend dispatch (assistant.py _BACKEND_IMPORTS, resolved via importlib + getattr) ---
     "Ai21Backend",
     "AnthropicBackend",
     "DeepSeekBackend",

@@ -532,7 +532,7 @@ class TestGoldenPins:
     def test_core_flag_tier_contract_pinned(self) -> None:
         registry = FeatureFlagRegistry()
         team_flags = {"sso", "team_rbac", "audit_viewer", "admin_spend_limits", "runtime_config", "rate_limits"}
-        community_flags = {"eval_system", "webhook_trigger", "saved_views", "remy"}
+        community_flags = {"eval_system", "webhook_trigger", "saved_views", "assistant"}
         for name in team_flags:
             flag = registry.get_flag(name)
             assert flag is not None
@@ -542,9 +542,9 @@ class TestGoldenPins:
             assert flag is not None
             assert flag.tier == "community", f"{name} must stay community-tier"
 
-    def test_remy_ui_driving_tier_pinned(self) -> None:
+    def test_assistant_ui_driving_tier_pinned(self) -> None:
         registry = FeatureFlagRegistry()
-        flag = registry.get_flag("remy_ui_driving")
+        flag = registry.get_flag("assistant_ui_driving")
         assert flag is not None
         assert flag.tier == "community"
 

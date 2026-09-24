@@ -1134,11 +1134,11 @@ class TestSimpleToolErrorHandlers(_AuthContext):
 
     async def test_get_org_config_success_with_sections(self) -> None:
         long_value = {"blob": "v" * 300}
-        cfg_remy = MagicMock(key="remy_config:1", value="plain")
+        cfg_assistant = MagicMock(key="assistant_config:1", value="plain")
         cfg_limits = MagicMock(key="rate_limits:y", value=long_value)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.system_config.list_config", new=AsyncMock(return_value=[cfg_remy, cfg_limits])),
+            patch("modulo.db.crud.system_config.list_config", new=AsyncMock(return_value=[cfg_assistant, cfg_limits])),
         ):
             result = await get_org_config(section="rate_limits")
         assert result["count"] == 1
@@ -1266,20 +1266,26 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_search_documentation_empty_and_hits(self) -> None:
         index = MagicMock()
         index.search.return_value = []
-        with (
-            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch.object(ms, "DocumentationIndex") as mock_cls,
-        ):
-            mock_cls.build.return_value = index
+        try:
+            with (
+                patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+                patch.object(ms, "DocumentationIndex") as mock_cls,
+            ):
+                mock_cls.build.return_value = index
+                ms._doc_index = None
+                ms._doc_index_ts = 0.0
+                result = await search_documentation(query="x")
+                assert result["count"] == 0
+                index.search.return_value = [MagicMock()]
+                index.format_results.return_value = "- hit"
+                result = await search_documentation(query="x")
+            assert result["count"] == 1
+            assert result["results"] == "- hit"
+        finally:
+            # The mocked index would otherwise stay cached module-wide and
+            # leak into any later test that calls _get_doc_index().
             ms._doc_index = None
             ms._doc_index_ts = 0.0
-            result = await search_documentation(query="x")
-            assert result["count"] == 0
-            index.search.return_value = [MagicMock()]
-            index.format_results.return_value = "- hit"
-            result = await search_documentation(query="x")
-        assert result["count"] == 1
-        assert result["results"] == "- hit"
 
     async def test_get_run_output_error_envelopes(self) -> None:
         with patch.object(ms, "_get_run_output_impl", side_effect=ProgrammingError("s", {}, Exception())):
