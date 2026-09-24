@@ -22,7 +22,7 @@ _PLACEHOLDER_KEY_ID = uuid.UUID("00000000-0000-0000-0000-000000000005")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
 
 
-def _set_mcp_ctx(role: str = "runner") -> None:
+def _set_mcp_ctx(role: str = "runner", *, node_allowed_tools: list[str] | None = None) -> None:
     """Populate the request-scoped MCP ContextVars a tool handler reads."""
     from modulo.api.mcp_server import (
         _ctx_auth_token,
@@ -44,7 +44,7 @@ def _set_mcp_ctx(role: str = "runner") -> None:
     _ctx_auth_type.set("api_key")
     _ctx_key_scope.set("org")
     _ctx_team_id.set(None)
-    _ctx_node_allowed_tools.set(None)
+    _ctx_node_allowed_tools.set(node_allowed_tools)
 
 
 def _clear_mcp_ctx() -> None:
@@ -611,80 +611,142 @@ def decision_audit_actor_type(atype: str, request):
         assert _browser_principal_client_type() == "browser"
 
 
+def _make_library_primitive(name: str, ptype: str = "schema", index: int = 0) -> MagicMock:
+    """A fake ``LibraryPrimitive`` row matching what ``search_library`` reads."""
+    p = MagicMock()
+    p.id = uuid.UUID(int=index + 1)
+    p.name = name
+    p.description = f"{name} description"
+    p.primitive_type = ptype
+    p.version = "1.0"
+    p.average_rating = 4.5
+    p.tags = ["test"]
+    return p
+
+
+def _call_search_library(request, *, search: str | None = None, deny_node_tools: list[str] | None = None) -> dict:
+    """Drive the REAL ``search_library`` tool with the DB/list seams patched.
+
+    The real ``_check_agent_tool_scope`` gate runs for every call: a role at or
+    above the ``library.search`` viewer floor browses, and a node-level
+    ``allowed_tools`` scope that excludes ``search_library`` (``deny_node_tools``)
+    is denied with the pinned ``insufficient_scope`` error shape. Only the auth
+    re-validation, ``list_primitives`` read and ``_session`` seams are patched.
+    """
+    import asyncio
+
+    from modulo.api.mcp_server import search_library
+    from modulo.db.crud.base import PageResult
+
+    primitives = getattr(request.node, "_primitives", [])
+    session = _make_session_context(AsyncMock())
+
+    def _list_side_effect(session, org_id, **kwargs):
+        term = kwargs.get("search")
+        items = primitives
+        if term:
+            items = [p for p in primitives if term.lower() in p.name.lower()]
+        return PageResult(
+            items=items,
+            total=len(items),
+            page=1,
+            page_size=20,
+            next_cursor=None,
+            has_more=False,
+        )
+
+    with (
+        patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+        patch("modulo.api.mcp_server._session", return_value=session),
+        patch("modulo.api.mcp_server.list_primitives", side_effect=_list_side_effect) as mock_list,
+        patch("modulo.api.mcp_server.library_copy_to_adapt", new_callable=AsyncMock) as mock_copy,
+    ):
+        _set_mcp_ctx("viewer", node_allowed_tools=deny_node_tools)
+        try:
+            result = asyncio.run(search_library(search=search))
+        finally:
+            _clear_mcp_ctx()
+    request.node._list_primitives = mock_list
+    request.node._copy_to_adapt = mock_copy
+    return result
+
+
 @given("the organisation has {count:d} local primitives")
 def org_has_local_primitives(count: int, request):
     request.node._local_primitive_count = count
+    request.node._primitives = [_make_library_primitive(f"Local Primitive {i}", index=i) for i in range(count)]
 
 
-@when(parsers.parse('the MCP client sends a tools/call request for "library_browse"'))
-def mcp_library_browse(client, request):
-    resp = client.post(
-        "/mcp/tools/call",
-        json={
-            "tool": "library_browse",
-            "arguments": {},
-        },
-        headers={"Authorization": f"Bearer {getattr(request.node, '_mcp_key', '')}"},
-    )
-    request.node._resp = resp
+@when("the MCP client browses the library")
+def mcp_browse_library(request):
+    request.node._result = _call_search_library(request)
+
+
+@when(parsers.parse('the MCP client searches the library for "{term}"'))
+def mcp_search_library(term: str, request):
+    request.node._result = _call_search_library(request, search=term)
+
+
+@when("the MCP client tries to browse the library")
+def mcp_browse_library_denied(request):
+    deny = getattr(request.node, "_deny_node_tools", None) or ["trigger_pipeline"]
+    request.node._result = _call_search_library(request, deny_node_tools=deny)
 
 
 @then("the response contains the list of primitives")
 def response_contains_primitives(request):
-    pass
+    data = _mcp_response_payload(request)
+    assert isinstance(data.get("items"), list), data
+    expected = getattr(request.node, "_primitives", [])
+    assert len(data["items"]) == len(expected), f"expected {len(expected)} primitives, got {len(data['items'])}"
+    assert data["total"] == len(expected)
 
 
-@then("each primitive has id, name, and primitive_type")
+@then("each primitive has id, name, and type")
 def primitive_has_fields(request):
-    pass
+    data = _mcp_response_payload(request)
+    for item in data["items"]:
+        assert item.get("id"), item
+        assert item.get("name"), item
+        assert item.get("type"), item
 
 
-@given("the organisation has a primitive named {name}")
-def org_has_primitive_named(name: str, request):
-    request.node._primitive_name = name
-
-
-@when(parsers.parse('the MCP client sends a tools/call request for "library_browse" with search "{term}"'))
-def mcp_library_search(term: str, client, request):
-    resp = client.post(
-        "/mcp/tools/call",
-        json={
-            "tool": "library_browse",
-            "arguments": {"search": term},
-        },
-        headers={"Authorization": f"Bearer {getattr(request.node, '_mcp_key', '')}"},
-    )
-    request.node._resp = resp
-
-
-@then(parsers.parse('the response contains "{name}"'))
-def response_contains_name(name: str, request):
-    data = request.node._resp.json()
-    content = str(data)
-    assert name in content
-
-
-@when(parsers.parse('the MCP client sends a tools/call request for "library_browse" with intent to modify'))
-def mcp_library_modify(client, request):
-    resp = client.post(
-        "/mcp/tools/call",
-        json={
-            "tool": "library_browse",
-            "arguments": {"intent": "modify", "name": "new-primitive"},
-        },
-        headers={"Authorization": f"Bearer {getattr(request.node, '_mcp_key', '')}"},
-    )
-    request.node._resp = resp
+@then(parsers.parse('the response contains the primitive named "{name}"'))
+def response_contains_primitive_named(name: str, request):
+    data = _mcp_response_payload(request)
+    names = [item.get("name") for item in data.get("items", [])]
+    assert name in names, f"primitive {name!r} not in response: {data}"
 
 
 @then("the response is read-only")
 def response_read_only(request):
-    pass
+    data = _mcp_response_payload(request)
+    assert isinstance(data.get("items"), list), data
+    # The browse surface is on the read-only allowlist, statically pinned.
+    from modulo.core.mcp.scope_validator import READ_ONLY_TOOLS
+
+    assert "search_library" in READ_ONLY_TOOLS
 
 
 @then("no primitives are created or modified")
 def no_primitives_modified(request):
-    pass
+    mock_list = getattr(request.node, "_list_primitives", None)
+    assert mock_list is not None, "list_primitives seam was not captured"
+    mock_list.assert_called_once()
+    mock_copy = getattr(request.node, "_copy_to_adapt", None)
+    assert mock_copy is not None, "copy seam was not captured"
+    mock_copy.assert_not_awaited()
+
+
+@given(parsers.parse('the organisation has a primitive named "{name}"'))
+def org_has_primitive_named(name: str, request):
+    request.node._primitive_name = name
+    request.node._primitives = [_make_library_primitive(name)]
+
+
+@given("the MCP caller's allowed_tools scope excludes the library")
+def mcp_browse_scoped_out(request):
+    request.node._deny_node_tools = ["trigger_pipeline"]
 
 
 @when("the MCP client sends a tools/list request")

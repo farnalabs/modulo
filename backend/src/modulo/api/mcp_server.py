@@ -4797,6 +4797,10 @@ async def search_library(
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         org_id = _ctx_org_id_val()
+        try:
+            _check_agent_tool_scope("search_library")
+        except MCPAuthorizationError as exc:
+            return {"error": "insufficient_scope", "detail": str(exc)}
         async with _session(org_id) as s:
             result = await list_primitives(
                 s,

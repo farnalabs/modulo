@@ -124,6 +124,21 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
       org-only. Mint/revoke emit `api_key_created` / `api_key_revoked` audit
       events on BOTH surfaces with `auth_type` / `key_scope` masked-prefix
       payload stamps
+- [x] MCP library browse (2026-09-25): the `search_library` tool is the
+      read-only library-browse surface (browse + text search + cursor
+      pagination over org / Native / community primitives). It maps to the
+      dedicated `library.search` viewer permission in the centralized scope
+      gate (`core/mcp/scope_validator.py`) and — following the
+      `copy_library_primitive` (library.copy @ runner) precedent — is now
+      gated at the handler by the real `_check_agent_tool_scope` chokepoint:
+      an authenticated caller at or above viewer browses, and a node-level
+      `capability_scope.allowed_tools` that excludes `search_library` (a
+      run-scoped sandbox key narrowed to `trigger`-only tools) is denied the
+      pinned `{"error": "insufficient_scope", "detail": ...}` shape BEFORE
+      any DB read. The four `mcp/library_browse.feature` scenarios execute
+      in CI against the real handler + scope-gate seams (auth re-validation +
+      `list_primitives` / `_session` seams patched), closing the last pinned
+      legacy-`/mcp/tools/call` draft
 - [x] Caller-scoped (`.self` permission-key suffix) MCP tools target the
       CALLER's own account with NO target parameter (registry-introspection
       pinned); the first pair (`get_hitl_email_alerts` /
@@ -143,6 +158,28 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   published as a distinct surface here.
 
 ## QA History
+- 2026-09-25: **product-map review pass** — closed the last pinned MCP
+  legacy-`/mcp/tools/call` draft: the four `mcp/library_browse.feature`
+  scenarios previously targeted the dead HTTP surface and never ran. They are
+  rewritten (the `trigger.feature` / `review_hitl.feature` re-anchor pattern)
+  to drive the REAL `search_library` tool handler directly (request ContextVars
+  hydrated by hand): the list surface (`id`/`name`/`type` wire items), the text
+  search passthrough (the `search` term reaches the real `list_primitives`
+  seam), the read-only posture (the tool is on the READ_ONLY_TOOLS allowlist
+  and the only library seam it can touch is the read — `copy_library_primitive`
+  is never invoked), and the scope-gate denial (a node-level
+  `capability_scope.allowed_tools` that excludes `search_library` is denied the
+  pinned `insufficient_scope` error by the real `_check_agent_tool_scope`
+  chokepoint before any DB read). Product change closing the wire gap the
+  scenarios describe: `search_library` moved from the generic
+  `resource.read_only` fallback onto the dedicated `library.search` permission
+  (viewer) in `core/mcp/scope_validator.py` and now calls the shared
+  `_check_agent_tool_scope` handler gate (mirroring `copy_library_primitive`),
+  so the library-browse surface is explicitly scoped and the FAR-436 node-level
+  allowed_tools narrowing can restrict it. Removed the four scenarios from
+  `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
+  `_ORPHANED_BDD_FEATURES` stays empty. No `@awaiting-implementation`
+  scenarios remain under `feat-mcp`.
 - 2026-09-24: **product-map review pass** — closed the MCP HITL-review
   `@awaiting-implementation` gap: the five `mcp/review_hitl.feature` scenarios
   previously targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned

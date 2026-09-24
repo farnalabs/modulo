@@ -87,6 +87,12 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "review_hitl:reject": "hitl.reject",
     "review_hitl:deliver_manual": "hitl.deliver_manual",
     "copy_library_primitive": "library.copy",
+    # The library-browse surface maps to the dedicated ``library.search``
+    # permission (same viewer floor as ``resource.read_only``) so the browse
+    # tool resolves a real permission key instead of the generic read-only
+    # fallback, and the node-level ``allowed_tools`` narrowing (FAR-436) — a
+    # deployment's per-node capability gate — actually restricts it.
+    "search_library": "library.search",
     "list_pending_hitl": _SCOPE_HITL_LIST,
     "list_hitl_gates": _SCOPE_HITL_LIST,
     "get_hitl_gate": _SCOPE_HITL_LIST,

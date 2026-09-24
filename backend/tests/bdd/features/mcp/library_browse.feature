@@ -1,43 +1,40 @@
 Feature: MCP Library Browse
   As an MCP client
-  I want to browse the library via MCP
+  I want to browse and search the library via MCP
   So that AI assistants can discover reusable primitives
+
+  The MCP server speaks JSON-RPC over the StreamableHTTP transport at POST /mcp —
+  the legacy /mcp/tools/call HTTP surface no longer exists. The real shipped
+  library-browse surface is the `search_library` tool (read-only, mapped to the
+  `library.search` viewer permission in the centralized scope gate). These
+  scenarios call the REAL `search_library` tool handler directly with the request
+  ContextVars hydrated by hand (the `trigger.feature` / `review_hitl.feature`
+  re-anchor pattern), network-free and DB-free, with only the auth re-validation
+  and DB/list seams patched. The FastMCP invoke/dispatch layer itself is not
+  exercised here.
 
   Background:
     Given an MCP server is running at /mcp
-    And I have a valid MCP API key with scope "library:browse"
 
-  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
-  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
-  @awaiting-implementation
   Scenario: MCP lists library primitives
     Given the organisation has 3 local primitives
-    When the MCP client sends a tools/call request for "library_browse"
+    When the MCP client browses the library
     Then the response contains the list of primitives
-    And each primitive has id, name, and primitive_type
+    And each primitive has id, name, and type
 
-  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
-  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
-  @awaiting-implementation
   Scenario: MCP searches library primitives
     Given the organisation has a primitive named "PRD Input Schema"
-    When the MCP client sends a tools/call request for "library_browse" with search "PRD"
-    Then the response contains "PRD Input Schema"
+    When the MCP client searches the library for "PRD"
+    Then the response contains the primitive named "PRD Input Schema"
 
-  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
-  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
-  @awaiting-implementation
-  Scenario: MCP library_browse is read-only
+  Scenario: MCP library browse is read-only
     Given the organisation has 3 local primitives
-    When the MCP client sends a tools/call request for "library_browse" with intent to modify
+    When the MCP client browses the library
     Then the response is read-only
     And no primitives are created or modified
 
-  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
-  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
-  @awaiting-implementation
-  Scenario: MCP without library:browse scope is blocked
-    Given the MCP API key has scope "trigger:run" only
-    When the MCP client sends a tools/call request for "library_browse"
-    Then the response contains isError true
-    And the error mentions "insufficient scope"
+  Scenario: MCP caller without library browse scope is blocked
+    Given the MCP caller's allowed_tools scope excludes the library
+    When the MCP client tries to browse the library
+    Then the response carries an error
+    And the tool returns error "insufficient_scope"

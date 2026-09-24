@@ -30,8 +30,28 @@ def _make_mock_primitive(
 class TestSearchLibrary:
     pytestmark = pytest.mark.asyncio
 
+    def _auth_ctx(
+        self,
+        org_id: str = "00000000-0000-0000-0000-000000000001",
+        role: str = "viewer",
+        node_allowed_tools: list[str] | None = None,
+    ) -> None:
+        """Seed the request ContextVars an authenticated MCP handler reads.
+
+        Auth re-validation is patched separately per test; here we mirror the
+        middleware's context so the REAL ``_check_agent_tool_scope`` gate runs
+        against a live role + node ``capability_scope.allowed_tools`` (FAR-436).
+        """
+        from modulo.api.mcp_server import _ctx_node_allowed_tools as _node_tools
+        from modulo.api.mcp_server import _ctx_org_id as _org
+        from modulo.api.mcp_server import _ctx_role as _role
+
+        _org.set(org_id)
+        _role.set(role)
+        _node_tools.set(node_allowed_tools)
+
     async def test_returns_formatted_items(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, search_library
+        from modulo.api.mcp_server import search_library
 
         mock_items = [
             _make_mock_primitive(
@@ -58,8 +78,7 @@ class TestSearchLibrary:
             has_more=False,
         )
 
-        _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
-
+        self._auth_ctx()
         with (
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -99,7 +118,7 @@ class TestSearchLibrary:
         }
 
     async def test_returns_empty_list_when_no_results(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, search_library
+        from modulo.api.mcp_server import search_library
 
         page_result = PageResult(
             items=[],
@@ -110,8 +129,7 @@ class TestSearchLibrary:
             has_more=False,
         )
 
-        _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
-
+        self._auth_ctx()
         with (
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -132,10 +150,9 @@ class TestSearchLibrary:
         }
 
     async def test_passes_filter_params(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, search_library
+        from modulo.api.mcp_server import search_library
 
-        _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
-
+        self._auth_ctx()
         with (
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -164,10 +181,9 @@ class TestSearchLibrary:
         )
 
     async def test_uses_default_limit_of_20(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, search_library
+        from modulo.api.mcp_server import search_library
 
-        _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
-
+        self._auth_ctx()
         with (
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -183,10 +199,9 @@ class TestSearchLibrary:
         assert kwargs["page_size"] == 20
 
     async def test_rejects_expired_token(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, search_library
+        from modulo.api.mcp_server import search_library
 
-        _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
-
+        self._auth_ctx()
         with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
             result = await search_library()
 
@@ -195,13 +210,10 @@ class TestSearchLibrary:
             "detail": "Token revoked or expired - re-authenticate",
         }
 
-    async def test_no_scope_check_needed(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, search_library
-        from modulo.api.mcp_server import _ctx_role as _role
+    async def test_authenticated_viewer_browses(self) -> None:
+        from modulo.api.mcp_server import search_library
 
-        _role.set(None)
-        _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
-
+        self._auth_ctx(role="viewer")
         with (
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
             patch("modulo.api.mcp_server._session") as mock_session,
@@ -214,16 +226,41 @@ class TestSearchLibrary:
             result = await search_library()
 
         assert "insufficient_scope" not in result
-        # The tool must still perform its work — not just avoid raising.
+        # The library-browse surface is a read at the viewer floor: the tool
+        # must still perform its work — not just avoid raising.
         mock_list.assert_called_once()
         assert not result["items"]
         assert result["total"] == 0
 
+    async def test_out_of_scope_node_denied_insufficient_scope(self) -> None:
+        from modulo.api.mcp_server import search_library
+
+        self._auth_ctx(
+            role="runner",
+            node_allowed_tools=["trigger_pipeline"],
+        )
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch(
+                "modulo.api.mcp_server.list_primitives",
+                return_value=PageResult(items=[], total=0, page=1, page_size=20),
+            ) as mock_list,
+        ):
+            mock_session.return_value.__aenter__.return_value = AsyncMock()
+            result = await search_library()
+
+        # The FAR-436 node capability_scope.allowed_tools narrowing excludes
+        # the library-browse tool, so the centralized scope gate denies the call
+        # at the handler before any DB read/seam is touched.
+        assert result.get("error") == "insufficient_scope", result
+        assert "search_library" in result.get("detail", "")
+        mock_list.assert_not_called()
+
     async def test_error_handling(self) -> None:
-        from modulo.api.mcp_server import _ctx_org_id, search_library
+        from modulo.api.mcp_server import search_library
 
-        _ctx_org_id.set("00000000-0000-0000-0000-000000000001")
-
+        self._auth_ctx()
         with (
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
             patch("modulo.api.mcp_server._session") as mock_session,
