@@ -14,7 +14,7 @@
 ## Context
 
 Modulo's MCP server (ADR 014/047) is the control plane for external agents,
-Claude Code, IDE agents, Remy sessions, CI automation. Today every MCP API
+Claude Code, IDE agents, Modulo assistant sessions, CI automation. Today every MCP API
 key is an ORG-LEVEL credential: it carries an org role (operator/runner), a
 team boundary, and optionally a run binding (sandbox keys), but it has no
 identity axis. Consequences:
@@ -138,7 +138,7 @@ This is fail-closed and accepted.
 
 OAuth is the right protocol for interactive browser consent; it cannot
 solve headless provisioning: consent flows need a browser, and access
-tokens are short-lived by design. A cron-scheduled Remy/job needs a
+tokens are short-lived by design. A cron-scheduled assistant job needs a
 long-lived credential minted ahead of time that STILL acts as a single
 user, does not touch other users' state, and can be revoked independently
 without rotating the org's service credentials. A user-scoped key with the
@@ -190,7 +190,7 @@ keys re-read as 'org', silent widening on rollback is PINNED as accepted
 
 ## Observability notes
 
-- **Bucket-string shift:** Remy's JWT callers now carry auth_type 'jwt'
+- **Bucket-string shift:** Modulo assistant JWT callers now carry auth_type 'jwt'
   (previously 'oauth'), so the trigger_pipeline bucket string shifts
   `trigger_pipeline:{org}:oauth:user:{uid}` → `...:jwt:user:{uid}`, a
   one-time in-memory budget reset for those callers (fresh empty buckets).
@@ -199,7 +199,7 @@ keys re-read as 'org', silent widening on rollback is PINNED as accepted
   rate-limit fix.
 - Auth_type 'jwt' is a NEW value distinguishable from OAuth; it cannot by
   itself distinguish OAuth from the old regular-JWT (pre-existing gap), but
-  it CAN separate Remy-held JWT sessions from OAuth tokens in audit
+  it CAN separate assistant-held JWT sessions from OAuth tokens in audit
   payloads from this release onward.
 - The mint-cap / role-cap counters (`permission.api_key_role_cap`)
   continue to count user-scope key clamps exactly like org-key clamps (the
