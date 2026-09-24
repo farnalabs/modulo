@@ -109,24 +109,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Import handles duplicate pipeline names with suffix",
         }
     ),
-    "tests/bdd/features/errors/recovery.feature": frozenset(
-        {
-            "Already running run cannot be recovered",
-            "Manual fix then resume",
-            "Recovery preserves node 1 output",
-            "Recovery with modified run_context",
-            "Resume from checkpoint after failure",
-        }
-    ),
-    "tests/bdd/features/errors/retry.feature": frozenset(
-        {
-            "Retry from failed node",
-            "Retry from start restarts the entire pipeline",
-            "Retry on successful run is rejected",
-            "Retry resets downstream state",
-            "Retry with new run_context",
-        }
-    ),
     "tests/bdd/features/mcp/human_only.feature": frozenset(
         {
             "Audit logs distinguish MCP vs human actions",

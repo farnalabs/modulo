@@ -32,8 +32,7 @@ The `/runs` surface: triggering runs (with thread/runner identity), org-scoped r
 listing, stats and heatmaps, run detail with terminal status and guardrail/gate
 summaries, cancellation, node-level output and IO inspection, workspace events and
 leases, live event polling, node recovery / observation / guardrail-override /
-prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
-`recovery`).
+prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`).
 
 ## Behaviours
 
@@ -75,8 +74,14 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
       pipeline?" (`trigger_run` team gate). Secrets are brokered — injected by
       the engine, never readable by the user. `runs.owner_team_id` is metadata
       (dashboard aggregation), not a security control.
-- [x] Error-state handling: failed states, retries and recovery flows are covered by
-      `backend/tests/bdd/features/errors/{failed_state,retry,recovery}.feature`
+- [x] Error-state handling: failed states and node recovery flows are covered by
+      `backend/tests/bdd/features/errors/{failed_state,recovery}.feature`. The
+      recovery scenarios drive the REAL `POST /runs/{id}/nodes/{node_id}/recover`
+      route (replay-with-`input_data` 200 / skip 200 / HITL-gate-node 422 /
+      node-missing 404 / already-completed 409 / non-recoverable-state 409 /
+      concurrent-recovery 409 / failed-resume-enqueue 500 / non-operator 403)
+      with only the `recover_node` DB seam and the `dispatch_run` resume seam
+      patched (`steps/test_alpha_errors.py`)
 - [x] Run lifecycle is BDD-exercised end to end: a manual trigger creates a pending run
       (202), the engine moves it pending → running, a clean completion lands on
       `completed` with a `final_state`, an unhandled node exception lands on `failed`
@@ -100,6 +105,21 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
   is not unified in one tracker.
 
 ## QA History
+
+- 2026-09-24: **product-map walk** — closed the deferred run recovery/retry
+  BDD drafts (`build/runs.md` error-state coverage). The run-level `/resume` /
+  `/retry` endpoints those scenarios targeted never shipped — recovery is
+  per-node via `POST /runs/{id}/nodes/{node_id}/recover` — so
+  `errors/retry.feature` was deleted (its retry-from-node / retry-on-success
+  semantics are the replay / already-completed-409 cases now locked by the
+  recovery surface) and `errors/recovery.feature` was rewritten to drive the
+  REAL recover-node route with only the `recover_node` + `dispatch_run` seams
+  patched: replay/skip resume (200 with the resume dispatch carrying the
+  recovery output), the HITL-gate-node refusal (422), node-missing (404),
+  already-completed (409), non-recoverable state (409), concurrent recovery
+  (409), failed-resume-enqueue (500) and the non-operator 403 gate. Removed
+  both files from `PINNED_AWAITING_IMPLEMENTATION`; the scenarios now execute
+  in CI. `_ORPHANED_BDD_FEATURES` stays empty.
 
 - 2026-09-21: **product-map walk** — closed the active-run observability BDD gap
   (tracked under `feat-observability`): `active_run_observability.feature` is no

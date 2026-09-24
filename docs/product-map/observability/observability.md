@@ -38,7 +38,7 @@ bdd:
   - backend/tests/bdd/features/observability/otel_traces.feature
   - backend/tests/bdd/features/observability/active_run_observability.feature
   - backend/tests/bdd/features/errors/failed_state.feature
-  - backend/tests/bdd/features/errors/retry.feature
+  - backend/tests/bdd/features/errors/recovery.feature
   - backend/tests/bdd/features/error_tracking/error_dashboard.feature
   - backend/tests/bdd/features/error_tracking/error_ingestion.feature
   - backend/tests/bdd/features/error_tracking/error_notifications.feature
@@ -178,5 +178,5 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   had added a second `feat-observability` tracker at `monitor/observability.md`,
   breaking the one-entry-per-feature invariant. This entry is retained; the
   duplicate's unique citations (`otel_bridge/`, the seven `error_tracking` unit
-  suites, and the `otel_traces` / `errors/failed_state` / `errors/retry` BDD
+  suites, and the `otel_traces` / `errors/failed_state` / `errors/recovery` BDD
   features) were folded in here. Status: covered.
