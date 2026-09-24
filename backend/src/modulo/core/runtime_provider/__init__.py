@@ -423,7 +423,9 @@ class RuntimeProvider(ABC):
         Valid from provisioning until substrate reclamation; where the
         substrate retains post-kill logs, valid post-destroy for a bounded
         retention window. ``max_bytes`` caps how much of the NEWEST end of
-        the log is returned (bound applied to the encoded tail content).
+        the log is returned; the bound is applied as a character slice on the
+        decoded tail text before re-encoding (matching the legacy probe), not
+        on the encoded byte length.
 
         Optional base-class method: providers that do not override it
         raise the typed :class:`ProviderCapabilityUnsupportedError` —
