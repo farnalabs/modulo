@@ -35,6 +35,7 @@ from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base
 from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.journey import Journey
@@ -236,6 +237,7 @@ _TABLES: list[Table] = cast(
         Journey.__table__,
         EvalDefinitionRow.__table__,
         EvalResult.__table__,
+        Eval.__table__,
         AuditEvent.__table__,
         AuditChainHead.__table__,
         EnvironmentProfile.__table__,

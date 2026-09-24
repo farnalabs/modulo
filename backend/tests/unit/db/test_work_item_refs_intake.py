@@ -54,6 +54,7 @@ from modulo.db.lifecycle_refs import (
     validate_ref_entry,
 )
 from modulo.db.models.base import Base
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.journey import Journey
 from modulo.db.models.organisation import Organisation
@@ -79,6 +80,7 @@ _TABLES: list[Table] = cast(
         Journey.__table__,
         VariantGroup.__table__,
         EvalDefinition.__table__,
+        Eval.__table__,
     ],
 )
 
