@@ -91,7 +91,7 @@ manage org-level licenses.
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/system/orgs`: the whole-page view `AdminSystemOrgsView.vue` now maps to its
   owning view so a newly shipped testid on the system-orgs page can no longer silently
-  stay invisible to Remy's docs indexer / `/api/v1/manifest`.
+  stay invisible to Assistant's docs indexer / `/api/v1/manifest`.
 
 - 2026-09-07: **product-map review pass** — added this
   behaviour-tracker for `feat-system-orgs`, which previously had no

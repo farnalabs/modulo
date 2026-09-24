@@ -262,7 +262,7 @@ may decide.
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/settings/hitl-review`
   manifest `elements:` inventory and wired the component into the reverse
   testid-coverage guard, so the HITL review search control the page ships stays
-  visible to Remy's docs indexer and `/api/v1/manifest`.
+  visible to Assistant's docs indexer and `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — closed the
   `/settings/hitl-review` element-inventory drift for the shared gate-card
@@ -272,7 +272,7 @@ may decide.
   are now registered on `/settings/hitl-review`, and
   `test_mapped_route_elements_cover_owning_view_testids` maps the route to the view
   plus `HitlGateCard.vue` / `HitlBriefing.vue`, so a newly shipped gate/briefing
-  testid can no longer drift invisible to Remy's docs indexer / `/api/v1/manifest`.
+  testid can no longer drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-08-29: **product-map review pass** — new behaviour
   tracker for the registered `feat-hitl` manifest feature (route
   `/settings/hitl-review`, previously absent from the feature graph).

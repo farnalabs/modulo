@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
-import AccessEntitySelector from '../components/remy/AccessEntitySelector.vue'
+import AccessEntitySelector from '../components/assistant/AccessEntitySelector.vue'
 
 beforeEach(() => {
   setActivePinia(createPinia())

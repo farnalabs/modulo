@@ -3,7 +3,7 @@
 ``frontend/src/manifest.yaml`` declares a ``product_map`` ``feat-*`` reference
 for every shipped route (per ADR 008 — Core Shared Manifest). The registry of
 allowed features lives in the same file under the top-level ``features:`` map.
-Remy's ``search_documentation`` tool indexes each route's ``product_map`` refs,
+Assistant's ``search_documentation`` tool indexes each route's ``product_map`` refs,
 so a route that drops its reference (or references a feature that no longer
 exists) silently shrinks what the assistant can find, while a feature that is
 never referenced is dead weight in the registry.
@@ -98,7 +98,7 @@ def test_every_registered_feature_has_a_description():
         if not isinstance(spec, dict) or not str(spec.get("description") or "").strip()
     }
     assert not blank, (
-        "registered features with a blank/missing description (Remy's feature search has nothing to match):\n"
+        "registered features with a blank/missing description (Assistant's feature search has nothing to match):\n"
         + "\n".join(f"  {feat} -> {spec!r}" for feat, spec in sorted(blank.items()))
     )
 
@@ -118,7 +118,7 @@ def test_documentation_indexer_surfaces_product_map_features():
     )
 
     # Every route must surface each of its product_map feature references in the
-    # summary text, so Remy's documentation indexer can find a route by feature
+    # summary text, so Assistant's documentation indexer can find a route by feature
     # tag end to end — not just the /admin/costs page. The reference is matched
     # as a token, so a combined multi-feature ``product_map=`` summary still
     # exposes every individual feature reference.

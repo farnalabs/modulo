@@ -120,7 +120,7 @@ applied migration between versions (`core/schema_registry/*`).
   in the manifest `elements:` inventory for `/schemas/infer`: the raw inferred
   definition renders inline with `<JsonViewer :show-toolbar="true">`
   (`SchemaInferenceView.vue`), so the viewer shipped in the DOM while staying
-  invisible to Remy's docs indexer / `/api/v1/manifest`. The component is now part
+  invisible to Assistant's docs indexer / `/api/v1/manifest`. The component is now part
   of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
@@ -129,7 +129,7 @@ applied migration between versions (`core/schema_registry/*`).
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/schemas/editor/:id`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-11: **product-map review pass** — registered the shared
@@ -137,14 +137,14 @@ applied migration between versions (`core/schema_registry/*`).
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/schemas/editor/:id`
   manifest `elements:` inventory and wired the component into the reverse
   testid-coverage guard, so the schema search control the page ships stays visible
-  to Remy's docs indexer and `/api/v1/manifest`.
+  to Assistant's docs indexer and `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/parameter-schemas, /schemas/editor/:id, /schemas/infer`: the whole-page view(s) `ParameterSchemasView.vue, SchemaEditorView.vue, SchemaInferenceView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — registered the
@@ -154,7 +154,7 @@ applied migration between versions (`core/schema_registry/*`).
   schema library page, but none of its static testids were in the product map.
   `test_mapped_route_elements_cover_owning_view_testids` now maps `/schemas` to
   `SchemaListView.vue` + `FolderTree.vue` so the folder surface cannot drift
-  invisible to Remy's docs indexer / `/api/v1/manifest`.
+  invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-schemas`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/schemas.py`,

@@ -57,7 +57,7 @@ an eligible tier.
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/product-analytics`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-11: **product-map review pass** — registered the
@@ -67,7 +67,7 @@ an eligible tier.
   `AppLayout.vue` (alongside the page's existing `consent-level` indicator) but
   had no product-map home. `test_mapped_route_elements_cover_owning_view_testids`
   now maps the route to its page view + the prompt component, so the consent
-  surface cannot drift invisible to Remy's docs indexer / `/api/v1/manifest`.
+  surface cannot drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-product-analytics`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/product_analytics*.py`,

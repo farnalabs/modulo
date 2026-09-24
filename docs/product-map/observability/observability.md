@@ -135,7 +135,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   `/settings/monitoring`, `/settings/observability`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded. Also fixed the browser-monitoring page
   (`/settings/monitoring`): `SettingsMonitorConfigView.vue` opened `<FeatureGate>`
   without importing it, so the entitlement gate could not resolve and the whole
@@ -151,13 +151,13 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   (`test_mapped_route_elements_cover_owning_view_testids`) mapped to
   `AdminErrorDetailView.vue`, `SettingsErrorForwardersView.vue` and
   `SettingsMonitorConfigView.vue`, so the error-detail / forwarders / browser-monitor
-  surfaces stay visible to Remy's docs indexer and `/api/v1/manifest`.
+  surfaces stay visible to Assistant's docs indexer and `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/admin/errors` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
-  guard, so the error-list search control the page ships stays visible to Remy's
+  guard, so the error-list search control the page ships stays visible to Assistant's
   docs indexer and `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
@@ -165,7 +165,7 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   `/settings/observability`: the whole-page view(s) `SettingsObservabilityView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-08-27: **product-map review pass** — added this entry to

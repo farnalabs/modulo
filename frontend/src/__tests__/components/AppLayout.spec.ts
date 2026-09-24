@@ -44,7 +44,7 @@ afterEach(() => {
 import AppLayout from '../../components/AppLayout.vue'
 import { usePlanStore } from '../../stores/planStore'
 import { useOnboardingStore } from '../../composables/useOnboarding'
-import { useRemyStore } from '../../composables/useRemyStore'
+import { useAssistantStore } from '../../composables/useAssistantStore'
 import { api, getAccessToken } from '../../lib/api/client'
 
 const router = createRouter({
@@ -284,8 +284,8 @@ describe('AppLayout', () => {
     expect(bannerWrapper.classes()).not.toContain('absolute')
   })
 
-  describe('full-width main content (Remy panel is an overlay, not a layout column)', () => {
-    it('never reserves right-side padding on main, even when the Remy panel is docked', async () => {
+  describe('full-width main content (Assistant panel is an overlay, not a layout column)', () => {
+    it('never reserves right-side padding on main, even when the Assistant panel is docked', async () => {
       const wrapper = mount(AppLayout, {
         global: {
           plugins: [createPinia(), router],
@@ -297,9 +297,9 @@ describe('AppLayout', () => {
       // The premise: the panel is docked. The old layout
       // bound `paddingRight: panelSize.width`px onto <main> in this state,
       // reserving 440px on every page.
-      const remyStore = useRemyStore()
-      remyStore.setPanelState('docked')
-      expect(remyStore.panelState).toBe('docked')
+      const assistantStore = useAssistantStore()
+      assistantStore.setPanelState('docked')
+      expect(assistantStore.panelState).toBe('docked')
       const main = wrapper.find('main')
       expect(main.attributes('style')).toBeUndefined()
       expect(main.element.style.paddingRight).toBe('')

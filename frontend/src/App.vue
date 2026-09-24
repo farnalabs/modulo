@@ -2,7 +2,7 @@
   <router-view v-if="showsPublicRouteView" />
   <LoginView v-else-if="!isAuthenticated" />
   <ForceChangePasswordView v-else-if="passwordChangeRequired" />
-  <RemyOnlyView v-else-if="isBareRoute" />
+  <AssistantOnlyView v-else-if="isBareRoute" />
   <AppLayout v-else />
 </template>
 
@@ -16,7 +16,7 @@ import { applyMustChangePassword, syncFromMe, useMustChangePassword } from './li
 import LoginView from './views/LoginView.vue'
 import AppLayout from './components/AppLayout.vue'
 import ForceChangePasswordView from './views/ForceChangePasswordView.vue'
-import RemyOnlyView from './views/RemyOnlyView.vue'
+import AssistantOnlyView from './views/AssistantOnlyView.vue'
 import { useWebVitals } from './composables/useWebVitals'
 
 const router = useRouter()
@@ -32,7 +32,7 @@ const isAuthenticated = ref(getInitialAuthState(!!getAccessToken()))
 // synced from the login response and (for restored sessions) once from /me.
 const passwordChangeRequired = useMustChangePassword()
 
-// Routes flagged meta.bare (e.g. /remy) render without the AppLayout chrome.
+// Routes flagged meta.bare (e.g. /assistant) render without the AppLayout chrome.
 const isBareRoute = computed(() => route.meta.bare === true)
 
 // Public routes that must render through <router-view> rather than the

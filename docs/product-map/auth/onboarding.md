@@ -91,7 +91,7 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
   `/onboarding`: the whole-page view(s) `OnboardingWizard.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — registered the
@@ -103,7 +103,7 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
   `spotlight-overlay`) render on the dashboard via `AppLayout.vue` but had no
   product-map home. `test_mapped_route_elements_cover_owning_view_testids` now
   maps `/` to both components so a newly shipped banner/spotlight testid cannot
-  drift invisible to Remy's docs indexer / `/api/v1/manifest`.
+  drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-08-28: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-onboarding`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/onboarding.py` and

@@ -66,11 +66,11 @@ class TestManifestLoad:
         routes = manifest.get("routes", {})
         assert "/" in routes
         assert "/admin/users" in routes
-        assert "/admin/remy" in routes
+        assert "/admin/assistant" in routes
         assert "/admin/costs" in routes
         assert "/admin/errors" in routes
         assert "/settings/teams" in routes
-        assert "/settings/remy" in routes
+        assert "/settings/assistant" in routes
         assert "/feedback/inbox" in routes
 
     def test_manifest_sidebar_groups(self):

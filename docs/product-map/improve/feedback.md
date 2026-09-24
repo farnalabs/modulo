@@ -77,7 +77,7 @@ created per run, transition through a validated state machine
   in the manifest `elements:` inventory for `/feedback/inbox`: the feedback record's
   rejected output and correction proposal render inline with
   `<JsonViewer :show-toolbar="true">` (`FeedbackInboxView.vue`), so the viewer
-  shipped in the DOM while staying invisible to Remy's docs indexer /
+  shipped in the DOM while staying invisible to Assistant's docs indexer /
   `/api/v1/manifest`. The component is now part of the route's reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`).
 
@@ -86,7 +86,7 @@ created per run, transition through a validated state machine
   `/feedback/inbox`: the whole-page view(s) `FeedbackInboxView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-08-28: **product-map review pass** — added this behaviour-tracker

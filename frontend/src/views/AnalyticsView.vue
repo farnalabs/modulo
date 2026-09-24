@@ -312,14 +312,14 @@ function formatCapacityMs(value: number | null): string {
 
 onMounted(async () => {
   await store.fetchOptions();
-  // Pre-filter from a deep link (e.g. Remy's /analytics?group_by=day&date_from=...).
+  // Pre-filter from a deep link (e.g. Assistant's /analytics?group_by=day&date_from=...).
   if (route.query && Object.keys(route.query).length > 0) {
     store.applyQueryParams(route.query);
   }
   await store.fetchQuery();
 });
 
-// Remy's panel is a global overlay, so a deep link can be clicked while already
+// Assistant's panel is a global overlay, so a deep link can be clicked while already
 // on /analytics: the component is reused, onMounted does not re-fire, and the
 // pre-filter would never apply. Watch the route query and re-apply + refetch on
 // same-route navigation with a new query.

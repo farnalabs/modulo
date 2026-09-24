@@ -32,16 +32,16 @@
       </router-view>
     </main>
 
-    <div v-if="planStore.devMode && remyStore.isExecutingUi" class="remy-execution-overlay">
-      <div class="remy-execution-banner">
-        <span>{{ $t('components.AppLayout.remy_performing_actions') }}</span>
-        <button type="button" class="remy-stop-btn" @click="abortUiCommands">{{ $t('components.AppLayout.remy_stop') }}</button>
+    <div v-if="planStore.devMode && assistantStore.isExecutingUi" class="assistant-execution-overlay">
+      <div class="assistant-execution-banner">
+        <span>{{ $t('components.AppLayout.assistant_performing_actions') }}</span>
+        <button type="button" class="assistant-stop-btn" @click="abortUiCommands">{{ $t('components.AppLayout.assistant_stop') }}</button>
       </div>
     </div>
 
     <SpotlightOverlay />
     <CommandPalette ref="commandPaletteRef" />
-    <RemyPanel v-if="planStore.devMode" />
+    <AssistantPanel v-if="planStore.devMode" />
   </div>
 </template>
 
@@ -51,9 +51,9 @@ import { clearAccessTokenForLogout } from "../lib/api/client";
 import { useCurrentUser } from "../composables/useCurrentUser";
 import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
-import RemyPanel from "./remy/RemyPanel.vue";
+import AssistantPanel from "./assistant/AssistantPanel.vue";
 import AppSidebar from "./AppSidebar.vue";
-import { useRemyStore } from "../composables/useRemyStore";
+import { useAssistantStore } from "../composables/useAssistantStore";
 import { useSidebarMode } from "../composables/useSidebarMode";
 import { useOnboardingStore } from "../composables/useOnboarding";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
@@ -66,7 +66,7 @@ import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
 import ProductAnalyticsConsentPrompt from "./product-analytics/ProductAnalyticsConsentPrompt.vue";
 
 const planStore = usePlanStore();
-const remyStore = useRemyStore();
+const assistantStore = useAssistantStore();
 const onboardingStore = useOnboardingStore();
 
 const onboardingActive = computed(() => onboardingStore.isActive);
@@ -98,7 +98,7 @@ const mainPaddingClass = computed(() => {
   return showMobileHeader.value ? 'pt-14 md:pt-0' : ''
 });
 
-// The Remy panel is a position:fixed overlay (RemyPanel .remy-panel) in every
+// The Assistant panel is a position:fixed overlay (AssistantPanel .assistant-panel) in every
 // open state, including "docked" — it floats above the page on the right with
 // an elevation shadow and never reserves layout space. Main content therefore
 // always spans the full available width (no padding-right reservation, no
@@ -169,13 +169,13 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.remy-execution-overlay {
+.assistant-execution-overlay {
   position: fixed;
   inset: 0;
   z-index: 40;
   pointer-events: none;
 }
-.remy-execution-banner {
+.assistant-execution-banner {
   position: fixed;
   top: 0; left: 0; right: 0;
   z-index: 41;
@@ -188,7 +188,7 @@ onMounted(() => {
   font-size: 13px;
   pointer-events: auto;
 }
-.remy-stop-btn {
+.assistant-stop-btn {
   background: hsl(var(--destructive));
   color: hsl(var(--destructive-foreground));
   border: none;

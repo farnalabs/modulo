@@ -6312,7 +6312,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/me/remy/skills": {
+    "/api/v1/me/assistant/skills": {
         parameters: {
             query?: never;
             header?: never;
@@ -6320,17 +6320,17 @@ export interface paths {
             cookie?: never;
         };
         /** List User Skills */
-        get: operations["list_user_skills_api_v1_me_remy_skills_get"];
+        get: operations["list_user_skills_api_v1_me_assistant_skills_get"];
         put?: never;
         /** Create User Skill */
-        post: operations["create_user_skill_api_v1_me_remy_skills_post"];
+        post: operations["create_user_skill_api_v1_me_assistant_skills_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/me/remy/skills/{skill_id}": {
+    "/api/v1/me/assistant/skills/{skill_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -6339,16 +6339,16 @@ export interface paths {
         };
         get?: never;
         /** Update User Skill */
-        put: operations["update_user_skill_api_v1_me_remy_skills__skill_id__put"];
+        put: operations["update_user_skill_api_v1_me_assistant_skills__skill_id__put"];
         post?: never;
         /** Delete User Skill */
-        delete: operations["delete_user_skill_api_v1_me_remy_skills__skill_id__delete"];
+        delete: operations["delete_user_skill_api_v1_me_assistant_skills__skill_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/me/remy/context-sources": {
+    "/api/v1/me/assistant/context-sources": {
         parameters: {
             query?: never;
             header?: never;
@@ -6356,17 +6356,17 @@ export interface paths {
             cookie?: never;
         };
         /** Get User Context Sources */
-        get: operations["get_user_context_sources_api_v1_me_remy_context_sources_get"];
+        get: operations["get_user_context_sources_api_v1_me_assistant_context_sources_get"];
         put?: never;
         post?: never;
         /** Reset User Context Sources */
-        delete: operations["reset_user_context_sources_api_v1_me_remy_context_sources_delete"];
+        delete: operations["reset_user_context_sources_api_v1_me_assistant_context_sources_delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/me/remy/context-sources/{source_key}": {
+    "/api/v1/me/assistant/context-sources/{source_key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -6375,7 +6375,7 @@ export interface paths {
         };
         get?: never;
         /** Set User Context Source */
-        put: operations["set_user_context_source_api_v1_me_remy_context_sources__source_key__put"];
+        put: operations["set_user_context_source_api_v1_me_assistant_context_sources__source_key__put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -7363,17 +7363,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/remy/config": {
+    "/api/v1/admin/assistant/config": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Remy Config */
-        get: operations["get_remy_config_api_v1_admin_remy_config_get"];
-        /** Update Remy Config */
-        put: operations["update_remy_config_api_v1_admin_remy_config_put"];
+        /** Get Assistant Config */
+        get: operations["get_assistant_config_api_v1_admin_assistant_config_get"];
+        /** Update Assistant Config */
+        put: operations["update_assistant_config_api_v1_admin_assistant_config_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -7381,7 +7381,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/remy/available-providers": {
+    "/api/v1/admin/assistant/available-providers": {
         parameters: {
             query?: never;
             header?: never;
@@ -7389,7 +7389,7 @@ export interface paths {
             cookie?: never;
         };
         /** Get Available Providers */
-        get: operations["get_available_providers_api_v1_admin_remy_available_providers_get"];
+        get: operations["get_available_providers_api_v1_admin_assistant_available_providers_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7398,7 +7398,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/remy/skills": {
+    "/api/v1/admin/assistant/skills": {
         parameters: {
             query?: never;
             header?: never;
@@ -7406,17 +7406,17 @@ export interface paths {
             cookie?: never;
         };
         /** List Org Skills */
-        get: operations["list_org_skills_api_v1_admin_remy_skills_get"];
+        get: operations["list_org_skills_api_v1_admin_assistant_skills_get"];
         put?: never;
         /** Create Org Skill */
-        post: operations["create_org_skill_api_v1_admin_remy_skills_post"];
+        post: operations["create_org_skill_api_v1_admin_assistant_skills_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/remy/skills/{skill_id}": {
+    "/api/v1/admin/assistant/skills/{skill_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -7425,16 +7425,16 @@ export interface paths {
         };
         get?: never;
         /** Update Org Skill */
-        put: operations["update_org_skill_api_v1_admin_remy_skills__skill_id__put"];
+        put: operations["update_org_skill_api_v1_admin_assistant_skills__skill_id__put"];
         post?: never;
         /** Delete Org Skill */
-        delete: operations["delete_org_skill_api_v1_admin_remy_skills__skill_id__delete"];
+        delete: operations["delete_org_skill_api_v1_admin_assistant_skills__skill_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/remy/context-sources": {
+    "/api/v1/admin/assistant/context-sources": {
         parameters: {
             query?: never;
             header?: never;
@@ -7442,17 +7442,17 @@ export interface paths {
             cookie?: never;
         };
         /** Get Org Context Sources */
-        get: operations["get_org_context_sources_api_v1_admin_remy_context_sources_get"];
+        get: operations["get_org_context_sources_api_v1_admin_assistant_context_sources_get"];
         put?: never;
         post?: never;
         /** Reset Org Context Sources */
-        delete: operations["reset_org_context_sources_api_v1_admin_remy_context_sources_delete"];
+        delete: operations["reset_org_context_sources_api_v1_admin_assistant_context_sources_delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/remy/context-sources/{source_key}": {
+    "/api/v1/admin/assistant/context-sources/{source_key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -7461,7 +7461,7 @@ export interface paths {
         };
         get?: never;
         /** Set Org Context Source */
-        put: operations["set_org_context_source_api_v1_admin_remy_context_sources__source_key__put"];
+        put: operations["set_org_context_source_api_v1_admin_assistant_context_sources__source_key__put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -9097,7 +9097,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/remy/sessions": {
+    "/api/v1/assistant/sessions": {
         parameters: {
             query?: never;
             header?: never;
@@ -9105,17 +9105,17 @@ export interface paths {
             cookie?: never;
         };
         /** List Sessions */
-        get: operations["list_sessions_api_v1_remy_sessions_get"];
+        get: operations["list_sessions_api_v1_assistant_sessions_get"];
         put?: never;
         /** Create Session */
-        post: operations["create_session_api_v1_remy_sessions_post"];
+        post: operations["create_session_api_v1_assistant_sessions_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/remy/sessions/{session_id}": {
+    "/api/v1/assistant/sessions/{session_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -9123,18 +9123,18 @@ export interface paths {
             cookie?: never;
         };
         /** Get Session */
-        get: operations["get_session_api_v1_remy_sessions__session_id__get"];
+        get: operations["get_session_api_v1_assistant_sessions__session_id__get"];
         put?: never;
         post?: never;
         /** Delete Session */
-        delete: operations["delete_session_api_v1_remy_sessions__session_id__delete"];
+        delete: operations["delete_session_api_v1_assistant_sessions__session_id__delete"];
         options?: never;
         head?: never;
         /** Rename Session */
-        patch: operations["rename_session_api_v1_remy_sessions__session_id__patch"];
+        patch: operations["rename_session_api_v1_assistant_sessions__session_id__patch"];
         trace?: never;
     };
-    "/api/v1/remy/sessions/{session_id}/messages": {
+    "/api/v1/assistant/sessions/{session_id}/messages": {
         parameters: {
             query?: never;
             header?: never;
@@ -9142,17 +9142,17 @@ export interface paths {
             cookie?: never;
         };
         /** List Messages */
-        get: operations["list_messages_api_v1_remy_sessions__session_id__messages_get"];
+        get: operations["list_messages_api_v1_assistant_sessions__session_id__messages_get"];
         put?: never;
         /** Append Message */
-        post: operations["append_message_api_v1_remy_sessions__session_id__messages_post"];
+        post: operations["append_message_api_v1_assistant_sessions__session_id__messages_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/remy/sessions/{session_id}/stream": {
+    "/api/v1/assistant/sessions/{session_id}/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -9162,14 +9162,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Stream Chat */
-        post: operations["stream_chat_api_v1_remy_sessions__session_id__stream_post"];
+        post: operations["stream_chat_api_v1_assistant_sessions__session_id__stream_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/remy/sessions/{session_id}/permission-response": {
+    "/api/v1/assistant/sessions/{session_id}/permission-response": {
         parameters: {
             query?: never;
             header?: never;
@@ -9179,14 +9179,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Submit Permission Response */
-        post: operations["submit_permission_response_api_v1_remy_sessions__session_id__permission_response_post"];
+        post: operations["submit_permission_response_api_v1_assistant_sessions__session_id__permission_response_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/remy/sessions/{session_id}/ui-command-results": {
+    "/api/v1/assistant/sessions/{session_id}/ui-command-results": {
         parameters: {
             query?: never;
             header?: never;
@@ -9196,14 +9196,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Submit Ui Command Results */
-        post: operations["submit_ui_command_results_api_v1_remy_sessions__session_id__ui_command_results_post"];
+        post: operations["submit_ui_command_results_api_v1_assistant_sessions__session_id__ui_command_results_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/remy/sessions/{session_id}/reset-permissions": {
+    "/api/v1/assistant/sessions/{session_id}/reset-permissions": {
         parameters: {
             query?: never;
             header?: never;
@@ -9213,14 +9213,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Reset Session Permissions */
-        post: operations["reset_session_permissions_api_v1_remy_sessions__session_id__reset_permissions_post"];
+        post: operations["reset_session_permissions_api_v1_assistant_sessions__session_id__reset_permissions_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/remy/sessions/{session_id}/resume": {
+    "/api/v1/assistant/sessions/{session_id}/resume": {
         parameters: {
             query?: never;
             header?: never;
@@ -9230,14 +9230,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Resume Session */
-        post: operations["resume_session_api_v1_remy_sessions__session_id__resume_post"];
+        post: operations["resume_session_api_v1_assistant_sessions__session_id__resume_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/remy/sessions/{session_id}/stop": {
+    "/api/v1/assistant/sessions/{session_id}/stop": {
         parameters: {
             query?: never;
             header?: never;
@@ -9247,14 +9247,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Stop Session */
-        post: operations["stop_session_api_v1_remy_sessions__session_id__stop_post"];
+        post: operations["stop_session_api_v1_assistant_sessions__session_id__stop_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/remy/sessions/{session_id}/audit-trail": {
+    "/api/v1/assistant/sessions/{session_id}/audit-trail": {
         parameters: {
             query?: never;
             header?: never;
@@ -9262,7 +9262,7 @@ export interface paths {
             cookie?: never;
         };
         /** Get Audit Trail */
-        get: operations["get_audit_trail_api_v1_remy_sessions__session_id__audit_trail_get"];
+        get: operations["get_audit_trail_api_v1_assistant_sessions__session_id__audit_trail_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9271,7 +9271,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/remy/sessions/{session_id}/undo": {
+    "/api/v1/assistant/sessions/{session_id}/undo": {
         parameters: {
             query?: never;
             header?: never;
@@ -9281,7 +9281,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Undo Last Action */
-        post: operations["undo_last_action_api_v1_remy_sessions__session_id__undo_post"];
+        post: operations["undo_last_action_api_v1_assistant_sessions__session_id__undo_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10205,6 +10205,51 @@ export interface components {
             sha256: string;
             /** Compression */
             compression: string;
+        };
+        /** AssistantConfigResponse */
+        AssistantConfigResponse: {
+            /** System Prompt */
+            system_prompt?: string | null;
+            /** Additional Guidance */
+            additional_guidance?: string | null;
+            access_list?: components["schemas"]["AccessList"];
+            /**
+             * Default Provider
+             * @default anthropic
+             */
+            default_provider: string;
+            /**
+             * Default Model
+             * @default claude-sonnet-4-20250514
+             */
+            default_model: string;
+            /**
+             * Default Context Window
+             * @default 200000
+             */
+            default_context_window: number;
+            /** Allowed Providers */
+            allowed_providers?: string[];
+            /** Allowed Models */
+            allowed_models?: string[];
+        };
+        /** AssistantConfigUpdate */
+        AssistantConfigUpdate: {
+            /** System Prompt */
+            system_prompt?: string | null;
+            /** Additional Guidance */
+            additional_guidance?: string | null;
+            access_list?: components["schemas"]["AccessList"] | null;
+            /** Default Provider */
+            default_provider?: string | null;
+            /** Default Model */
+            default_model?: string | null;
+            /** Default Context Window */
+            default_context_window?: number | null;
+            /** Allowed Providers */
+            allowed_providers?: string[] | null;
+            /** Allowed Models */
+            allowed_models?: string[] | null;
         };
         /** AutomationSuggestion */
         AutomationSuggestion: {
@@ -16499,51 +16544,6 @@ export interface components {
             /** Reason */
             reason: string;
         };
-        /** RemyConfigResponse */
-        RemyConfigResponse: {
-            /** System Prompt */
-            system_prompt?: string | null;
-            /** Additional Guidance */
-            additional_guidance?: string | null;
-            access_list?: components["schemas"]["AccessList"];
-            /**
-             * Default Provider
-             * @default anthropic
-             */
-            default_provider: string;
-            /**
-             * Default Model
-             * @default claude-sonnet-4-20250514
-             */
-            default_model: string;
-            /**
-             * Default Context Window
-             * @default 200000
-             */
-            default_context_window: number;
-            /** Allowed Providers */
-            allowed_providers?: string[];
-            /** Allowed Models */
-            allowed_models?: string[];
-        };
-        /** RemyConfigUpdate */
-        RemyConfigUpdate: {
-            /** System Prompt */
-            system_prompt?: string | null;
-            /** Additional Guidance */
-            additional_guidance?: string | null;
-            access_list?: components["schemas"]["AccessList"] | null;
-            /** Default Provider */
-            default_provider?: string | null;
-            /** Default Model */
-            default_model?: string | null;
-            /** Default Context Window */
-            default_context_window?: number | null;
-            /** Allowed Providers */
-            allowed_providers?: string[] | null;
-            /** Allowed Models */
-            allowed_models?: string[] | null;
-        };
         /** RenameSessionRequest */
         RenameSessionRequest: {
             /** Name */
@@ -18073,7 +18073,7 @@ export interface components {
             mcp_api_key?: string | null;
             /**
              * Page Context
-             * @description Current page context for Remy's context-awareness.
+             * @description Current page context for Assistant's context-awareness.
              */
             page_context?: string | null;
             /**
@@ -18083,7 +18083,7 @@ export interface components {
             system_prompt?: string | null;
             /**
              * Exclude Ui Tools
-             * @description Exclude the UI-driving tool family (remy-only mode — no browser automation).
+             * @description Exclude the UI-driving tool family (assistant-only mode — no browser automation).
              * @default false
              */
             exclude_ui_tools: boolean;
@@ -33346,7 +33346,7 @@ export interface operations {
             };
         };
     };
-    list_user_skills_api_v1_me_remy_skills_get: {
+    list_user_skills_api_v1_me_assistant_skills_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -33377,7 +33377,7 @@ export interface operations {
             };
         };
     };
-    create_user_skill_api_v1_me_remy_skills_post: {
+    create_user_skill_api_v1_me_assistant_skills_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -33412,7 +33412,7 @@ export interface operations {
             };
         };
     };
-    update_user_skill_api_v1_me_remy_skills__skill_id__put: {
+    update_user_skill_api_v1_me_assistant_skills__skill_id__put: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -33449,7 +33449,7 @@ export interface operations {
             };
         };
     };
-    delete_user_skill_api_v1_me_remy_skills__skill_id__delete: {
+    delete_user_skill_api_v1_me_assistant_skills__skill_id__delete: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -33480,7 +33480,7 @@ export interface operations {
             };
         };
     };
-    get_user_context_sources_api_v1_me_remy_context_sources_get: {
+    get_user_context_sources_api_v1_me_assistant_context_sources_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -33511,7 +33511,7 @@ export interface operations {
             };
         };
     };
-    reset_user_context_sources_api_v1_me_remy_context_sources_delete: {
+    reset_user_context_sources_api_v1_me_assistant_context_sources_delete: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -33542,7 +33542,7 @@ export interface operations {
             };
         };
     };
-    set_user_context_source_api_v1_me_remy_context_sources__source_key__put: {
+    set_user_context_source_api_v1_me_assistant_context_sources__source_key__put: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -36142,7 +36142,7 @@ export interface operations {
             };
         };
     };
-    get_remy_config_api_v1_admin_remy_config_get: {
+    get_assistant_config_api_v1_admin_assistant_config_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -36159,7 +36159,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RemyConfigResponse"];
+                    "application/json": components["schemas"]["AssistantConfigResponse"];
                 };
             };
             /** @description Validation Error */
@@ -36173,7 +36173,7 @@ export interface operations {
             };
         };
     };
-    update_remy_config_api_v1_admin_remy_config_put: {
+    update_assistant_config_api_v1_admin_assistant_config_put: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -36184,7 +36184,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RemyConfigUpdate"];
+                "application/json": components["schemas"]["AssistantConfigUpdate"];
             };
         };
         responses: {
@@ -36194,7 +36194,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RemyConfigResponse"];
+                    "application/json": components["schemas"]["AssistantConfigResponse"];
                 };
             };
             /** @description Validation Error */
@@ -36208,7 +36208,7 @@ export interface operations {
             };
         };
     };
-    get_available_providers_api_v1_admin_remy_available_providers_get: {
+    get_available_providers_api_v1_admin_assistant_available_providers_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -36239,7 +36239,7 @@ export interface operations {
             };
         };
     };
-    list_org_skills_api_v1_admin_remy_skills_get: {
+    list_org_skills_api_v1_admin_assistant_skills_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -36270,7 +36270,7 @@ export interface operations {
             };
         };
     };
-    create_org_skill_api_v1_admin_remy_skills_post: {
+    create_org_skill_api_v1_admin_assistant_skills_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -36305,7 +36305,7 @@ export interface operations {
             };
         };
     };
-    update_org_skill_api_v1_admin_remy_skills__skill_id__put: {
+    update_org_skill_api_v1_admin_assistant_skills__skill_id__put: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -36342,7 +36342,7 @@ export interface operations {
             };
         };
     };
-    delete_org_skill_api_v1_admin_remy_skills__skill_id__delete: {
+    delete_org_skill_api_v1_admin_assistant_skills__skill_id__delete: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -36373,7 +36373,7 @@ export interface operations {
             };
         };
     };
-    get_org_context_sources_api_v1_admin_remy_context_sources_get: {
+    get_org_context_sources_api_v1_admin_assistant_context_sources_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -36406,7 +36406,7 @@ export interface operations {
             };
         };
     };
-    reset_org_context_sources_api_v1_admin_remy_context_sources_delete: {
+    reset_org_context_sources_api_v1_admin_assistant_context_sources_delete: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -36439,7 +36439,7 @@ export interface operations {
             };
         };
     };
-    set_org_context_source_api_v1_admin_remy_context_sources__source_key__put: {
+    set_org_context_source_api_v1_admin_assistant_context_sources__source_key__put: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40208,7 +40208,7 @@ export interface operations {
             };
         };
     };
-    list_sessions_api_v1_remy_sessions_get: {
+    list_sessions_api_v1_assistant_sessions_get: {
         parameters: {
             query?: {
                 page?: number;
@@ -40243,7 +40243,7 @@ export interface operations {
             };
         };
     };
-    create_session_api_v1_remy_sessions_post: {
+    create_session_api_v1_assistant_sessions_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40280,7 +40280,7 @@ export interface operations {
             };
         };
     };
-    get_session_api_v1_remy_sessions__session_id__get: {
+    get_session_api_v1_assistant_sessions__session_id__get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40322,7 +40322,7 @@ export interface operations {
             };
         };
     };
-    delete_session_api_v1_remy_sessions__session_id__delete: {
+    delete_session_api_v1_assistant_sessions__session_id__delete: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40364,7 +40364,7 @@ export interface operations {
             };
         };
     };
-    rename_session_api_v1_remy_sessions__session_id__patch: {
+    rename_session_api_v1_assistant_sessions__session_id__patch: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40410,7 +40410,7 @@ export interface operations {
             };
         };
     };
-    list_messages_api_v1_remy_sessions__session_id__messages_get: {
+    list_messages_api_v1_assistant_sessions__session_id__messages_get: {
         parameters: {
             query?: {
                 page?: number;
@@ -40454,7 +40454,7 @@ export interface operations {
             };
         };
     };
-    append_message_api_v1_remy_sessions__session_id__messages_post: {
+    append_message_api_v1_assistant_sessions__session_id__messages_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40500,7 +40500,7 @@ export interface operations {
             };
         };
     };
-    stream_chat_api_v1_remy_sessions__session_id__stream_post: {
+    stream_chat_api_v1_assistant_sessions__session_id__stream_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40572,7 +40572,7 @@ export interface operations {
             };
         };
     };
-    submit_permission_response_api_v1_remy_sessions__session_id__permission_response_post: {
+    submit_permission_response_api_v1_assistant_sessions__session_id__permission_response_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40625,7 +40625,7 @@ export interface operations {
             };
         };
     };
-    submit_ui_command_results_api_v1_remy_sessions__session_id__ui_command_results_post: {
+    submit_ui_command_results_api_v1_assistant_sessions__session_id__ui_command_results_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40671,7 +40671,7 @@ export interface operations {
             };
         };
     };
-    reset_session_permissions_api_v1_remy_sessions__session_id__reset_permissions_post: {
+    reset_session_permissions_api_v1_assistant_sessions__session_id__reset_permissions_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40713,77 +40713,7 @@ export interface operations {
             };
         };
     };
-    resume_session_api_v1_remy_sessions__session_id__resume_post: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
-                };
-            };
-            /** @description Forbidden */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    stop_session_api_v1_remy_sessions__session_id__stop_post: {
+    resume_session_api_v1_assistant_sessions__session_id__resume_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40853,7 +40783,77 @@ export interface operations {
             };
         };
     };
-    get_audit_trail_api_v1_remy_sessions__session_id__audit_trail_get: {
+    stop_session_api_v1_assistant_sessions__session_id__stop_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_audit_trail_api_v1_assistant_sessions__session_id__audit_trail_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -40902,7 +40902,7 @@ export interface operations {
             };
         };
     };
-    undo_last_action_api_v1_remy_sessions__session_id__undo_post: {
+    undo_last_action_api_v1_assistant_sessions__session_id__undo_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;

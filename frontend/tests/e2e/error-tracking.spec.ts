@@ -2,14 +2,14 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Error Tracking', { tag: "@regression" }, () => {
   test.beforeEach(async ({ page }) => {
-    // The Remy panel is a position:fixed overlay. Even though it now defaults
+    // The Assistant panel is a position:fixed overlay. Even though it now defaults
     // to 'closed' (FAR-869), a stale persisted 'docked'/'floating' state can
     // still render it over the filter bar and intercept the Reset click with
     // "subtree intercepts pointer events". Force it closed before the app boots
     // so it can never cover [data-testid=admin-errors-reset]. Mirrors
     // json-viewer.spec.ts and view-modes-admin.spec.ts.
     await page.addInitScript(() => {
-      localStorage.setItem('remy-panel-state', 'closed')
+      localStorage.setItem('assistant-panel-state', 'closed')
     })
   })
 

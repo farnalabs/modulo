@@ -242,7 +242,7 @@ export function systemAdminJwt(): string {
  *
  * Returns true when the target can actually render such a route. The local
  * target uses the mock API and swaps in a system-admin JWT (same approach as
- * remy-only.spec.ts). Staging/prod authenticate with the real E2E_ADMIN_EMAIL
+ * assistant-only.spec.ts). Staging/prod authenticate with the real E2E_ADMIN_EMAIL
  * identity, which is a regular org admin — there is no in-product way to grant
  * is_system_admin — so the router guard redirects SYSTEM routes to the
  * dashboard and this returns false.

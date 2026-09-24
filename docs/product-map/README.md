@@ -7,7 +7,7 @@ layers:
    Shared Manifest). It registers every UI route, its `product_map: [feat-*]` references,
    sidebar grouping, permissions/tiers, testable `data-testid` elements, and the
    `features:` registry of allowed feature ids. The backend serves it at
-   `/api/v1/manifest`, the frontend router/nav consume it at build time, and Remy's
+   `/api/v1/manifest`, the frontend router/nav consume it at build time, and Assistant's
    `search_documentation` indexes each route's `product_map` refs.
 2. **`docs/product-map/`** — the feature graph (this directory). One behaviour-tracker
    entry per feature, keyed by the same `feat-*` id, describing expected behaviours,
@@ -23,7 +23,7 @@ reason: every registered feature is referenced by at least one shipped route, an
 `feat-*` reference anywhere in the codebase must resolve either to a registered manifest
 feature or to a behaviour-tracker entry below (enforced by
 `backend/tests/architecture/test_product_map.py`). If a feature ships, it appears in one
-of these two places — otherwise it is invisible to Remy and to this graph.
+of these two places — otherwise it is invisible to Assistant and to this graph.
 
 ## Entry format
 
@@ -104,7 +104,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 ### Configure
 - **feat-schemas** - Typed JSON schemas, schema editor, inference, and parameter schemas - routes: `/schemas`, `/schemas/editor/:id`, `/schemas/infer`, `/admin/parameter-schemas`
 - **feat-model-backends** - Model backend management and setup - routes: `/admin/model-backends`, `/setup/model-backend/:id`
-- **feat-remy** - Remy assistant configuration and skills - routes: `/admin/remy`, `/settings/remy`, `/remy`
+- **feat-assistant** - Modulo assistant configuration and skills - routes: `/admin/assistant`, `/settings/assistant`, `/assistant`
 - **feat-mcp** - Model Context Protocol tool configuration - routes: `/settings/mcp`
 - **feat-guardrails** - Guardrail policies - routes: `/settings/guardrails`
 - **feat-connectors** - External tool connectors - routes: `/admin/connectors`
@@ -145,7 +145,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk:** `feat-environments`, `feat-auth`, `feat-sso`, `feat-org`,
 > `feat-runtime`, `feat-system-config`, `feat-system-orgs`, `feat-connectors`,
 > `feat-lifecycle-maps`, `feat-feedback`, `feat-hitl`, `feat-router`, `feat-library`,
-> `feat-license`, `feat-mcp`, `feat-model-backends`, `feat-onboarding`, `feat-remy`,
+> `feat-license`, `feat-mcp`, `feat-model-backends`, `feat-onboarding`, `feat-assistant`,
 > `feat-schemas`, `feat-teams`, `feat-evals`, `feat-guardrails`, `feat-variants`,
 > `feat-product-analytics`, `feat-pipelines`, `feat-runs`, `feat-dashboard`,
 > `feat-costs`, `feat-notifications`, `feat-observability`, `feat-plugins`,
@@ -713,7 +713,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-guardrails](configure/guardrails.md) => PRD N/A
 - [feat-mcp](configure/mcp.md) => PRD N/A
 - [feat-model-backends](configure/model-backends.md) => PRD N/A
-- [feat-remy](configure/remy.md) => PRD 8.23
+- [feat-assistant](configure/assistant.md) => PRD 8.23
 
 ### Core Platform
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6

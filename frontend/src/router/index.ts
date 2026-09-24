@@ -102,10 +102,10 @@ const AdminHousekeepingView = () => import('../views/AdminHousekeepingView.vue')
 const AdminSystemOrgsView = () => import('../views/AdminSystemOrgsView.vue')
 const AdminSystemConfigView = () => import('../views/AdminSystemConfigView.vue')
 const AdminProductAnalyticsView = () => import('../views/AdminProductAnalyticsView.vue')
-const AdminRemyView = () => import('../views/AdminRemyView.vue')
+const AdminAssistantView = () => import('../views/AdminAssistantView.vue')
 const AdminErrorsView = () => import('../views/AdminErrorsView.vue')
 const AdminErrorDetailView = () => import('../views/AdminErrorDetailView.vue')
-const UserRemySkillsView = () => import('../views/UserRemySkillsView.vue')
+const UserAssistantSkillsView = () => import('../views/UserAssistantSkillsView.vue')
 const SettingsEmailView = () => import('../views/SettingsEmailView.vue')
 const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwardersView.vue')
 const SettingsMonitorConfigView = () => import('../views/SettingsMonitorConfigView.vue')
@@ -123,7 +123,7 @@ const ParameterSchemasView = () => import('../views/ParameterSchemasView.vue')
 const OAuthConsentView = () => import('../views/OAuthConsentView.vue')
 const DemoView = () => import('../views/DemoView.vue')
 const AcceptInviteView = () => import('../views/AcceptInviteView.vue')
-const RemyOnlyView = () => import('../views/RemyOnlyView.vue')
+const AssistantOnlyView = () => import('../views/AssistantOnlyView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -296,9 +296,9 @@ const router = createRouter({
       component: SettingsHitlReviewView,
     },
     {
-      path: '/settings/remy',
-      name: 'settings-remy',
-      component: UserRemySkillsView,
+      path: '/settings/assistant',
+      name: 'settings-assistant',
+      component: UserAssistantSkillsView,
     },
     {
       path: '/schemas',
@@ -365,7 +365,7 @@ const router = createRouter({
     },
     {
       path: '/admin',
-      redirect: '/admin/remy',
+      redirect: '/admin/assistant',
     },
     {
       path: '/admin/my-profile',
@@ -497,9 +497,9 @@ const router = createRouter({
       component: AdminErrorDetailView,
     },
     {
-      path: '/admin/remy',
-      name: 'admin-remy',
-      component: AdminRemyView,
+      path: '/admin/assistant',
+      name: 'admin-assistant',
+      component: AdminAssistantView,
     },
     {
       path: '/pipelines/copy',
@@ -627,10 +627,23 @@ const router = createRouter({
       redirect: (to) => ({ path: `/admin/runners/profiles/${String(to.params.id)}/edit` }),
     },
     {
-      path: '/remy',
-      name: 'remy-only',
-      component: RemyOnlyView,
+      path: '/assistant',
+      name: 'assistant-only',
+      component: AssistantOnlyView,
       meta: { bare: true },
+    },
+    {
+      // FAR-1196 one-release redirects: legacy Remy paths must not 404.
+      path: '/remy',
+      redirect: '/assistant',
+    },
+    {
+      path: '/settings/remy',
+      redirect: '/settings/assistant',
+    },
+    {
+      path: '/admin/remy',
+      redirect: '/admin/assistant',
     },
     {
       path: '/:pathMatch(.*)*',

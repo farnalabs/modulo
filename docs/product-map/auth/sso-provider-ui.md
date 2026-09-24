@@ -108,7 +108,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   (`sso-tenant-domain`) and the callback-URL copy control
   (`sso-callback-url-copy` + the `sso-callback-url-copied` copy-confirmation
   status). All three were rendered by `SettingsSsoView.vue` in the DOM while
-  staying invisible to Remy's docs indexer / `/api/v1/manifest` (the same
+  staying invisible to Assistant's docs indexer / `/api/v1/manifest` (the same
   drift the 2026-09-12 JsonViewer registration closed). The component is now
   part of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so a newly shipped
@@ -120,7 +120,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   in the manifest `elements:` inventory for `/settings/sso`: a successful connection
   test renders the provider info inline with `<JsonViewer :show-toolbar="true">`
   (`SettingsSsoView.vue`), so the viewer shipped in the DOM while staying invisible
-  to Remy's docs indexer / `/api/v1/manifest`. The component is now part of the
+  to Assistant's docs indexer / `/api/v1/manifest`. The component is now part of the
   route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
@@ -129,7 +129,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/sso`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
@@ -137,7 +137,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   `/settings/sso`: the whole-page view(s) `SettingsSsoView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-08-25: **product-map review pass** — shipped the login-page SSO

@@ -181,27 +181,27 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   `page-header-right`) in the manifest `elements:` inventory for `/pipelines`, which
   renders the header's `#right` action slot, and wired the component into the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) so the
-  header action surface stays visible to Remy's docs indexer / `/api/v1/manifest`.
+  header action surface stays visible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/node-categories`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-12: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/composites/:id/editor`: the whole-page view `pipeline/CompositeEditorView.vue`
   now maps to its owning view so a newly shipped testid on the composite editor can
-  no longer silently stay invisible to Remy's docs indexer / `/api/v1/manifest`.
+  no longer silently stay invisible to Assistant's docs indexer / `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/node-categories`: the whole-page view(s) `AdminNodeCategoriesView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — registered the shared
@@ -209,14 +209,14 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/pipelines` and
   `/pipelines/copy` manifest `elements:` inventory and wired the component into the
   reverse testid-coverage guard, so the pipeline search control both pages ship
-  stays visible to Remy's docs indexer and `/api/v1/manifest`.
+  stays visible to Assistant's docs indexer and `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/pipelines/copy`: the whole-page view(s) `CopyPipelineWizard.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — registered the
@@ -226,7 +226,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   (`pipeline-tree-folder-*`), so the tree's own container and its new/all-pipelines
   actions were the remaining drift. `test_mapped_route_elements_cover_owning_view_testids`
   now maps `/pipelines` to `PipelineListView.vue` + `FolderTree.vue` so the folder
-  surface cannot ship invisible to Remy's docs indexer / `/api/v1/manifest`.
+  surface cannot ship invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-11: **product-map review pass** — registered the
   editor's command-management editor (`pipeline/SandboxCommandsEditor.vue`) static
   testids (`pipeline-editor-node-commands-editor`,
@@ -234,13 +234,13 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   `/pipelines/:id/editor` manifest `elements:` inventory and extended
   `test_mapped_route_elements_cover_owning_view_testids` to map that route to the
   owning component, so the command surface can no longer ship controls invisible
-  to Remy's docs indexer / `/api/v1/manifest`.
+  to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-10: **product-map review pass** — registered the
   editor's runner-binding (`AgentRunnerBindings.vue`) and snapshot-timeline
   (`PipelineSnapshotTimeline.vue`) static testids (`pipeline-editor-runner-binding-*`,
   `pipeline-editor-runner-bindings*`, `snapshot-timeline-*`) in the
   `/pipelines/:id/editor` manifest `elements:` inventory, so those two panels no
-  longer ship controls invisible to Remy's docs indexer / `/api/v1/manifest`.
+  longer ship controls invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-08: **product-map review pass** — closed the
   "no executing BDD surface for `run_lifecycle.feature` / `run_sequential.feature`"
   gap: both files are now registered in `steps/test_pipelines.py` and the missing
