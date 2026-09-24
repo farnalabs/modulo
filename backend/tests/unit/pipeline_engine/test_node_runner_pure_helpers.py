@@ -29,12 +29,10 @@ from modulo.core.pipeline_engine.node_runner import (
     _claim_token_attempt_suffix,
     _coerce_stdout_max_bytes,
     _coerce_stdout_retention_mode,
-    _combine_log_entries,
     _compile_delivery_sentinel_pattern,
     _compute_sandbox_cost,
     _effective_self_reported_cap,
     _extract_reported_cost,
-    _log_entry_text,
     _marker_delivery_done_for_node,
     _normalize_marker_text,
     _normalize_required_team_id,
@@ -43,6 +41,12 @@ from modulo.core.pipeline_engine.node_runner import (
     _resolve_stdout_cap,
     _run_identity_strs,
     _source_contains_delivery_sentinel,
+)
+from modulo.core.runtime_provider.log_tail import (
+    combine_log_entries as _combine_log_entries,
+)
+from modulo.core.runtime_provider.log_tail import (
+    log_entry_text as _log_entry_text,
 )
 
 # ---------------------------------------------------------------------------

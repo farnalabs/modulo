@@ -21,6 +21,7 @@ from modulo.core.runtime_provider import (
     RuntimeProvider,
     WorkspaceSpec,
 )
+from modulo.core.runtime_provider.log_tail import combine_log_entries
 
 _log = logging.getLogger(__name__)
 
@@ -45,41 +46,6 @@ _STREAM_START_TIMEOUT = 120
 _LOG_TAIL_ENTRY_LIMIT = 60
 _LOG_TAIL_FETCH_TIMEOUT_S = 8
 _LOG_TAIL_RAW_FALLBACK = 4000
-
-
-def _combine_log_entries(entries: list[Any], limit: int) -> list[str]:
-    """Split E2B log entries into preferred-level and rest, then tail the union.
-
-    Verbatim copy of ``node_runner._combine_log_entries`` (the legacy helper
-    keeps its own copy until slice R6 retires it; the content-parity test
-    pins the two implementations to identical output over the same payload).
-    Entries at informative levels (info/warn/warning/error) sort ahead of the
-    remainder so the most actionable lines survive the ``limit`` window.
-    """
-    preferred: list[str] = []
-    rest: list[str] = []
-    preferred_levels = {"info", "warn", "warning", "error"}
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        text = _log_entry_text(entry)
-        if not text:
-            continue
-        if isinstance(entry.get("level"), str) and entry["level"].lower() in preferred_levels:
-            preferred.append(text)
-        else:
-            rest.append(text)
-    return (preferred + rest)[-limit:]
-
-
-def _log_entry_text(entry: dict[str, Any]) -> str:
-    """Extract the human-readable text of one E2B log entry."""
-    msg = entry.get("message")
-    if msg is None:
-        msg = entry.get("fields")
-    if not msg:
-        return ""
-    return str(msg)
 
 
 @dataclass(frozen=True)
@@ -341,7 +307,7 @@ class E2BRuntimeProvider(RuntimeProvider):
             entries = payload.get("logEntries") if isinstance(payload, dict) else payload
             if not isinstance(entries, list):
                 return raw[: min(_LOG_TAIL_RAW_FALLBACK, max_bytes)].encode("utf-8", errors="replace")
-            combined = _combine_log_entries(entries, _LOG_TAIL_ENTRY_LIMIT)
+            combined = combine_log_entries(entries, _LOG_TAIL_ENTRY_LIMIT)
             return "\n".join(combined)[-max_bytes:].encode("utf-8", errors="replace")
         except Exception:
             return raw[: min(_LOG_TAIL_RAW_FALLBACK, max_bytes)].encode("utf-8", errors="replace")

@@ -71,6 +71,9 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
 from modulo.connectors.base import DEFAULT_ON_UNKNOWN, ON_UNKNOWN_MODES
+from modulo.core.runtime_provider.log_tail import (
+    combine_log_entries as _combine_log_entries,
+)
 from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
 
 if TYPE_CHECKING:
@@ -1074,38 +1077,6 @@ async def _fetch_sandbox_log_tail(sandbox_id: str | None, limit: int = 60) -> st
         return "\n".join(combined)[-6000:]
     except Exception:
         return raw[:4000]
-
-
-def _combine_log_entries(entries: list[Any], limit: int) -> list[str]:
-    """Split E2B log entries into preferred-level and rest, then tail the union.
-
-    Entries at informative levels (info/warn/warning/error) sort ahead of the
-    remainder so the most actionable lines survive the ``limit`` window.
-    """
-    preferred: list[str] = []
-    rest: list[str] = []
-    preferred_levels = {"info", "warn", "warning", "error"}
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        text = _log_entry_text(entry)
-        if not text:
-            continue
-        if isinstance(entry.get("level"), str) and entry["level"].lower() in preferred_levels:
-            preferred.append(text)
-        else:
-            rest.append(text)
-    return (preferred + rest)[-limit:]
-
-
-def _log_entry_text(entry: dict[str, Any]) -> str:
-    """Extract the human-readable text of one E2B log entry."""
-    msg = entry.get("message")
-    if msg is None:
-        msg = entry.get("fields")
-    if not msg:
-        return ""
-    return str(msg)
 
 
 async def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
