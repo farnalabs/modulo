@@ -172,6 +172,46 @@ async def test_e2b_read_log_tail_key_falls_back_to_legacy_env(monkeypatch: pytes
     assert captured == ["legacy-env-key"]
 
 
+async def test_e2b_read_log_tail_skips_non_dict_and_empty_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Entry filtering drops non-dict entries and entries with no usable text.
+
+    Pins the ``_combine_log_entries`` early-returns: a non-dict element, a
+    dict whose message/fields are empty (both the empty-string and the
+    missing-key arm of ``_log_entry_text``), leaving only the real line.
+    """
+    payload = (
+        b'{"logEntries": ['
+        b'"not-a-dict",'  # non-dict -> skip
+        b'{"message": "", "level": "error"},'  # empty message -> skip
+        b'{"fields": "", "level": "debug"},'  # empty fields -> skip
+        b'{"level": "info"},'  # no message/fields -> skip
+        b'{"message": "kept", "level": "info"}'  # survives
+        b"]}"
+    )
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    provider = E2BRuntimeProvider(api_key="test-key")
+    with patch("urllib.request.urlopen", lambda req, timeout: _fake_urlopen(payload)):
+        tail = await provider.read_log_tail("sbx-1", max_bytes=6000)
+    assert tail == b"kept"
+
+
+async def test_e2b_read_log_tail_no_key_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Terminal key arm: bridge + legacy env absent and constructor key falsy.
+
+    ``__init__`` guarantees a non-empty ``_api_key``, so the only way to reach
+    the defensive ``if not api_key`` guard is to clear it — proving the guard
+    returns empty without touching the network.
+    """
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    provider = E2BRuntimeProvider(api_key="ctor-key")
+    provider._api_key = None  # type: ignore[assignment]
+    with patch("urllib.request.urlopen") as urlopen:
+        assert await provider.read_log_tail("sbx-1", max_bytes=100) == b""
+    urlopen.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # 3. Content parity: legacy urllib fixture vs the primitive
 # ---------------------------------------------------------------------------

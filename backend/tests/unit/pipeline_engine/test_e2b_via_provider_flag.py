@@ -23,6 +23,7 @@ import pytest
 
 from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
+    _build_log_tail_provider,
     _read_log_tail_via_provider,
     make_sandbox_agent_fn,
 )
@@ -108,6 +109,35 @@ async def _completed_no_output_sandbox(sandbox_id: str) -> MagicMock:
     return sandbox
 
 
+def _sandbox_with_completed_command(sandbox_id: str, output_json: str) -> MagicMock:
+    """Sandbox whose command completed, routing ``output.json`` vs the log file.
+
+    The redirected agent log (any non-output.json path) reads empty so the
+    drain probe sees no growth, while the declared output.json is returned
+    verbatim — letting the schema-validation arm (site 3) fire.
+    """
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "agent stdout"
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    def _read(path: str, format: str = "text", **kwargs: Any) -> str:
+        return output_json if str(path).endswith("output.json") else ""
+
+    sandbox = MagicMock()
+    sandbox.sandbox_id = sandbox_id
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    return sandbox
+
+
 def _enable_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(get_settings(), "modulo_e2b_via_provider", True)
 
@@ -128,6 +158,37 @@ def test_flag_defaults_off() -> None:
 def test_flag_enabled_by_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MODULO_E2B_VIA_PROVIDER", "true")
     assert Settings(_env_file=None).modulo_e2b_via_provider is True
+
+
+# ---------------------------------------------------------------------------
+# _build_log_tail_provider: the REAL construction seam (not the injected fake)
+# ---------------------------------------------------------------------------
+
+
+async def test_build_log_tail_provider_constructs_real_e2b_provider() -> None:
+    """The real builder body runs the hub factory and returns the E2B provider.
+
+    No network: ``RuntimeProviderHub.initialise`` only constructs and registers
+    the provider object (no E2B API call).  Every flag call-site test injects a
+    fake builder, so this is the only test that executes the real body.
+    """
+    from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+
+    provider = await _build_log_tail_provider("test-key")
+    assert isinstance(provider, E2BRuntimeProvider)
+
+
+async def test_build_log_tail_provider_returns_none_when_hub_init_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hub/config failure is swallowed and surfaces as ``None`` (never raises)."""
+    from modulo.core.runtime_provider.hub import RuntimeProviderHub
+
+    async def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
+        raise RuntimeError("hub exploded")
+
+    monkeypatch.setattr(RuntimeProviderHub, "initialise", _boom)
+    assert await _build_log_tail_provider("test-key") is None
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +275,96 @@ async def test_flag_on_caller_hits_provider_not_urllib(monkeypatch: pytest.Monke
     # pre-kill ordering preserved on the flag-ON path
     assert events[0] == "fetch"
     assert events.index("fetch") < events.index("kill")
+
+
+async def test_flag_on_timeout_kill_path_uses_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T6 site 1 (stalled/timed-out → pre-kill probe) routes through the provider.
+
+    ``commands.run`` raises so ``cmd_result`` is None; the flag-ON arm must call
+    ``_read_log_tail_via_provider`` (not the legacy urllib helper) before the kill.
+    """
+    _enable_flag(monkeypatch)
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = FakeRuntimeProvider(b"timeout-tail")
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        AsyncMock(return_value=fake),
+    )
+    legacy = AsyncMock(side_effect=AssertionError("legacy helper must not run when flag ON"))
+    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", legacy)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30))
+    sandbox = MagicMock()
+    sandbox.sandbox_id = "sbx-timeout"
+    sandbox.files.write = AsyncMock()
+    sandbox.commands.run = AsyncMock(side_effect=TimeoutError("command timed out"))
+    sandbox.files.read = AsyncMock(side_effect=TimeoutError("no output.json"))
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    assert fake.calls == [("sbx-timeout", 6000)]
+    legacy.assert_not_awaited()
+
+
+async def test_flag_on_schema_failure_path_uses_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T6 site 3 (declared-schema violation → SandboxNodeFailedError) uses provider."""
+    _enable_flag(monkeypatch)
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = FakeRuntimeProvider(b"schema-tail")
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        AsyncMock(return_value=fake),
+    )
+    legacy = AsyncMock(side_effect=AssertionError("legacy helper must not run when flag ON"))
+    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", legacy)
+
+    node_def = _base_node_def(timeout_seconds=30, output_schema_json={"required": ["status", "summary"]})
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _sandbox_with_completed_command("sbx-schema", '{"summary": "done"}')
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    assert "schema validation" in str(excinfo.value)
+    assert fake.calls == [("sbx-schema", 6000)]
+    legacy.assert_not_awaited()
+
+
+async def test_flag_on_generic_exception_path_uses_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T6 site 4 (generic exception envelope) routes through the provider."""
+    _enable_flag(monkeypatch)
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = FakeRuntimeProvider(b"exc-tail")
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        AsyncMock(return_value=fake),
+    )
+    legacy = AsyncMock(side_effect=AssertionError("legacy helper must not run when flag ON"))
+    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", legacy)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30))
+    sandbox = MagicMock()
+    sandbox.sandbox_id = "sbx-exc"
+    sandbox.files.write = AsyncMock(side_effect=RuntimeError("e2b file write exploded"))
+    sandbox.files.read = AsyncMock(return_value="")
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock()
+    sandbox.kill = AsyncMock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "failed"
+    assert fake.calls == [("sbx-exc", 6000)]
+    legacy.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
