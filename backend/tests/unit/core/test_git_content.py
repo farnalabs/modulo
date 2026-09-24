@@ -7,11 +7,16 @@ pin-on-apply rewriting, and the render-point content substitution helper.
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 import pytest
 
+from modulo.core.pipeline_engine import git_content
 from modulo.core.pipeline_engine.git_content import (
     GitContentFetchError,
     GitContentRefError,
+    _git,
     default_git_content_resolver,
     fetch_git_content,
     git_content_values,
@@ -21,6 +26,7 @@ from modulo.core.pipeline_engine.git_content import (
     pin_git_content_spec,
     resolve_against_ls_remote,
     resolve_git_content_field,
+    run_git_ls_remote,
 )
 
 _SHA_A = "a" * 40
@@ -129,6 +135,43 @@ def test_parse_embedded_credentials_are_rejected() -> None:
 def test_parse_non_git_prefixed_value_is_rejected() -> None:
     with pytest.raises(GitContentRefError, match="must start with"):
         parse_git_content_ref("https://github.com/example/repo@main#a.md")
+
+
+def test_parse_non_string_value_is_rejected() -> None:
+    with pytest.raises(GitContentRefError, match="must be a string"):
+        parse_git_content_ref(123)  # type: ignore[arg-type]
+
+
+def test_parse_missing_repository_url_is_rejected() -> None:
+    with pytest.raises(GitContentRefError, match="missing the repository URL"):
+        parse_git_content_ref("git+#prompts/x.md")
+
+
+def test_parse_second_hash_in_path_is_rejected() -> None:
+    """Only the FIRST '#' separates repo from path; a second is malformed."""
+    with pytest.raises(GitContentRefError, match="single '#'"):
+        parse_git_content_ref(f"git+{_REPO}@main#a#b")
+
+
+def test_parse_whitespace_in_repository_url_is_rejected() -> None:
+    with pytest.raises(GitContentRefError, match="whitespace"):
+        parse_git_content_ref("git+https://github.com/exa mple/repo@main#a.md")
+
+
+def test_parse_scp_url_with_extra_at_is_rejected() -> None:
+    """A second '@' inside an SCP-style URL is a credential-shaped refusal."""
+    with pytest.raises(GitContentRefError, match="SCP-style"):
+        parse_git_content_ref("git+git@host:a@b@main#x.md")
+
+
+def test_parse_url_without_host_is_rejected() -> None:
+    with pytest.raises(GitContentRefError, match="malformed"):
+        parse_git_content_ref("git+https://#a.md")
+
+
+def test_parse_url_without_path_is_rejected() -> None:
+    with pytest.raises(GitContentRefError, match="malformed"):
+        parse_git_content_ref("git+https://github.com#a.md")
 
 
 # ---------------------------------------------------------------------------
@@ -377,3 +420,110 @@ async def test_resolve_field_fetch_failure_propagates(monkeypatch: pytest.Monkey
 async def test_fetch_git_content_requires_pinned_sha() -> None:
     with pytest.raises(GitContentFetchError, match="40-hex"):
         await fetch_git_content(_REPO, "main", "prompts/x.md")
+
+
+# ---------------------------------------------------------------------------
+# Bounded subprocess seams — run_git_ls_remote / _git / fetch_git_content
+# ---------------------------------------------------------------------------
+
+
+class _FakeProc:
+    """Minimal asyncio subprocess stand-in for the bounded git seams.
+
+    ``communicate`` hangs on its FIRST call when *hang* is set so
+    ``asyncio.wait_for`` exercises the timeout path; the post-kill second call
+    returns immediately (mirrors the real reap-then-return sequence).
+    """
+
+    def __init__(self, *, stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0, hang: bool = False) -> None:
+        self._stdout = stdout
+        self._stderr = stderr
+        self.returncode = returncode
+        self.kill_called = False
+        self._hang = hang
+        self._calls = 0
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        self._calls += 1
+        if self._hang and self._calls == 1:
+            await asyncio.sleep(30)
+        return self._stdout, self._stderr
+
+    def kill(self) -> None:
+        self.kill_called = True
+
+
+def _patch_exec(monkeypatch: pytest.MonkeyPatch, proc: _FakeProc) -> None:
+    async def _exec(*_args: object, **_kwargs: object) -> _FakeProc:
+        return proc
+
+    monkeypatch.setattr(git_content.asyncio, "create_subprocess_exec", _exec)
+
+
+async def test_run_git_ls_remote_returns_raw_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    proc = _FakeProc(stdout=f"{_SHA_A}\trefs/heads/main\n".encode())
+    _patch_exec(monkeypatch, proc)
+    assert await run_git_ls_remote(_REPO) == f"{_SHA_A}\trefs/heads/main\n"
+
+
+async def test_run_git_ls_remote_nonzero_exit_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    proc = _FakeProc(stderr=b"fatal: repository not found\n", returncode=128)
+    _patch_exec(monkeypatch, proc)
+    with pytest.raises(GitContentRefError, match="ls-remote failed"):
+        await run_git_ls_remote(_REPO)
+
+
+async def test_run_git_ls_remote_timeout_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    proc = _FakeProc(hang=True)
+    _patch_exec(monkeypatch, proc)
+    with pytest.raises(GitContentRefError, match="timed out"):
+        await run_git_ls_remote(_REPO, timeout_seconds=0.01)
+    assert proc.kill_called
+
+
+async def test_git_returns_stdout_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    proc = _FakeProc(stdout=b"file bytes")
+    _patch_exec(monkeypatch, proc)
+    out = await _git(("show", f"{_SHA_A}:prompts/x.md"), cwd="/tmp", timeout_seconds=5, what="show", repo_url=_REPO)
+    assert out == b"file bytes"
+
+
+async def test_git_nonzero_exit_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    proc = _FakeProc(stderr=b"fatal: bad object\n", returncode=1)
+    _patch_exec(monkeypatch, proc)
+    with pytest.raises(GitContentFetchError, match="git show failed"):
+        await _git(("show", f"{_SHA_A}:prompts/x.md"), cwd="/tmp", timeout_seconds=5, what="show", repo_url=_REPO)
+
+
+async def test_git_timeout_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    proc = _FakeProc(hang=True)
+    _patch_exec(monkeypatch, proc)
+    with pytest.raises(GitContentFetchError, match="timed out"):
+        await _git(("show", f"{_SHA_A}:prompts/x.md"), cwd="/tmp", timeout_seconds=0.01, what="show", repo_url=_REPO)
+    assert proc.kill_called
+
+
+async def test_fetch_git_content_decodes_utf8_and_cleans_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def _fake_git(args, *, cwd, timeout_seconds, what, repo_url):
+        calls.append({"args": args, "what": what, "cwd": cwd})
+        return b"PROMPT FROM GIT" if what.startswith("show") else b""
+
+    monkeypatch.setattr(git_content, "_git", _fake_git)
+    out = await fetch_git_content(_REPO, _SHA_A, "prompts/x.md")
+    assert out == "PROMPT FROM GIT"
+    assert calls[0]["what"] == "clone"
+    assert calls[0]["args"][0] == "clone"  # type: ignore[index]
+    assert calls[1]["what"] == "show prompts/x.md"
+    assert calls[1]["args"] == ("show", f"{_SHA_A}:prompts/x.md")
+    assert not await asyncio.to_thread(Path(str(calls[0]["cwd"])).exists)
+
+
+async def test_fetch_git_content_non_utf8_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_git(*_args: object, **_kwargs: object) -> bytes:
+        return b"\xff\xfe\xfa"
+
+    monkeypatch.setattr(git_content, "_git", _fake_git)
+    with pytest.raises(GitContentFetchError, match="not UTF-8"):
+        await fetch_git_content(_REPO, _SHA_A, "prompts/x.md")

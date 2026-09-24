@@ -289,6 +289,54 @@ def test_diff_git_content_renders_absent_side_as_placeholder() -> None:
     ]
 
 
+def test_diff_git_content_skips_equal_scalar_ref() -> None:
+    """Two identical pinned prompts are not drift — the whole-graph hash agrees."""
+    from modulo.cli.apply.drift import _diff_git_content
+
+    graph = {"nodes": [{"id": _NODE_ID, "agent_prompt": _PINNED_PROMPT_A}], "edges": []}
+    assert _diff_git_content(graph, graph) == []
+
+
+def test_diff_git_content_reports_command_list_commit_move() -> None:
+    """A git-sourced ``agent_commands`` item that moved commits is named."""
+    from modulo.cli.apply.drift import _diff_git_content
+
+    desired = {"nodes": [{"id": _NODE_ID, "agent_commands": [_PINNED_PROMPT_B]}], "edges": []}
+    current = {"nodes": [{"id": _NODE_ID, "agent_commands": [_PINNED_PROMPT_A]}], "edges": []}
+    assert _diff_git_content(desired, current) == [
+        {
+            "node": _NODE_ID,
+            "field": "agent_commands[0]",
+            "desired": _PINNED_PROMPT_B,
+            "current": _PINNED_PROMPT_A,
+        }
+    ]
+
+
+def test_diff_git_content_skips_equal_command_ref() -> None:
+    """Identical git-sourced command items are not drift."""
+    from modulo.cli.apply.drift import _diff_git_content
+
+    graph = {"nodes": [{"id": _NODE_ID, "agent_commands": [_PINNED_PROMPT_A]}], "edges": []}
+    assert _diff_git_content(graph, graph) == []
+
+
+def test_diff_git_content_reports_command_added_on_one_side() -> None:
+    """A command present on only one side renders the absent side as ``(none)``."""
+    from modulo.cli.apply.drift import _diff_git_content
+
+    desired = {"nodes": [{"id": _NODE_ID, "agent_commands": []}], "edges": []}
+    current = {"nodes": [{"id": _NODE_ID, "agent_commands": [_PINNED_PROMPT_A]}], "edges": []}
+    assert _diff_git_content(desired, current) == [
+        {
+            "node": _NODE_ID,
+            "field": "agent_commands[0]",
+            "desired": "(none)",
+            "current": _PINNED_PROMPT_A,
+        }
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Write path — the PATCH payload carries the pin (respx, real API models)
 # ---------------------------------------------------------------------------
