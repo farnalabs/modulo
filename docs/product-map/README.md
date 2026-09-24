@@ -685,6 +685,31 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `PINNED_AWAITING_IMPLEMENTATION` and now execute in CI;
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-24):** closed `feat-mcp`'s `human_only` half of
+> the remaining legacy-`/mcp/tools/call` `@awaiting-implementation` debt
+> (`configure/mcp.md`). The three `mcp/human_only.feature` scenarios previously
+> targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned since 2026-08)
+> and never ran; following the `trigger.feature` / `review_hitl.feature`
+> re-anchor pattern, they now drive the REAL `review_hitl` / `list_pending_hitl`
+> handler seams directly (request ContextVars hydrated by hand): the REAL
+> `_check_human_only_gate` policy hook denies an API-key client on a `human_only`
+> gate with the shared `human_only_denial` verdict (pinned
+> `{"error": "human_only_gate", "detail": MSG_HUMAN_ONLY_DENY}`) and attempts
+> the FAR-634 `hitl.human_only_denied` denial audit; `list_pending_hitl` lists
+> the pending human-only gate with a real per-gate `human_only` flag; and the
+> FAR-611 decision-audit `client_type` attribution is exercised on both sides —
+> `browser` via the REST `hitl._client_type` for a browser principal and `mcp`
+> stamped by the MCP `_dispatch_hitl_action`. Product improvement closing the
+> wire gap the scenario describes: `list_pending_hitl` now surfaces each
+> pending gate's `human_only` flag via the new shared batched resolver
+> (`db/crud/hitl_gate_config.resolve_gate_human_only_map` — claim-stamped
+> fire-time config preferred, snapshot-config fallback, fail-safe
+> `DEFAULT_HUMAN_ONLY`), so an MCP agent can see which gates REQUIRE a browser
+> human before it attempts an action. Removed the three scenarios from
+> `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`) and they
+> now execute in CI; `_ORPHANED_BDD_FEATURES` stays empty. `library_browse`
+> remains the last pinned MCP legacy-`/mcp/tools/call` draft.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

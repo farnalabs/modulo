@@ -271,6 +271,43 @@ def resolve_gate_description(
     return normalize_gate_description(config)
 
 
+async def _batch_load_snapshot_graphs(
+    session: AsyncSession,
+    *,
+    run_ids: set[uuid.UUID],
+    org_id: uuid.UUID,
+) -> tuple[dict[uuid.UUID, uuid.UUID], dict[uuid.UUID, dict[str, Any]]]:
+    """Batch-load the pending gates' runs + snapshot graph JSON (two IN queries).
+
+    Shared by the pending-gate resolvers (:func:`resolve_gate_descriptions`
+    and :func:`resolve_gate_human_only_map`) so a page of gates costs the same
+    two queries no matter how many fields the surface renders. Returns
+    ``(snapshot_id_by_run, graph_by_snapshot)``; runs without a snapshot or
+    snapshots without a dict ``graph_json`` are simply absent from the maps.
+    """
+    snapshot_id_by_run: dict[uuid.UUID, uuid.UUID] = {}
+    if run_ids:
+        run_rows = await session.execute(
+            select(Run.id, Run.snapshot_id).where(
+                Run.id.in_(run_ids),
+                Run.organisation_id == org_id,
+            )
+        )
+        snapshot_id_by_run = {row[0]: row[1] for row in run_rows.all() if row[1] is not None}
+    graph_by_snapshot: dict[uuid.UUID, dict[str, Any]] = {}
+    if snapshot_id_by_run:
+        snap_rows = await session.execute(
+            select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(
+                PipelineSnapshot.id.in_(set(snapshot_id_by_run.values())),
+                PipelineSnapshot.organisation_id == org_id,
+            )
+        )
+        for row in snap_rows.all():
+            if isinstance(row[1], dict):
+                graph_by_snapshot[row[0]] = row[1]
+    return snapshot_id_by_run, graph_by_snapshot
+
+
 async def resolve_gate_descriptions(
     session: AsyncSession,
     *,
@@ -295,24 +332,9 @@ async def resolve_gate_descriptions(
     description_by_gate: dict[tuple[uuid.UUID, str], str | None] = {}
     if not gates:
         return description_by_gate
-    run_rows = await session.execute(
-        select(Run.id, Run.snapshot_id).where(
-            Run.id.in_({g.run_id for g in gates}),
-            Run.organisation_id == org_id,
-        )
+    snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(
+        session, run_ids={g.run_id for g in gates}, org_id=org_id
     )
-    snapshot_id_by_run: dict[uuid.UUID, uuid.UUID] = {row[0]: row[1] for row in run_rows.all() if row[1] is not None}
-    graph_by_snapshot: dict[uuid.UUID, dict[str, Any]] = {}
-    if snapshot_id_by_run:
-        snap_rows = await session.execute(
-            select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(
-                PipelineSnapshot.id.in_(set(snapshot_id_by_run.values())),
-                PipelineSnapshot.organisation_id == org_id,
-            )
-        )
-        for row in snap_rows.all():
-            if isinstance(row[1], dict):
-                graph_by_snapshot[row[0]] = row[1]
     config_map_by_snapshot: dict[uuid.UUID, dict[str, dict[str, Any]]] = {}
     for gate in gates:
         snapshot_id = snapshot_id_by_run.get(gate.run_id)
@@ -326,6 +348,58 @@ async def resolve_gate_descriptions(
             gate.context_json if isinstance(gate.context_json, dict) else None, config
         )
     return description_by_gate
+
+
+async def resolve_gate_human_only_map(
+    session: AsyncSession,
+    *,
+    gates: Sequence[HitlClaim],
+    org_id: uuid.UUID,
+) -> dict[tuple[uuid.UUID, str], bool]:
+    """Resolve each pending gate's ``human_only`` flag (fail-safe by default).
+
+    The MCP ``list_pending_hitl`` surface uses this to tell an agent client
+    which pending gates REQUIRE a browser human before it attempts an action
+    (human_only gates cannot be claimed or decided through MCP — FAR-609 /
+    FAR-610). Keys are ``(run_id, gate_id)`` and every gate maps to a boolean.
+
+    Resolution order per gate:
+
+    0. STAMP (FAR-634) — the executor stamps the fire-time resolved config
+       onto ``hitl_claims.gate_config_json``; that column on the ALREADY-LOADED
+       claim row is authoritative and costs zero extra queries. Read through
+       :func:`human_only_effective`.
+    1. SNAPSHOT — the run's immutable ``PipelineSnapshot`` config map
+       (:func:`snapshot_gate_config_map`), batched like
+       :func:`resolve_gate_descriptions` so a page of gates is two IN queries.
+    2. FAIL-SAFE — an unresolvable gate maps to :data:`DEFAULT_HUMAN_ONLY`
+       (True), the same default every enforcement surface reads, so the pending
+       surface can never under-report a gate as actionable by an agent.
+    """
+    human_only_by_gate: dict[tuple[uuid.UUID, str], bool] = {}
+    if not gates:
+        return human_only_by_gate
+    unstamped_run_ids: set[uuid.UUID] = set()
+    for gate in gates:
+        stamped = getattr(gate, "gate_config_json", None)
+        if isinstance(stamped, dict):
+            human_only_by_gate[(gate.run_id, gate.gate_id)] = human_only_effective(stamped)
+        else:
+            unstamped_run_ids.add(gate.run_id)
+    snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(
+        session, run_ids=unstamped_run_ids, org_id=org_id
+    )
+    config_map_by_snapshot: dict[uuid.UUID, dict[str, dict[str, Any]]] = {}
+    for gate in gates:
+        if (gate.run_id, gate.gate_id) in human_only_by_gate:
+            continue
+        snapshot_id = snapshot_id_by_run.get(gate.run_id)
+        if snapshot_id is not None and snapshot_id not in config_map_by_snapshot:
+            graph = graph_by_snapshot.get(snapshot_id)
+            config_map_by_snapshot[snapshot_id] = snapshot_gate_config_map(graph) if isinstance(graph, dict) else {}
+        config = config_map_by_snapshot.get(snapshot_id, {}).get(gate.gate_id) if snapshot_id is not None else None
+        human_only_by_gate[(gate.run_id, gate.gate_id)] = human_only_effective(config)
+    return human_only_by_gate
 
 
 async def _config_from_live_edges(
