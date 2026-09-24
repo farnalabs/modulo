@@ -23,6 +23,14 @@ class PipelineSnapshot(OrgScoped):
             name="ck_pipeline_snapshots_created_kind",
         ),
         CheckConstraint("channel IN ('none','stable','canary')", name="ck_pipeline_snapshots_channel"),
+        # FAR-1223: the autonomy ceiling frozen into the snapshot carries the
+        # SAME vocabulary the live column is guarded by (0256 added the column
+        # to both tables but only checked `pipelines`; 0259 closes the gap).
+        CheckConstraint(
+            "max_autonomy_level IS NULL OR "
+            "max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            name="ck_pipeline_snapshots_max_autonomy_level",
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(

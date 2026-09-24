@@ -2880,17 +2880,24 @@ async def update_pipeline_endpoint(
                     previous=current.circuit_breaker_threshold,
                     new=new_threshold,
                 )
-            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            # FAR-1222: the in-txn team gate SELECTs the row FOR UPDATE inside
+            # THIS transaction — that locked row, not the earlier unlocked read
+            # above, is what the ceiling/default merge below must validate
+            # against. Two concurrent PATCHes each validating against their own
+            # stale unlocked read can otherwise both commit and store
+            # ceiling < default. The helper keeps the 404 (gone row) and 403
+            # (team-private row, non-member) semantics of the unlocked read.
+            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             await _assert_team_transition_allowed(session, principal, current, updates)
             # FAR-1163: a PATCH may set only one of default/max — validate the
             # MERGED effective values (ceiling NULL = effective ceiling is the
             # default, so it never violates on its own).
             if "default_autonomy_level" in updates or "max_autonomy_level" in updates:
-                merged_default = updates.get("default_autonomy_level", current.default_autonomy_level)
+                merged_default = updates.get("default_autonomy_level", locked.default_autonomy_level)
                 merged_ceiling = (
                     updates["max_autonomy_level"]
                     if "max_autonomy_level" in updates
-                    else getattr(current, "max_autonomy_level", None)
+                    else getattr(locked, "max_autonomy_level", None)
                 )
                 try:
                     # Lenient: a stored non-string/unparseable ceiling does not

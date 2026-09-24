@@ -508,6 +508,13 @@ def test_update_pipeline_rejects_ceiling_below_existing_default(client: TestClie
     with (
         patch("modulo.api.routes.pipelines.update_pipeline") as update,
         patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        # FAR-1222: the merge is validated against the row SELECTed FOR UPDATE
+        # by the in-txn team gate — keep the locked row identical to the row
+        # under test.
+        patch(
+            "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+            new=AsyncMock(return_value=current),
+        ),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
         patch("modulo.api.routes.pipelines.append_audit_event"),
@@ -532,6 +539,10 @@ def test_update_pipeline_rejects_default_above_existing_ceiling(client: TestClie
     with (
         patch("modulo.api.routes.pipelines.update_pipeline") as update,
         patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch(
+            "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+            new=AsyncMock(return_value=current),
+        ),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
         patch("modulo.api.routes.pipelines.append_audit_event"),
@@ -539,6 +550,42 @@ def test_update_pipeline_rejects_default_above_existing_ceiling(client: TestClie
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
             json={"default_autonomy_level": "fully_autonomous"},
+        )
+
+    assert resp.status_code == 422
+    assert "must be >=" in resp.json()["detail"]
+    update.assert_not_awaited()
+
+
+def test_update_pipeline_ceiling_validated_against_locked_row(client: TestClient) -> None:
+    """FAR-1222: the ceiling/default merge validates against the row the
+    in-txn team gate SELECTed FOR UPDATE, not the earlier unlocked read.
+
+    The unlocked read here is STALE (default still ``manual_approval``); the
+    locked row already carries ``default_autonomy_level='fully_autonomous'``.
+    Validating the stale row would accept the PATCH and store
+    ceiling < default — the locked row rejects it with 422."""
+    stale = _make_pipeline()
+    stale.default_autonomy_level = "manual_approval"
+    stale.max_autonomy_level = None
+    locked = _make_pipeline()
+    locked.default_autonomy_level = "fully_autonomous"
+    locked.max_autonomy_level = None
+
+    with (
+        patch("modulo.api.routes.pipelines.update_pipeline") as update,
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=stale)),
+        patch(
+            "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+            new=AsyncMock(return_value=locked),
+        ),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"max_autonomy_level": "notify_on_complete"},
         )
 
     assert resp.status_code == 422

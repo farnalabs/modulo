@@ -322,10 +322,12 @@ def apply_pipelines(
                 }
                 if status == "updated" and entity.manages_circuit_breaker:
                     patch_payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
-                # FAR-1163: send the ceiling only when DECLARED — an omitted
-                # ceiling must never clear a UI-set one as a side effect
-                # (mirrors the managed-view omission above).
-                if entity.max_autonomy_level is not None:
+                # FAR-1163/FAR-1221: send the ceiling only when DECLARED — an
+                # omitted ceiling must never clear a UI-set one as a side
+                # effect (mirrors the managed-view omission above), while a
+                # DECLARED null sends an explicit null so the REST PATCH
+                # clears the column back to "inherit the default".
+                if entity.manages_max_autonomy:
                     patch_payload["max_autonomy_level"] = entity.max_autonomy_level
                 if entity.graph is not None and graph is not None and graph_differs:
                     patch_payload["graph_json"] = graph
