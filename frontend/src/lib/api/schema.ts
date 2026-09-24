@@ -4290,6 +4290,10 @@ export interface paths {
          *     Returns the input payload, per-node outputs, snapshot graph, and
          *     a ``fixture_map`` that can be loaded directly into
          *     ``StubModelBackend(fixture_map=...)`` for regression testing.
+         *
+         *     All three surfaces are masked for secrets: ``input_payload`` /
+         *     ``outputs_json`` via :func:`_mask_output_value`, and the snapshot
+         *     graph via the shared pipeline-graph node masker (FAR-1181).
          */
         get: operations["export_run_fixture_api_v1_runs__run_id__export_fixture_get"];
         put?: never;
