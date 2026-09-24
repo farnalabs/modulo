@@ -20,6 +20,7 @@ from modulo.api.routes.health import (
     _check_dispatcher_reconcile,
     _check_migrations,
     _check_runner_health_probe,
+    _check_runner_workspace_reconcile,
     _check_slot_reconciliation,
     _check_stale_run_recovery,
 )
@@ -672,3 +673,114 @@ class TestCheckMigrationsDivergence:
         assert result.status == "degraded"
         assert result.detail is not None
         assert "could not run" in result.detail.lower()
+
+
+def _rwr_payload(**overrides: Any) -> str:
+    payload: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "orphans_destroyed": 0,
+    }
+    payload.update(overrides)
+    return json.dumps(payload)
+
+
+class TestRunnerWorkspaceReconcileNotApplicable:
+    """FAR-1201: engine-less deployments read "not applicable" — distinct
+    from a healthy sweep's ``last_run_at=...`` reading and from a failed
+    sweep's error reading — while CONFIGURED deployments keep the exact
+    stats path (engine-unreachable still surfaces as degraded)."""
+
+    _REASON = "no Docker endpoint configured (MODULO_DOCKER_HOST unset, no socket)"
+
+    async def _read(self, reason: str | None, fake: _FakeStatsRedis) -> Any:
+        with (
+            patch("modulo.api.routes.health.docker_endpoint_skip_reason", return_value=reason),
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            return await _check_runner_workspace_reconcile()
+
+    @pytest.mark.asyncio
+    async def test_not_applicable_when_endpoint_missing_and_stats_fresh(self) -> None:
+        """EKS steady state: the SAQ wrapper persists clean zeros every tick
+        after the sweep skips — the reading must be "not applicable", NOT the
+        healthy "last_run_at=..." reading a bare-stats reader would produce."""
+        result = await self._read(self._REASON, _FakeStatsRedis(blob=_rwr_payload().encode()))
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert result.detail.startswith("not applicable on this deployment")
+        assert "last_run_at=" not in result.detail
+
+    @pytest.mark.asyncio
+    async def test_not_applicable_when_stats_never_persisted(self) -> None:
+        """No stats blob + no endpoint -> "not applicable", never
+        "sweep has never run" (liveness is meaningless when the sweep skips)."""
+        result = await self._read(self._REASON, _FakeStatsRedis(blob=None))
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "not applicable on this deployment" in result.detail
+        assert "has never run" not in result.detail
+
+    @pytest.mark.asyncio
+    async def test_stale_stats_do_not_degrade_when_not_applicable(self) -> None:
+        """Stale last_run_at is a LIVENESS signal — suppressed when the sweep
+        is not applicable (worker death is caught by system_crons/saq_workers)."""
+        stale = _rwr_payload(last_run_at=(datetime.now(UTC) - timedelta(minutes=30)).isoformat())
+        result = await self._read(self._REASON, _FakeStatsRedis(blob=stale.encode()))
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "not applicable on this deployment" in result.detail
+        assert "stale" not in result.detail
+
+    @pytest.mark.asyncio
+    async def test_recorded_error_surfaces_when_endpoint_missing(self) -> None:
+        """A persisted sweep error is a CONTENT signal and must surface even
+        when the local process sees no endpoint — the web and worker endpoint
+        views can diverge (raw-socket override mounted into the worker only),
+        and a real recorded failure must never be hidden by the skip."""
+        fake = _FakeStatsRedis(blob=_rwr_payload(error="sweep_failed (ReconcilerSweepError: engine down)").encode())
+        result = await self._read(self._REASON, fake)
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "sweep reported error" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_unparsable_stats_surface_when_endpoint_missing(self) -> None:
+        """A corrupt stats blob is also a content signal — surfaces, never
+        skipped away."""
+        result = await self._read(self._REASON, _FakeStatsRedis(blob=b"not-json"))
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "unparsable" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_configured_endpoint_uses_unchanged_stats_path(self) -> None:
+        """Endpoint configured: the reader behaves exactly as before the skip
+        existed — healthy stats read as "ok" with the count detail."""
+        fake = _FakeStatsRedis(blob=_rwr_payload(orphans_destroyed=3).encode())
+        result = await self._read(None, fake)
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "orphans_destroyed=3" in result.detail
+        assert "not applicable" not in result.detail
+
+    @pytest.mark.asyncio
+    async def test_configured_endpoint_missing_stats_still_degraded(self) -> None:
+        """Endpoint configured + never-run stats -> degraded, exactly as
+        before (a dead sweep on an applicable deployment must still alert)."""
+        result = await self._read(None, _FakeStatsRedis(blob=None))
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "has never run" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_configured_endpoint_error_still_degrades(self) -> None:
+        """Endpoint configured + recorded error (engine-unreachable) ->
+        degraded — the FAR-1201 signal is preserved for configured engines."""
+        fake = _FakeStatsRedis(
+            blob=_rwr_payload(error="sweep_failed (ReconcilerSweepError: engine unreachable)").encode()
+        )
+        result = await self._read(None, fake)
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "engine unreachable" in result.detail

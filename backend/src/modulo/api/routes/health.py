@@ -54,6 +54,7 @@ from sqlalchemy import text
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
+from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
 from modulo.db.migration_guard import DivergenceCheckResult, check_migration_divergence
 from modulo.settings import Settings, break_glass_boot_findings, get_settings, resolve_instance_identity
@@ -678,19 +679,32 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     )
 
 
-async def _check_sweep_stats_advisory(key: str, stale_seconds: int, count_key: str) -> CheckResult:
+async def _check_sweep_stats_advisory(
+    key: str, stale_seconds: int, count_key: str, *, not_applicable: str | None = None
+) -> CheckResult:
     """Shared ADVISORY reader for a sweep's Redis liveness stats key.
 
-    Both sweep wrappers (``stale_run_recovery`` and, since FAR-604 F6,
-    ``slot_reconciliation``) persist their outcome (``last_run_at`` + released
-    counts) to a shared Redis key every 5-min tick; this reader reports
-    "degraded" when the key is missing (never run), its ``last_run_at`` is
-    older than *stale_seconds* (stale), the payload is unparsable, or the
-    payload carries a non-null ``error`` (FAR-824 — a cron that runs but
-    FAILS must not read like a healthy one; see the FAR-808 incident where
+    Sweep wrappers persist their outcome (``last_run_at`` + a count) to a
+    shared Redis key every tick; this reader reports "degraded" when the key
+    is missing (never run), its ``last_run_at`` is older than
+    *stale_seconds* (stale), the payload is unparsable, or the payload
+    carries a non-null ``error`` (FAR-824 — a cron that runs but FAILS must
+    not read like a healthy one; see the FAR-808 incident where
     ``runner_health_probe`` reported ok for hours while its stats carried
-    ``error: probe_failed, orgs_probed: 0`), and
-    "ok" otherwise. Fail-open on Redis read errors (never gates readiness).
+    ``error: probe_failed, orgs_probed: 0``), and "ok" otherwise. Fail-open
+    on Redis read errors (never gates readiness).
+
+    FAR-1201: when *not_applicable* is provided (the deployment has no
+    Docker endpoint, so the sweep skips every tick — see
+    ``runner_reconciler.docker_endpoint_skip_reason``), the LIVENESS
+    readings (missing key, stale ``last_run_at``) are replaced by an
+    explicit "not applicable on this deployment" reading, because a skipped
+    sweep's liveness is meaningless. Content signals still surface even
+    then: an unparsable payload or a persisted ``error`` reports degraded —
+    the reader's local endpoint view can differ from the worker's (the
+    raw-socket operator override can mount the socket into the worker but
+    not the web process), and a recorded worker-side failure must never be
+    hidden by the skip.
     """
     settings = get_settings()
     r: aioredis.Redis | None = None
@@ -700,6 +714,9 @@ async def _check_sweep_stats_advisory(key: str, stale_seconds: int, count_key: s
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        # Fail-open contract unchanged even when not_applicable: we could not
+        # inspect the blob, so we do not claim its reading either way. Redis
+        # itself is reported by the non-advisory ``redis`` check.
         _log.warning("health.sweep_stats_read_failed key=%s: %s", key, exc)
         return CheckResult(status="ok", detail="sweep liveness check unavailable (redis read failed)")
     finally:
@@ -708,6 +725,8 @@ async def _check_sweep_stats_advisory(key: str, stale_seconds: int, count_key: s
                 await r.aclose()
 
     if raw is None:
+        if not_applicable is not None:
+            return CheckResult(status="ok", detail=f"not applicable on this deployment: {not_applicable}")
         return CheckResult(status="degraded", detail="sweep has never run")
     try:
         data = json.loads(raw)
@@ -723,6 +742,8 @@ async def _check_sweep_stats_advisory(key: str, stale_seconds: int, count_key: s
         if error_detail:
             msg += f" ({error_detail})"
         return CheckResult(status="degraded", detail=f"{msg}, last {count_key}={count}")
+    if not_applicable is not None:
+        return CheckResult(status="ok", detail=f"not applicable on this deployment: {not_applicable}")
     if not last_run_at:
         return CheckResult(status="degraded", detail="sweep last_run_at missing")
     try:
@@ -798,11 +819,28 @@ async def _check_runner_workspace_reconcile() -> CheckResult:
     log-only soak detection), so a missing or >15min-stale key reports
     "degraded" to alert operators while the app remains healthy. Fail-open
     on Redis read errors.
+
+    FAR-1201 follow-up: when the deployment has NO Docker endpoint at all,
+    the sweep skips every tick (``docker_endpoint_skip_reason``), so the
+    liveness readings are meaningless — the check reads an explicit
+    "not applicable on this deployment: <reason>" instead (see
+    ``_check_sweep_stats_advisory``'s *not_applicable* contract: persisted
+    sweep errors still surface, so an asymmetric raw-socket config cannot
+    hide a real worker failure). Status stays ``ok`` because a fourth
+    status value would require regenerating ``frontend/src/lib/api/schema.ts``
+    (schema-freshness CI gate) and updating ``uptime-monitor.yml`` (which
+    alerts on ANY non-ok sub-check) — both outside this change's footprint;
+    a non-ok status here would keep engine-less deployments permanently
+    alerting, the exact problem this skip fixes. Configured deployments
+    take the unchanged stats path, so configured-but-unreachable engines
+    keep reporting degraded.
     """
+    skip_reason = docker_endpoint_skip_reason()
     return await _check_sweep_stats_advisory(
         _RUNNER_WORKSPACE_RECONCILE_STATS_KEY,
         _RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS,
         "orphans_destroyed",
+        not_applicable=skip_reason,
     )
 
 

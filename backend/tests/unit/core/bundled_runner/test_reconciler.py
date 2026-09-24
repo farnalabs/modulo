@@ -5,10 +5,14 @@ destroy-mode orphan removal, active-run spare + destroy-path false-positive
 re-check, the 24h max-lifetime backstop (applies regardless of run state),
 fail-safe abort on cross-reference failure, and machine-scoped container
 filters.
+
+FAR-1201 follow-up: the engine-less skip — ``docker_endpoint_skip_reason``
+and the sweep's early return when NO Docker endpoint is resolvable.
 """
 
 import logging
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock
@@ -20,8 +24,22 @@ from modulo.core.bundled_runner.runner_reconciler import (
     ReconcilerSweepError,
     _LabelledContainer,
     deployment_identity,
+    docker_endpoint_skip_reason,
     reconcile_runner_workspaces,
 )
+
+
+@pytest.fixture(autouse=True)
+def _configured_docker_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1201: the sweep skips when NO endpoint is resolvable — force one.
+
+    The existing behaviour tests below exercise the sweep machinery with a
+    fake ``_DockerWorkspaceSource``; without this fixture they would take
+    the engine-less skip path on any host lacking a Docker socket/context
+    (CI containers, engine-less dev boxes) and fail non-deterministically.
+    Skip-path tests delenv this and patch the filesystem probes explicitly.
+    """
+    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://docker-socket-proxy:2375")
 
 
 def _container(run_id: str, age_s: float, cid: str = "c-1") -> _LabelledContainer:
@@ -298,3 +316,169 @@ def test_deployment_identity_env_then_hostname(monkeypatch: pytest.MonkeyPatch) 
     assert deployment_identity() == "machine-x"
     monkeypatch.delenv("MODULO_RUNNER_MACHINE_ID")
     assert deployment_identity()  # hostname fallback — non-empty
+
+
+# ---------------------------------------------------------------------------
+# FAR-1201: engine-less skip — docker_endpoint_skip_reason + sweep early return
+# ---------------------------------------------------------------------------
+
+
+def _force_no_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulate a deployment with NO resolvable Docker endpoint.
+
+    Clears the documented env chain and patches both filesystem probes so
+    the result does not depend on the test host having (or lacking) a
+    Docker socket/context.
+    """
+    monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    monkeypatch.setattr(runner_reconciler, "_context_endpoint_configured", lambda: False)
+    monkeypatch.setattr(runner_reconciler, "_default_docker_socket_present", lambda: False)
+
+
+def _isolate_from_context_and_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralise the non-env signals so only the env chain can decide."""
+    monkeypatch.setattr(runner_reconciler, "_context_endpoint_configured", lambda: False)
+    monkeypatch.setattr(runner_reconciler, "_default_docker_socket_present", lambda: False)
+
+
+def test_skip_reason_none_when_env_endpoint_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MODULO_DOCKER_HOST alone (autouse fixture) makes the sweep applicable —
+    even with every other signal neutralised. A configured-but-unreachable
+    endpoint therefore NEVER skips: the predicate never probes reachability."""
+    _isolate_from_context_and_socket(monkeypatch)
+
+    assert docker_endpoint_skip_reason() is None
+
+
+def test_skip_reason_present_when_no_endpoint_resolvable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No env, no context, no socket → explicit not-applicable reason."""
+    _force_no_endpoint(monkeypatch)
+
+    reason = docker_endpoint_skip_reason()
+
+    assert reason is not None
+    assert "no Docker endpoint configured" in reason
+    assert "MODULO_DOCKER_HOST" in reason  # names the remediation knob
+
+
+def test_skip_reason_none_when_docker_host_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DOCKER_HOST (the documented step-3 fallback) also counts as configured."""
+    monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+    monkeypatch.setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
+    _isolate_from_context_and_socket(monkeypatch)
+
+    assert docker_endpoint_skip_reason() is None
+
+
+def test_skip_reason_none_when_docker_context_selected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A selected Docker context is an endpoint (aiodocker resolves it)."""
+    _force_no_endpoint(monkeypatch)
+    monkeypatch.setattr(runner_reconciler, "_context_endpoint_configured", lambda: True)
+
+    assert docker_endpoint_skip_reason() is None
+
+
+def test_skip_reason_none_when_local_socket_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The raw-socket operator override (step 4) is applicable — never skipped."""
+    _force_no_endpoint(monkeypatch)
+    monkeypatch.setattr(runner_reconciler, "_default_docker_socket_present", lambda: True)
+
+    assert docker_endpoint_skip_reason() is None
+
+
+async def test_sweep_skips_with_explicit_reason_when_no_endpoint(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Engine-less deployment: the sweep returns a skip envelope, never
+    constructs an engine client, and logs the reason (never a silent swallow)."""
+    _force_no_endpoint(monkeypatch)
+    source_factory = MagicMock(
+        side_effect=AssertionError("_DockerWorkspaceSource must not be constructed when skipping")
+    )
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", source_factory)
+
+    with caplog.at_level(logging.INFO):
+        result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result["scanned"] == 0
+    assert result["orphans_destroyed"] == 0
+    assert "no Docker endpoint configured" in result["skipped"]
+    assert "runner.reconciler.skipped" in caplog.text
+    source_factory.assert_not_called()
+
+
+def test_local_socket_paths_mirror_aiodocker_search_list() -> None:
+    """The socket probe mirrors aiodocker's ``_sock_search_paths``.
+
+    Path objects are compared (not ``str``) so the assertion holds on
+    Windows hosts too, where ``str(Path("/run/..."))`` normalises to
+    backslashes.
+    """
+    paths = runner_reconciler._local_docker_socket_paths()
+    assert Path("/run/docker.sock") in paths
+    assert Path("/var/run/docker.sock") in paths
+
+
+def test_context_configured_from_docker_config_current_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """``currentContext`` in config.json counts as a configured endpoint."""
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    config = tmp_path / "config.json"
+    config.write_text('{"currentContext": "remote-engine"}', encoding="utf-8")
+    monkeypatch.setattr(runner_reconciler, "_docker_config_path", lambda: config)
+
+    assert runner_reconciler._context_endpoint_configured() is True
+
+
+def test_context_not_configured_when_default_or_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """``"default"`` currentContext / missing config file = no context endpoint."""
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    missing = tmp_path / "no-such-config.json"
+    monkeypatch.setattr(runner_reconciler, "_docker_config_path", lambda: missing)
+    assert runner_reconciler._context_endpoint_configured() is False
+
+    config = tmp_path / "config.json"
+    config.write_text('{"currentContext": "default"}', encoding="utf-8")
+    monkeypatch.setattr(runner_reconciler, "_docker_config_path", lambda: config)
+    assert runner_reconciler._context_endpoint_configured() is False
+
+
+def test_docker_context_env_default_suppresses_config_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """DOCKER_CONTEXT=default means "no context" even when config.json
+    selects one — mirrors aiodocker's env-over-config precedence."""
+    monkeypatch.setenv("DOCKER_CONTEXT", "default")
+    config = tmp_path / "config.json"
+    config.write_text('{"currentContext": "remote-engine"}', encoding="utf-8")
+    monkeypatch.setattr(runner_reconciler, "_docker_config_path", lambda: config)
+
+    assert runner_reconciler._context_endpoint_configured() is False
+
+
+def test_docker_context_env_set_selects_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-default DOCKER_CONTEXT env value is an endpoint signal."""
+    monkeypatch.setenv("DOCKER_CONTEXT", "production")
+
+    assert runner_reconciler._context_endpoint_configured() is True
+
+
+def test_malformed_docker_config_counts_as_configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A malformed config.json makes aiodocker RAISE at construction — that
+    error must surface as a failed sweep, never be skipped away."""
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    config = tmp_path / "config.json"
+    config.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(runner_reconciler, "_docker_config_path", lambda: config)
+
+    assert runner_reconciler._context_endpoint_configured() is True
+
+
+def test_non_string_current_context_counts_as_configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A non-string currentContext (e.g. a number) makes aiodocker RAISE
+    (AttributeError on .encode) at construction — must surface, not skip."""
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    config = tmp_path / "config.json"
+    config.write_text('{"currentContext": 5}', encoding="utf-8")
+    monkeypatch.setattr(runner_reconciler, "_docker_config_path", lambda: config)
+
+    assert runner_reconciler._context_endpoint_configured() is True
