@@ -12,10 +12,10 @@ test.describe('Onboarding Wizard', { tag: '@regression' }, () => {
   // unscoped h2 locators would hit a strict-mode violation)
   const stepTitle = (page: Page) => page.locator('header.mb-6 h2')
   test.beforeEach(async ({ page }) => {
-    // Force the Remy floating panel closed before the app boots so its
+    // Force the Assistant floating panel closed before the app boots so its
     // overlay can never cover page controls. Mirrors json-viewer.spec.ts.
     await page.addInitScript(() => {
-      localStorage.setItem('remy-panel-state', 'closed')
+      localStorage.setItem('assistant-panel-state', 'closed')
     })
   })
 

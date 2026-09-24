@@ -75,7 +75,7 @@ org/`days` to keep the landing page fast.
   notifications-panel product-map gap: the `DashboardNotificationsPanel.vue` paging
   controls ship static `data-testid`s (`panel-prev-page` / `panel-next-page`) on the
   home page while the `/` manifest `elements:` inventory registered only its
-  `notifications-panel-toggle`, so the paging surface was invisible to Remy's docs
+  `notifications-panel-toggle`, so the paging surface was invisible to Assistant's docs
   indexer / `/api/v1/manifest` (guarded by the reverse testid-coverage test
   `test_mapped_route_elements_cover_owning_view_testids`, which only scans owned views).
   Registered both buttons in the `/` inventory and wired
@@ -86,13 +86,13 @@ org/`days` to keep the landing page fast.
   `page-header-right`) in the manifest `elements:` inventory for the home dashboard
   (`/`), which renders the header's `#right` action slot, and wired the component into
   the reverse testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`)
-  so the header action surface stays visible to Remy's docs indexer / `/api/v1/manifest`.
+  so the header action surface stays visible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/views`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-08-28: **product-map review pass** — added this behaviour-tracker

@@ -133,15 +133,15 @@ class TestGetOrgConfigSuccess(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_list_config.return_value = [
-            _make_config(key="remy_config:enabled", value="true"),
+            _make_config(key="assistant_config:enabled", value="true"),
             _make_config(key="default_plan", value="team"),
         ]
         mock_session.return_value = make_session_context(AsyncMock())
 
-        result = await get_org_config(section="remy")
+        result = await get_org_config(section="assistant")
 
         assert result["count"] == 1
-        assert "remy_config:enabled" in result["results"]
+        assert "assistant_config:enabled" in result["results"]
         assert "default_plan" not in result["results"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

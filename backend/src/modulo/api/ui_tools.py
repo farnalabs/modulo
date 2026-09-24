@@ -1,4 +1,4 @@
-"""UI tool definitions for Remy browser automation commands.
+"""UI tool definitions for Assistant browser automation commands.
 
 These tool definitions are injected into the LLM's `tools` parameter alongside
 MCP tool definitions. When the LLM calls a UI tool, the SSE stream forwards

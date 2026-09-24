@@ -49,7 +49,7 @@ kill-switch, authorization enforcement).
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/feature-flags`, `/admin/org`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
@@ -57,14 +57,14 @@ kill-switch, authorization enforcement).
   `/admin/org`: the whole-page view(s) `AdminOrgSettingsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/admin/feature-flags` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
-  guard, so the feature-flag search control the page ships stays visible to Remy's
+  guard, so the feature-flag search control the page ships stays visible to Assistant's
   docs indexer and `/api/v1/manifest`.
 
 - 2026-09-07: **product-map review pass** — added this

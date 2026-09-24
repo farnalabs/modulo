@@ -113,7 +113,7 @@ clients.
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/my-profile`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
@@ -121,7 +121,7 @@ clients.
   `/oauth/authorize`: the whole-page view(s) `OAuthConsentView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
@@ -129,7 +129,7 @@ clients.
   `/admin/my-profile`: the whole-page view(s) `MyProfileView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-07: **product-map review pass** — added this

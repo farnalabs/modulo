@@ -97,21 +97,21 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/model-backends`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-12: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/setup/model-backend/:id`: the whole-page view setup/ModelBackendSetupView.vue now
   maps to its owning view so a newly shipped testid on the model-backend setup flow
-  can no longer silently stay invisible to Remy's docs indexer / `/api/v1/manifest`.
+  can no longer silently stay invisible to Assistant's docs indexer / `/api/v1/manifest`.
 
 - 2026-09-10: **product-map review pass** — registered the preset
   picker/testids of `AdminModelBackendsView.vue` (`admin-model-backends-*` preset and
   manual-entry controls) in the manifest `elements:` inventory and added the view to the
   reverse testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`),
   so a newly shipped panel on the model-backends page can no longer ship invisible to
-  Remy's docs indexer / `/api/v1/manifest`.
+  Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-08-27: **product-map review pass** — added this behaviour-tracker
   for the registered manifest feature `feat-model-backends`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/model_backends.py`,

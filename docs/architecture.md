@@ -747,13 +747,13 @@ ADRs document key trade-offs and are maintained alongside this project's private
 | 046 | Agent Architecture: Two-Tier Orchestration + Execution | Superseded by ADR 029 |
 | 005 | Self-Hosted Deployments Use One Org; Teams Are the Separation Boundary | Active |
 | 006 | Dashboard Performance: Application Cache Over Materialized View | Active |
-| 007 | Remy UI Commands: Frontend-Mediated Browser Automation | Active |
+| 007 | Assistant UI Commands: Frontend-Mediated Browser Automation | Active |
 | 008 | Core Shared Manifest: Single Source of Truth for Page Structure | Active |
 | 009 | Frontend Monitor Backend Abstraction | Accepted |
 | 010 | Integration Tier Classification (Native / Preview / In-Dev) | Accepted |
-| 011 | Remy Context Sources: Configurable Knowledge Domains with Progressive Disclosure | Active |
+| 011 | Assistant Context Sources: Configurable Knowledge Domains with Progressive Disclosure | Active |
 | 012 | Migrate to Managed Fly Postgres | Proposed – implementation deferred until production data warrants backups |
-| 014 | Remy Stream: JWT as MCP API Key | Accepted |
+| 014 | Assistant Stream: JWT as MCP API Key | Accepted |
 | 015 | Bundle Format v2 (YAML) | Accepted |
 | 016 | Agent Log Observability | Accepted |
 | 017 | Celery to SAQ Migration | Accepted |

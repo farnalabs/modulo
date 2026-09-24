@@ -20,7 +20,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.csrf import CsrfMiddleware
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
-from modulo.api.routes.remy import clear_session_approvals_for_account
+from modulo.api.routes.assistant import clear_session_approvals_for_account
 from modulo.auth.dependencies import (
     OrganisationMembershipNotFound,
     get_current_user,

@@ -429,7 +429,7 @@ ignore = [
 
 "scripts/**" = ["T20", "PERF", "ISC"]
 "scripts/gen_seed_sql.py" = ["S608"]
-"scripts/generate_remy_primer.py" = ["ASYNC240"]
+"scripts/generate_assistant_primer.py" = ["ASYNC240"]
 "deploy/*" = ["T20", "S108"]
 "tests/bdd/check-bdd-coverage.py" = ["N999"]
 "tests/unit/runtime_provider/*" = ["E402"]

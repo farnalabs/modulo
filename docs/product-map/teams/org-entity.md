@@ -92,7 +92,7 @@ authorization cleanup.
   "no ``organisation exists`` shared BDD step" Known Gap: the step
   ``Given the organisation exists`` is now defined once in the top-level
   ``tests/bdd/conftest.py`` (shared by every BDD module) and reused by the
-  library and remy feature files.
+  library and assistant feature files.
 - 2026-08-25: **product-map review pass** — restored this entry as part of
   rebuilding the `docs/product-map/` feature graph. The entry is referenced by ADR 047/018
   (centralized-authorization cleanup). Re-verified model columns, the RLS exclusion, the

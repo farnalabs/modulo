@@ -61,10 +61,10 @@ beforeEach(() => {
 })
 
 describe('App bare-route layout switch (meta.bare)', () => {
-  it('renders RemyOnlyView without AppLayout when meta.bare is true', () => {
+  it('renders AssistantOnlyView without AppLayout when meta.bare is true', () => {
     routeRef.meta = { bare: true }
     const wrapper = shallowMount(App)
-    expect(wrapper.findComponent({ name: 'RemyOnlyView' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'AssistantOnlyView' }).exists()).toBe(true)
     expect(wrapper.findComponent({ name: 'AppLayout' }).exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'LoginView' }).exists()).toBe(false)
   })
@@ -73,14 +73,14 @@ describe('App bare-route layout switch (meta.bare)', () => {
     routeRef.meta = { bare: false }
     const wrapper = shallowMount(App)
     expect(wrapper.findComponent({ name: 'AppLayout' }).exists()).toBe(true)
-    expect(wrapper.findComponent({ name: 'RemyOnlyView' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'AssistantOnlyView' }).exists()).toBe(false)
   })
 
   it('renders AppLayout when meta.bare is undefined', () => {
     routeRef.meta = {}
     const wrapper = shallowMount(App)
     expect(wrapper.findComponent({ name: 'AppLayout' }).exists()).toBe(true)
-    expect(wrapper.findComponent({ name: 'RemyOnlyView' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'AssistantOnlyView' }).exists()).toBe(false)
   })
 })
 

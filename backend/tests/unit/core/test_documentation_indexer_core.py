@@ -3,9 +3,9 @@
 The module builds a searchable index from the product manifest
 ``frontend/src/manifest.yaml`` (the structured product manifest of routes/pages
 shipped in the build). Existing coverage — the unit tests in
-``tests/unit/remy/test_documentation_indexer.py``, the remy MCP context-source
-tests in ``tests/unit/remy/test_context_tools.py``, and the BDD steps in
-``tests/bdd/steps/test_remy_context_sources.py`` — exercises
+``tests/unit/assistant/test_documentation_indexer.py``, the assistant MCP context-source
+tests in ``tests/unit/assistant/test_context_tools.py``, and the BDD steps in
+``tests/bdd/steps/test_assistant_context_sources.py`` — exercises
 ``DocumentationIndex.search`` and ``format_results``. This test module adds
 focused coverage of the manifest ``build`` and its failure paths, plus the
 search/formatting edge cases.

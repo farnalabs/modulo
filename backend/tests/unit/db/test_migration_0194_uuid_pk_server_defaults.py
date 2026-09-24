@@ -83,6 +83,17 @@ def _metadata_uuid_pk_pairs() -> set[tuple[str, str]]:
     return pairs
 
 
+# 0257_rename_remy_to_assistant (FAR-1196 Tier 3) renamed these tables; 0194's
+# FROZEN source still carries the historical names (shipped migrations are
+# never edited). Translate through the rename before comparing so the coverage
+# contract — every current uuid-PK has a SET DEFAULT in 0194 — is checked
+# against today's metadata.
+_RENAMED_BY_0257 = {
+    "remy_skills": "assistant_skills",
+    "remy_context_sources": "assistant_context_sources",
+}
+
+
 def test_metadata_pins_chain() -> None:
     module = _load_migration()
     assert module.revision == _MIGRATION_NAME
@@ -102,7 +113,9 @@ def test_migration_source_is_frozen_not_runtime_enumerated() -> None:
 
 def test_upgrade_covers_exactly_every_metadata_uuid_pk() -> None:
     _load_migration()  # the migration module must import cleanly
-    upgrade_pairs = _alter_pairs(_source_code(), "SET")
+    upgrade_pairs = {
+        (_RENAMED_BY_0257.get(table, table), column) for table, column in _alter_pairs(_source_code(), "SET")
+    }
     metadata_pairs = _metadata_uuid_pk_pairs()
     assert len(metadata_pairs) == _EXPECTED_COUNT, f"metadata uuid-PK count drifted: {len(metadata_pairs)}"
     assert len(upgrade_pairs) == _EXPECTED_COUNT, f"migration SET statements: {sorted(upgrade_pairs)}"

@@ -2,6 +2,10 @@ from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.agent_runner_binding import AgentRunnerBinding
 from modulo.db.models.api_key import OrgApiKey
+from modulo.db.models.assistant_context_source import AssistantContextSource
+from modulo.db.models.assistant_message import ChatMessage
+from modulo.db.models.assistant_session import ChatSession
+from modulo.db.models.assistant_skill import AssistantSkill
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base, OrgScoped, TimestampMixin
 from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
@@ -71,10 +75,6 @@ from modulo.db.models.policy_gate_decision import PolicyGateDecision
 from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
 from modulo.db.models.primitive_rating import PrimitiveRating
 from modulo.db.models.publisher import Publisher
-from modulo.db.models.remy_context_source import RemyContextSource
-from modulo.db.models.remy_message import ChatMessage
-from modulo.db.models.remy_session import ChatSession
-from modulo.db.models.remy_skill import RemySkill
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import JourneyFact, RunDailyFact
 from modulo.db.models.run_evidence import RunEvidence
@@ -103,6 +103,8 @@ __all__ = [
     "Account",
     "Agent",
     "AgentRunnerBinding",
+    "AssistantContextSource",
+    "AssistantSkill",
     "AuditChainHead",
     "AuditEvent",
     "Base",
@@ -170,8 +172,6 @@ __all__ = [
     "PrimitiveAbuseReport",
     "PrimitiveRating",
     "Publisher",
-    "RemyContextSource",
-    "RemySkill",
     "Run",
     "RunDailyFact",
     "RunEvidence",

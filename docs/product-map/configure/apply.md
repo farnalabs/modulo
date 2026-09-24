@@ -188,7 +188,7 @@ schemas, model-backends, pipelines and triggers features.
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/model-backends`, `/settings/triggers`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-10: **product-map review pass** — added this

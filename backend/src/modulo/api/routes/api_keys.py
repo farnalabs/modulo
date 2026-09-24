@@ -187,7 +187,7 @@ async def _user_keys_flag_enabled(org_id: uuid.UUID) -> bool:
     """Resolve the per-org ``user_scoped_mcp_keys`` flag (FAR-620).
 
     Fail-closed: any resolution error is treated as OFF so a broken flag read
-    can never enable user-scoped key minting. Mirrors the ``remy.py``
+    can never enable user-scoped key minting. Mirrors the ``assistant.py``
     ``resolve_flag`` precedent (org ``settings_json.feature_overrides`` wins
     over the catalog default).
     """

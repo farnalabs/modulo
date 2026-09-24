@@ -98,7 +98,7 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   `filter-bar-search` / `filter-bar-search-wrapper`) in the manifest `elements:`
   inventory for `/lifecycle-maps`: `LifecycleMapList.vue` passes a `search` prop
   to its in-header `FilterBar`, so the search box ships in the DOM on the list page
-  while staying invisible to Remy's docs indexer / `/api/v1/manifest`. The
+  while staying invisible to Assistant's docs indexer / `/api/v1/manifest`. The
   component is now part of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
@@ -108,7 +108,7 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   `/lifecycle-maps/:id`, both of which render the header's `#right` action slot, and
   wired the component into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`) so the header action surface
-  stays visible to Remy's docs indexer / `/api/v1/manifest`. Also registered the map
+  stays visible to Assistant's docs indexer / `/api/v1/manifest`. Also registered the map
   detail page's header action buttons `lifecycle-map-export` / `lifecycle-map-import`
   (bound-literal static testids that the manifest previously left out), and extended
   the static-testid scanner to recognise bound string literals
@@ -121,14 +121,14 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   `/lifecycle-maps/:id/editor`: the whole-page view
   `lifecycle-map/LifecycleMapEditorView.vue` now maps to its owning view so a newly
   shipped testid on the lifecycle-map editor can no longer silently stay invisible to
-  Remy's docs indexer / `/api/v1/manifest`.
+  Assistant's docs indexer / `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/lifecycle-maps`: the whole-page view(s) `LifecycleMapList.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-11: **product-map review pass** — registered the
@@ -136,7 +136,7 @@ journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
   `components/lifecycle-map/LifecycleMapRenderer.vue` in the `/lifecycle-maps/:id`
   manifest `elements:` inventory and added the renderer to the reverse testid-coverage
   guard (`test_mapped_route_elements_cover_owning_view_testids`), so the capped-journeys
-  chip can no longer drift invisible to Remy's docs indexer / `/api/v1/manifest`.
+  chip can no longer drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-10: **product-map review pass** — registered the lifecycle
   map-journeys detail-view testids (`lifecycle-map-journeys-*`, `lifecycle-map-show-work-items`)
   in the manifest `elements:` inventory and added `LifecycleMapView.vue` to the reverse

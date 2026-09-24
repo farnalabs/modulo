@@ -92,7 +92,7 @@ guarded against tampering at both the ORM and the database layer.
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
   in the manifest `elements:` inventory for `/admin/audit`: the expanded audit-event
   payload is rendered inline with `<JsonViewer :show-toolbar="true">` (`AdminAuditView.vue`),
-  so the viewer shipped in the DOM while staying invisible to Remy's docs indexer /
+  so the viewer shipped in the DOM while staying invisible to Assistant's docs indexer /
   `/api/v1/manifest`. The component is now part of the route's reverse testid-coverage
   guard (`test_mapped_route_elements_cover_owning_view_testids`).
 
@@ -101,7 +101,7 @@ guarded against tampering at both the ORM and the database layer.
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/audit`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-11: **product-map review pass** — extended the reverse
@@ -109,7 +109,7 @@ guarded against tampering at both the ORM and the database layer.
   `/admin/audit`: the whole-page view(s) `AdminAuditView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-08-29: **product-map review pass** — new behaviour

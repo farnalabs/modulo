@@ -16,6 +16,7 @@ from modulo.api.routes.dashboard import (
     _compute_period_metrics,
     _facts_status_counts,
     _facts_window,
+    _load_config_warnings,
 )
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
@@ -518,6 +519,45 @@ class TestDashboardSummary:
         # raw pending/claimed components instead of adding on top of them.
         assert body["total_runs"] == counts["running"] + counts["failed"] + counts["idle"]
         assert body["total_runs"] == 10
+
+
+class TestLoadConfigWarnings:
+    """Unit tests for ``_load_config_warnings`` (dashboard config advisories)."""
+
+    async def test_reports_assistant_provider_not_configured(self) -> None:
+        """The success path reads the Assistant config's default provider.
+
+        Regression coverage for the FAR-1196 rename: the config service call
+        must return a config whose ``default_provider`` is then counted against
+        the org's model backends. With two backends but none matching the
+        default provider, the low-severity advisory is emitted.
+        """
+        session = AsyncMock()
+        mb_count_result = MagicMock()
+        mb_count_result.scalar_one.return_value = 2
+        provider_count_result = MagicMock()
+        provider_count_result.scalar_one.return_value = 0
+        session.execute = AsyncMock(side_effect=[mb_count_result, provider_count_result])
+
+        config = MagicMock()
+        config.default_provider = "anthropic"
+        with patch("modulo.api.routes.dashboard.AssistantConfigService") as service_cls:
+            service_cls.return_value.get_config = AsyncMock(return_value=config)
+            warnings = await _load_config_warnings(session, _ORG_ID)
+
+        assert warnings == [
+            {
+                "type": "assistant_provider_not_configured",
+                "severity": "low",
+                "message": (
+                    "Assistant is configured to use anthropic but no API key is set "
+                    "for that provider. Assistant will auto-detect the first configured "
+                    "provider. Change the default in Assistant Config."
+                ),
+                "action_label": "Configure anthropic",
+                "action_url": "/admin/model-backends",
+            }
+        ]
 
 
 class TestDashboardSummaryPeriod:

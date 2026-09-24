@@ -227,9 +227,9 @@ class TestKnownFlags:
         names = {flag.name for flag in registry.list_flags()}
         assert {"eval_system", "sso", "team_rbac"} <= names
 
-    def test_remy_ui_driving_is_community(self) -> None:
+    def test_assistant_ui_driving_is_community(self) -> None:
         registry = FeatureFlagRegistry()
-        flag = registry.get_flag("remy_ui_driving")
+        flag = registry.get_flag("assistant_ui_driving")
         assert flag is not None
         assert flag.tier == "community"
 

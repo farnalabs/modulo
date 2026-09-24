@@ -118,7 +118,7 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
         }
     ),
     "pipelines": frozenset({"run_context_defaults", "rate_limit_config"}),
-    "remy_skills": frozenset({"triggers"}),
+    "assistant_skills": frozenset({"triggers"}),
     # permanent (documented repo divergence) — the new table keeps its three
     # blob columns after B2b (they ARE the store once the legacy columns go).
     "run_node_outputs": frozenset({"outputs_json", "node_telemetry_json", "raw_output_markers", "artifacts_json"}),

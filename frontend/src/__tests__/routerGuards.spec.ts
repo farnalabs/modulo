@@ -124,7 +124,7 @@ describe('enforceRoleTierVisibility', () => {
     decodeJwtPayload.mockReturnValue({})
     planStore.devMode = false
     const result = await enforceRoleTierVisibility(
-      makeRoute('settings-remy', { visibility: 'private_preview' }),
+      makeRoute('settings-assistant', { visibility: 'private_preview' }),
       'tok',
     )
     expect(result).toEqual({ name: 'dashboard' })
@@ -134,7 +134,7 @@ describe('enforceRoleTierVisibility', () => {
     decodeJwtPayload.mockReturnValue({})
     planStore.devMode = true
     const result = await enforceRoleTierVisibility(
-      makeRoute('settings-remy', { visibility: 'private_preview' }),
+      makeRoute('settings-assistant', { visibility: 'private_preview' }),
       'tok',
     )
     expect(result).toBe(true)

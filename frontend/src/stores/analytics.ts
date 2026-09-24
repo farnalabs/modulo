@@ -200,7 +200,7 @@ export function serializeFilters(
   let dateFrom: string;
   let dateTo: string;
   if (filters.dateFrom && filters.dateTo) {
-    // Explicit range from a deep link (e.g. Remy's /analytics?date_from=...):
+    // Explicit range from a deep link (e.g. Assistant's /analytics?date_from=...):
     // send the range verbatim and respect the carried granularity.
     groupBy = filters.groupBy;
     dateFrom = filters.dateFrom;
@@ -257,7 +257,7 @@ const DIMENSION_VALUES: AnalyticsDimension[] = [
 ];
 
 /**
- * Map an /analytics URL query (from a deep link such as Remy's
+ * Map an /analytics URL query (from a deep link such as Assistant's
  * `/analytics?group_by=day&date_from=...&pipeline_id=...`) onto the store's
  * filter state. Returns true when at least one filter was applied.
  * Explicit date ranges are kept as an override so the query round-trips

@@ -363,9 +363,11 @@ class TestMigrationBackfillGrace:
         # 0253_runs_enforcement_mode_outcome, and
         # 0255_trigger_event_value_filter_label (FAR-1144) chains on top of
         # 0254_eval_backfill_cutover, and 0256_pipeline_max_autonomy_level
-        # (FAR-1163) chains on top of 0255_trigger_event_value_filter_label,
-        # so it is now the single linear head of the chain.
-        assert heads == ["0256_pipeline_max_autonomy_level"], f"expected a single head, got {heads}"
+        # (FAR-1163) chains on top of 0255_trigger_event_value_filter_label, and
+        # 0257_rename_remy_to_assistant (FAR-1196 Tier 3) chains on top of
+        # 0256_pipeline_max_autonomy_level, so it is now the single linear
+        # head of the chain.
+        assert heads == ["0257_rename_remy_to_assistant"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

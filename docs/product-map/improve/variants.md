@@ -95,7 +95,7 @@ than left as false coverage promises.
   in the manifest `elements:` inventory for `/variants/compare` and
   `/variants/compare/:batchId`: both pages render the compared variant outputs
   inline with `<JsonViewer>` (`VariantCompareView.vue` / `VariantBatchCompareView.vue`),
-  so the viewer shipped in the DOM while staying invisible to Remy's docs indexer /
+  so the viewer shipped in the DOM while staying invisible to Assistant's docs indexer /
   `/api/v1/manifest`. The component is now part of both routes' reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`).
 
@@ -104,7 +104,7 @@ than left as false coverage promises.
   `/variants/compare` and `/variants/compare/:batchId`: the whole-page view(s) `VariantCompareView.vue` and `VariantBatchCompareView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped
-  testid can no longer silently stay invisible to Remy's docs indexer /
+  testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
 - 2026-09-17: **FAR-936** — retired the AB Test Models page (`/variants/ab-test`).

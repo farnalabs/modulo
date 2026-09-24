@@ -923,7 +923,7 @@ describe('AnalyticsView', () => {
     expect(tableText).not.toContain('harness.worker_failed')
   })
 
-  it('pre-filters from a deep-link query on mount (e.g. Remy /analytics link)', async () => {
+  it('pre-filters from a deep-link query on mount (e.g. Assistant /analytics link)', async () => {
     setupMocks()
     const { useRoute } = await import('vue-router')
     const routeMock = vi.mocked(useRoute)
@@ -963,7 +963,7 @@ describe('AnalyticsView', () => {
     await flushPromises()
     const store = useAnalyticsStore()
     expect(store.filters.groupBy).toBe('day')
-    // Simulate a Remy deep-link navigation while already on /analytics: the
+    // Simulate a Assistant deep-link navigation while already on /analytics: the
     // component is reused, so only the route-query watcher can apply it.
     routeValue.query = {
       group_by: 'week',

@@ -4,7 +4,7 @@
 ``description`` and, for features whose coverage is mid-flight, an explicit
 ``status:`` plus a ``behaviours:`` checklist. ADR 008 and
 ``docs/product-map/README.md`` make that registry the single source of truth for
-what the product ships (Remy's ``search_documentation`` indexes each route's
+what the product ships (Assistant's ``search_documentation`` indexes each route's
 ``product_map`` refs, so a behaviour that is silently unchecked is invisible to
 the assistant just as much as a missing route).
 
@@ -54,7 +54,7 @@ def test_every_feature_has_description():
         for feat, spec in _load_features().items()
         if not isinstance(spec, dict) or not str(spec.get("description") or "").strip()
     }
-    assert not blank, "features without a description (Remy's feature search has nothing to match):\n" + "\n".join(
+    assert not blank, "features without a description (Assistant's feature search has nothing to match):\n" + "\n".join(
         f"  {feat} -> {spec!r}" for feat, spec in sorted(blank.items())
     )
 

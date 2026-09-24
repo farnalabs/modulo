@@ -83,8 +83,8 @@ async function main() {
   })
 
   // Mount only once the router has resolved the initial navigation. Without
-  // this, a direct load of a guarded route (e.g. /remy) flashes the full
-  // AppLayout (incl. RemyPanel) before the auth/dev-mode guard redirects.
+  // this, a direct load of a guarded route (e.g. /assistant) flashes the full
+  // AppLayout (incl. AssistantPanel) before the auth/dev-mode guard redirects.
   await router.isReady()
 
   app.mount('#app')

@@ -843,7 +843,7 @@ async def _validate_oauth_live(token: str) -> bool:
     try:
         claims = decode_oauth_access_token(token, settings.secret_key)
     except JWTError:
-        # Regular JWT (used by Remy) — skip OAuth token family check
+        # Regular JWT (used by Assistant) — skip OAuth token family check
         try:
             from modulo.auth.jwt import decode_principal
 
@@ -904,7 +904,7 @@ async def validate_current_auth() -> bool:
         if auth_type == "oauth":
             return await _validate_oauth_live(token)
         if auth_type == "jwt":
-            # FAR-620 CRITICAL CO-CHANGE: regular JWT (Remy) sessions now carry
+            # FAR-620 CRITICAL CO-CHANGE: regular JWT (Assistant) sessions now carry
             # auth_type 'jwt' (previously conflated with 'oauth'). Route them
             # through the SAME live-principal revalidation that
             # ``_validate_oauth_live``'s JWT fallback performs — decode the
@@ -1168,7 +1168,7 @@ async def _authenticate_oauth_jwt(
 
     Returns ``(handled, error_response, claims)``:
 
-    * ``(True, None, None)`` — a regular JWT (Remy) fully authenticated; the
+    * ``(True, None, None)`` — a regular JWT (Assistant) fully authenticated; the
       caller should ``call_next`` and return.
     * ``(False, None, claims)`` — an OAuth access token decoded successfully;
       the caller continues to the token-family check with ``claims``.
@@ -1181,7 +1181,7 @@ async def _authenticate_oauth_jwt(
     try:
         claims = decode_oauth_access_token(token, settings.secret_key)
     except JWTError:
-        # Fall back to regular JWT access token (used by Remy MCP tool calls).
+        # Fall back to regular JWT access token (used by Assistant MCP tool calls).
         try:
             from modulo.auth.jwt import decode_principal
 
@@ -1252,7 +1252,7 @@ async def _authenticate_oauth_jwt(
         _ctx_key_id.set(uuid.UUID(int=0))
         _ctx_user_id.set(principal.account_id)
         _ctx_auth_token.set(token)
-        # FAR-620: a regular JWT (Remy) session is the USER's own identity —
+        # FAR-620: a regular JWT (Assistant) session is the USER's own identity —
         # auth_type 'jwt' (distinct from OAuth tokens) and caller scope
         # 'user' (identity-bound, eligible for caller-scoped tools).
         _ctx_auth_type.set("jwt")
@@ -1963,7 +1963,7 @@ def _analytics_deep_link(result: dict[str, Any], params: AnalyticsParams) -> str
     Built from the RESOLVED result (``group_by``/``dimension``/``date_from``/
     ``date_to`` reflect the service's normalised effective range) plus the raw
     ``params`` filters (trigger/status/pipeline/folder/error_code). Emitted only
-    on the MCP surface so Remy can hand the user a clickable, pre-filtered link
+    on the MCP surface so Assistant can hand the user a clickable, pre-filtered link
     to the /analytics view. The REST route keeps its clean ``AnalyticsResponse``
     contract — this field is presentation-only.
     """
@@ -7024,7 +7024,7 @@ def _is_sensitive_key(key: str) -> bool:
     lower = key.lower()
     if any(lower.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS):
         return True
-    # Also match colon-separated segments (e.g. "remy_config:{org}:api_key")
+    # Also match colon-separated segments (e.g. "assistant_config:{org}:api_key")
     return any(any(segment.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS) for segment in lower.split(":"))
 
 
@@ -7163,14 +7163,14 @@ async def get_integration_status() -> dict[str, Any]:
         return _tool_error("Failed to get integration status")
 
 
-_VALID_CONFIG_SECTIONS = {"remy", "plan", "rate_limits"}
+_VALID_CONFIG_SECTIONS = {"assistant", "plan", "rate_limits"}
 
 
 def _config_key_prefixes(section: str | None) -> list[str] | None:
     """Key prefixes matching a config section, or None to match all sections."""
     org_ctx = f"{_ctx_org_id_val()}"
-    if section == "remy":
-        return [f"remy_config:{org_ctx}", "remy_config"]
+    if section == "assistant":
+        return [f"assistant_config:{org_ctx}", "assistant_config"]
     if section in {"plan", "rate_limits"}:
         return ["feature_flags", "default_plan", "rate_limits"]
     return None
@@ -7200,7 +7200,7 @@ def _config_table(filtered: list[Any]) -> str:
 @mcp.tool(
     description=(
         "Get org-level configuration. Optionally filter to a specific section "
-        "(remy, plan, rate_limits). Never exposes secrets."
+        "(assistant, plan, rate_limits). Never exposes secrets."
     ),
 )
 async def get_org_config(section: str | None = None) -> dict[str, Any]:

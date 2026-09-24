@@ -35,7 +35,7 @@ status: covered
 
 # Model Context Protocol (MCP)
 
-Remote MCP server through which external agents (Claude Code, IDE agents, Remy)
+Remote MCP server through which external agents (Claude Code, IDE agents, Assistant)
 drive the Modulo ViewModel as a tool stack. Mounted at `/mcp` as a Starlette
 sub-application, it exposes the pipeline/schema/connector/trigger/viewmodel tool
 surfaces over MCP (SSE), authenticates by API key (`mk_*` bearer) or OAuth, and
@@ -200,7 +200,7 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/mcp`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-09: **product-map review pass** — closed the

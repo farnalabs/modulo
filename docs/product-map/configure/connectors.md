@@ -356,7 +356,7 @@ and per-destination rate limiting.
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/connectors`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-10: **product-map review pass** — registered the
@@ -371,7 +371,7 @@ and per-destination rate limiting.
   inventory and added `AdminConnectorsView.vue` to the reverse testid-coverage
   guard (`test_mapped_route_elements_cover_owning_view_testids`) — the structured
   Generic REST connector form shipped on the page was previously invisible to
-  Remy's docs indexer / `/api/v1/manifest`.
+  Assistant's docs indexer / `/api/v1/manifest`.
 - 2026-09-07: **product-map review pass** — added this
   behaviour-tracker for `feat-connectors`, which previously had behaviours only
   in `manifest.yaml` inline. Behaviours verified against `routes/connectors.py`,

@@ -86,10 +86,10 @@ test.describe('Lifecycle Maps', { tag: '@regression' }, () => {
   test.setTimeout(90_000)
 
   test.beforeEach(async ({ page }) => {
-    // Force the Remy floating panel closed before the app boots so its
+    // Force the Assistant floating panel closed before the app boots so its
     // overlay can never cover page controls. Mirrors json-viewer.spec.ts.
     await page.addInitScript(() => {
-      localStorage.setItem('remy-panel-state', 'closed')
+      localStorage.setItem('assistant-panel-state', 'closed')
     })
   })
 

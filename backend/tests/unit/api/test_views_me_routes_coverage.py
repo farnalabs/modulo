@@ -1,4 +1,4 @@
-"""Coverage-boosting tests for me.py HITL email, remy skills, and context sources.
+"""Coverage-boosting tests for me.py HITL email, assistant skills, and context sources.
 
 These routes were uncovered by the existing test_me_settings.py (which only
 tests GET/PUT /me/settings).  The sibling test_me_hitl_email_preferences.py
@@ -137,15 +137,15 @@ class TestHitlEmailPreferencesCoverage:
         assert kwargs["pipeline_overrides"] is None
 
 
-# ── User-level Remy Skills ──────────────────────────────────────────
+# ── User-level Assistant Skills ──────────────────────────────────────────
 
 
-class TestRemySkillsCoverage:
-    """Cover the /me/remy/skills CRUD endpoints in me.py."""
+class TestAssistantSkillsCoverage:
+    """Cover the /me/assistant/skills CRUD endpoints in me.py."""
 
     def test_list_skills(self, client: TestClient) -> None:
         with patch("modulo.api.routes.me.get_user_skills", return_value=[]):
-            resp = client.get("/api/v1/me/remy/skills")
+            resp = client.get("/api/v1/me/assistant/skills")
         assert resp.status_code == 200
         assert not resp.json()
 
@@ -153,13 +153,13 @@ class TestRemySkillsCoverage:
         with patch(
             "modulo.api.routes.me.get_user_skills", side_effect=ProgrammingError("stmt", "params", Exception("orig"))
         ):
-            resp = client.get("/api/v1/me/remy/skills")
+            resp = client.get("/api/v1/me/assistant/skills")
         assert resp.status_code == 501
 
     def test_create_skill(self, client: TestClient) -> None:
         with patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock):
             resp = client.post(
-                "/api/v1/me/remy/skills",
+                "/api/v1/me/assistant/skills",
                 json={"name": "My Skill", "body": "do stuff"},
             )
         assert resp.status_code == 201
@@ -172,7 +172,7 @@ class TestRemySkillsCoverage:
         client.mock_session.flush = AsyncMock(side_effect=ProgrammingError("stmt", "params", Exception("orig")))  # type: ignore[attr-defined]
         with patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock):
             resp = client.post(
-                "/api/v1/me/remy/skills",
+                "/api/v1/me/assistant/skills",
                 json={"name": "X", "body": "b"},
             )
         assert resp.status_code == 501
@@ -191,7 +191,7 @@ class TestRemySkillsCoverage:
             patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
             patch("modulo.api.routes.me.get_user_skill_or_404", return_value=skill),
         ):
-            resp = client.put(f"/api/v1/me/remy/skills/{_SKILL_ID}", json={"name": "Updated"})
+            resp = client.put(f"/api/v1/me/assistant/skills/{_SKILL_ID}", json={"name": "Updated"})
         assert resp.status_code == 200
         assert resp.json()["name"] == "Updated"
 
@@ -203,7 +203,7 @@ class TestRemySkillsCoverage:
                 side_effect=HTTPException(status_code=404, detail="Skill not found"),
             ),
         ):
-            resp = client.put(f"/api/v1/me/remy/skills/{_SKILL_ID}", json={"name": "X"})
+            resp = client.put(f"/api/v1/me/assistant/skills/{_SKILL_ID}", json={"name": "X"})
         assert resp.status_code == 404
 
     def test_update_skill_programming_error(self, client: TestClient) -> None:
@@ -213,7 +213,7 @@ class TestRemySkillsCoverage:
             patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
             patch("modulo.api.routes.me.get_user_skill_or_404", return_value=skill),
         ):
-            resp = client.put(f"/api/v1/me/remy/skills/{_SKILL_ID}", json={"name": "X"})
+            resp = client.put(f"/api/v1/me/assistant/skills/{_SKILL_ID}", json={"name": "X"})
         assert resp.status_code == 501
 
     def test_delete_skill(self, client: TestClient) -> None:
@@ -222,7 +222,7 @@ class TestRemySkillsCoverage:
             patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
             patch("modulo.api.routes.me.get_user_skill_or_404", return_value=skill),
         ):
-            resp = client.delete(f"/api/v1/me/remy/skills/{_SKILL_ID}")
+            resp = client.delete(f"/api/v1/me/assistant/skills/{_SKILL_ID}")
         assert resp.status_code == 204
 
     def test_delete_skill_not_found(self, client: TestClient) -> None:
@@ -233,7 +233,7 @@ class TestRemySkillsCoverage:
                 side_effect=HTTPException(status_code=404, detail="Skill not found"),
             ),
         ):
-            resp = client.delete(f"/api/v1/me/remy/skills/{_SKILL_ID}")
+            resp = client.delete(f"/api/v1/me/assistant/skills/{_SKILL_ID}")
         assert resp.status_code == 404
 
     def test_delete_skill_programming_error(self, client: TestClient) -> None:
@@ -243,7 +243,7 @@ class TestRemySkillsCoverage:
             patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
             patch("modulo.api.routes.me.get_user_skill_or_404", return_value=skill),
         ):
-            resp = client.delete(f"/api/v1/me/remy/skills/{_SKILL_ID}")
+            resp = client.delete(f"/api/v1/me/assistant/skills/{_SKILL_ID}")
         assert resp.status_code == 501
 
 
@@ -251,7 +251,7 @@ class TestRemySkillsCoverage:
 
 
 class TestContextSourcesCoverage:
-    """Cover the /me/remy/context-sources endpoints in me.py."""
+    """Cover the /me/assistant/context-sources endpoints in me.py."""
 
     def _mock_service(self) -> MagicMock:
         service = MagicMock()
@@ -264,8 +264,8 @@ class TestContextSourcesCoverage:
 
     def test_get_context_sources(self, client: TestClient) -> None:
         service = self._mock_service()
-        with patch("modulo.api.routes.me.RemyContextSourceService", return_value=service):
-            resp = client.get("/api/v1/me/remy/context-sources")
+        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
+            resp = client.get("/api/v1/me/assistant/context-sources")
         assert resp.status_code == 200
         service.get_effective_config.assert_awaited_once()
         service.get_user_overrides.assert_awaited_once()
@@ -273,15 +273,15 @@ class TestContextSourcesCoverage:
     def test_get_context_sources_programming_error(self, client: TestClient) -> None:
         service = MagicMock()
         service.get_effective_config = AsyncMock(side_effect=ProgrammingError("stmt", "params", Exception("orig")))
-        with patch("modulo.api.routes.me.RemyContextSourceService", return_value=service):
-            resp = client.get("/api/v1/me/remy/context-sources")
+        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
+            resp = client.get("/api/v1/me/assistant/context-sources")
         assert resp.status_code == 501
 
     def test_set_context_source(self, client: TestClient) -> None:
         service = self._mock_service()
-        with patch("modulo.api.routes.me.RemyContextSourceService", return_value=service):
+        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
             resp = client.put(
-                f"/api/v1/me/remy/context-sources/{_SOURCE_KEY}",
+                f"/api/v1/me/assistant/context-sources/{_SOURCE_KEY}",
                 json={"source_mode": "tool"},
             )
         assert resp.status_code == 200
@@ -290,30 +290,30 @@ class TestContextSourcesCoverage:
     def test_set_context_source_programming_error(self, client: TestClient) -> None:
         service = MagicMock()
         service.set_user_override = AsyncMock(side_effect=ProgrammingError("stmt", "params", Exception("orig")))
-        with patch("modulo.api.routes.me.RemyContextSourceService", return_value=service):
+        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
             resp = client.put(
-                f"/api/v1/me/remy/context-sources/{_SOURCE_KEY}",
+                f"/api/v1/me/assistant/context-sources/{_SOURCE_KEY}",
                 json={"source_mode": "tool"},
             )
         assert resp.status_code == 501
 
     def test_set_context_source_invalid_mode(self, client: TestClient) -> None:
         resp = client.put(
-            f"/api/v1/me/remy/context-sources/{_SOURCE_KEY}",
+            f"/api/v1/me/assistant/context-sources/{_SOURCE_KEY}",
             json={"source_mode": "invalid"},
         )
         assert resp.status_code == 422
 
     def test_reset_context_sources(self, client: TestClient) -> None:
         service = self._mock_service()
-        with patch("modulo.api.routes.me.RemyContextSourceService", return_value=service):
-            resp = client.delete("/api/v1/me/remy/context-sources")
+        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
+            resp = client.delete("/api/v1/me/assistant/context-sources")
         assert resp.status_code == 200
         service.reset_user_overrides.assert_awaited_once()
 
     def test_reset_context_sources_programming_error(self, client: TestClient) -> None:
         service = MagicMock()
         service.reset_user_overrides = AsyncMock(side_effect=ProgrammingError("stmt", "params", Exception("orig")))
-        with patch("modulo.api.routes.me.RemyContextSourceService", return_value=service):
-            resp = client.delete("/api/v1/me/remy/context-sources")
+        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
+            resp = client.delete("/api/v1/me/assistant/context-sources")
         assert resp.status_code == 501

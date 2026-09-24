@@ -46,7 +46,7 @@ with sensitive value masking.
   in the manifest `elements:` inventory for `/admin/system/config`: each config
   entry's value renders inline with `<JsonViewer :show-toolbar="true">`
   (`AdminSystemConfigView.vue`), so the viewer shipped in the DOM while staying
-  invisible to Remy's docs indexer / `/api/v1/manifest`. The component is now part
+  invisible to Assistant's docs indexer / `/api/v1/manifest`. The component is now part
   of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
@@ -55,7 +55,7 @@ with sensitive value masking.
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/system/config`
   and wired the two components into the reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
-  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
 - 2026-09-07: **product-map review pass** — added this
