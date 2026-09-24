@@ -208,7 +208,7 @@ async def test_e2b_read_log_tail_no_key_returns_empty(monkeypatch: pytest.Monkey
     provider = E2BRuntimeProvider(api_key="ctor-key")
     provider._api_key = None  # type: ignore[assignment]
     with patch("urllib.request.urlopen") as urlopen:
-        assert await provider.read_log_tail("sbx-1", max_bytes=100) == b""
+        assert not await provider.read_log_tail("sbx-1", max_bytes=100)
     urlopen.assert_not_called()
 
 
