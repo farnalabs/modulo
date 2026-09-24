@@ -771,7 +771,7 @@ def test_update_pipeline_autonomy_change_emits_audit(client: tuple[TestClient, A
     http, _session = client
     current = _make_pipeline()
     previous = _make_pipeline(default_autonomy_level="manual_approval")
-    updated = _make_pipeline(default_autonomy_level="autonomous")
+    updated = _make_pipeline(default_autonomy_level="fully_autonomous")
     with (
         patch(f"{_PREFIX}get_pipeline", new=AsyncMock(side_effect=[current, previous])),
         patch(f"{_PREFIX}update_pipeline", new=AsyncMock(return_value=updated)),
@@ -781,7 +781,7 @@ def test_update_pipeline_autonomy_change_emits_audit(client: tuple[TestClient, A
         try:
             resp = http.patch(
                 f"/api/v1/pipelines/{_PIPELINE_ID}",
-                json={"default_autonomy_level": "autonomous"},
+                json={"default_autonomy_level": "fully_autonomous"},
             )
         finally:
             _stop_all(_rls_started)

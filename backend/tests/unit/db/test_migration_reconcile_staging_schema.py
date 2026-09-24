@@ -85,8 +85,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # chains off 0252_enforcement_daily_facts, and 0254_eval_backfill_cutover (FAR-1100)
 # chains off 0253_runs_enforcement_mode_outcome, and
 # 0255_trigger_event_value_filter_label (FAR-1144) chains off
-# 0254_eval_backfill_cutover as the chain head.
-_CHAIN_HEAD_MIGRATION = "0255_trigger_event_value_filter_label"
+# 0254_eval_backfill_cutover, and 0256_pipeline_max_autonomy_level
+# (FAR-1163) chains off 0255 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0256_pipeline_max_autonomy_level"
 
 
 def _source(name: str) -> str:

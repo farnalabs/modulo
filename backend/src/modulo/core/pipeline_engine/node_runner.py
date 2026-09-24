@@ -130,11 +130,15 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     sandbox_jinja_environment,
 )
 from modulo.core.run_context.autonomy import (
-    effective_autonomy_level,
+    AutonomyResolution,
+    resolve_autonomy,
     should_notify_on_complete,
     should_skip_hitl_gate,
 )
-from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
+from modulo.core.run_context.autonomy_telemetry import (
+    emit_autonomy_clamp_telemetry,
+    emit_autonomy_telemetry,
+)
 from modulo.core.schema_registry.contract import write_schema_contract
 from modulo.core.schema_registry.rendering import SchemaProfile, render_for_profile
 from modulo.db.crud.hitl_gate_config import human_only_effective
@@ -4564,25 +4568,28 @@ def _hitl_gate_eval_condition_skip(
 
 def _hitl_gate_autonomy_result(
     gate_id: str, state: dict[str, Any], human_only: bool
-) -> tuple[Any, dict[str, Any] | None]:
-    """Determine effective autonomy level; return skip/auto-approve artifact, if any."""
-    # Determine effective autonomy level from run_context.
+) -> tuple[AutonomyResolution, dict[str, Any] | None]:
+    """Resolve the ceiling-clamped autonomy level; return skip/auto-approve artifact, if any."""
+    # Determine effective autonomy level from run_context (FAR-1163: a
+    # context-setter's recommendation is clamped to the pipeline's
+    # max_autonomy_level ceiling pinned as ``_pipeline_max_autonomy``).
     run_context: dict[str, Any] = state.get("run_context") or {}
     pipeline_default: str | None = run_context.get("_pipeline_default_autonomy")
-    autonomy = effective_autonomy_level(pipeline_default, run_context)
+    resolution = resolve_autonomy(pipeline_default, run_context)
+    autonomy = resolution.effective
     human_only_effective: bool = human_only
 
     # human_only overrides everything — always interrupt.
     if not human_only_effective and should_skip_hitl_gate(autonomy):
         # fully_autonomous: silently skip the gate.
-        return (autonomy, _build_hitl_gate_artifact(gate_id, "skipped", autonomy=autonomy.value))
+        return (resolution, _build_hitl_gate_artifact(gate_id, "skipped", autonomy=autonomy.value))
     if not human_only_effective and should_notify_on_complete(autonomy):
         # notify_on_complete: auto-approve, record notification artifact.
         return (
-            autonomy,
+            resolution,
             _build_hitl_gate_artifact(gate_id, "auto_approved", autonomy=autonomy.value),
         )
-    return (autonomy, None)
+    return (resolution, None)
 
 
 def _resolve_subject_parent_and_key(
@@ -4712,7 +4719,27 @@ def make_hitl_gate_fn(
             return eval_condition_skip
 
         # --- Autonomy skip/approve. ---
-        autonomy, autonomy_result = _hitl_gate_autonomy_result(gate_id, state, human_only)
+        resolution, autonomy_result = _hitl_gate_autonomy_result(gate_id, state, human_only)
+        autonomy = resolution.effective
+        # FAR-1163 S0: when the recommendation was clamped to the ceiling,
+        # record the clamp (requested/effective/ceiling) IN ADDITION to the
+        # normal level-applied event — on both the skip/auto-approve and the
+        # fired path. Fail-open like the sibling telemetry.
+        if resolution.clamped and resolution.requested is not None:
+            await emit_autonomy_clamp_telemetry(
+                session_factory,
+                org_id=org_id,
+                run_id=state.get("_run_id"),
+                gate_id=gate_id,
+                requested=resolution.requested.value,
+                effective=autonomy.value,
+                ceiling=resolution.ceiling.value,
+                # FAR-1163: carry the pipeline id (seeded into state by the
+                # executor alongside _run_id/_org_id) — without it every
+                # production clamp event had pipeline_id: null while the unit
+                # test passed it explicitly.
+                pipeline_id=state.get("_pipeline_id"),
+            )
         if autonomy_result is not None:
             # skipped (fully_autonomous) or auto_approved (notify_on_complete):
             # record the effective autonomy granted as evidence (fail-open).
@@ -4725,6 +4752,11 @@ def make_hitl_gate_fn(
                 autonomy_level=autonomy.value,
                 gate_outcome=outcome,
                 human_only=human_only,
+                # FAR-1163: carry the pipeline id (seeded into state by the
+                # executor alongside _run_id/_org_id) — without it every
+                # production level-applied event on this path had
+                # pipeline_id: null while the unit test passed it explicitly.
+                pipeline_id=state.get("_pipeline_id"),
             )
             return autonomy_result
 
@@ -4738,6 +4770,9 @@ def make_hitl_gate_fn(
             autonomy_level=autonomy.value,
             gate_outcome="fired",
             human_only=human_only,
+            # FAR-1163: same pipeline-id forwarding as the skip/auto-approve
+            # path above — the fired event must be joinable too.
+            pipeline_id=state.get("_pipeline_id"),
         )
         hitl_gates: list[dict[str, Any]] = list(state.get("_hitl_gates") or [])
         hitl_gates.append(hitl_gate_config)

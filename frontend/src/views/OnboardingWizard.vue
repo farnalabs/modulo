@@ -720,7 +720,7 @@ async function createPipeline() {
         max_concurrent_runs: 10,
         lock_wait_timeout_seconds: 30,
         node_timeout_seconds: 300,
-        default_autonomy_level: 'balanced',
+        default_autonomy_level: 'manual_approval',
         max_duration_seconds: 3600,
         stale_run_timeout_minutes: 30,
       },

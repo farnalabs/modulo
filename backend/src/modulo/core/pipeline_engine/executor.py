@@ -78,6 +78,7 @@ from modulo.core.node_output_split import (
 from modulo.core.notifier import EVENT_HITL_AWAITING
 from modulo.core.pipeline_engine import retry_compensation as rc
 from modulo.core.pipeline_engine.decorator import (
+    _RESERVED_RUN_CONTEXT_KEYS,
     RunCancelledError,
     set_audit_hook,
     set_cancellation_check,
@@ -123,6 +124,7 @@ from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, CompensationFailedError
+from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
@@ -712,6 +714,16 @@ async def _teardown_hub(hub: Any) -> None:
                 _log.exception("pipeline.runtime_hub_cleanup_failed")
 
 
+# FAR-1163: engine-managed run_context keys that a caller-supplied
+# ``snapshot.run_context_defaults`` spread must never seed. Derived from the
+# decorator's reserved-key set (imported — no cycle: decorator does not
+# import executor) UNION ``_run_overrides``, which is NOT in that set (it is
+# a node_runner override boundary key, not a context-setter write guard) but
+# is equally engine-managed: it is seeded ONLY from the run's frozen
+# ``variant_config_snapshot`` in ``_seed_state`` below.
+_ENGINE_MANAGED_SEED_KEYS: frozenset[str] = _RESERVED_RUN_CONTEXT_KEYS | {"_run_overrides"}
+
+
 class GraphValidationError(ValueError):
     """Raised when pre-run graph validation fails with blocking errors."""
 
@@ -740,16 +752,31 @@ def _seed_state(
 
     ``_run_overrides`` is a SYSTEM-RESERVED TOP-LEVEL run_context key. It is
     seeded ONLY from the run's frozen ``variant_config_snapshot`` (captured at
-    fire time) — NEVER from caller input. A normal run has no variant config, so
-    a caller-supplied ``_run_overrides`` inside ``input_payload`` stays DATA in
+    fire time) — NEVER from caller input or caller-controlled
+    ``run_context_defaults``. A normal run has no variant config, so a
+    caller-supplied ``_run_overrides`` inside ``input_payload`` stays DATA in
     ``run_context["input"]`` and can never reach the node_runner's override
     boundary (FAR-342 injection surface).
+
+    The same holds for the ``run_context_defaults`` spread: it is
+    unfiltered arbitrary JSON (it travels through snapshot/clone/
+    workflow-import), so every engine-managed key
+    (``_ENGINE_MANAGED_SEED_KEYS`` — the reserved set UNION
+    ``_run_overrides``) is filtered OUT of the spread before assembly.
+    Engine-owned values (``cancelled``/``input``, the snapshot-pinned
+    autonomy keys, and the variant-config ``_run_overrides``) are then set
+    exactly as before, from their authoritative sources.
     """
     # Copy input_payload to avoid mutating the caller's dict.
     payload = dict(input_payload)
     run_context_defaults: dict[str, Any] = snapshot.run_context_defaults or {}
+    # FAR-1163: filter the SPREAD (not the just-built dict — it already
+    # legitimately sets cancelled/input). With a NULL ceiling/default the
+    # autonomy keys stay absent and resolution falls back exactly as
+    # designed; the snapshot values pinned below are authoritative.
+    filtered_defaults = {k: v for k, v in run_context_defaults.items() if k not in _ENGINE_MANAGED_SEED_KEYS}
     run_context: dict[str, Any] = {
-        **run_context_defaults,
+        **filtered_defaults,
         "cancelled": False,
         "input": payload,
     }
@@ -761,9 +788,16 @@ def _seed_state(
     # Seed autonomy from snapshot-level default so gate nodes can resolve it.
     if snapshot.default_autonomy_level:
         run_context["_pipeline_default_autonomy"] = snapshot.default_autonomy_level
+    # FAR-1163 S0: pin the autonomy CEILING from the snapshot (nullable —
+    # NULL means resolution falls back to the default as the effective
+    # ceiling). isinstance-str guards non-string stand-ins (test mocks).
+    max_autonomy = getattr(snapshot, "max_autonomy_level", None)
+    if isinstance(max_autonomy, str) and max_autonomy:
+        run_context[PIPELINE_MAX_AUTONOMY_KEY] = max_autonomy
     # Seed the system-reserved override namespace from the run's FROZEN variant
     # config only. This is the ONLY path that populates it — a caller-supplied
-    # ``_run_overrides`` in the input payload is never promoted here.
+    # ``_run_overrides`` in the input payload (or in run_context_defaults,
+    # filtered out of the spread above) is never promoted here.
     if isinstance(variant_config_snapshot, dict):
         overrides = variant_config_snapshot.get("_run_overrides")
         if isinstance(overrides, dict):
@@ -4573,6 +4607,12 @@ class PipelineExecutor:
             {
                 "_run_id": scope.run_id,
                 "_org_id": scope.org_id,
+                # FAR-1163: seed the pipeline id alongside the other run
+                # identity scalars so node-time readers (gate clamp telemetry,
+                # _run_identity_strs -> MODULO_PIPELINE_ID, loop-intercept
+                # guardrail binding) find it at gate/dispatch time. The state
+                # key was READ in those paths but never written before this.
+                "_pipeline_id": scope.pipeline_id,
                 "_claim_lease": self._claim_token,
                 # FAR-764: community-gated agent IDs seeded into state so
                 # node functions can enforce default-deny without DB access.

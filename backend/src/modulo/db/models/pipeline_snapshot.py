@@ -76,6 +76,10 @@ class PipelineSnapshot(OrgScoped):
     draft: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
     channel: Mapped[str] = mapped_column(String(10), nullable=False, server_default="none", default="none")
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30))
+    # FAR-1163 S0: the autonomy ceiling frozen at snapshot time — runs read
+    # the SNAPSHOT, not the live row, so the ceiling must travel with it.
+    # NULL = effective ceiling is the snapshot's default_autonomy_level.
+    max_autonomy_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     # FAR-811: pipeline-level default for sandbox stdout retention, frozen at

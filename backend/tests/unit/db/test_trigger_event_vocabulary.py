@@ -118,8 +118,11 @@ _MIGRATION_PATH = (
 # chained onto 0252_enforcement_daily_facts, and 0254_eval_backfill_cutover (FAR-1100)
 # chained onto 0253_runs_enforcement_mode_outcome, and
 # 0255_trigger_event_value_filter_label (FAR-1144) chained onto
-# 0254_eval_backfill_cutover as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0255_trigger_event_value_filter_label"
+# 0254_eval_backfill_cutover, and 0256_pipeline_max_autonomy_level
+# (FAR-1163) chained onto 0255 as the chain head. (_MIGRATION_NAME above
+# stays pinned to 0255 — that is the constraint-owning migration under test,
+# not the head.)
+_CHAIN_HEAD_MIGRATION_NAME = "0256_pipeline_max_autonomy_level"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

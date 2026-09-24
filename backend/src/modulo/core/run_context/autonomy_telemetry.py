@@ -64,12 +64,80 @@ _log = logging.getLogger(__name__)
 # Canonical event type emitted by this module.
 AUTONOMY_LEVEL_APPLIED = "run.autonomy_level_applied"
 
+# Emitted whenever a context-setter's autonomy_recommendation is clamped down
+# to the pipeline's max_autonomy_level ceiling (FAR-1163 S0).
+AUTONOMY_RECOMMENDATION_CLAMPED = "run.autonomy_recommendation_clamped"
+
 # Gate outcomes recorded in the payload.
 GATE_OUTCOME_SKIPPED = "skipped"  # fully_autonomous — gate bypassed
 GATE_OUTCOME_AUTO_APPROVED = "auto_approved"  # notify_on_complete
 GATE_OUTCOME_FIRED = "fired"  # human path taken / interrupt raised
 
 VALID_GATE_OUTCOMES = frozenset({GATE_OUTCOME_SKIPPED, GATE_OUTCOME_AUTO_APPROVED, GATE_OUTCOME_FIRED})
+
+
+async def _append_run_autonomy_event(
+    session_factory: Callable[..., Any] | None,
+    *,
+    org_id: uuid.UUID | None,
+    run_id: uuid.UUID | str | None,
+    event_type: str,
+    payload_json: dict[str, Any],
+    failure_message: str,
+) -> None:
+    """Shared session/RLS/``append_audit_event``/fail-open envelope.
+
+    Both public emitters (``emit_autonomy_telemetry`` and
+    ``emit_autonomy_clamp_telemetry``) funnel through this helper so the
+    transaction shape cannot drift between them: no-op without a session
+    factory or org id, RLS org + execution-context established INSIDE the
+    transaction before the tamper-evident ``audit_events`` append,
+    ``asyncio.CancelledError`` re-raised (cancellation is not a telemetry
+    failure), and every other failure logged with *failure_message* and
+    swallowed (telemetry must never break a run).
+
+    Parameters
+    ----------
+    session_factory:
+        Async session factory; ``None`` is a no-op.
+    org_id:
+        Organisation the run belongs to; ``None`` skips the write.
+    run_id, event_type, payload_json:
+        The audit-event fields — built by the caller so each emitter keeps
+        its exact payload shape and summary wording.
+    failure_message:
+        The exception-log line recorded on a swallowed failure (the two
+        emitters historically logged distinct messages; both are preserved).
+    """
+    if session_factory is None or org_id is None:
+        return
+    try:
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.db.rls import set_rls_execution_context, set_rls_org
+
+        async with session_factory() as session, session.begin():
+            # STRICT RLS guards audit_events: without the org + execution-context
+            # settings established inside the transaction the INSERT is rejected
+            # by the rls_org_isolation policy (app.organisation_id must equal
+            # organisation_id), and without session.begin() the open transaction
+            # is rolled back on close so the event never persists. This mirrors
+            # the sibling mid-run helper _append_conformance_audit exactly.
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type=event_type,
+                actor_user_id=None,
+                resource_type="run",
+                resource_id=uuid.UUID(str(run_id)) if run_id else None,
+                payload_json=payload_json,
+                request_id=None,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # pragma: no cover - fail-open telemetry
+        _log.exception(failure_message)
 
 
 async def emit_autonomy_telemetry(
@@ -106,42 +174,109 @@ async def emit_autonomy_telemetry(
     if gate_outcome not in VALID_GATE_OUTCOMES:
         _log.warning("autonomy_telemetry: invalid gate_outcome %r — skipping", gate_outcome)
         return
+    # Fail-open envelope: the labels import and payload construction sit
+    # INSIDE a guarded region — a raise here must never propagate into gate
+    # evaluation and break a run ("telemetry must never break a run").
+    # asyncio.CancelledError is a BaseException and propagates untouched.
     try:
-        from modulo.core.audit_logger import append_audit_event
         from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
-        from modulo.db.rls import set_rls_execution_context, set_rls_org
 
-        async with session_factory() as session, session.begin():
-            # STRICT RLS guards audit_events: without the org + execution-context
-            # settings established inside the transaction the INSERT is rejected
-            # by the rls_org_isolation policy (app.organisation_id must equal
-            # organisation_id), and without session.begin() the open transaction
-            # is rolled back on close so the event never persists. This mirrors
-            # the sibling mid-run helper _append_conformance_audit exactly.
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            await append_audit_event(
-                session,
-                org_id=org_id,
-                event_type=AUTONOMY_LEVEL_APPLIED,
-                actor_user_id=None,
-                resource_type="run",
-                resource_id=uuid.UUID(str(run_id)) if run_id else None,
-                payload_json={
-                    "actor": SYSTEM_ACTOR,
-                    "summary": (
-                        f'Autonomy level "{autonomy_level}" applied to run '
-                        f"{short_id(run_id) or 'unknown'} (gate {gate_id}, {gate_outcome})"
-                    ),
-                    "gate_id": gate_id,
-                    "autonomy_level": autonomy_level,
-                    "gate_outcome": gate_outcome,
-                    "pipeline_id": str(pipeline_id) if pipeline_id else None,
-                    "human_only": bool(human_only),
-                },
-                request_id=None,
-            )
-    except asyncio.CancelledError:
-        raise
+        payload: dict[str, Any] = {
+            "actor": SYSTEM_ACTOR,
+            "summary": (
+                f'Autonomy level "{autonomy_level}" applied to run '
+                f"{short_id(run_id) or 'unknown'} (gate {gate_id}, {gate_outcome})"
+            ),
+            "gate_id": gate_id,
+            "autonomy_level": autonomy_level,
+            "gate_outcome": gate_outcome,
+            "pipeline_id": str(pipeline_id) if pipeline_id else None,
+            "human_only": bool(human_only),
+        }
     except Exception:  # pragma: no cover - fail-open telemetry
         _log.exception("autonomy_telemetry: failed to record event (ignored)")
+        return
+
+    await _append_run_autonomy_event(
+        session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        event_type=AUTONOMY_LEVEL_APPLIED,
+        payload_json=payload,
+        failure_message="autonomy_telemetry: failed to record event (ignored)",
+    )
+
+
+async def emit_autonomy_clamp_telemetry(
+    session_factory: Callable[..., Any] | None,
+    *,
+    org_id: uuid.UUID | None,
+    run_id: uuid.UUID | str | None,
+    gate_id: str,
+    requested: str | None,
+    effective: str,
+    ceiling: str,
+    pipeline_id: uuid.UUID | str | None = None,
+) -> None:
+    """Append a ``run.autonomy_recommendation_clamped`` audit event (fail-open).
+
+    Records that a context-setter's ``autonomy_recommendation`` was clamped to
+    the pipeline ceiling at a HITL gate. Mirrors :func:`emit_autonomy_telemetry`
+    exactly: no-op without a session factory or org id, RLS org +
+    execution-context established inside the transaction before the
+    tamper-evident ``audit_events`` append, ``asyncio.CancelledError``
+    re-raised, every other failure logged and swallowed (telemetry must never
+    break a run).
+
+    Parameters
+    ----------
+    session_factory:
+        Async session factory (``lambda: SessionLocal()`` style); ``None`` is
+        a no-op.
+    org_id:
+        Organisation the run belongs to; ``None`` skips the write.
+    run_id, gate_id:
+        The run and gate the clamp occurred on.
+    requested:
+        The autonomy level the recommendation asked for.
+    effective:
+        The autonomy level actually applied after the clamp.
+    ceiling:
+        The ceiling the recommendation was clamped against.
+    pipeline_id:
+        Optional pipeline id, carried in the payload for joins.
+    """
+    if session_factory is None or org_id is None:
+        return
+    # Fail-open envelope: same guarded payload-construction region as
+    # emit_autonomy_telemetry — the labels import / f-string build must
+    # never propagate into gate evaluation. CancelledError (BaseException)
+    # propagates untouched.
+    try:
+        from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
+
+        payload: dict[str, Any] = {
+            "actor": SYSTEM_ACTOR,
+            "summary": (
+                f'Autonomy recommendation "{requested}" clamped to "{effective}" '
+                f'(ceiling "{ceiling}") on run {short_id(run_id) or "unknown"} '
+                f"(gate {gate_id})"
+            ),
+            "gate_id": gate_id,
+            "requested": requested,
+            "effective": effective,
+            "ceiling": ceiling,
+            "pipeline_id": str(pipeline_id) if pipeline_id else None,
+        }
+    except Exception:  # pragma: no cover - fail-open telemetry
+        _log.exception("autonomy_telemetry: failed to record clamp event (ignored)")
+        return
+
+    await _append_run_autonomy_event(
+        session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        event_type=AUTONOMY_RECOMMENDATION_CLAMPED,
+        payload_json=payload,
+        failure_message="autonomy_telemetry: failed to record clamp event (ignored)",
+    )

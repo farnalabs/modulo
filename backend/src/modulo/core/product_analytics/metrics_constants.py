@@ -8,6 +8,7 @@ VALID_EVENT_TYPES: set[str] = {
     "pipeline_created",
     "pipeline_graph_saved",
     "run.autonomy_level_applied",
+    "run.autonomy_recommendation_clamped",
     "hitl_gate_claimed",
     "hitl_gate_approved",
     "hitl_gate_rejected",

@@ -31,6 +31,11 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
             "default_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipelines_autonomy_level",
         ),
+        CheckConstraint(
+            "max_autonomy_level IS NULL OR "
+            "max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            name="ck_pipelines_max_autonomy_level",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -61,6 +66,11 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
         JSON, nullable=False, default=dict, server_default=text("'{}'")
     )
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30), server_default="manual_approval")
+    # FAR-1163 S0: hard ceiling on the autonomy level any HITL-gate resolution
+    # may reach. NULL = effective ceiling is default_autonomy_level (a
+    # context-setter recommendation can then only LOWER autonomy). Migration
+    # 0256; CHECK ck_pipelines_max_autonomy_level above.
+    max_autonomy_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
     graph_nodes_json: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
         nullable=False,

@@ -22,6 +22,15 @@ Modulo lets each pipeline choose a default **autonomy level** for its HITL gates
 | `notify_on_complete` | Gate is auto-approved at runtime but emits a notification for observability. |
 | `fully_autonomous` | Gate is skipped entirely; no halt, no notification. |
 
+Each pipeline also carries an optional **ceiling** (`max_autonomy_level`). At
+every HITL gate, a context-setter's `autonomy_recommendation` may *lower* the
+level freely, but may *raise* it only up to that ceiling. When no ceiling is
+configured, the effective ceiling is the pipeline's own default level — so a
+recommendation can only lower autonomy, never escalate a `manual_approval`
+pipeline toward `fully_autonomous`. Every clamp is recorded as a
+`run.autonomy_recommendation_clamped` audit event carrying `gate_id`,
+`requested`, `effective` and `ceiling`.
+
 The *progressive* claim: autonomy should **rise** for change classes that
 consistently ship clean and **fall** after a defect escapes human review. A
 team that runs `manual_approval` for a pipeline, sees a streak of clean merges,

@@ -2898,6 +2898,9 @@ elements:
       - testid: pipeline-editor-max-duration
         type: input
         dynamic_testid: false
+      - testid: pipeline-editor-max-autonomy
+        type: select
+        dynamic_testid: false
       - testid: pipeline-editor-circuit-breaker-threshold
         type: input
         dynamic_testid: false
@@ -4920,6 +4923,8 @@ features:
             - "[x] GET /api/v1/hitl/gates lists org gates in EVERY state, paginated in the repo's standard items/total/page/page_size envelope: `status` accepts undecided (DEFAULT — decision IS NULL), pending (undecided + unclaimed), claimed (undecided + claimed), approved, rejected and all (a Literal-typed param, so unknown values 422); the pending-work statuses (undecided/pending/claimed) are data-rot fenced (FAR-612/FAR-604) — joined to runs and restricted to HITL_ACTIONABLE_RUN_STATUSES exactly like /hitl/pending — while approved/rejected history and the all audit view are deliberately unfenced (a decided gate's run has legitimately moved past awaiting_human, and the audit view must surface data-rot rows); page_size defaults to 25 and CLAMPS at 100 instead of failing; sort is decision_at DESC NULLS LAST, claimed_at DESC NULLS LAST, id DESC; /api/v1/hitl/pending is deliberately unchanged for API stability"
             - "[x] The /settings/hitl-review page fetches /hitl/gates with the status filter mapped server-side (empty selection → undecided, preserving the default queue view): approved/rejected history is finally filterable, decided gates render through the same shared HitlGateCard (decision banners, no claim/approve/reject actions), and the status filter change resets pagination to page 1"
             - "[x] The review page paginates server-side (page/page_size params on every fetch, minimal inline pager with Previous / 'Page X of Y' / Next shown only when total > page_size, disabled states at the bounds, aria-labelled buttons and a role=status page indicator); search/pipeline/date filters remain CLIENT-side over the loaded page (documented limitation: search matches within the current page only)"
+            # FAR-1163: autonomy escalation ceiling (ADR 043 slice S0)
+            - "[x] HITL autonomy resolution clamps a context-setter's autonomy_recommendation to the pipeline's max_autonomy_level ceiling (pinned into the run snapshot as the reserved `_pipeline_max_autonomy` run_context key): a recommendation may lower autonomy freely, may raise only up to the ceiling — with no explicit ceiling the effective ceiling is the pipeline default, so a recommendation can only lower — and each clamp appends a run.autonomy_recommendation_clamped audit event (gate_id, requested, effective, ceiling); human_only gates still always fire"
     feat-router:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
     feat-library:

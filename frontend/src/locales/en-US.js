@@ -1048,6 +1048,12 @@ export default {
       "add_node": "Add Node",
       "archived": "Archived",
       "max_duration_s": "Max Duration (s)",
+      "max_autonomy_level": "Autonomy ceiling",
+      "max_autonomy_level_inherit": "Inherit pipeline default",
+      "max_autonomy_level_hint": "Hard cap on any agent autonomy recommendation. Recommendations can lower autonomy, but cannot raise it above this ceiling (or the pipeline default when inherited) unless you raise the ceiling here.",
+      "autonomy_manual_approval": "Manual approval",
+      "autonomy_notify_on_complete": "Notify on complete",
+      "autonomy_fully_autonomous": "Fully autonomous",
       "save_as_template": "Save as template",
       "composite": "Composite",
       "rename_pipeline": "Rename pipeline",
@@ -1228,7 +1234,9 @@ export default {
       "circuit_breaker_tripped_help": "This pipeline exceeded its monthly spend limit, so its triggers are paused. An org admin can reset it.",
       "circuit_breaker_reset": "Reset",
       "circuit_breaker_resetting": "Resetting...",
-      "failed_to_reset_circuit_breaker": "Failed to reset the circuit breaker: {error}"
+      "failed_to_reset_circuit_breaker": "Failed to reset the circuit breaker: {error}",
+      "failed_to_update_max_autonomy": "Failed to update autonomy ceiling: {error}",
+      "max_autonomy_below_default": "Autonomy ceiling cannot be below the pipeline default level: {error}"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
