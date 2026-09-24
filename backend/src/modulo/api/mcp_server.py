@@ -3208,34 +3208,28 @@ async def list_eval_definitions(
         pid = uuid.UUID(pipeline_id) if pipeline_id else None
         lim = max(1, min(limit, 100))
 
-        from sqlalchemy import func as sa_func
-
+        from modulo.db.crud.pagination import CursorPaginator
         from modulo.db.models.eval import Eval
         from modulo.db.models.policy_gate import PolicyGate as PolicyGateModel
 
         async with _session(org_id) as s:
-            q = (
-                select(Eval)
-                .where(
-                    Eval.organisation_id == org_id,
-                    Eval.deleted_at.is_(None),
-                )
-                .order_by(Eval.name)
-            )
-            if pid is not None:
-                q = q.where(Eval.pipeline_id == pid)
-
-            # Simple offset/limit pagination for the MCP surface.
-            total_q = select(sa_func.count(Eval.id)).where(
+            q = select(Eval).where(
                 Eval.organisation_id == org_id,
                 Eval.deleted_at.is_(None),
             )
             if pid is not None:
-                total_q = total_q.where(Eval.pipeline_id == pid)
-            total = (await s.execute(total_q)).scalar() or 0
+                q = q.where(Eval.pipeline_id == pid)
 
-            q = q.offset(0).limit(lim)
-            rows = (await s.execute(q)).scalars().all()
+            paginator = CursorPaginator(sort_field="name", sort_dir="asc")
+            page = await paginator.paginate(
+                s,
+                q,
+                cursor=cursor,
+                limit=lim,
+                model=Eval,
+                compute_total=True,
+            )
+            rows = page.items
 
             # Batch-load PolicyGates for failure_behaviour mapping.
             gate_map: dict[uuid.UUID, Any] = {}
@@ -3269,9 +3263,9 @@ async def list_eval_definitions(
                 }
                 for d in rows
             ],
-            "total": total,
-            "next_cursor": None,
-            "has_more": False,
+            "total": page.total,
+            "next_cursor": page.next_cursor,
+            "has_more": page.has_more,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -3354,7 +3348,10 @@ def _parse_eval_ref_ids(
 
 
 async def _load_eval_def(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> Any:
-    """Load an org-scoped Eval row; None when the row does not exist.
+    """Load an org-scoped ``Eval`` row; ``None`` when the row does not exist.
+
+    Return type is ``Eval | None`` (from ``modulo.db.models.eval``); written
+    as ``Any`` because the import is deferred inside the function body.
 
     Consolidated single loader (chunk 3b cutover): reads from the ``evals``
     table instead of ``eval_definitions``.  Used by the update (W6) and
@@ -3415,7 +3412,7 @@ async def _create_eval_definition_impl(
     _check_agent_tool_scope("create_eval_definition")
 
     from modulo.api.constants import MSG_PIPELINE_NOT_FOUND
-    from modulo.api.routes.evals import _eval_row_to_legacy_dict
+    from modulo.api.routes.evals import _eval_def_to_dict
 
     if (err := _assert_create_eval_definition_params(name, eval_type, failure_behaviour, pass_threshold)) is not None:
         return err
@@ -3478,7 +3475,7 @@ async def _create_eval_definition_impl(
         except PolicyGateBindingViolationError as exc:
             return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}
 
-        return _eval_row_to_legacy_dict(eval_row, failure_behaviour=failure_behaviour)
+        return _eval_def_to_dict(eval_row, failure_behaviour_override=failure_behaviour)
 
 
 @mcp.tool(

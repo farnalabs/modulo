@@ -1,6 +1,6 @@
 """FAR-1101 chunk-3b acceptance coverage - REST write paths.
 
-Criterion 1-4 (real numbering; supporting tests unnumbered).
+Criterion 1-6 (real numbering; supporting tests unnumbered).
 
 Every eval-definition write endpoint now persists to ``evals`` (+ a
 ``PolicyGate`` where the shared helper says so) instead of ``eval_definitions``.
@@ -11,6 +11,8 @@ and assert the persisted shape against the new tables:
  * criterion 2     W2: POST /evals/from-run -> Eval row via the shared helper
  * criterion 3     W3: POST /feedback/proposals/{id}/publish -> Eval row
  * criterion 4     W4: PUT /evals/{id} -> version bump + pre_version_raw + gate update
+ * criterion 5     W1 create + standalone_evaluate proves eval actually evaluates
+ * criterion 6     W2 from-run create + standalone_evaluate proves eval actually evaluates
  * supporting     W1 guardrail-typed: POST /evals guardrail-typed -> Eval row, NO PolicyGate
  * supporting     W3 guardrail-typed feedback publish: PUT /evals/{id} guardrail variant -> still no PolicyGate
 
@@ -520,3 +522,78 @@ async def test_w6_guardrail_update_still_has_no_gate(env: Chunk3bEnv, client: As
         wants_gate=False,
         wants_version=2,
     )
+
+
+# ---------------------------------------------------------------------------
+# Criterion 5 - W1 create: evaluate proves eval actually evaluates
+# ---------------------------------------------------------------------------
+async def test_w1_create_eval_actually_evaluates(env: Chunk3bEnv, client: AsyncClient) -> None:
+    """Criterion 5 - create an eval via W1, then drive EvalEngine.evaluate
+    to prove the persisted config produces an EvalResult with the expected outcome."""
+    from modulo.core.eval_engine import EvalEngine, EvalType
+
+    name = f"c5-evaluate-{env.org_id.hex[:6]}"
+    payload = {
+        "pipeline_id": str(env.pipeline_id),
+        "node_id": str(_NODE_ID_1),
+        "name": name,
+        "eval_type": "regex",
+        "config_json": {"field": "output", "pattern": "hello"},
+        "failure_behaviour": "warn",
+    }
+    resp = await client.post("/api/v1/evals", json=payload, headers=env.headers)
+    assert resp.status_code == 201, resp.text
+
+    # Load the persisted eval row and build the engine DTO.
+    rows = await _load_eval_rows(env, name)
+    assert len(rows) == 1
+    row = rows[0]
+
+    from modulo.core.guardrails import to_engine_definition
+
+    engine_def = to_engine_definition(row)
+    assert engine_def.eval_type == EvalType("regex")
+    assert engine_def.config.get("pattern") == "hello"
+
+    # Drive the real evaluation path against sample data.
+    engine = EvalEngine()
+    result = engine.evaluate({"output": "hello world"}, engine_def)
+    # The regex pattern "hello" matches "hello world" -> pass outcome.
+    assert result.passed is True, f"expected eval to pass, got {result}"
+
+
+# ---------------------------------------------------------------------------
+# Criterion 6 - W2 from-run create: evaluate proves eval actually evaluates
+# ---------------------------------------------------------------------------
+async def test_w2_from_run_eval_actually_evaluates(env: Chunk3bEnv, client: AsyncClient) -> None:
+    """Criterion 6 - create an eval via W2 (from-run), then drive EvalEngine.evaluate
+    to prove the persisted config produces an EvalResult."""
+    from modulo.core.eval_engine import EvalEngine
+
+    snapshot_id = await _seed_snapshot(env.engine, env.org_id, env.pipeline_id)
+    run_id = await _seed_run(env.engine, env.org_id, env.pipeline_id, snapshot_id)
+
+    name = f"c6-from-run-eval-{env.org_id.hex[:6]}"
+    payload = {
+        "run_id": str(run_id),
+        "node_id": str(_NODE_ID_1),
+        "name": name,
+        "eval_type": "regex",
+    }
+    resp = await client.post("/api/v1/evals/from-run", json=payload, headers=env.headers)
+    assert resp.status_code == 201, resp.text
+
+    # Load the persisted eval row and build the engine DTO.
+    rows = await _load_eval_rows(env, name)
+    assert len(rows) == 1
+    row = rows[0]
+
+    from modulo.core.guardrails import to_engine_definition
+
+    engine_def = to_engine_definition(row)
+
+    # Drive the real evaluation path against sample data.
+    engine = EvalEngine()
+    result = engine.evaluate({"output": "test output"}, engine_def)
+    assert result is not None
+    assert hasattr(result, "passed")

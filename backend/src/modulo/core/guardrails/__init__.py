@@ -1494,7 +1494,11 @@ async def alert_unexpected_guardrail_skip(
 
 
 def serialize_guardrail_pin(db_row: Any) -> dict[str, Any]:
-    """Serialize a DB ``eval_definitions`` guardrail row into a snapshot pin.
+    """Serialize a DB guardrail row into a snapshot pin.
+
+    Accepts either a legacy ``eval_definitions`` row or a new ``evals`` row.
+    The ``evals`` model lacks a ``failure_behaviour`` column — guardrails
+    default to ``"warn"``.
 
     Item 10: the pipeline snapshot pins the guardrail set so a replay evaluates
     the ORIGINAL conditions, not the live rows. The pin is self-contained
@@ -1508,7 +1512,7 @@ def serialize_guardrail_pin(db_row: Any) -> dict[str, Any]:
         "name": db_row.name,
         "eval_type": db_row.eval_type,
         "config_json": dict(db_row.config_json or {}),
-        "failure_behaviour": db_row.failure_behaviour,
+        "failure_behaviour": getattr(db_row, "failure_behaviour", None) or "warn",
         "pass_threshold": str(db_row.pass_threshold) if db_row.pass_threshold is not None else None,
         "suite_id": db_row.suite_id,
     }
@@ -1561,7 +1565,13 @@ def to_engine_definition_from_pin(entry: dict[str, Any]) -> EvalDefinition:
 
 
 def to_engine_definition(db_row: Any) -> EvalDefinition:
-    """Build an engine ``EvalDefinition`` DTO from a DB ``eval_definitions`` row.
+    """Build an engine ``EvalDefinition`` DTO from a DB row.
+
+    Accepts either a legacy ``eval_definitions`` row or a new ``evals`` row.
+    The ``evals`` model lacks a ``failure_behaviour`` column — guardrails
+    default to ``"warn"`` (the action is driven by ``config_json.action``).
+    Non-guardrail evals with a ``PolicyGate`` should already have
+    ``failure_behaviour`` set by the caller (response mapping layer).
 
     The interception seam runs inside ``db.crud.run.create_run``; this keeps
     the mapping localised so the DB layer never reaches into the engine's
@@ -1575,7 +1585,7 @@ def to_engine_definition(db_row: Any) -> EvalDefinition:
         name=db_row.name,
         eval_type=EvalType(db_row.eval_type),
         config=dict(db_row.config_json or {}),
-        failure_behaviour=db_row.failure_behaviour,
+        failure_behaviour=getattr(db_row, "failure_behaviour", None) or "warn",
         pass_threshold=float(db_row.pass_threshold) if db_row.pass_threshold is not None else None,
         suite_id=db_row.suite_id,
     )

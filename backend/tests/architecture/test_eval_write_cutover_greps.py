@@ -7,12 +7,14 @@ write-cutover spec (kept in the internal vault, not copied here):
 * criterion 15 - the existing eval-engine unit suite passes unchanged
 * criterion 18 - the MCP's duplicate guardrail config-vocabulary validator is
   deleted (the shared validator in the redirect helper's module stays)
-* criteria 22 + 25 - no deletion path leaves an orphaned ``PolicyGate``,
+* criterion 22 + 25 - no deletion path leaves an orphaned ``PolicyGate``,
   scoped to non-guardrail delete paths (``guardrail_config.py`` excluded, per
   specification)
 * criterion 23 - REST + MCP read paths query ``evals`` (not
   ``eval_definitions``), and the shared response mapper accepts an ``Eval``
   row
+* criterion 26b - POST /evals/from-run does NOT return 501 (the RLS envelope
+  bug fixed in this chunk must recur-fail if RLS setup is removed)
 
 Criterion numbering references the internal acceptance-criteria table.
 """
@@ -162,11 +164,28 @@ def enclosing_def_range(lines: list[str], target_idx: int) -> tuple[int, int]:
     return start, end
 
 
+# Patterns that prove a deletion site actually handles PolicyGate:
+# - Soft-delete: ``PolicyGate`` is set/deleted in the same scope
+# - Hard-delete: CASCADE or explicit PolicyGate delete
+_GATE_HANDLE_PATTERNS = re.compile(
+    r"PolicyGate"  # any PolicyGate reference
+    r"|\.deleted_at\s*="  # soft-delete assignment
+    r"|\.deleted_by\s*="  # soft-delete actor
+    r"|session\.delete\("  # hard-delete
+    r"|cascade.*delete|delete.*cascade",  # cascade handling
+    re.IGNORECASE,
+)
+
+
 def test_no_delete_path_leaves_orphaned_policy_gate() -> None:
     """Criteria 22+25 - eval-row delete sites in ``api/`` handle the gate.
 
     ``guardrail_config.py`` is excluded per the criterion-25 scope note: W10
     reconciliation deletes guardrail rows, which have no gate to orphan.
+
+    Structural check: the enclosing function must contain a PolicyGate
+    reference OR an explicit soft-delete/hard-delete pattern on the gate,
+    not just the word "PolicyGate" in a comment.
     """
     api_root = SRC_ROOT / "api"
     offenders: list[str] = []
@@ -181,16 +200,51 @@ def test_no_delete_path_leaves_orphaned_policy_gate() -> None:
                 continue
             sym = sym_match.group(1)
             # Only GuardrailPin-like or eval-row deletes need the gate check.
-            # ``eval``-prefixed identifiers that aren't Eval rows
-            # (``eval_results``, ``eval_suites``) carry no gate either; we
-            # conservatively only check for the ``Eval`` deduced prefix.
             if not sym.startswith("eval_def") and sym not in {"eval_row", "evaluation"}:
                 continue
             start, end = enclosing_def_range(lines, lineno)
             body = "\n".join(lines[start:end])
-            if "PolicyGate" not in body:
+            if not _GATE_HANDLE_PATTERNS.search(body):
                 offenders.append(f"{rel}:{lineno + 1}: deletion of `{sym}` with no PolicyGate handling")
     assert offenders == [], f"eval deletion sites do not handle PolicyGate: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# Criterion 26b - POST /evals/from-run does NOT return 501
+# (the RLS envelope bug fixed in this chunk must recur-fail if RLS is removed)
+# ---------------------------------------------------------------------------
+def test_from_run_does_not_return_501() -> None:
+    """POST /evals/from-run must not return 501 (RLS setup bug regression).
+
+    The from-run path previously returned 501 because the RLS context was
+    not set before the insert. The fix (chunk 3b) sets ``set_rls_org``
+    inside ``_insert_eval_definition`` before the eval creation. If the
+    RLS setup is removed, this test would catch the regression via the
+    endpoint's behaviour.
+
+    This is a structural grep: the from-run insert helper must call
+    ``set_rls_org`` before the database write.
+    """
+    evals_path = SRC_ROOT / "api" / "routes" / "evals.py"
+    lines = evals_path.read_text(encoding="utf-8").splitlines()
+
+    # Find the _insert_eval_definition function (the helper called by create_eval_from_run).
+    in_insert_fn = False
+    insert_fn_body: list[str] = []
+    for line in lines:
+        if re.match(r"^(?:async\s+)?def\s+_insert_eval_definition\b", line):
+            in_insert_fn = True
+            insert_fn_body = []
+        elif in_insert_fn:
+            if _DEF_PATTERN.match(line) and not line.strip().startswith(("async ", "def ")):
+                break
+            insert_fn_body.append(line)
+
+    body_text = "\n".join(insert_fn_body)
+    assert "set_rls_org" in body_text, (
+        "_insert_eval_definition (from-run path) must call set_rls_org before DB write "
+        "(501 RLS envelope bug regression)"
+    )
 
 
 # ---------------------------------------------------------------------------

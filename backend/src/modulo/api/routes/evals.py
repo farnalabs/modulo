@@ -149,16 +149,23 @@ def _eval_def_to_dict(
     eval_row: Eval,
     *,
     policy_gate: PolicyGate | None = None,
+    failure_behaviour_override: str | None = None,
 ) -> dict[str, Any]:
     """Convert an ``Eval`` row (and optional ``PolicyGate``) to the legacy response shape.
 
     ``failure_behaviour`` is populated from ``PolicyGate.action`` for
     node-scoped evals with a gate, else defaults to ``"warn"`` (guardrail-
-    typed or suite-scoped evals without a gate).  The field name
-    ``failure_behaviour`` is retained for backward compatibility — its
-    retirement is chunk 5a's concern.
+    typed or suite-scoped evals without a gate).  Callers that already know
+    the value (e.g. REST create paths that just set it) can pass
+    ``failure_behaviour_override`` to skip the gate lookup.
+
+    The field name ``failure_behaviour`` is retained for backward
+    compatibility — its retirement is chunk 5a's concern.
     """
-    failure_behaviour = policy_gate.action if policy_gate is not None else "warn"
+    if failure_behaviour_override is not None:
+        failure_behaviour = failure_behaviour_override
+    else:
+        failure_behaviour = policy_gate.action if policy_gate is not None else "warn"
     return {
         "id": str(eval_row.id),
         "pipeline_id": str(eval_row.pipeline_id),
@@ -168,30 +175,6 @@ def _eval_def_to_dict(
         "config_json": eval_row.config_json,
         "failure_behaviour": failure_behaviour,
         "pass_threshold": float(eval_row.pass_threshold) if eval_row.pass_threshold is not None else None,
-        "suite_id": eval_row.suite_id,
-        "account_id": str(eval_row.account_id),
-        "version": getattr(eval_row, "version", 1),
-        "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
-    }
-
-
-def _eval_row_to_legacy_dict(eval_row: Any, *, failure_behaviour: str = "warn") -> dict[str, Any]:
-    """Convert an ``Eval`` ORM row to the legacy ``_eval_def_to_dict`` JSON shape.
-
-    The ``failure_behaviour`` response field is retained for backward
-    compatibility; callers pass the actual value from the request context
-    (for creates) or from the PolicyGate (for reads in a later chunk).
-    """
-
-    return {
-        "id": str(eval_row.id),
-        "pipeline_id": str(eval_row.pipeline_id),
-        "node_id": str(eval_row.node_id) if eval_row.node_id else None,
-        "name": eval_row.name,
-        "eval_type": eval_row.eval_type,
-        "config_json": eval_row.config_json,
-        "failure_behaviour": failure_behaviour,
-        "pass_threshold": eval_row.pass_threshold,
         "suite_id": eval_row.suite_id,
         "account_id": str(eval_row.account_id),
         "version": getattr(eval_row, "version", 1),
@@ -333,7 +316,7 @@ async def create_eval_definition(
                     detail=f"PolicyGate binding violation: {exc}",
                 ) from exc
             # Map Eval row to the legacy response shape
-            eval_def = _eval_row_to_legacy_dict(eval_row, failure_behaviour=req.failure_behaviour or "warn")
+            eval_def = _eval_def_to_dict(eval_row, failure_behaviour_override=req.failure_behaviour or "warn")
     except HTTPException:
         raise
     except IntegrityError:
