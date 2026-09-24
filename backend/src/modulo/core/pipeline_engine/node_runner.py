@@ -78,6 +78,7 @@ if TYPE_CHECKING:
 
     from modulo.core.artifacts.streaming import StreamingArtifactWriter
     from modulo.core.artifacts.writer import ArtifactWriter
+    from modulo.core.runtime_provider import RuntimeProvider
 
 import typing
 
@@ -1105,6 +1106,52 @@ def _log_entry_text(entry: dict[str, Any]) -> str:
     if not msg:
         return ""
     return str(msg)
+
+
+async def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
+    """Build the E2B RuntimeProvider for the flag-ON log probe (FAR-1050 R1).
+
+    A dedicated seam so unit tests can substitute a
+    ``FakeRuntimeProvider`` without touching the hub. Returns ``None`` when
+    the provider cannot be constructed (never raises) — the caller maps that
+    to an empty tail, matching the legacy probe's fail-open contract.
+    """
+    from modulo.core.runtime_provider.hub import RuntimeProviderHub
+
+    try:
+        hub = RuntimeProviderHub()
+        await hub.initialise({"e2b": {"type": "e2b", "api_key": api_key}})
+    except Exception:
+        return None
+    return hub.get("e2b")
+
+
+async def _read_log_tail_via_provider(sandbox_id: str | None, *, max_bytes: int = 6000) -> str:
+    """FAR-1050 R1 flag-ON path: read the E2B log tail via ``read_log_tail``.
+
+    Gated sibling of :func:`_fetch_sandbox_log_tail` (``MODULO_E2B_VIA_PROVIDER``,
+    default OFF). Resolves the key with the SAME fallback chain as the legacy
+    probe (runtime bridge / ``MODULO_E2B_API_KEY``, then legacy
+    ``E2B_API_KEY``) so flipping the flag never changes which credential is
+    used; empty on no key. Never raises — provider build failure, provider
+    error and fetch failure all yield ``""`` (``CancelledError`` propagates,
+    matching the legacy helper).
+    """
+    if not isinstance(sandbox_id, str) or not sandbox_id:
+        return ""
+    from modulo.core.runtime_config.key_bridge import get_e2b_api_key
+
+    api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
+    if not api_key:
+        return ""
+    try:
+        provider = await _build_log_tail_provider(api_key)
+        if provider is None:
+            return ""
+        raw = await provider.read_log_tail(sandbox_id, max_bytes=max_bytes)
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
 
 
 def _bounded_tail(text: str, limit: int) -> str:
@@ -8703,7 +8750,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # The E2B kill reason only lives in the sandbox logs, and the logs
             # endpoint only serves live sandboxes — fetch the tail BEFORE the
             # kill below (FAR-97 observability).
-            _sandbox_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
+            from modulo.settings import get_settings
+
+            if get_settings().modulo_e2b_via_provider:
+                _sandbox_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000)
+            else:
+                _sandbox_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
             # The command stalled or timed out. Kill the sandbox BEFORE
             # reading output.json: the interrupted-but-alive process could
             # otherwise write a fabricated completion in the grace window
@@ -8916,7 +8968,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 # the kill reason lives) are fetched BEFORE the finally-block
                 # kill, while the sandbox is still alive — the logs endpoint
                 # only serves live sandboxes.
-                _no_output_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
+                from modulo.settings import get_settings
+
+                if get_settings().modulo_e2b_via_provider:
+                    _no_output_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000)
+                else:
+                    _no_output_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
                 if watchdog.budget_killed:
                     # FAR-296 Phase 3b-3: the platform-side resource-cap killer
                     # fired. On the REAL kill path the command handle raises an
@@ -9122,7 +9179,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     delivery_sentinel=delivery_sentinel,
                     max_artifact_bytes=_stdout_cap,
                 )
-                _schema_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
+                from modulo.settings import get_settings
+
+                if get_settings().modulo_e2b_via_provider:
+                    _schema_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000)
+                else:
+                    _schema_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
                 raise SandboxNodeFailedError(
                     _build_schema_failure_message(
                         schema_exc=str(_schema_exc),
@@ -9442,7 +9504,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _exc_output_json = output_json
         # Best-effort sandbox trace on the generic-exception path too — the
         # sandbox may already be dead, in which case the helper returns "".
-        _exc_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
+        from modulo.settings import get_settings
+
+        if get_settings().modulo_e2b_via_provider:
+            _exc_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000)
+        else:
+            _exc_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
         _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
         # FAR-582: finalize artifacts before returning on exception path.
         await _finalize_artifact_writer(

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import shlex
 import time
+import urllib.request
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -35,6 +38,48 @@ _STREAM_CMD_TIMEOUT = 0
 # semgrep sandbox-commands-run-without-wait-for). Matches node_runner's
 # background-command start bound (min(sandbox_timeout, 120)).
 _STREAM_START_TIMEOUT = 120
+# FAR-1050 R1 log-tail primitive: the api.e2b.app HTTP log-tail call moved
+# here from node_runner._fetch_sandbox_log_tail. Entry window + fetch timeout
+# + raw-payload fallback mirror the legacy helper byte-for-byte (parity is
+# pinned by the content-parity unit test).
+_LOG_TAIL_ENTRY_LIMIT = 60
+_LOG_TAIL_FETCH_TIMEOUT_S = 8
+_LOG_TAIL_RAW_FALLBACK = 4000
+
+
+def _combine_log_entries(entries: list[Any], limit: int) -> list[str]:
+    """Split E2B log entries into preferred-level and rest, then tail the union.
+
+    Verbatim copy of ``node_runner._combine_log_entries`` (the legacy helper
+    keeps its own copy until slice R6 retires it; the content-parity test
+    pins the two implementations to identical output over the same payload).
+    Entries at informative levels (info/warn/warning/error) sort ahead of the
+    remainder so the most actionable lines survive the ``limit`` window.
+    """
+    preferred: list[str] = []
+    rest: list[str] = []
+    preferred_levels = {"info", "warn", "warning", "error"}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        text = _log_entry_text(entry)
+        if not text:
+            continue
+        if isinstance(entry.get("level"), str) and entry["level"].lower() in preferred_levels:
+            preferred.append(text)
+        else:
+            rest.append(text)
+    return (preferred + rest)[-limit:]
+
+
+def _log_entry_text(entry: dict[str, Any]) -> str:
+    """Extract the human-readable text of one E2B log entry."""
+    msg = entry.get("message")
+    if msg is None:
+        msg = entry.get("fields")
+    if not msg:
+        return ""
+    return str(msg)
 
 
 @dataclass(frozen=True)
@@ -252,6 +297,54 @@ class E2BRuntimeProvider(RuntimeProvider):
         if killed:
             self._sandboxes.pop(provider_ref, None)
         return killed
+
+    async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:
+        """Read the E2B logs-endpoint tail for *provider_ref* (ADR 040 primitive).
+
+        FAR-1050 R1: this is the ``api.e2b.app`` HTTP log-tail call moved out
+        of ``node_runner._fetch_sandbox_log_tail`` — the legacy helper stays
+        in-tree as the flag-OFF path until slice R6 retires it. Fetch and
+        parse mirror the legacy helper byte-for-byte (preferred-level
+        reordering, the 60-entry window, the ``[-max_bytes:]`` final bound,
+        the ``min(4000, max_bytes)`` raw-payload fallback); the content-parity
+        unit test pins the two implementations to identical output over the
+        same payload.
+
+        Contract (T6): never raises — invalid ref, missing key, network
+        failure and parse failure all yield ``b""`` (or the raw fallback for
+        parse-level failures), so callers keep the legacy "never raises /
+        empty on no key" behaviour. Key resolution keeps the legacy fallback
+        chain: runtime override / ``MODULO_E2B_API_KEY`` bridge, then the
+        legacy ``E2B_API_KEY`` env var, then the constructor-held key.
+        """
+        if not isinstance(provider_ref, str) or not provider_ref:
+            return b""
+        api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY") or self._api_key
+        if not api_key:
+            return b""
+
+        def _fetch_bytes() -> bytes:
+            _req = urllib.request.Request(
+                f"https://api.e2b.app/sandboxes/{provider_ref}/logs?limit={_LOG_TAIL_ENTRY_LIMIT}",
+                headers={"X-API-KEY": api_key, "Accept": "application/json"},
+            )
+            # URL is a hard-coded https endpoint, not caller-controlled.
+            with urllib.request.urlopen(_req, timeout=_LOG_TAIL_FETCH_TIMEOUT_S) as _resp:  # noqa: S310  # nosec B310
+                return bytes(_resp.read())
+
+        try:
+            raw = (await asyncio.to_thread(_fetch_bytes)).decode("utf-8", errors="replace")
+        except Exception:
+            return b""
+        try:
+            payload = json.loads(raw)
+            entries = payload.get("logEntries") if isinstance(payload, dict) else payload
+            if not isinstance(entries, list):
+                return raw[: min(_LOG_TAIL_RAW_FALLBACK, max_bytes)].encode("utf-8", errors="replace")
+            combined = _combine_log_entries(entries, _LOG_TAIL_ENTRY_LIMIT)
+            return "\n".join(combined)[-max_bytes:].encode("utf-8", errors="replace")
+        except Exception:
+            return raw[: min(_LOG_TAIL_RAW_FALLBACK, max_bytes)].encode("utf-8", errors="replace")
 
     async def exec_command_stream(
         self,

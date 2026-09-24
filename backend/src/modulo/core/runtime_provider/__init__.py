@@ -417,6 +417,27 @@ class RuntimeProvider(ABC):
             f"Runtime provider '{self.__class__.__name__}' does not implement destroy_workspace_by_ref"
         )
 
+    async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:
+        """Read the workspace log tail as raw bytes (ADR 040).
+
+        Valid from provisioning until substrate reclamation; where the
+        substrate retains post-kill logs, valid post-destroy for a bounded
+        retention window. ``max_bytes`` caps how much of the NEWEST end of
+        the log is returned (bound applied to the encoded tail content).
+
+        Optional base-class method: providers that do not override it
+        raise the typed :class:`ProviderCapabilityUnsupportedError` —
+        never a raw ``NotImplementedError`` (ADR 040 "Error honesty",
+        the same carve-out as the :meth:`exec_command_stream` and
+        :meth:`destroy_workspace_by_ref` defaults). Callers that need a
+        log tail on a non-overriding provider surface the refusal as a
+        terminal named failure; they must never fall back to a
+        provider-specific direct call.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement read_log_tail"
+        )
+
     @abstractmethod
     async def get_workspace_status(self, provider_ref: str) -> str:
         """Return the current status string for the workspace."""
