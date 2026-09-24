@@ -30,6 +30,7 @@ from modulo.db.crud.token_family import consume_break_glass_credential
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
+_CSRF_VALUE = "bg-csrf"
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _FUTURE = datetime.now(UTC) + timedelta(hours=1)
@@ -471,6 +472,8 @@ def test_refresh_denied_for_break_glass_no_write(client: TestClient) -> None:
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value=None)),
         patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock()) as advance,
     ):
-        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _refresh_token()})
+        client.cookies.set("modulo_refresh", _refresh_token())
+        client.cookies.set("XSRF-TOKEN", _CSRF_VALUE)
+        resp = client.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": _CSRF_VALUE})
     assert resp.status_code == 401
     advance.assert_not_awaited()

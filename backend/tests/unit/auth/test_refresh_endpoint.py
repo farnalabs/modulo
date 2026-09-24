@@ -1,8 +1,13 @@
-"""POST /api/v1/auth/refresh tests: account-active defense-in-depth (FAR-463).
+"""POST /api/v1/auth/refresh tests: cookie transport + account-active checks.
+
+FAR-1197: the refresh token rides ONLY in the httpOnly ``modulo_refresh``
+cookie — the JSON body no longer carries it. The endpoint is bodyless and gated
+by a route-local double-submit CSRF check (see ``_require_csrf_double_submit``).
 
 Deactivation must kill outstanding refresh families exactly like membership
 removal does: every refresh re-reads ACCOUNT.ACTIVE, denies inactive/deleted
-accounts, and blacklists the presented family inside the same transaction.
+accounts, and blacklists the presented family inside the same transaction
+(FAR-463).
 """
 
 import uuid
@@ -15,6 +20,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.routes.auth import REFRESH_COOKIE
 from modulo.api.routes.auth import router as auth_router
 from modulo.auth.jwt import create_refresh_token, decode_refresh_token_claims
 from modulo.settings import Settings, get_settings
@@ -23,6 +29,8 @@ _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _FAMILY_ID = "00000000-0000-0000-0000-00000000000f"
+_CSRF_COOKIE = "XSRF-TOKEN"
+_CSRF_VALUE = "unit-csrf-token"
 
 
 def _make_settings() -> Settings:
@@ -33,6 +41,9 @@ def _make_settings() -> Settings:
         modulo_admin_password="testpass",
         modulo_auth_rate_limit_enabled=False,
         redis_url="",
+        # Explicit: sibling unit/api conftests leak MODULO_CSRF_ENABLED=false into the
+        # process env, and this module's CSRF pair tests must be env-independent.
+        modulo_csrf_enabled=True,
     )
 
 
@@ -45,6 +56,7 @@ def _make_settings_with_refresh_ttl(ttl_hours: int) -> Settings:
         modulo_auth_rate_limit_enabled=False,
         redis_url="",
         modulo_refresh_token_ttl_hours=ttl_hours,
+        modulo_csrf_enabled=True,
     )
 
 
@@ -103,6 +115,26 @@ def client(mock_session: AsyncMock, app: FastAPI) -> Generator[TestClient, None,
         app.dependency_overrides.clear()
 
 
+def _set_refresh_cookie(client: TestClient, token: str) -> None:
+    """Arm the cookie jar with the refresh token and a matching CSRF pair.
+
+    The XSRF cookie is reseeded before EVERY call to mirror the SPA: the
+    double-submit header must always match the cookie the browser currently
+    holds (a rotated response refreshes it in the jar, but callers may still
+    be acting on a pre-rotation page state).
+    """
+    client.cookies.set(_CSRF_COOKIE, _CSRF_VALUE)
+    for cookie in list(client.cookies.jar):
+        if cookie.name == REFRESH_COOKIE:
+            client.cookies.jar.clear(cookie.domain, cookie.path, cookie.name)
+    client.cookies.set(REFRESH_COOKIE, token)
+
+
+def _post_refresh(client: TestClient, *, with_csrf_header: bool = True) -> "object":
+    headers = {"X-CSRF-Token": _CSRF_VALUE} if with_csrf_header else None
+    return client.post("/api/v1/auth/refresh", headers=headers)
+
+
 def _make_refresh_token(org_id: str | None, sequence: int = 1) -> str:
     settings = _make_settings()
     return create_refresh_token(
@@ -137,15 +169,60 @@ def test_refresh_success_for_active_account(client: TestClient, mock_session: As
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=resolve_role),
         patch("modulo.api.routes.auth.advance_sequence", new=advance),
     ):
-        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _make_refresh_token(str(_ORG_ID))})
-    assert resp.status_code == 200
+        _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
+        resp = _post_refresh(client)
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["access_token"]
     assert body["token_type"] == "bearer"
+    # FAR-1197: the token never appears in a JSON body the SPA could persist.
+    assert "refresh_token" not in body
     resolve_role.assert_awaited_once()
     advance.assert_awaited_once()
     # A successful refresh never touches the family blacklist.
     assert not _blacklist_update_sqls(mock_session)
+
+
+def test_refresh_without_cookie_denied_fail_closed(client: TestClient) -> None:
+    """No refresh cookie at all -> generic 401; no token-existence oracle."""
+    client.cookies.set(_CSRF_COOKIE, _CSRF_VALUE)
+    resp = client.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": _CSRF_VALUE})
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid or expired refresh token"
+
+
+def test_refresh_without_csrf_pair_rejected_403(client: TestClient) -> None:
+    """Missing/mismatched double-submit pair -> 403, fail closed (FAR-1197)."""
+    client.cookies.set(REFRESH_COOKIE, _make_refresh_token(str(_ORG_ID)))
+    missing = client.post("/api/v1/auth/refresh")
+    assert missing.status_code == 403
+    mismatched = client.post(
+        "/api/v1/auth/refresh",
+        headers={"X-CSRF-Token": _CSRF_VALUE},
+    )
+    assert mismatched.status_code == 403
+
+
+def test_refresh_cookie_attributes(client: TestClient, mock_session: AsyncMock) -> None:
+    """A rotating refresh response re-sets an httpOnly SameSite=strict Secure cookie."""
+    advance = AsyncMock(return_value=(2, False, False))
+    with (
+        _patch_account(_make_account(True)),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+    ):
+        _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
+        resp = _post_refresh(client)
+    assert resp.status_code == 200, resp.text
+    set_cookies = resp.headers.get_list("set-cookie")
+    refresh_cookie = next(c for c in set_cookies if c.startswith(f"{REFRESH_COOKIE}="))
+    assert "httponly" in refresh_cookie.lower()
+    assert "samesite=strict" in refresh_cookie.lower()
+    assert "secure" in refresh_cookie.lower()
+    assert f"max-age={_make_settings().modulo_refresh_token_ttl_hours * 3600}" in refresh_cookie.lower()
+    # The CSRF cookie is NOT httpOnly: the SPA must read it for the header.
+    csrf_cookie = next(c for c in set_cookies if c.startswith("XSRF-TOKEN="))
+    assert "httponly" not in csrf_cookie.lower()
 
 
 def test_refresh_deactivated_account_denied_and_blacklisted(client: TestClient, mock_session: AsyncMock) -> None:
@@ -157,8 +234,10 @@ def test_refresh_deactivated_account_denied_and_blacklisted(client: TestClient, 
         _patch_account(_make_account(False)),
         patch("modulo.api.routes.auth.advance_sequence", new=advance),
     ):
-        first = client.post("/api/v1/auth/refresh", json={"refresh_token": token})
-        second = client.post("/api/v1/auth/refresh", json={"refresh_token": token})
+        _set_refresh_cookie(client, token)
+        first = _post_refresh(client)
+        _set_refresh_cookie(client, token)
+        second = _post_refresh(client)
     assert first.status_code == 401
     assert second.status_code == 401
     assert first.json()["detail"] == "Account no longer has access to this organisation"
@@ -178,7 +257,8 @@ def test_refresh_unknown_account_denied_and_blacklisted(client: TestClient, mock
         _patch_account(None),
         patch("modulo.api.routes.auth.advance_sequence", new=advance),
     ):
-        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _make_refresh_token(str(_ORG_ID))})
+        _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
+        resp = _post_refresh(client)
     assert resp.status_code == 401
     advance.assert_not_awaited()
     assert len(_blacklist_update_sqls(mock_session)) == 1
@@ -196,7 +276,8 @@ def test_refresh_deactivated_system_admin_without_membership_denied(
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=resolve_role),
         patch("modulo.api.routes.auth.advance_sequence", new=advance),
     ):
-        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _make_refresh_token(None)})
+        _set_refresh_cookie(client, _make_refresh_token(None))
+        resp = _post_refresh(client)
     assert resp.status_code == 401
     resolve_role.assert_not_awaited()
     advance.assert_not_awaited()
@@ -212,8 +293,9 @@ def test_refresh_active_system_admin_without_membership_succeeds(client: TestCli
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock()),
         patch("modulo.api.routes.auth.advance_sequence", new=advance),
     ):
-        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _make_refresh_token(None)})
-    assert resp.status_code == 200
+        _set_refresh_cookie(client, _make_refresh_token(None))
+        resp = _post_refresh(client)
+    assert resp.status_code == 200, resp.text
     advance.assert_awaited_once()
     assert not _blacklist_update_sqls(mock_session)
 
@@ -227,19 +309,20 @@ def test_refresh_reuse_within_window_mints_tokens(client: TestClient, mock_sessi
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=resolve_role),
         patch("modulo.api.routes.auth.advance_sequence", new=advance),
     ):
-        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _make_refresh_token(str(_ORG_ID))})
+        _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
+        resp = _post_refresh(client)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["access_token"]
-    assert body["refresh_token"]
+    assert REFRESH_COOKIE in resp.cookies
     advance.assert_awaited_once()
     # Must NOT blacklist on a reuse replay
     assert not _blacklist_update_sqls(mock_session)
 
 
 def test_refresh_rotation_mints_configured_lifetime(client: TestClient, app: FastAPI, mock_session: AsyncMock) -> None:
-    """FAR-1170: a non-default modulo_refresh_token_ttl_hours is stamped on
-    the rotated refresh token — exp - iat equals the configured TTL."""
+    """A non-default modulo_refresh_token_ttl_hours is stamped on the rotated
+    refresh token — and on the httponly cookie's Max-Age (exp - iat == TTL)."""
     app.dependency_overrides[get_settings] = lambda: _make_settings_with_refresh_ttl(6)
     advance = AsyncMock(return_value=(2, False, False))
     resolve_role = AsyncMock(return_value="admin")
@@ -248,8 +331,10 @@ def test_refresh_rotation_mints_configured_lifetime(client: TestClient, app: Fas
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=resolve_role),
         patch("modulo.api.routes.auth.advance_sequence", new=advance),
     ):
-        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": _make_refresh_token(str(_ORG_ID))})
+        _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
+        resp = _post_refresh(client)
     assert resp.status_code == 200, resp.text
-    payload = decode_refresh_token_claims(resp.json()["refresh_token"], _VALID_32)
+    rotated = resp.cookies[REFRESH_COOKIE]
+    payload = decode_refresh_token_claims(rotated, _VALID_32)
     lifetime_seconds = float(payload["exp"]) - float(payload["iat"])
     assert abs(lifetime_seconds - 6 * 3600) <= 1

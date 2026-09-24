@@ -14,7 +14,6 @@ export {
   clearAccessToken,
   clearAccessTokenForLogout,
   setAccessToken,
-  setRefreshToken,
   onAuthChange,
   getAuthHeaders,
   isDemoSession,

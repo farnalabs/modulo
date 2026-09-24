@@ -145,7 +145,7 @@ const router = createRouter({
     },
     {
       // SSO (OIDC/SAML) success handoff: the backend redirects the browser to
-      // /auth/callback#access_token=...&refresh_token=... after a successful
+      // /auth/callback#access_token=... after a successful (FAR-1197 dropped the refresh-token fragment: it rides the httpOnly cookie)
       // provider callback. This public route consumes the fragment tokens,
       // stores them, strips them from the URL, and redirects to the dashboard.
       // Public so the auth guard does not bounce an unauthenticated browser

@@ -344,12 +344,15 @@ def metadata_has_acs_url(request: Any) -> None:
     assert "HTTP-POST" in body, "Missing HTTP-POST binding in metadata"
 
 
-@then("the redirect URL contains access and refresh tokens")
+@then("the redirect URL contains an access token and the httpOnly refresh cookie")
 def redirect_has_tokens(request: Any) -> None:
     resp = request.node._resp
     location = resp.headers.get("location", "")
     assert "access_token=" in location, f"Missing access_token in redirect: {location}"
-    assert "refresh_token=" in location, f"Missing refresh_token in redirect: {location}"
+    # FAR-1197: the refresh token is delivered in an httpOnly cookie, not the URL.
+    set_cookies = "; ".join(resp.headers.get_list("Set-Cookie"))
+    assert "modulo_refresh" in set_cookies, f"Missing modulo_refresh cookie: {set_cookies}"
+    assert "HttpOnly" in set_cookies, f"Refresh cookie missing HttpOnly: {set_cookies}"
 
 
 @then("a new user account was provisioned")

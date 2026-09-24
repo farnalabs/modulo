@@ -29,6 +29,7 @@ from starlette.responses import Response
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.auth import REFRESH_COOKIE
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_refresh_token
 from modulo.settings import Settings, get_settings
@@ -123,8 +124,9 @@ def _assert_error_matrix(
     expected: dict,
 ) -> None:
     for exc, status_code in expected:
+        _arm_cookies(http, _refresh_token())
         with patch(f"{_PREFIX}{patch_target}", new=AsyncMock(side_effect=exc)):
-            resp = http.request(method.upper(), url, json=json_body)
+            resp = http.request(method.upper(), url, json=json_body or None, headers={"X-CSRF-Token": _CSRF_VALUE})
         assert resp.status_code == status_code, f"{patch_target} {exc!r}: {resp.text}"
 
 
@@ -186,7 +188,9 @@ def test_login_happy_path_mints_tokens_and_cookies(client: tuple[TestClient, Asy
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["access_token"]
-    assert body["refresh_token"]
+    # FAR-1197: the refresh token must NOT be in the JSON body (cookie only).
+    assert "refresh_token" not in body
+    assert REFRESH_COOKIE in resp.cookies
     assert body["requires_bootstrap"] is False
     assert "modulo_session" in resp.cookies
 
@@ -482,6 +486,26 @@ def test_accept_invite_assert_error_matrix(client: tuple[TestClient, AsyncMock])
 
 _REFRESH_URL = "/api/v1/auth/refresh"
 
+_CSRF_VALUE = "coverage-csrf"
+
+
+def _arm_cookies(http: TestClient, token: str) -> None:
+    """Arm the jar with a refresh token + matching CSRF pair (FAR-1197 transport).
+
+    The XSRF cookie is reseeded before every call: the double-submit header must
+    always match the CURRENT cookie value, the way the SPA reads it.
+    """
+    http.cookies.set("XSRF-TOKEN", _CSRF_VALUE)
+    http.cookies.set(REFRESH_COOKIE, token)
+
+
+def _post_refresh(http: TestClient) -> object:
+    return http.post(_REFRESH_URL, headers={"X-CSRF-Token": _CSRF_VALUE})
+
+
+def _post_logout(http: TestClient) -> object:
+    return http.post(_LOGOUT_URL, headers={"X-CSRF-Token": _CSRF_VALUE})
+
 
 def _refresh_token(org_role: str = "admin") -> str:
     return create_refresh_token(
@@ -512,7 +536,8 @@ def _claims(**overrides: object) -> dict:
 def test_refresh_invalid_token_returns_401(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with patch(f"{_PREFIX}decode_refresh_token_claims", side_effect=JWTError("bad")):
-        resp = http.post(_REFRESH_URL, json={"refresh_token": "junk"})
+        _arm_cookies(http, "junk-token")
+        resp = _post_refresh(http)
 
     assert resp.status_code == 401, resp.text
 
@@ -536,7 +561,8 @@ def test_refresh_claim_shape_401s(
 ) -> None:
     http, _session = client
     with patch(f"{_PREFIX}decode_refresh_token_claims", return_value=claims):
-        resp = http.post(_REFRESH_URL, json={"refresh_token": "junk"})
+        _arm_cookies(http, "junk-token")
+        resp = _post_refresh(http)
 
     assert resp.status_code == 401, resp.text
     assert detail in resp.json()["detail"]
@@ -545,7 +571,8 @@ def test_refresh_claim_shape_401s(
 def test_refresh_inactive_account_returns_401(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with patch(f"{_PREFIX}get_account_by_id", new=AsyncMock(return_value=_make_account(active=False))):
-        resp = http.post(_REFRESH_URL, json={"refresh_token": _refresh_token()})
+        _arm_cookies(http, _refresh_token())
+        resp = _post_refresh(http)
 
     assert resp.status_code == 401, resp.text
     assert "no longer has access" in resp.json()["detail"]
@@ -557,7 +584,8 @@ def test_refresh_missing_membership_returns_401(client: tuple[TestClient, AsyncM
         patch(f"{_PREFIX}get_account_by_id", new=AsyncMock(return_value=_make_account())),
         patch(f"{_PREFIX}resolve_role_from_membership", new=AsyncMock(return_value=None)),
     ):
-        resp = http.post(_REFRESH_URL, json={"refresh_token": _refresh_token()})
+        _arm_cookies(http, _refresh_token())
+        resp = _post_refresh(http)
 
     assert resp.status_code == 401, resp.text
 
@@ -569,7 +597,8 @@ def test_refresh_theft_detected_returns_401(client: tuple[TestClient, AsyncMock]
         patch(f"{_PREFIX}resolve_role_from_membership", new=AsyncMock(return_value="admin")),
         patch(f"{_PREFIX}advance_sequence", new=AsyncMock(return_value=(1, True, False))),
     ):
-        resp = http.post(_REFRESH_URL, json={"refresh_token": _refresh_token()})
+        _arm_cookies(http, _refresh_token())
+        resp = _post_refresh(http)
 
     assert resp.status_code == 401, resp.text
     assert "suspected theft" in resp.json()["detail"]
@@ -582,12 +611,14 @@ def test_refresh_reuse_within_window_mints_tokens(client: tuple[TestClient, Asyn
         patch(f"{_PREFIX}resolve_role_from_membership", new=AsyncMock(return_value="admin")),
         patch(f"{_PREFIX}advance_sequence", new=AsyncMock(return_value=(3, False, True))),
     ):
-        resp = http.post(_REFRESH_URL, json={"refresh_token": _refresh_token()})
+        _arm_cookies(http, _refresh_token())
+        resp = _post_refresh(http)
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["access_token"]
-    assert body["refresh_token"]
+    assert "refresh_token" not in body
+    assert REFRESH_COOKIE in resp.cookies
     assert "modulo_session" in resp.cookies
 
 
@@ -598,12 +629,14 @@ def test_refresh_happy_path_rotates_tokens(client: tuple[TestClient, AsyncMock])
         patch(f"{_PREFIX}resolve_role_from_membership", new=AsyncMock(return_value="operator")),
         patch(f"{_PREFIX}advance_sequence", new=AsyncMock(return_value=(1, False, False))),
     ):
-        resp = http.post(_REFRESH_URL, json={"refresh_token": _refresh_token()})
+        _arm_cookies(http, _refresh_token())
+        resp = _post_refresh(http)
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["access_token"]
-    assert body["refresh_token"]
+    assert "refresh_token" not in body
+    assert REFRESH_COOKIE in resp.cookies
     assert "modulo_session" in resp.cookies
 
 
@@ -613,7 +646,7 @@ def test_refresh_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> No
         http,
         method="post",
         url=_REFRESH_URL,
-        json_body={"refresh_token": _refresh_token()},
+        json_body={},
         patch_target="_advance_refresh_sequence",
         expected={(_INTEGRITY, 409), (_PROG, 501), (_SQL, 503), (_RUNTIME, 500)},
     )
@@ -629,9 +662,21 @@ _LOGOUT_URL = "/api/v1/auth/logout"
 def test_logout_invalid_token_returns_401(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with patch(f"{_PREFIX}decode_refresh_token_claims", side_effect=JWTError("bad")):
-        resp = http.post(_LOGOUT_URL, json={"refresh_token": "junk"})
+        _arm_cookies(http, "junk-token")
+        resp = _post_logout(http)
 
     assert resp.status_code == 401, resp.text
+
+
+def test_logout_missing_cookie_returns_401(client: tuple[TestClient, AsyncMock]) -> None:
+    http, _session = client
+    # CSRF pair is armed, but the httpOnly refresh cookie is absent, so the
+    # handler must reject before attempting to decode a token.
+    http.cookies.set("XSRF-TOKEN", _CSRF_VALUE)
+    resp = _post_logout(http)
+
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "Invalid or expired refresh token"
 
 
 def test_logout_happy_path_blacklists_family_and_clears_approvals(client: tuple[TestClient, AsyncMock]) -> None:
@@ -641,7 +686,8 @@ def test_logout_happy_path_blacklists_family_and_clears_approvals(client: tuple[
         patch(f"{_PREFIX}blacklist_family", new=AsyncMock(return_value=True)) as blacklist,
         patch(f"{_PREFIX}clear_session_approvals_for_account") as clear_approvals,
     ):
-        resp = http.post(_LOGOUT_URL, json={"refresh_token": _refresh_token()})
+        _arm_cookies(http, _refresh_token())
+        resp = _post_logout(http)
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["detail"] == "Logged out"
@@ -656,7 +702,8 @@ def test_logout_claims_without_family_skip_blacklist(client: tuple[TestClient, A
         patch(f"{_PREFIX}blacklist_family", new_callable=AsyncMock) as blacklist,
         patch(f"{_PREFIX}clear_session_approvals_for_account") as clear_approvals,
     ):
-        resp = http.post(_LOGOUT_URL, json={"refresh_token": _refresh_token()})
+        _arm_cookies(http, _refresh_token())
+        resp = _post_logout(http)
 
     assert resp.status_code == 200, resp.text
     blacklist.assert_not_awaited()
@@ -670,7 +717,8 @@ def test_logout_invalid_family_uuid_is_tolerated(client: tuple[TestClient, Async
         patch(f"{_PREFIX}blacklist_family", new_callable=AsyncMock) as blacklist,
         patch(f"{_PREFIX}clear_session_approvals_for_account") as clear_approvals,
     ):
-        resp = http.post(_LOGOUT_URL, json={"refresh_token": _refresh_token()})
+        _arm_cookies(http, _refresh_token())
+        resp = _post_logout(http)
 
     assert resp.status_code == 200, resp.text
     blacklist.assert_not_awaited()
@@ -684,7 +732,8 @@ def test_logout_family_not_found_still_succeeds(client: tuple[TestClient, AsyncM
         patch(f"{_PREFIX}blacklist_family", new=AsyncMock(return_value=False)),
         patch(f"{_PREFIX}clear_session_approvals_for_account"),
     ):
-        resp = http.post(_LOGOUT_URL, json={"refresh_token": _refresh_token()})
+        _arm_cookies(http, _refresh_token())
+        resp = _post_logout(http)
 
     assert resp.status_code == 200, resp.text
 
@@ -702,7 +751,8 @@ def test_logout_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> Non
             patch(f"{_PREFIX}decode_refresh_token_claims", return_value=_claims()),
             patch(f"{_PREFIX}blacklist_family", new=AsyncMock(side_effect=exc)),
         ):
-            resp = http.post(_LOGOUT_URL, json={"refresh_token": _refresh_token()})
+            _arm_cookies(http, _refresh_token())
+            resp = _post_logout(http)
         assert resp.status_code == expected, f"{exc!r}: {resp.text}"
 
 
@@ -823,7 +873,7 @@ def test_set_and_clear_auth_cookies() -> None:
     cleared = Response()
     _clear_auth_cookies(cleared, settings)
     clear_headers = "; ".join(cleared.headers.getlist("set-cookie"))
-    assert clear_headers.count("Max-Age=0") == 2
+    assert clear_headers.count("Max-Age=0") == 3
 
 
 def test_client_ip_resolution() -> None:

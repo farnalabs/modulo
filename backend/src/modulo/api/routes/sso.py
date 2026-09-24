@@ -1,6 +1,7 @@
 """SSO routes: OIDC and SAML 2.0 login flows."""
 
 import logging
+import secrets
 import xml.sax.saxutils
 from typing import Any
 
@@ -60,10 +61,27 @@ def _frontend_url(settings: Settings) -> str:
 
 
 def _redirect_to_frontend(tokens: dict[str, str], settings: Settings) -> RedirectResponse:
-    """Redirect the browser to the frontend callback URL with tokens in fragment."""
+    """Redirect the browser to the frontend callback URL.
+
+    FAR-1197: only the short-lived access token stays in the URL fragment; the
+    long-lived refresh token is delivered exclusively via the httpOnly
+    ``modulo_refresh`` cookie (set on this API response) so it never lands in
+    browser history or JS-reachable storage.
+    """
     base = _frontend_url(settings)
-    url = f"{base}/auth/callback#access_token={tokens['access_token']}&refresh_token={tokens['refresh_token']}"
-    return RedirectResponse(url=url)
+    url = f"{base}/auth/callback#access_token={tokens['access_token']}"
+    response = RedirectResponse(url=url)
+    # Deferred import: keep the routes graph acyclic (same pattern as
+    # _frontend_url).
+    from modulo.api.routes.auth import _refresh_cookie_ttl, _set_csrf_cookie, _set_refresh_cookie
+
+    refresh_token = tokens.get("refresh_token")
+    if refresh_token:
+        _set_refresh_cookie(response, refresh_token, settings)
+        # The double-submit CSRF token must outlive the short access token so
+        # the SPA can still present it on the cookie-only /auth/refresh call.
+        _set_csrf_cookie(response, secrets.token_hex(32), settings, max_age_seconds=_refresh_cookie_ttl(settings))
+    return response
 
 
 class OidcProviderInfo(BaseModel):
