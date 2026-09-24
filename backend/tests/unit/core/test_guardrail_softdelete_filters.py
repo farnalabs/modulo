@@ -85,6 +85,24 @@ async def test_load_node_guardrails_includes_deleted_at_filter():
     assert "deleted_at" in where_clause, f"Expected 'deleted_at' in WHERE clause but got: {where_clause}"
 
 
+async def test_load_node_guardrails_without_node_id_scopes_org_level():
+    """Without a node_id the loader filters to org-level rows (node_id IS NULL)."""
+    from modulo.core.guardrails.conformance import load_node_guardrails
+
+    pipeline_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+
+    session = _make_session(_scalars_result([]))
+    result = await load_node_guardrails(session, org_id=org_id, pipeline_id=pipeline_id, node_id=None)
+
+    assert result == []
+    call_args = session.execute.call_args
+    stmt = call_args[0][0]
+    where_clause = str(stmt.whereclause)
+    assert "evals.node_id IS NULL" in where_clause, f"Expected org-level filter but got: {where_clause}"
+    assert "deleted_at" in where_clause, f"Expected 'deleted_at' in WHERE clause but got: {where_clause}"
+
+
 # ---------------------------------------------------------------------------
 # conformance.load_claimed_guardrails
 # ---------------------------------------------------------------------------

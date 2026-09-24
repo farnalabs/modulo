@@ -194,6 +194,12 @@ class TestValidatorMatrix:
         )
         assert result is None
 
+    def test_none_config_returns_early_without_vocabulary_checks(self) -> None:
+        # A guardrail with no config_json short-circuits after the
+        # failure_behaviour checks (chunk 3b: line 77-78 return).
+        result = validate_guardrail_request(eval_type="guardrail", failure_behaviour="warn", config_json=None)
+        assert result is None
+
     def test_non_guardrail_eval_type_bypasses(self) -> None:
         # Non-guardrail eval types short-circuit regardless of payload shape.
         result = validate_guardrail_request(
@@ -230,6 +236,37 @@ class TestSuiteScopedCreate:
         mock_binding.assert_not_called()
         mock_gate_cls.assert_not_called()
         assert session.add.call_count == 1
+
+
+class TestFirstTimeRedirectCreate:
+    """The UPDATE path with an ``existing_eval_id`` that names a row which does
+    not exist yet (first-time redirect) CREATES the Eval row at version 1
+    rather than failing — chunk 3b ``eval_definition_write`` lines 208-225.
+    """
+
+    async def test_create_when_existing_eval_id_row_missing(self) -> None:
+        session = _make_session(None)  # scalar_one_or_none -> None (no existing row)
+        missing_id = uuid.uuid4()
+
+        row = await create_or_update_eval(
+            session,
+            org_id=_ORG_ID,
+            account_id=_USER_ID,
+            pipeline_id=uuid.uuid4(),
+            node_id=None,
+            name="redirected",
+            eval_type="regex",
+            config_json={"field": "output", "pattern": "ok"},
+            failure_behaviour="warn",
+            pass_threshold=None,
+            suite_id=None,
+            existing_eval_id=missing_id,
+        )
+
+        assert row.id == missing_id
+        assert row.version == 1
+        assert session.add.call_count == 1
+        session.flush.assert_awaited()
 
 
 class TestBindingViolationPrecedesPersistence:
@@ -326,6 +363,29 @@ class TestMcpDeleteCutover:
             "name": "soft-me",
             "purge": False,
         }
+
+    @patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_guardrail_soft_delete_without_live_gate(
+        self, mock_session: AsyncMock, mock_auth: AsyncMock, mock_audit: AsyncMock
+    ) -> None:
+        """Soft-deleting a guardrail with NO live PolicyGate still succeeds and
+        never stamps a gate (chunk 3b: ``gate is None`` arm)."""
+        guardrail = _make_eval(eval_type="guardrail", name="no-gate")
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[_result_mock(guardrail), _result_mock(None)])
+        session.delete = AsyncMock()
+        session.flush = AsyncMock()
+        mock_session.return_value = _session_cm(session)
+
+        result = await delete_eval_definition(eval_id=str(guardrail.id), hard=False)
+
+        assert "error" not in result, result
+        assert result["soft_deleted"] is True
+        assert guardrail.deleted_at is not None
+        assert guardrail.deleted_by == _USER_ID
+        assert session.delete.call_count == 0
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")

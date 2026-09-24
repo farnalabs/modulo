@@ -6,7 +6,7 @@ Tests: POST /api/v1/evals, GET /api/v1/evals, GET /api/v1/evals/{eval_id},
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +17,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -180,6 +181,39 @@ class TestCreateEvalDefinition:
         assert data["suite_id"] == "suite-1"
         assert data["config_json"] == {"pattern": r"\d+"}
         assert data["version"] == 1
+
+    def test_create_policy_gate_binding_violation_returns_400(self, admin_client: TestClient) -> None:
+        mock_pipeline = MagicMock()
+        mock_pipeline.id = _PIPELINE_ID
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        with patch.object(
+            evals_routes,
+            "create_or_update_eval",
+            new=AsyncMock(side_effect=PolicyGateBindingViolationError([{"exclusion": "node_id_mismatch"}])),
+        ):
+            resp = admin_client.post(
+                self.URL,
+                json={
+                    "pipeline_id": str(_PIPELINE_ID),
+                    "name": "Bad Binding",
+                    "eval_type": "regex",
+                    "config_json": {"pattern": r"\d+"},
+                },
+            )
+        assert resp.status_code == 400
+        assert "PolicyGate binding violation" in resp.json()["detail"]
 
     def test_create_omit_optionals(self, admin_client: TestClient) -> None:
         mock_pipeline = MagicMock()
@@ -588,6 +622,31 @@ class TestUpdateEvalDefinition:
         resp = admin_client.put(f"{self.URL}/{uuid.uuid4()}", json={"name": "Nope"})
         assert resp.status_code == 404
 
+    def test_update_policy_gate_binding_violation_returns_400(self, admin_client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        eval_def = _make_eval_def(name="Original", pass_threshold=None, suite_id=None)
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=eval_def),  # Eval lookup
+            _make_result(scalar_one_value=None),  # PolicyGate lookup for current failure_behaviour
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        with patch.object(
+            evals_routes,
+            "create_or_update_eval",
+            new=AsyncMock(side_effect=PolicyGateBindingViolationError([{"exclusion": "node_id_mismatch"}])),
+        ):
+            resp = admin_client.put(f"{self.URL}/{_EVAL_DEF_ID}", json={"name": "Updated"})
+        assert resp.status_code == 400
+        assert "PolicyGate binding violation" in resp.json()["detail"]
+
     def test_update_admin_required(self, runner_client: TestClient) -> None:
         resp = runner_client.put(f"{self.URL}/{_EVAL_DEF_ID}", json={"name": "Should Fail"})
         assert resp.status_code == 403
@@ -682,6 +741,38 @@ class TestDeleteEvalDefinitionTwoStep:
         # hard-deleted.
         assert eval_def.deleted_at is not None
         assert eval_def.deleted_by == _USER_ID
+        mock_session.delete.assert_not_called()
+
+    def test_delete_guardrail_eval_soft_deletes_live_gate(
+        self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When a live PolicyGate exists for the guardrail, the soft-delete
+        stamps deleted_at/deleted_by on the gate too — no orphaned gate."""
+        audit = AsyncMock()
+        monkeypatch.setattr(evals_routes, "append_audit_event", audit)
+        mock_session = _make_mock_session()
+        eval_def = _make_eval_def(eval_type="guardrail", name="gatekeeper")
+        live_gate = MagicMock()
+        live_gate.deleted_at = None
+        live_gate.deleted_by = None
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=eval_def),  # select(Eval)
+            _make_result(scalar_one_value=live_gate),  # select(PolicyGate) — live gate
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
+        assert resp.status_code == 204
+        assert eval_def.deleted_at is not None
+        assert live_gate.deleted_at is not None, "the live PolicyGate must be soft-deleted too"
+        assert live_gate.deleted_by == _USER_ID
         mock_session.delete.assert_not_called()
 
     def test_delete_guardrail_eval_purge_hard_deletes(self, admin_client: TestClient) -> None:
@@ -815,3 +906,41 @@ class TestDeleteEvalDefinitionTwoStep:
         assert resp.status_code == 204
         mock_session.delete.assert_called_once()
         audit.assert_not_awaited()
+
+
+# ── POST /api/v1/evals/from-run — redirected insert binding violation ────────
+
+
+class TestInsertEvalDefinitionBindingViolation:
+    """The from-run insert redirects through ``create_or_update_eval``; a
+    binding violation surfaces as a 400 (chunk 3b write-cutover)."""
+
+    async def test_insert_binding_violation_returns_400(self) -> None:
+        from fastapi import HTTPException
+
+        from modulo.api.routes.evals import _insert_eval_definition
+
+        session = _make_mock_session()
+        principal = MagicMock()
+        principal.organisation_id = _ORG_ID
+        principal.account_id = _USER_ID
+        principal.org_role = "admin"
+        run = MagicMock()
+        run.pipeline_id = _PIPELINE_ID
+        req = MagicMock()
+        req.node_id = uuid.uuid4()
+        req.name = "from-run"
+        req.eval_type = "regex"
+
+        with (
+            patch.object(
+                evals_routes,
+                "create_or_update_eval",
+                new=AsyncMock(side_effect=PolicyGateBindingViolationError([{"exclusion": "node_id_mismatch"}])),
+            ),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await _insert_eval_definition(session, principal, req, run, {"pattern": "x"})
+
+        assert excinfo.value.status_code == 400
+        assert "PolicyGate binding violation" in excinfo.value.detail

@@ -126,6 +126,7 @@ from modulo.core.analytics.builder import (
     AnalyticsTriggerType,
 )
 from modulo.core.analytics.service import AnalyticsParams
+from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
 from modulo.db.capacity import StorageExhaustedError
@@ -1925,10 +1926,48 @@ class TestEvalDefinitionTools(_AdminContext):
             result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
         assert result["error"] == "validation_failed"
 
+    async def test_create_policy_gate_binding_violation(self) -> None:
+        """A binding violation from the shared helper maps to the MCP
+        ``validation_failed`` envelope (chunk 3b write-cutover)."""
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=MagicMock())
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch(
+                "modulo.core.eval_engine.eval_definition_write.create_or_update_eval",
+                side_effect=PolicyGateBindingViolationError([{"exclusion": "node_id_mismatch"}]),
+            ),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
+        assert result["error"] == "validation_failed"
+        assert "PolicyGate binding violation" in result["detail"]
+
     async def test_update_auth_expired(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=False)):
             result = await update_eval_definition(eval_id=str(uuid.uuid4()))
         assert result["error"] == "auth_expired"
+
+    async def test_update_policy_gate_binding_violation(self) -> None:
+        """A binding violation from the shared helper maps to the MCP
+        ``validation_failed`` envelope on the update path."""
+        eval_def = MagicMock()
+        eval_def.eval_type = "llm_judge"
+        eval_def.failure_behaviour = "warn"
+        eval_def.config_json = {}
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=eval_def)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch(
+                "modulo.core.eval_engine.eval_definition_write.create_or_update_eval",
+                side_effect=PolicyGateBindingViolationError([{"exclusion": "node_id_mismatch"}]),
+            ),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="n")
+        assert result["error"] == "validation_failed"
+        assert "PolicyGate binding violation" in result["detail"]
 
     async def test_update_rejects_bad_eval_type(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
