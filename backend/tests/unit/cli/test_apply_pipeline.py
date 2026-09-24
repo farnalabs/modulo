@@ -48,6 +48,18 @@ entities:
       max_concurrent_runs: 3
 """
 
+STDOUT_RETENTION_DECLARED = {"mode": "tail", "max_bytes": 1000}
+
+STDOUT_RETENTION_CONFIG_TEXT = """
+api_version: modulo.dev/v1
+entities:
+  pipelines:
+    - name: sample
+      description: Sample pipeline
+      max_concurrent_runs: 3
+      stdout_retention_config: {mode: tail, max_bytes: 1000}
+"""
+
 _AGENT_ID = "00000000-0000-0000-0000-0000000000ff"
 _AGENT_LIST_PARAMS = {"page": "1", "page_size": str(PAGE_SIZE)}
 _LIST_PARAMS = {"page": "1", "page_size": str(PAGE_SIZE)}
@@ -506,6 +518,86 @@ entities:
         assert update.graph_json is not None
         agent_nodes = [n for n in update.graph_json.nodes if n.node_type == "agent"]
         assert agent_nodes[0].agent_id is not None
+
+
+class TestStdoutRetentionConfigPayloads:
+    """FAR-1187: stdout_retention_config is drift-compared but was never sent."""
+
+    @respx.mock
+    def test_create_payload_includes_stdout_retention_config(self) -> None:
+        """The POST body carries the declared stdout_retention_config (contract
+        round-trip through the REAL PipelineCreate)."""
+        routes = _mock_current_with_pipelines([])
+        config = parse_apply_documents(STDOUT_RETENTION_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        assert routes["pipelines_post"].call_count == 1
+        create_payload = json.loads(routes["pipelines_post"].calls.last.request.content)
+        assert create_payload["stdout_retention_config"] == STDOUT_RETENTION_DECLARED
+        PipelineCreate.model_validate(create_payload)
+
+    @respx.mock
+    def test_patch_payload_includes_stdout_retention_config(self) -> None:
+        """The update PATCH body carries the declared value (contract
+        round-trip through the REAL PipelineUpdate)."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        # Live row has no stored override -> the declared value is drift.
+        routes = _mock_current_with_pipelines([existing])
+        config = parse_apply_documents(STDOUT_RETENTION_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        updated = [e["name"] for e in report["updated"] if e["kind"] == "pipeline"]
+        assert updated == ["sample"]
+        assert routes["pipeline_patch"].call_count == 1
+        patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        assert patch_payload["stdout_retention_config"] == STDOUT_RETENTION_DECLARED
+        PipelineUpdate.model_validate(patch_payload)
+
+    @respx.mock
+    def test_double_apply_with_stdout_retention_converges(self) -> None:
+        """FAR-1187 acceptance (prove-the-fix): the declared config plans as
+        'updated' against a live row that lacks it; after the real payload
+        builder sends the value, re-planning the same entity against the
+        stored value reports 'unchanged'. Round-trip through the real
+        managed_view + plan_entity + the real apply payload builder."""
+        from modulo.cli.apply.models import PipelineEntity
+        from modulo.cli.apply.plan import plan_entity
+
+        entity = PipelineEntity.model_validate(
+            {
+                "name": "sample",
+                "description": "Sample pipeline",
+                "max_concurrent_runs": 3,
+                "stdout_retention_config": STDOUT_RETENTION_DECLARED,
+            }
+        )
+        # Live row: same managed top-level fields, no stored retention config.
+        current_row = _pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa")
+        first = plan_entity("pipeline", "sample", entity.managed_view(), current_row)
+        assert first.status == "updated"
+
+        # Run the real apply and capture what the payload builder actually sent.
+        routes = _mock_current_with_pipelines([dict(current_row)])
+        config = parse_apply_documents(STDOUT_RETENTION_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        sent = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        update = PipelineUpdate.model_validate(sent)
+        assert update.stdout_retention_config == STDOUT_RETENTION_DECLARED
+
+        # Server stores what was sent (PATCH exclude_unset merge semantics);
+        # without the fix the sent payload lacks the key, the stored value
+        # stays absent, and this second plan would still report 'updated'.
+        stored = dict(current_row)
+        stored.update(sent)
+        second = plan_entity("pipeline", "sample", entity.managed_view(), stored)
+        assert second.status == "unchanged"
 
 
 class TestFailureIsolation:
