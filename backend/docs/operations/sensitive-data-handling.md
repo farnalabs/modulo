@@ -61,6 +61,21 @@ Masking is applied at these points:
 | `POST /api/v1/runs/{run_id}/nodes/{node_id}/prompt/reveal` | `_mask_prompt_text()` / `_mask_message_list()` | Regex-based credential masking in prompt text |
 | `get_run_output` MCP tool | `_mask_output_value()` from `runs.py` | Nested sensitive keys, returns `masked_fields` list |
 | Admin SSO routes | `SensitiveValue` Pydantic type | Auto-masks on serialisation |
+| `GET /api/v1/pipelines/{id}/graph` (and convert/revert responses) | `mask_pipeline_graph_node()` on every node | Sensitive env-var keys masked whole; remaining env values + context file contents redacted by the canonical secret-VALUE patterns; `composite_parameter_values` / `parameter_overrides` deep-masked |
+| `GET /api/v1/pipelines/{id}/snapshots/{snapshot_id}` | `mask_pipeline_graph_node()` on each node of `graph_json` | Same node masking as the graph read |
+| Snapshot diff endpoint | `mask_pipeline_graph_node()` on `nodes_added` / `nodes_removed` and the diffed graphs | Same node masking |
+
+Graph READ masking must not corrupt data on WRITE: the graph endpoints are
+full-replace, so a PATCH round-tripping a masked GET would otherwise persist
+the mask literals over the stored secrets. `merge_masked_graph_nodes()`
+resolves mask echoes against the stored graph before a graph write commits —
+an echoed value is restored from storage, an echo with no stored counterpart
+is dropped (fail closed), and keys the caller removed stay removed.
+
+**Known gap (accepted risk):** the MCP `get_pipeline_graph` /
+`update_pipeline_graph` tools bypass the REST read/write masking — a read
+returns raw env values and a write can persist mask literals. Tracked in the
+FAR-1181 delivery report for a follow-up.
 
 ### 2. Log redaction
 

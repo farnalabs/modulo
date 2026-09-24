@@ -41,6 +41,10 @@ from modulo.api.dependencies import (
     require_team_membership_or_admin,
     require_team_membership_or_admin_any_credential,
 )
+from modulo.api.middleware.sensitive_mask import (
+    mask_pipeline_graph_node,
+    merge_masked_graph_nodes,
+)
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import (
     resolve_pipeline_team_scope,
@@ -1671,10 +1675,15 @@ def _graph_response(
 
     # --- nodes: validate per-node; never fail the read ---
     valid_nodes: list[PipelineGraphNode] = []
-    for node_dict in nodes:
-        if not isinstance(node_dict, dict):
-            logger.warning("Graph read: skipping non-dict node entry: %r", type(node_dict).__name__)
+    for raw_entry in nodes:
+        if not isinstance(raw_entry, dict):
+            logger.warning("Graph read: skipping non-dict node entry: %r", type(raw_entry).__name__)
             continue
+        # FAR-1181: the graph read masks credential-bearing node fields
+        # (env_vars / context_files / composite_parameter_values /
+        # parameter_overrides) before serialization, reusing the shipped
+        # maskers. Masking is applied to a copy — the stored data is untouched.
+        node_dict = mask_pipeline_graph_node(raw_entry)
         raw_node_id = node_dict.get("id")
         node_id = str(raw_node_id) if raw_node_id is not None else "unknown"
         try:
@@ -2421,6 +2430,16 @@ async def replace_pipeline_graph_endpoint(
             await _set_rls_context(session, principal)
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             pipeline = await _get_pipeline_or_404(session, pipeline_id)
+            # FAR-1181: the graph READ masks envVars/contextFiles/parameter
+            # values; a full-replace write round-tripping that masked read must
+            # not persist the mask literals over the stored secrets. Echoes are
+            # resolved against the stored graph before the write commits.
+            node_data = merge_masked_graph_nodes(node_data, list(pipeline.graph_nodes_json or []))
+            validator_graph = {
+                "nodes": node_data,
+                "edges": [_edge_data_to_validator(edge) for edge in edge_data],
+            }
+            connector_bindings = extract_connector_bindings(node_data)
             await _enforce_connector_team_bindings(
                 session,
                 principal.organisation_id,
@@ -2664,6 +2683,15 @@ async def _apply_graph_update(
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     effective_owner_team_id = updates.get("owner_team_id", existing.owner_team_id)
+    # FAR-1181: resolve mask echoes against the stored graph (parity with the
+    # PATCH /graph endpoint) — a full-replace write round-tripping the masked
+    # read must not persist the mask literals over the stored secrets.
+    node_data = merge_masked_graph_nodes(node_data, list(existing.graph_nodes_json or []))
+    validator_graph = {
+        "nodes": node_data,
+        "edges": [_edge_data_to_validator(edge) for edge in edge_data],
+    }
+    graph_bindings = extract_connector_bindings(node_data)
     await _enforce_connector_team_bindings(
         session,
         org_id,
@@ -3332,6 +3360,22 @@ def _snapshot_to_response(s: Any) -> SnapshotResponse:
     )
 
 
+def _masked_snapshot_graph(graph_json: Any) -> Any:
+    """Return ``graph_json`` with per-node credentials masked (FAR-1181).
+
+    Snapshots store the graph with real values; any response that surfaces
+    ``graph_json`` gets the same node masking as the graph read. Non-dict
+    payloads are returned unchanged.
+    """
+    if not isinstance(graph_json, dict):
+        return graph_json
+    masked = dict(graph_json)
+    nodes = graph_json.get("nodes")
+    if isinstance(nodes, list):
+        masked["nodes"] = [mask_pipeline_graph_node(node) if isinstance(node, dict) else node for node in nodes]
+    return masked
+
+
 def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
     return SnapshotDetailResponse(
         id=s.id,
@@ -3345,7 +3389,7 @@ def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
         created_kind=s.created_kind,
         draft=s.draft,
         channel=s.channel,
-        graph_json=s.graph_json,
+        graph_json=_masked_snapshot_graph(s.graph_json),
         connector_bindings_json=s.connector_bindings_json,
         schema_pins_json=s.schema_pins_json,
         prompt_pins_json=s.prompt_pins_json,
@@ -3589,6 +3633,20 @@ async def diff_snapshot_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="One or both snapshots not found",
         )
+    # FAR-1181: diff payloads carry raw node dicts copied from the stored
+    # snapshots — mask them exactly like the snapshot-detail graph read.
+    result = dict(result)
+    for key in ("snapshot_a", "snapshot_b"):
+        snapshot_payload = result.get(key)
+        if isinstance(snapshot_payload, dict):
+            result[key] = {
+                **snapshot_payload,
+                "graph": _masked_snapshot_graph(snapshot_payload.get("graph")),
+            }
+    for key in ("nodes_added", "nodes_removed"):
+        entries = result.get(key)
+        if isinstance(entries, list):
+            result[key] = [mask_pipeline_graph_node(node) if isinstance(node, dict) else node for node in entries]
     return SnapshotDiffResponse(**result)
 
 

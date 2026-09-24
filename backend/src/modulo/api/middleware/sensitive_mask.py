@@ -27,7 +27,13 @@ from modulo.settings import Settings, get_settings
 
 # Re-exported so API-layer callers can import from the documented location.
 # Required because mypy runs under `strict` (no_implicit_reexport = True).
-__all__ = ["SENSITIVE_VALUE_MASK", "merge_masked_config", "merge_masked_config_json"]
+__all__ = [
+    "SENSITIVE_VALUE_MASK",
+    "mask_pipeline_graph_node",
+    "merge_masked_config",
+    "merge_masked_config_json",
+    "merge_masked_graph_nodes",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -375,3 +381,130 @@ async def reveal_sensitive_value(
         await redis.aclose()
 
     return RevealResponse(token=reveal_token, value=actual_value, expires_in_seconds=30)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline graph node masking (FAR-1181)
+# ---------------------------------------------------------------------------
+
+_GRAPH_NODE_SECRET_FIELDS: tuple[str, ...] = (
+    "env_vars",
+    "context_files",
+    "composite_parameter_values",
+    "parameter_overrides",
+)
+
+
+def mask_pipeline_graph_node(node: dict[str, Any]) -> dict[str, Any]:
+    """Mask credential-bearing fields on a pipeline graph node dict (FAR-1181).
+
+    Returned dict is a NEW object — the caller's ``node`` is never mutated.
+
+    Masking tiers (both reusing the shipped maskers — no new detection logic):
+    - Key tier: env var keys matched by :func:`is_sensitive_env_key` get the
+      whole value masked; remaining env keys are still scanned by the canonical
+      value patterns (an opaque token under a non-sensitive key is masked).
+    - Value tier: context file contents and remaining env values pass through
+      :func:`mask_secret_values_in_text` (embedded-secret redaction).
+    - Deep dicts (``composite_parameter_values``, ``parameter_overrides``) use
+      the shipped :func:`mask_config_json` (key tier at every nesting depth,
+      plus value tier).
+
+    Fail-closed: if any masker raises, the node's secret-bearing fields are
+    scrubbed wholesale (every value replaced with ``SENSITIVE_VALUE_MASK``)
+    rather than returned raw.
+    """
+    try:
+        masked = dict(node)
+        env = node.get("env_vars")
+        if isinstance(env, dict):
+            masked["env_vars"] = {
+                key: (mask_sensitive_value(value) if is_sensitive_env_key(key) else mask_secret_values_in_text(value))
+                if isinstance(value, str)
+                else value
+                for key, value in env.items()
+            }
+        contexts = node.get("context_files")
+        if isinstance(contexts, dict):
+            masked["context_files"] = {
+                key: mask_secret_values_in_text(value) if isinstance(value, str) else value
+                for key, value in contexts.items()
+            }
+        for field in ("composite_parameter_values", "parameter_overrides"):
+            values = node.get(field)
+            if isinstance(values, dict):
+                masked[field] = mask_config_json(values)
+        return masked
+    except Exception:
+        _log.exception("pipeline_graph_node_masking_failed: fail-closed scrub")
+        scrubbed = dict(node)
+        for field in _GRAPH_NODE_SECRET_FIELDS:
+            values = node.get(field)
+            if isinstance(values, dict):
+                scrubbed[field] = {key: SENSITIVE_VALUE_MASK for key, value in values.items() if isinstance(key, str)}
+        return scrubbed
+
+
+def merge_masked_graph_nodes(
+    incoming_nodes: list[dict[str, Any]],
+    stored_nodes: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Resolve mask echoes in a full-replace graph write against the stored graph (FAR-1181).
+
+    The graph read path masks ``env_vars`` / ``context_files`` /
+    ``composite_parameter_values`` / ``parameter_overrides``
+    (:func:`mask_pipeline_graph_node`). A full-replace write round-tripping
+    that masked read would otherwise persist the mask literals over the stored
+    secrets. Per node (matched by ``id``):
+
+    - ``env_vars`` / ``context_files`` (flat ``str`` dicts): an incoming value
+      containing ``SENSITIVE_VALUE_MASK`` is replaced with the stored value;
+      a masked echo with NO stored counterpart is dropped (fail closed).
+      Keys absent from the incoming field remain removed — full-replace
+      semantics are preserved for non-echo keys.
+    - ``composite_parameter_values`` / ``parameter_overrides``: a dict
+      containing a masked echo anywhere is deep-merged against the stored dict
+      via the shipped :func:`merge_masked_config_json`; an echo-free dict is
+      taken wholesale (full-replace semantics — no silent resurrection of
+      removed keys). A dict with no stored counterpart resolves echoes by
+      dropping them.
+    """
+    stored_by_id: dict[str, dict[str, Any]] = {}
+    for stored_node in stored_nodes or []:
+        if isinstance(stored_node, dict) and stored_node.get("id") is not None:
+            stored_by_id[str(stored_node["id"])] = stored_node
+
+    resolved: list[dict[str, Any]] = []
+    for node in incoming_nodes:
+        if not isinstance(node, dict):
+            resolved.append(node)
+            continue
+        stored = stored_by_id.get(str(node["id"])) if node.get("id") is not None else None
+        updated = dict(node)
+        for field in ("env_vars", "context_files"):
+            incoming = updated.get(field)
+            if not isinstance(incoming, dict):
+                continue
+            stored_field = stored.get(field) if stored is not None else None
+            stored_field = stored_field if isinstance(stored_field, dict) else {}
+            merged: dict[str, Any] = {}
+            for key, value in incoming.items():
+                if isinstance(value, str) and SENSITIVE_VALUE_MASK in value:
+                    restored = stored_field.get(key)
+                    if restored is not None:
+                        merged[key] = restored
+                    # else: mask echo with no stored counterpart — dropped.
+                else:
+                    merged[key] = value
+            updated[field] = merged
+        for field in ("composite_parameter_values", "parameter_overrides"):
+            incoming = updated.get(field)
+            if not isinstance(incoming, dict):
+                continue
+            stored_field = stored.get(field) if stored is not None else None
+            if _contains_masked_echo(incoming):
+                base = stored_field if isinstance(stored_field, dict) else {}
+                updated[field] = merge_masked_config_json(base, incoming)
+            # else: echo-free — keep the caller's value wholesale.
+        resolved.append(updated)
+    return resolved
