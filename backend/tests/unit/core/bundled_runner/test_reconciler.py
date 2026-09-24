@@ -482,3 +482,71 @@ def test_non_string_current_context_counts_as_configured(monkeypatch: pytest.Mon
     monkeypatch.setattr(runner_reconciler, "_docker_config_path", lambda: config)
 
     assert runner_reconciler._context_endpoint_configured() is True
+
+
+def test_non_object_docker_config_counts_as_configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A JSON array (any non-object) makes aiodocker RAISE at construction
+    (AttributeError on ``.get``) — that error must surface as a failed sweep,
+    never be skipped away."""
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    config = tmp_path / "config.json"
+    config.write_text("[1, 2, 3]", encoding="utf-8")
+    monkeypatch.setattr(runner_reconciler, "_docker_config_path", lambda: config)
+
+    assert runner_reconciler._context_endpoint_configured() is True
+
+
+def test_docker_config_path_is_the_cli_default() -> None:
+    """The context config path mirrors the Docker CLI default under ``$HOME``."""
+    assert runner_reconciler._docker_config_path() == Path.home() / ".docker" / "config.json"
+
+
+def test_windows_pipe_probe_false_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Off Windows there is no Docker Desktop named pipe — the probe is False."""
+    monkeypatch.setattr(runner_reconciler.sys, "platform", "linux")
+
+    assert runner_reconciler._windows_docker_engine_pipe_exists() is False
+
+
+def test_windows_pipe_probe_true_when_pipe_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows the probe reports the named pipe's presence."""
+    monkeypatch.setattr(runner_reconciler.sys, "platform", "win32")
+    monkeypatch.setattr(runner_reconciler.Path, "exists", lambda self: True)
+
+    assert runner_reconciler._windows_docker_engine_pipe_exists() is True
+
+
+def test_windows_pipe_probe_false_when_stat_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An OSError stat-ing the pipe is treated as absent (fail-safe)."""
+    monkeypatch.setattr(runner_reconciler.sys, "platform", "win32")
+
+    def _raise(self: Path) -> bool:
+        raise OSError("pipe query failed")
+
+    monkeypatch.setattr(runner_reconciler.Path, "exists", _raise)
+
+    assert runner_reconciler._windows_docker_engine_pipe_exists() is False
+
+
+def test_default_socket_present_true_when_posix_socket_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A present POSIX socket is aiodocker's auto-detected endpoint."""
+
+    class _Socket:
+        def is_socket(self) -> bool:
+            return True
+
+    monkeypatch.setattr(runner_reconciler, "_local_docker_socket_paths", lambda: (_Socket(),))
+
+    assert runner_reconciler._default_docker_socket_present() is True
+
+
+def test_default_socket_present_falls_back_to_windows_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No POSIX socket → the Windows named-pipe probe decides."""
+    monkeypatch.setattr(runner_reconciler, "_local_docker_socket_paths", lambda: ())
+    monkeypatch.setattr(runner_reconciler, "_windows_docker_engine_pipe_exists", lambda: True)
+
+    assert runner_reconciler._default_docker_socket_present() is True
+
+    monkeypatch.setattr(runner_reconciler, "_windows_docker_engine_pipe_exists", lambda: False)
+
+    assert runner_reconciler._default_docker_socket_present() is False
