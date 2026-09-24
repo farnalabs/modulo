@@ -1,7 +1,7 @@
 ---
 id: feat-core-runtime-provider-core
 prd: 6
-adr: [ADR 044 (agent-dispatch-model)]
+adr: [ADR 044 (agent-dispatch-model), ADR 040 (runtime-provider-errors)]
 delivery-tasks: []
 code:
   - backend/src/modulo/core/runtime_provider/
@@ -15,14 +15,27 @@ code:
 unit-tests:
   - backend/tests/unit/core/runtime_provider/test_abc.py
   - backend/tests/unit/core/runtime_provider/test_hub.py
+  - backend/tests/unit/core/runtime_provider/test_default_hub.py
+  - backend/tests/unit/core/runtime_provider/test_provider_type_coverage.py
+  - backend/tests/unit/core/runtime_provider/test_provider_close.py
+  - backend/tests/unit/core/runtime_provider/test_error_family.py
   - backend/tests/unit/core/runtime_provider/test_e2b.py
+  - backend/tests/unit/core/runtime_provider/test_e2b_conformance_slice2.py
+  - backend/tests/unit/core/runtime_provider/test_e2b_read_log_tail.py
+  - backend/tests/unit/core/runtime_provider/test_e2b_apply_isolation.py
+  - backend/tests/unit/core/runtime_provider/test_file_io_primitives.py
   - backend/tests/unit/core/runtime_provider/test_local.py
+  - backend/tests/unit/core/runtime_provider/test_workspace_network_validation.py
+  - backend/tests/unit/core/runtime_provider/test_docker_endpoint_tls.py
+  - backend/tests/unit/core/runtime_provider/test_far1128_cap_environments_dispatch.py
   - backend/tests/unit/runtime_provider/test_docker_provider.py
+  - backend/tests/unit/pipeline_engine/test_e2b_isolation_flag.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
   - backend/tests/unit/api/test_environment_profiles_routes.py
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
   - backend/tests/bdd/features/runtime_providers/provider_matrix.feature
+  - backend/tests/bdd/features/runtime_providers/file_io.feature
   - backend/tests/bdd/features/workflows/binding.feature
 depends-on: []
 status: covered
@@ -67,6 +80,42 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       the valid vocabulary, a missing type is unresolvable); and the factory
       `initialise` loads docker-family configs under their config name, skips e2b
       without an api_key, and rejects unknown types
+- [x] ADR 040 additive `RuntimeProviderError` family (FAR-1050 slice 1): typed
+      members (`ProviderCapabilityUnsupportedError`, `WorkspaceGoneError`,
+      `StreamingUnsupportedError`, `ArtifactTooLargeError`, `RateLimitedError`,
+      `SdkMissingError`, `ProvisionTimeoutError`, `UnknownRefError`,
+      `BackendUnreachableError`) with an explicit dual hierarchy — the
+      pre-existing `ProviderNotConfiguredError` / `UnknownProviderTypeError`
+      config tree is deliberately NOT re-parented under the new base, so each
+      dispatch catch-site stays reconciled
+- [x] `exec_command_stream` (D4 primitive) with a kill handle: async decoded
+      chunks, `done` on every stream end, `exit_code` stays `None` until the END
+      of a healthy stream (never a fabricated zero exit on a mid-stream
+      engine/proxy drop), and the ABC default raises the typed
+      `StreamingUnsupportedError` — never a raw `NotImplementedError` (ADR 040
+      error-honesty carve-out)
+- [x] `destroy_workspace_by_ref` (ADR 040 substrate-level destroy): idempotent on
+      already-destroyed / foreign refs (no-op success), confirmed-gone `True` /
+      unconfirmed `False` best-effort (never raises), overridable via
+      `AsyncSandbox.connect` on E2B, typed `ProviderCapabilityUnsupportedError`
+      default
+- [x] `read_log_tail` (FAR-1050 R1): bounded tail read (`max_bytes` newest-end
+      cap, 4k raw fallback, `b""` on invalid ref / fetch failure — never raises),
+      with E2B's legacy `_fetch_sandbox_log_tail` content parity pinned
+- [x] `apply_isolation` + the frozen `IsolationPolicy` carrier (FAR-1050 R3): the
+      single owner of the three in-sandbox controls — git-credential scoping,
+      the selected-mode egress allowlist, and the read-only seal — with
+      flag-gated parity to the legacy `sandbox_policy.apply_sandbox_policy`
+      (enforcement-critical-raise vs egress-best-effort split) and a typed
+      `ProviderCapabilityUnsupportedError` refusal on non-overriding providers
+- [x] File-I/O primitives (FAR-1050 R2a): `read_file` / `write_file` /
+      `list_files` / `get_info` (+ the frozen `WorkspaceFileInfo` value object)
+      on the ABC — exec-based binary-safe defaults (base64 over the text exec
+      channel, shlex-quoted paths, `mkdir -p` parent creation, sorted full
+      child paths, `stat` parsing, 30s per-command bound, typed
+      `RuntimeProviderError` on a non-zero exit) with E2B native `sandbox.files`
+      SDK overrides, all unit-covered and BDD-exercised against the REAL
+      `LocalRuntimeProvider` exec backend (`file_io.feature`)
 
 ## Known Gaps
 
@@ -75,6 +124,17 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
 
 ## QA History
 
+- 2026-09-25: **product-map walk** — walked the FAR-1050 runtime-provider
+  primitive series into this entry: the ADR 040 `RuntimeProviderError` family
+  (slice 1), `exec_command_stream` + `destroy_workspace_by_ref` (slice 2),
+  `read_log_tail` (R1), `apply_isolation` + `IsolationPolicy` (R3), and the
+  file-I/O primitives `read_file` / `write_file` / `list_files` / `get_info` +
+  `WorkspaceFileInfo` (R2a) were shipped without behaviour-tracker lines or
+  citation updates; added the behaviour lines, the missing unit-test citations,
+  the ADR 040 reference, and new executing BDD coverage
+  (`runtime_providers/file_io.feature`, steps in
+  `features/runtime_providers/test_file_io_steps.py`) driving the REAL
+  `LocalRuntimeProvider` exec-based defaults. Status: covered.
 - 2026-09-22: **product-map walk** — closed the "No BDD coverage for the
   platform-provider matrix" gap (`provider_matrix.feature`, steps in
   `features/runtime_providers/test_provider_matrix_steps.py`), driving the REAL
