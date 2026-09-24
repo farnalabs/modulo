@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// FAR-1197: cross-tab refresh is now automatic — the httpOnly `modulo_refresh`
+// FAR-1197: cross-tab refresh is now automatic â€” the httpOnly `modulo_refresh`
 // cookie is shared by the browser's cookie jar, so there is no localStorage
 // token for a sibling tab to "adopt". BroadcastChannel machinery stays as a
 // wake-up signal. jsdom does not implement BroadcastChannel, so this suite
 // stubs the channel to cover the creation + post-hint paths.
 
-// FAR-1197 legacy scrub key — the module wipes any pre-upgrade refresh token
+// FAR-1197 legacy scrub key â€” the module wipes any pre-upgrade refresh token
 // from script-visible storage on first load.
 const LEGACY_REFRESH_TOKEN_KEY = 'modulo_refresh_token'
 const TOKEN_KEY = 'modulo_access_token'
@@ -29,7 +29,7 @@ class MockBroadcastChannel {
 
   postMessage(data: unknown): void {
     // Per the BroadcastChannel spec, a channel does NOT receive its own
-    // messages — deliver to every OTHER registered channel.
+    // messages â€” deliver to every OTHER registered channel.
     for (const ch of MockBroadcastChannel.channels) {
       if (ch === this) continue
       for (const listener of ch.listeners) listener({ data } as MessageEvent)
@@ -75,7 +75,7 @@ describe('cross-tab refresh (cookie transport)', () => {
     expect(channel.name).toBe('modulo-auth')
   })
 
-  it('sends no JSON body — the token rides the httpOnly cookie automatically', async () => {
+  it('sends no JSON body â€” the token rides the httpOnly cookie automatically', async () => {
     const auth = await loadAuth()
     const fetchMock = vi.fn(async () => ({
       ok: true,

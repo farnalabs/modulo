@@ -13,7 +13,7 @@ import {
 } from '../lib/api/auth'
 
 const TOKEN_KEY = 'modulo_access_token'
-// FAR-1197 legacy scrub key — no refresh token is persisted anymore.
+// FAR-1197 legacy scrub key â€” no refresh token is persisted anymore.
 const LEGACY_REFRESH_TOKEN_KEY = 'modulo_refresh_token'
 
 beforeEach(() => {

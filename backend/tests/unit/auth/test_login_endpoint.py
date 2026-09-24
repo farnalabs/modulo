@@ -114,11 +114,11 @@ def test_login_success(client: TestClient) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert "access_token" in body
-    # FAR-1197: the refresh token never appears in a JSON body the SPA could
-    # persist — it rides the httpOnly modulo_refresh cookie set by
-    # _set_auth_cookies.
+    # FAR-1197: the refresh token rides ONLY in the httpOnly modulo_refresh
+    # cookie — it must never appear in the JSON body the SPA could persist.
     assert "refresh_token" not in body
     assert REFRESH_COOKIE in resp.cookies
+    assert resp.cookies[REFRESH_COOKIE]
     refresh_cookie = next(c for c in resp.headers.get_list("set-cookie") if c.startswith(f"{REFRESH_COOKIE}="))
     assert "httponly" in refresh_cookie.lower()
     assert body["token_type"] == "bearer"
