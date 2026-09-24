@@ -97,7 +97,7 @@ class TestResolveOwnerEmailsForImport:
         session.execute = AsyncMock()
         ctx = _ctx(session)
         assert await _resolve_owner_emails_for_import(ctx, {}) == (None, None)
-        assert ctx.warnings == []
+        assert not ctx.warnings
 
     async def test_empty_string_treated_as_unassigned(self) -> None:
         session = MagicMock()
@@ -108,7 +108,7 @@ class TestResolveOwnerEmailsForImport:
             {"business_owner_email": "", "reliability_owner_email": ""},
         )
         assert result == (None, None)
-        assert ctx.warnings == []
+        assert not ctx.warnings
 
     async def test_non_string_email_warns(self) -> None:
         session = MagicMock()
@@ -173,4 +173,4 @@ class TestResolveOwnerEmailsForImport:
         assert result == (_BUSINESS_ID, _RELIABILITY_ID)
         assert validate.await_count == 2
         assert all(c.kwargs["visibility"] == "org" for c in validate.await_args_list)
-        assert ctx.warnings == []
+        assert not ctx.warnings
