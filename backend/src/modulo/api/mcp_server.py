@@ -1486,6 +1486,16 @@ def _parse_uuid_param(value: str, field: str) -> tuple[uuid.UUID | None, dict[st
         return None, {"error": "invalid_id", "field": field, "detail": f"Invalid UUID format: {value}"}
 
 
+def _parse_optional_uuid(
+    value: str | None,
+    field: str,
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Parse an OPTIONAL UUID tool param (None passes through as "unassigned")."""
+    if value is None:
+        return None, None
+    return _parse_uuid_param(value, field)
+
+
 _TOOL_SHELL_P = ParamSpec("_TOOL_SHELL_P")
 
 
@@ -1678,7 +1688,16 @@ async def list_pipelines_tool(
         async with _session(org_id) as s:
             result = await list_pipelines(s, cursor=cursor, page_size=lim, team_id=_ctx_team_id_val())
         return {
-            "data": [{"id": str(p.id), "name": p.name, "visibility": p.visibility} for p in result.items],
+            "data": [
+                {
+                    "id": str(p.id),
+                    "name": p.name,
+                    "visibility": p.visibility,
+                    "business_owner_id": _owner_id_str(p.business_owner_id),
+                    "reliability_owner_id": _owner_id_str(p.reliability_owner_id),
+                }
+                for p in result.items
+            ],
             "total": result.total,
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
@@ -1695,7 +1714,11 @@ async def list_pipelines_tool(
     description="Create a new pipeline in the organisation. Returns the created pipeline details. "
     "Optional circuit_breaker_threshold (USD, > 0) sets a monthly spend circuit breaker: when the "
     "pipeline's calendar-month spend would exceed it, runs are rejected and the pipeline's triggers "
-    "pause until an org admin resets it. Omit or pass null for no breaker."
+    "pause until an org admin resets it. Omit or pass null for no breaker. "
+    "Optional business_owner_id / reliability_owner_id (account UUIDs) assign the accountability "
+    "owners (FAR-1161); each assignee must be an active member of this organisation and, when "
+    "visibility is 'team', a member of the owner team — an ineligible owner is rejected with a "
+    "validation error, never silently dropped. Omit or pass null for unassigned."
 )
 @_RETRY_DB
 async def create_pipeline(
@@ -1709,6 +1732,8 @@ async def create_pipeline(
     max_autonomy_level: str | None = None,
     folder_id: str | None = None,
     circuit_breaker_threshold: float | None = None,
+    business_owner_id: str | None = None,
+    reliability_owner_id: str | None = None,
 ) -> dict[str, Any]:
     parsed_folder_id: uuid.UUID | None = None
     if folder_id is not None:
@@ -1719,6 +1744,12 @@ async def create_pipeline(
     threshold_error = _circuit_breaker_threshold_error(circuit_breaker_threshold)
     if threshold_error is not None:
         return threshold_error
+    parsed_business_owner, business_owner_err = _parse_optional_uuid(business_owner_id, "business_owner_id")
+    if business_owner_err is not None:
+        return business_owner_err
+    parsed_reliability_owner, reliability_owner_err = _parse_optional_uuid(reliability_owner_id, "reliability_owner_id")
+    if reliability_owner_err is not None:
+        return reliability_owner_err
 
     # FAR-1163: the autonomy ceiling must be a valid level and sit at or
     # above the default (same rule as the REST create route).
@@ -1754,6 +1785,8 @@ async def create_pipeline(
                 max_autonomy_level=max_autonomy_level,
                 folder_id=parsed_folder_id,
                 circuit_breaker_threshold=circuit_breaker_threshold,
+                business_owner_id=parsed_business_owner,
+                reliability_owner_id=parsed_reliability_owner,
             )
 
         return {
@@ -1765,10 +1798,17 @@ async def create_pipeline(
             "default_autonomy_level": pipeline.default_autonomy_level,
             "circuit_breaker_threshold": _threshold_float(pipeline.circuit_breaker_threshold),
             "max_autonomy_level": pipeline.max_autonomy_level,
+            "business_owner_id": _owner_id_str(pipeline.business_owner_id),
+            "reliability_owner_id": _owner_id_str(pipeline.reliability_owner_id),
             "created_at": pipeline.created_at.isoformat() if pipeline.created_at else None,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except FastAPIHTTPException as exc:
+        # FAR-1161: the shared eligibility invariant rejects an ineligible
+        # accountability owner with a 422 — surface the specific detail
+        # instead of a generic internal error.
+        return {"error": "validation_failed", "detail": str(exc.detail)}
     except ProgrammingError:
         _log.exception("create_pipeline failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -1793,6 +1833,16 @@ def _threshold_float(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, Decimal | int | float):
         return None
     return float(value)
+
+
+def _owner_id_str(value: Any) -> str | None:
+    """Serialise an accountability-owner column as a JSON string (None = unassigned).
+
+    FAR-1161: defensive like ``PipelineResponse._coerce_owner_id`` — partial
+    ORM stand-ins and test doubles expose non-column attributes that must
+    serialise as "unassigned" (None), never a repr string.
+    """
+    return str(value) if isinstance(value, uuid.UUID | str) else None
 
 
 @mcp.tool(
@@ -1853,6 +1903,82 @@ async def set_pipeline_circuit_breaker(
     except Exception:
         _log.exception("set_pipeline_circuit_breaker failed")
         return _tool_error("Failed to set pipeline circuit breaker")
+
+
+@mcp.tool(
+    description=(
+        "Set BOTH of a pipeline's accountability owners (FAR-1161) in one atomic write. "
+        "Both parameters are REQUIRED and nullable: pass an account UUID to assign, or null to "
+        "clear that owner (there is no leave-unchanged state — the tool always writes both "
+        "fields; pass the owner's current id to keep it). The assignee must be an active member "
+        "of this organisation and, when the pipeline's visibility is 'team', a member of the "
+        "pipeline's owner team — the shared eligibility invariant rejects an ineligible owner "
+        "with a validation error (never silently dropped). Returns the stored owners. "
+        "Every change is audited (pipeline.business_owner_changed / pipeline.reliability_owner_changed)."
+    ),
+)
+@_RETRY_DB
+async def set_pipeline_owners(
+    pipeline_id: str,
+    business_owner_id: str | None,
+    reliability_owner_id: str | None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("set_pipeline_owners")
+
+        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+        if pid_err:
+            return pid_err
+        if pid is None:
+            return {"error": "invalid_id", "detail": _MSG_UUID_PARSE_FAILED}
+        parsed_business, business_err = _parse_optional_uuid(business_owner_id, "business_owner_id")
+        if business_err is not None:
+            return business_err
+        parsed_reliability, reliability_err = _parse_optional_uuid(reliability_owner_id, "reliability_owner_id")
+        if reliability_err is not None:
+            return reliability_err
+
+        from modulo.db.crud.pipeline import update_pipeline
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+        async with _session(org_id) as s:
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
+            pipeline = await update_pipeline(
+                s,
+                pid,
+                {
+                    "business_owner_id": parsed_business,
+                    "reliability_owner_id": parsed_reliability,
+                },
+                org_id=org_id,
+                account_id=account_id,
+            )
+            if pipeline is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            # Built inside the session (commits on exit) so no expired attribute is read.
+            return {
+                "pipeline_id": pipeline_id,
+                "business_owner_id": _owner_id_str(pipeline.business_owner_id),
+                "reliability_owner_id": _owner_id_str(pipeline.reliability_owner_id),
+            }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except FastAPIHTTPException as exc:
+        # FAR-1161: the shared eligibility invariant rejects an ineligible
+        # accountability owner with a 422 — surface the specific detail
+        # instead of a generic internal error.
+        return {"error": "validation_failed", "detail": str(exc.detail)}
+    except ProgrammingError:
+        _log.exception("set_pipeline_owners failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("set_pipeline_owners failed")
+        return _tool_error("Failed to set pipeline owners")
 
 
 def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:
@@ -8591,6 +8717,8 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
         f"Description: {pipeline.description or '(none)'}",
         f"Status: {'active' if pipeline.graph_nodes_json else 'inactive'}",
         f"Visibility: {pipeline.visibility}",
+        f"Business owner: {_owner_id_str(getattr(pipeline, 'business_owner_id', None)) or '(none)'}",
+        f"Reliability owner: {_owner_id_str(getattr(pipeline, 'reliability_owner_id', None)) or '(none)'}",
         f"Created: {pipeline.created_at.isoformat()}",
         f"Node count: {len(pipeline.graph_nodes_json)}",
         f"Edge count: {edge_count}",

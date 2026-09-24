@@ -28,6 +28,7 @@ _EXPECTED_TOOLS = frozenset(
         "update_pipeline_graph",
         "bind_connector_to_node",
         "set_pipeline_circuit_breaker",
+        "set_pipeline_owners",
         "trigger_pipeline",
         "get_run_status",
         "get_run_output",
