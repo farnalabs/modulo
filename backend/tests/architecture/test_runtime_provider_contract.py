@@ -46,6 +46,7 @@ _ABC_METHODS = {
     "close",
     "matches_provider_type",
     "read_log_tail",
+    "apply_isolation",
 }
 
 # Constructors / factories that return a runtime-provider hub. Seeded so a

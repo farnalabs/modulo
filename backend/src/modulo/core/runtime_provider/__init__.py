@@ -26,6 +26,7 @@ __all__ = [
     "ExecProcess",
     "ExecResult",
     "ExecStreamChunk",
+    "IsolationPolicy",
     "ProviderCapabilityUnsupportedError",
     "ProviderNotConfiguredError",
     "ProvisionTimeoutError",
@@ -275,6 +276,34 @@ class WorkspaceSpec:
     allow_root_user: bool = False
 
 
+@dataclass(frozen=True)
+class IsolationPolicy:
+    """The three named in-sandbox isolation controls (ADR 040).
+
+    Carrier for :meth:`RuntimeProvider.apply_isolation` — the single owner
+    of in-sandbox enforcement among these three named controls:
+
+    1. git-credential scoping (``scoped`` / ``none``, single- and multi-host),
+    2. the selected-mode egress allowlist,
+    3. the read-only seal.
+
+    Field semantics mirror the legacy engine-side
+    ``sandbox_policy.apply_sandbox_policy`` keyword arguments exactly (the
+    FAR-1050 R3 parity requirement): ``egress_allowlist`` entries may carry
+    a pre-resolved ``_resolved_ip`` key; ``allowed_hosts`` threads the
+    node's validated multi-host mapping (host -> env-var name) for
+    ``scoped`` credentials; ``command_timeout`` bounds each in-sandbox
+    step.
+    """
+
+    read_only: bool = False
+    git_credentials: str | None = None
+    egress_policy: str | None = None
+    egress_allowlist: list[dict[str, Any]] | None = None
+    allowed_hosts: dict[str, str] | None = None
+    command_timeout: float = 60.0
+
+
 @dataclass
 class ExecResult:
     """Result of executing a command in a workspace."""
@@ -438,6 +467,39 @@ class RuntimeProvider(ABC):
         """
         raise ProviderCapabilityUnsupportedError(
             f"Runtime provider '{self.__class__.__name__}' does not implement read_log_tail"
+        )
+
+    async def apply_isolation(
+        self,
+        provider_ref: str,
+        spec: WorkspaceSpec,
+        policy: IsolationPolicy,
+    ) -> None:
+        """Enforce the three named in-sandbox isolation controls (ADR 040).
+
+        ``apply_isolation`` is the single owner of in-sandbox enforcement
+        among the three named controls carried by *policy* (ADR 040
+        "Isolation enforcement"): git-credential scoping, the selected-mode
+        egress allowlist, and the read-only seal. ``provider_ref``
+        addresses the workspace — the same ref-first convention as
+        :meth:`read_log_tail` / :meth:`exec_command` (the ADR's
+        ``apply_isolation(spec, policy)`` shorthand names the two domain
+        arguments; the ref is the addressing primitive every workspace-
+        taking method carries) — and ``spec`` carries the workspace
+        attribution context.
+
+        Optional base-class method (ADR 040 "Error honesty": the same
+        carve-out from the contract freeze as :meth:`exec_command_stream`,
+        :meth:`destroy_workspace_by_ref` and :meth:`read_log_tail`):
+        providers that do not override it raise the typed
+        :class:`ProviderCapabilityUnsupportedError` — never a raw
+        ``NotImplementedError``. Callers surface that refusal as a
+        TERMINAL named-code run failure (a deterministic refusal must
+        never retry-loop); they must never silently downgrade to a
+        provider-specific direct call.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement apply_isolation"
         )
 
     @abstractmethod
