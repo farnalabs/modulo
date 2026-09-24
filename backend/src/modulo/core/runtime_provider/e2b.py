@@ -18,6 +18,7 @@ from modulo.core.runtime_provider import (
     ExecProcess,
     ExecResult,
     ExecStreamChunk,
+    IsolationPolicy,
     RuntimeProvider,
     WorkspaceSpec,
 )
@@ -311,6 +312,55 @@ class E2BRuntimeProvider(RuntimeProvider):
             return "\n".join(combined)[-max_bytes:].encode("utf-8", errors="replace")
         except Exception:
             return raw[: min(_LOG_TAIL_RAW_FALLBACK, max_bytes)].encode("utf-8", errors="replace")
+
+    async def apply_isolation(
+        self,
+        provider_ref: str,
+        spec: WorkspaceSpec,
+        policy: IsolationPolicy,
+    ) -> None:
+        """Run the sandbox-policy enforcement scripts in the sandbox (FAR-1050 R3).
+
+        ADR 040 ``apply_isolation``: wraps the existing
+        ``sandbox_policy.apply_sandbox_policy`` — the same script builders,
+        the same step order (git-credential scope -> egress allowlist ->
+        read-only seal), the same ``user=root``, and the same
+        enforcement-critical-raise vs egress-best-effort split — so the
+        flag-ON primitive and the flag-OFF engine invocation emit identical
+        enforcement for a fixed policy (pinned by the R3 parity unit test).
+
+        The sandbox is taken from this instance's tracked handles when the
+        provider created the workspace (the R4 dispatch shape); otherwise it
+        is reconnected by ref via ``AsyncSandbox.connect`` — the same by-ref
+        pattern as :meth:`destroy_workspace_by_ref` — so the R3 flag-ON
+        engine path can enforce a workspace the legacy direct path
+        provisioned. ``spec`` carries workspace attribution for callers; the
+        scripts target the fixed ``/home/user`` workspace and do not read it.
+        """
+        # Lazy import (house convention): sandbox_policy is dependency-free,
+        # but importing it pulls the pipeline_engine package __init__ — the
+        # engine process already has it loaded when this runs.
+        from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
+
+        sandbox = self._sandboxes.get(provider_ref)
+        if sandbox is None:
+            from e2b import AsyncSandbox
+
+            try:
+                sandbox = await AsyncSandbox.connect(provider_ref, api_key=self._api_key)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                raise RuntimeError(f"Failed to reconnect to sandbox {provider_ref} to apply isolation: {exc}") from exc
+        await apply_sandbox_policy(
+            sandbox,
+            read_only=policy.read_only,
+            git_credentials=policy.git_credentials,
+            egress_policy=policy.egress_policy,
+            egress_allowlist=policy.egress_allowlist,
+            allowed_hosts=policy.allowed_hosts,
+            command_timeout=policy.command_timeout,
+        )
 
     async def exec_command_stream(
         self,

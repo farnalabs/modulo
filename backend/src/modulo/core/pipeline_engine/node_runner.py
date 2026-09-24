@@ -1125,6 +1125,95 @@ async def _read_log_tail_via_provider(sandbox_id: str | None, *, max_bytes: int 
         return ""
 
 
+async def _build_isolation_provider(api_key: str) -> "RuntimeProvider | None":
+    """FAR-1050 R3 flag-ON isolation: build the E2B RuntimeProvider.
+
+    Sibling seam of :func:`_build_log_tail_provider` — delegates to it so
+    the hub-construction logic exists once, while giving the isolation path
+    its own test-substitutable injection point. Returns ``None`` when the
+    provider cannot be constructed — the caller fails CLOSED (isolation is
+    enforcement-critical), never open.
+    """
+    return await _build_log_tail_provider(api_key)
+
+
+async def _apply_isolation_via_provider(
+    sandbox_id: str | None,
+    *,
+    org_id: str | None,
+    run_id: str | None,
+    read_only: bool,
+    git_credentials: str | None,
+    egress_policy: str | None,
+    egress_allowlist: list[dict[str, Any]] | None,
+    allowed_hosts: dict[str, str] | None = None,
+    command_timeout: float = 60.0,
+) -> None:
+    """FAR-1050 R3 flag-ON path: enforce the sandbox policy via ``apply_isolation``.
+
+    Gated sibling of the engine-side ``apply_sandbox_policy(sandbox, ...)``
+    invocation (``MODULO_E2B_VIA_PROVIDER``, default OFF — with the flag OFF
+    this helper is unreachable and the legacy invocation is byte-for-byte
+    unchanged). Key resolution mirrors the legacy enforcement gate (runtime
+    bridge / ``MODULO_E2B_API_KEY``, then legacy ``E2B_API_KEY``).
+
+    Failure semantics at this invocation point:
+      - enforcement-critical step failures propagate UNCHANGED (the same
+        exception the legacy path raises at this spot — parity);
+      - a capability refusal (``ProviderCapabilityUnsupportedError`` — the
+        ABC default on a non-overriding provider) maps to
+        :class:`SandboxTierRefusedError`, carrying the existing TERMINAL
+        named code ``sandbox.tier_refused`` — a deterministic refusal must
+        never retry-loop (ADR 040);
+      - no key / provider build failure / missing sandbox id fail CLOSED as
+        the same tier refusal (isolation is enforcement-critical: never
+        silently skipped).
+    """
+    from modulo.core.runtime_config.key_bridge import get_e2b_api_key
+    from modulo.core.runtime_provider import (
+        IsolationPolicy,
+        ProviderCapabilityUnsupportedError,
+        WorkspaceSpec,
+    )
+
+    if not isinstance(sandbox_id, str) or not sandbox_id:
+        raise SandboxTierRefusedError("FAR-1050 flag-ON isolation path requires the dispatch sandbox id")
+    api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
+    provider = await _build_isolation_provider(api_key) if api_key else None
+    if provider is None:
+        raise SandboxTierRefusedError(
+            "FAR-1050 flag-ON isolation path could not resolve the E2B runtime provider "
+            "(set MODULO_E2B_API_KEY and restart)"
+        )
+    # WorkspaceSpec requires profile/org UUIDs; a session-factory-less
+    # dispatch has no bound profile (unit tests / direct dispatch), so the
+    # missing ids fall back to the nil UUID. E2B's apply_isolation does not
+    # read spec (the three controls ride in policy) — slice R4 may tighten
+    # this once dispatch moves through create_workspace(spec).
+    spec = WorkspaceSpec(
+        environment_profile_id=_runner_binding_env_profile_id() or uuid.UUID(int=0),
+        organisation_id=_parse_uuid_opt(org_id) or uuid.UUID(int=0),
+        run_id=_parse_uuid_opt(run_id),
+        egress_policy=egress_policy,
+    )
+    policy = IsolationPolicy(
+        read_only=read_only,
+        git_credentials=git_credentials,
+        egress_policy=egress_policy,
+        egress_allowlist=egress_allowlist,
+        allowed_hosts=allowed_hosts,
+        command_timeout=command_timeout,
+    )
+    try:
+        await provider.apply_isolation(sandbox_id, spec, policy)
+    except asyncio.CancelledError:
+        raise
+    except ProviderCapabilityUnsupportedError as exc:
+        raise SandboxTierRefusedError(
+            f"Runtime provider refused in-sandbox isolation for sandbox {sandbox_id}: {exc}"
+        ) from exc
+
+
 def _bounded_tail(text: str, limit: int) -> str:
     """Return the last ``limit`` chars of *text* with a clear truncation marker.
 
@@ -8306,8 +8395,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             egress_policy=_resolved_egress_for_policy,
             egress_allowlist=_resolved_allowlist_for_policy,
         ):
-            from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
-
             # FAR-798: thread the node's validated ``allowed_hosts`` (host ->
             # per-host env-var name) into the sandbox policy so the multi-host
             # git-credential helper is actually installed when scoped
@@ -8315,14 +8402,45 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # ``sandbox.git_credentials.multi_host`` certifies a guarantee the
             # runtime never enforced (capability/enforcement mismatch). Only
             # relevant for scoped credentials; other scopes ignore it.
-            await apply_sandbox_policy(
-                sandbox,
-                read_only=read_only,
-                git_credentials=git_credentials,
-                egress_policy=_resolved_egress_for_policy,
-                egress_allowlist=await _resolve_egress_allowlist(_resolved_allowlist_for_policy),
-                allowed_hosts=node_def.get("allowed_hosts") if git_credentials == "scoped" else None,
-            )
+            # Allowlist pre-resolution runs once, BEFORE the flag branch, so
+            # both paths enforce the identical resolved values (unchanged by
+            # FAR-1050 R3 — only the invocation seam is gated).
+            _resolved_allowlist = await _resolve_egress_allowlist(_resolved_allowlist_for_policy)
+            _policy_allowed_hosts = node_def.get("allowed_hosts") if git_credentials == "scoped" else None
+            from modulo.settings import get_settings
+
+            if get_settings().modulo_e2b_via_provider:
+                # FAR-1050 R3 flag-ON: route the SAME resolved policy through
+                # the ABC apply_isolation primitive (the E2B implementation
+                # wraps the identical sandbox_policy scripts — order, user and
+                # the raise-vs-best-effort split are parity-pinned). The
+                # flag-OFF arm below stays the legacy engine-side invocation
+                # until slice R6 retires it.
+                await _apply_isolation_via_provider(
+                    _sandbox_id,
+                    org_id=org_id,
+                    run_id=run_id,
+                    read_only=read_only,
+                    git_credentials=git_credentials,
+                    egress_policy=_resolved_egress_for_policy,
+                    egress_allowlist=_resolved_allowlist,
+                    allowed_hosts=_policy_allowed_hosts,
+                )
+            else:
+                # Legacy engine-side invocation. node_runner KEEPS importing
+                # apply_sandbox_policy on the flag-OFF path — the A21 guard
+                # must not activate until slice R6 physically removes this
+                # branch (docs/design/e2b-provider-conformance-rewire.md §4).
+                from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
+
+                await apply_sandbox_policy(
+                    sandbox,
+                    read_only=read_only,
+                    git_credentials=git_credentials,
+                    egress_policy=_resolved_egress_for_policy,
+                    egress_allowlist=_resolved_allowlist,
+                    allowed_hosts=_policy_allowed_hosts,
+                )
 
         try:
             # FAR-306: per-channel stall detector. The heartbeat channel
