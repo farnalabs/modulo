@@ -557,7 +557,7 @@ async def test_backfill_loader_reads_recent_notifications(monkeypatch: pytest.Mo
     assert events[0]["category"] == "run_failed"
 
 
-async def test_org_has_clients_reflects_tracked_connections() -> None:
+def test_org_has_clients_reflects_tracked_connections() -> None:
     from modulo.api.routes import events as ev
 
     assert ev._org_has_clients("org-none") is False
@@ -580,8 +580,8 @@ async def test_test_reset_connections_schedules_relay_reset(monkeypatch: pytest.
             break
         await asyncio.sleep(0.01)
 
-    assert ev._active_connections == {}
-    assert ev._queue_users == {}
+    assert not ev._active_connections
+    assert not ev._queue_users
     reset.assert_awaited_once()
 
 

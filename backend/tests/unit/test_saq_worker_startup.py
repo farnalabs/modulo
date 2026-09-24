@@ -365,8 +365,8 @@ class TestWorkerEventSubscriptionEdges:
         assert "worker_event_subscription.close_failed" in caplog.text
 
     async def test_close_pubsub_without_unsubscribe_or_close_is_noop(self) -> None:
-        await ws._close_pubsub(_NoUnsubPubSub())  # must not raise
-        await ws._close_pubsub(_NoCloseAtAllPubSub())  # must not raise
+        assert await ws._close_pubsub(_NoUnsubPubSub()) is None  # must not raise
+        assert await ws._close_pubsub(_NoCloseAtAllPubSub()) is None  # must not raise
 
 
 class TestSpawnWorkerEventSubscription:

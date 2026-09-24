@@ -606,7 +606,9 @@ def test_deliver_pending_with_no_pending_is_noop() -> None:
     """after_commit with an empty queue returns immediately (no loop needed)."""
     session = _bare_session()
     try:
-        listeners._deliver_pending(session)  # no pending queued
+        assert listeners._deliver_pending(session) is None  # no pending queued
+        assert session.info.get(listeners._PENDING_KEY) is None
+        assert not listeners._background_tasks
     finally:
         session.close()
         session.get_bind().dispose()  # type: ignore[attr-defined]

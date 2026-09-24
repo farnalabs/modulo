@@ -470,7 +470,7 @@ async def test_wait_ready_times_out_before_subscription(bus: EventBus, broker: _
 
 
 async def test_close_pubsub_none_is_noop() -> None:
-    await relay_mod._close_pubsub(None)  # must not raise
+    assert await relay_mod._close_pubsub(None) is None  # must not raise
 
 
 async def test_close_pubsub_unsubscribe_exception_swallowed(caplog: pytest.LogCaptureFixture) -> None:
@@ -503,7 +503,7 @@ async def test_close_pubsub_aclose_exception_swallowed(caplog: pytest.LogCapture
 
 
 async def test_close_pubsub_without_aclose_or_close_is_noop() -> None:
-    await relay_mod._close_pubsub(_NoClosePubSub())  # must not raise
+    assert await relay_mod._close_pubsub(_NoClosePubSub()) is None  # must not raise
 
 
 async def test_handle_payload_drops_non_string_and_non_object(
