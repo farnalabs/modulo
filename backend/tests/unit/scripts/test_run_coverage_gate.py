@@ -957,6 +957,24 @@ class TestIsExecutableJsLine:
         assert mod._is_executable_js_line("if (x) {") is True
         assert mod._is_executable_js_line("return y;") is True
 
+    def test_type_only_import_and_export_are_not_executable(self):
+        """TS type-only statements are erased by the compiler, so v8 never
+        instruments them and they must not enter the coverage denominator.
+
+        Regression: a type-only barrel file (``frontend/src/types/index.ts``)
+        never appears in the LCOV report, so a changed ``export type`` line was
+        scored as 0% unmeasured and could never clear the gate.
+        """
+        assert mod._is_executable_js_line("export type { Foo } from './foo'") is False
+        assert mod._is_executable_js_line("  export type { Foo, Bar } from './foo'") is False
+        assert mod._is_executable_js_line("import type { Foo } from './foo'") is False
+        assert mod._is_executable_js_line("export type Foo = string | number") is False
+        # A runtime re-export of a value is still executable.
+        assert mod._is_executable_js_line("export { Foo } from './foo'") is True
+        assert mod._is_executable_js_line("export const Foo = 1") is True
+        # Trailing comment is stripped before the type-only check.
+        assert mod._is_executable_js_line("export type { Foo } // type-only") is False
+
 
 # ---------------------------------------------------------------------------
 # FAR-962 regression: deleted and non-executable lines excluded from denominator

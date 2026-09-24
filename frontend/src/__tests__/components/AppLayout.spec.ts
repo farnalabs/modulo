@@ -284,6 +284,57 @@ describe('AppLayout', () => {
     expect(bannerWrapper.classes()).not.toContain('absolute')
   })
 
+  describe('assistant execution overlay (FAR-1196 rename)', () => {
+    function mountLayout() {
+      return mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true, AssistantPanel: true },
+        },
+      })
+    }
+
+    it('renders the overlay while executing and aborts on stop click', async () => {
+      const wrapper = mountLayout()
+      const planStore = usePlanStore()
+      const assistantStore = useAssistantStore()
+      planStore.devMode = true
+      assistantStore.isExecutingUi = true
+      await nextTick()
+      await nextTick()
+
+      expect(wrapper.find('.assistant-execution-overlay').exists()).toBe(true)
+      const stopBtn = wrapper.find('.assistant-stop-btn')
+      expect(stopBtn.exists()).toBe(true)
+      await stopBtn.trigger('click')
+      expect(assistantStore.isExecutingUi).toBe(true)
+    })
+
+    it('hides the overlay when dev mode is on but nothing is executing', async () => {
+      const wrapper = mountLayout()
+      const planStore = usePlanStore()
+      const assistantStore = useAssistantStore()
+      planStore.devMode = true
+      assistantStore.isExecutingUi = false
+      await nextTick()
+      await nextTick()
+
+      expect(wrapper.find('.assistant-execution-overlay').exists()).toBe(false)
+    })
+
+    it('hides the overlay when executing with dev mode off', async () => {
+      const wrapper = mountLayout()
+      const planStore = usePlanStore()
+      const assistantStore = useAssistantStore()
+      planStore.devMode = false
+      assistantStore.isExecutingUi = true
+      await nextTick()
+      await nextTick()
+
+      expect(wrapper.find('.assistant-execution-overlay').exists()).toBe(false)
+    })
+  })
+
   describe('full-width main content (Assistant panel is an overlay, not a layout column)', () => {
     it('never reserves right-side padding on main, even when the Assistant panel is docked', async () => {
       const wrapper = mount(AppLayout, {
