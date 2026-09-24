@@ -55,7 +55,11 @@ from modulo.core.eval_engine.coverage_gap import (
     DEFAULT_MIN_RUNS,
     compute_coverage_gap,
 )
-from modulo.core.eval_engine.eval_definition_freeze import raise_if_frozen
+from modulo.core.eval_engine.eval_definition_write import (
+    create_or_update_eval,
+    validate_guardrail_request,
+)
+from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 from modulo.core.eval_engine.suite_run import (
     EVAL_LEADERBOARD_DEFAULT_DAYS,
     EVAL_LEADERBOARD_MAX_DAYS,
@@ -69,11 +73,13 @@ from modulo.core.eval_engine.suite_run import (
 from modulo.core.node_output_split import node_return
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run_node_outputs import read_run_blobs
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_dataset import EvalDataset
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
@@ -139,34 +145,41 @@ class EvalDefinitionResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _eval_def_to_dict(eval_def: EvalDefinition) -> dict[str, Any]:
-    return {
-        "id": str(eval_def.id),
-        "pipeline_id": str(eval_def.pipeline_id),
-        "node_id": str(eval_def.node_id) if eval_def.node_id else None,
-        "name": eval_def.name,
-        "eval_type": eval_def.eval_type,
-        "config_json": eval_def.config_json,
-        "failure_behaviour": eval_def.failure_behaviour,
-        "pass_threshold": eval_def.pass_threshold,
-        "suite_id": eval_def.suite_id,
-        "account_id": str(eval_def.account_id),
-        "version": getattr(eval_def, "version", 1),
-        "pre_version_raw": getattr(eval_def, "pre_version_raw", None),
-    }
+def _eval_def_to_dict(
+    eval_row: Eval,
+    *,
+    policy_gate: PolicyGate | None = None,
+    failure_behaviour_override: str | None = None,
+) -> dict[str, Any]:
+    """Convert an ``Eval`` row (and optional ``PolicyGate``) to the legacy response shape.
 
+    ``failure_behaviour`` is populated from ``PolicyGate.action`` for
+    node-scoped evals with a gate, else defaults to ``"warn"`` (guardrail-
+    typed or suite-scoped evals without a gate).  Callers that already know
+    the value (e.g. REST create paths that just set it) can pass
+    ``failure_behaviour_override`` to skip the gate lookup.
 
-def _stamp_eval_definition_version(eval_def: EvalDefinition) -> None:
-    """Bump the eval-definition version and snapshot the pre-edit config.
-
-    FAR-382: an edit to an eval definition is a version-scoped event. The prior
-    config is captured into ``pre_version_raw`` before mutation so a reversal is
-    reconstructable, then ``version`` is incremented. A v1->v2 rubric change is
-    therefore explicit — an ``EvalResult`` stamped with v1 never looks like a
-    regression against a v2-scoped result.
+    The field name ``failure_behaviour`` is retained for backward
+    compatibility — its retirement is chunk 5a's concern.
     """
-    eval_def.pre_version_raw = {"config_json": eval_def.config_json}
-    eval_def.version = (eval_def.version or 1) + 1
+    if failure_behaviour_override is not None:
+        failure_behaviour = failure_behaviour_override
+    else:
+        failure_behaviour = policy_gate.action if policy_gate is not None else "warn"
+    return {
+        "id": str(eval_row.id),
+        "pipeline_id": str(eval_row.pipeline_id),
+        "node_id": str(eval_row.node_id) if eval_row.node_id else None,
+        "name": eval_row.name,
+        "eval_type": eval_row.eval_type,
+        "config_json": eval_row.config_json,
+        "failure_behaviour": failure_behaviour,
+        "pass_threshold": float(eval_row.pass_threshold) if eval_row.pass_threshold is not None else None,
+        "suite_id": eval_row.suite_id,
+        "account_id": str(eval_row.account_id),
+        "version": getattr(eval_row, "version", 1),
+        "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
+    }
 
 
 def _validate_guardrail_request(
@@ -177,49 +190,14 @@ def _validate_guardrail_request(
 ) -> None:
     """Graph-save validation for guardrail definitions (FAR-208 item 5).
 
-    A guardrail binding never carries ``failure_behaviour='retry'`` — a
-    guardrail block is TERMINAL (eval_failed) and run-level retries are
-    excluded by design. Rejected at the API edge so an invalid binding can
-    never reach the graph or the engine.
+    Delegates to the consolidated validator in eval_definition_write.
+    Kept as a thin wrapper for backward compatibility with existing callers.
     """
-    if eval_type != "guardrail":
-        return
-    if failure_behaviour == "retry":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="A guardrail may never use failure_behaviour='retry' — guardrail blocks are terminal.",
-        )
-    if failure_behaviour not in (None, "warn", "block"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Guardrail failure_behaviour must be 'warn' or 'block'.",
-        )
-    if config_json is None:
-        return
-    action = config_json.get("action")
-    if action is not None and action not in ("observe", "warn", "block", "redact"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Guardrail action must be one of observe|warn|block|redact (got {action!r}).",
-        )
-    detection_type = config_json.get("type")
-    if detection_type is not None and detection_type not in ("regex", "json_schema"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Guardrail detection must be regex|json_schema (got {detection_type!r}).",
-        )
-    # The ``detection`` envelope (PRD §8.17) is an alternative declaration form;
-    # when present, its ``type`` is authoritative and must be deterministic pure
-    # detection too — reject a forbidden envelope type at the API edge rather
-    # than at run time (where it would fail closed as a mechanism error).
-    envelope = config_json.get("detection")
-    if isinstance(envelope, dict):
-        env_type = envelope.get("type")
-        if env_type is not None and env_type not in ("regex", "json_schema"):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Guardrail detection envelope type must be regex|json_schema (got {env_type!r}).",
-            )
+    validate_guardrail_request(
+        eval_type=eval_type,
+        failure_behaviour=failure_behaviour,
+        config_json=config_json,
+    )
 
 
 class UpdateEvalRequest(BaseModel):
@@ -290,10 +268,6 @@ async def create_eval_definition(
 
     Admin only. The eval definition is scoped to the caller's organisation.
     """
-    # FAR-1100 chunk 3 → 3b freeze: creation disabled between read cutover and
-    # write cutover.  Remove when chunk 3b lands (CO-8).
-    raise_if_frozen()
-
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -322,21 +296,27 @@ async def create_eval_definition(
             if pipeline is None:
                 raise HTTPException(status_code=404, detail=MSG_PIPELINE_NOT_FOUND)
 
-            eval_def = EvalDefinition(
-                organisation_id=principal.organisation_id,
-                pipeline_id=req.pipeline_id,
-                node_id=req.node_id,
-                name=req.name,
-                eval_type=req.eval_type,
-                config_json=req.config_json,
-                failure_behaviour=req.failure_behaviour,
-                pass_threshold=req.pass_threshold,
-                suite_id=req.suite_id,
-                account_id=principal.account_id,
-                version=1,
-            )
-            session.add(eval_def)
-            await session.flush()
+            try:
+                eval_row = await create_or_update_eval(
+                    session,
+                    org_id=principal.organisation_id,
+                    account_id=principal.account_id,
+                    pipeline_id=req.pipeline_id,
+                    node_id=req.node_id,
+                    name=req.name,
+                    eval_type=req.eval_type,
+                    config_json=req.config_json,
+                    failure_behaviour=req.failure_behaviour,
+                    pass_threshold=req.pass_threshold,
+                    suite_id=req.suite_id,
+                )
+            except PolicyGateBindingViolationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"PolicyGate binding violation: {exc}",
+                ) from exc
+            # Map Eval row to the legacy response shape
+            eval_def = _eval_def_to_dict(eval_row, failure_behaviour_override=req.failure_behaviour or "warn")
     except HTTPException:
         raise
     except IntegrityError:
@@ -365,7 +345,7 @@ async def create_eval_definition(
             detail="An unexpected error occurred while creating the eval definition.",
         ) from None
 
-    return _eval_def_to_dict(eval_def)
+    return eval_def
 
 
 # ---------------------------------------------------------------------------
@@ -383,34 +363,59 @@ async def list_eval_definitions(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
 ) -> EvalDefinitionListResponse:
-    """List eval definitions for the caller's organisation."""
+    """List eval definitions for the caller's organisation.
+
+    Reads from the ``evals`` table (chunk 3b cutover).  Each row's
+    ``failure_behaviour`` response field is populated from the associated
+    ``PolicyGate.action`` (node-scoped evals with a gate) or defaults to
+    ``"warn"`` (guardrail-typed / suite-scoped).
+    """
     from sqlalchemy import func as sa_func
 
     conditions = [
-        EvalDefinition.organisation_id == principal.organisation_id,
-        EvalDefinition.deleted_at.is_(None),
+        Eval.organisation_id == principal.organisation_id,
+        Eval.deleted_at.is_(None),
     ]
     if pipeline_id:
-        conditions.append(EvalDefinition.pipeline_id == pipeline_id)
+        conditions.append(Eval.pipeline_id == pipeline_id)
     if eval_type:
-        conditions.append(EvalDefinition.eval_type == eval_type)
+        conditions.append(Eval.eval_type == eval_type)
 
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            total_q = select(sa_func.count(EvalDefinition.id)).where(*conditions)
+            total_q = select(sa_func.count(Eval.id)).where(*conditions)
             total = (await session.execute(total_q)).scalar() or 0
 
             q = (
-                select(EvalDefinition)
+                select(Eval)
                 .where(*conditions)
-                .order_by(EvalDefinition.created_at.desc())
+                .order_by(Eval.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             )
             rows = (await session.execute(q)).scalars().all()
+
+            # Batch-load PolicyGates for the page (one query, not N+1).
+            gate_map: dict[uuid.UUID, PolicyGate] = {}
+            if rows:
+                eval_ids = [r.id for r in rows]
+                gates = (
+                    (
+                        await session.execute(
+                            select(PolicyGate).where(
+                                PolicyGate.eval_id.in_(eval_ids),
+                                PolicyGate.organisation_id == principal.organisation_id,
+                                PolicyGate.deleted_at.is_(None),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                gate_map = {g.eval_id: g for g in gates}
     except HTTPException:
         raise
     except IntegrityError:
@@ -440,7 +445,7 @@ async def list_eval_definitions(
         ) from None
 
     return EvalDefinitionListResponse(
-        items=[EvalDefinitionResponse(**_eval_def_to_dict(d)) for d in rows],
+        items=[EvalDefinitionResponse(**_eval_def_to_dict(d, policy_gate=gate_map.get(d.id))) for d in rows],
         total=total,
         page=page,
         page_size=page_size,
@@ -1518,20 +1523,38 @@ async def get_eval_definition(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
 ) -> dict[str, Any]:
-    """Get a single eval definition by ID."""
+    """Get a single eval definition by ID.
+
+    Reads from the ``evals`` table (chunk 3b cutover).  Includes
+    soft-deleted rows for historical lookups.  The associated
+    ``PolicyGate`` (if any) is loaded for the response mapping.
+    """
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await session.execute(
                 include_soft_deleted(
-                    select(EvalDefinition).where(
-                        EvalDefinition.id == eval_id,
-                        EvalDefinition.organisation_id == principal.organisation_id,
+                    select(Eval).where(
+                        Eval.id == eval_id,
+                        Eval.organisation_id == principal.organisation_id,
                     )
                 )
             )
-            eval_def = result.scalar_one_or_none()
+            eval_row = result.scalar_one_or_none()
+
+            # Load the associated PolicyGate (if any) for the response mapping.
+            policy_gate: PolicyGate | None = None
+            if eval_row is not None:
+                gate_result = await session.execute(
+                    include_soft_deleted(
+                        select(PolicyGate).where(
+                            PolicyGate.eval_id == eval_row.id,
+                            PolicyGate.organisation_id == principal.organisation_id,
+                        )
+                    )
+                )
+                policy_gate = gate_result.scalar_one_or_none()
     except HTTPException:
         raise
     except IntegrityError:
@@ -1559,9 +1582,9 @@ async def get_eval_definition(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching the eval definition.",
         ) from None
-    if eval_def is None:
+    if eval_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
-    return _eval_def_to_dict(eval_def)
+    return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
 
 
 @router.put("/evals/{eval_id}", dependencies=[Depends(deny_break_glass_mint)])
@@ -1572,11 +1595,12 @@ async def update_eval_definition(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("eval.definition.update"),
 ) -> dict[str, Any]:
-    """Update an eval definition. Admin only."""
-    # FAR-1100 chunk 3 → 3b freeze: editing disabled between read cutover and
-    # write cutover.  Remove when chunk 3b lands (CO-8).
-    raise_if_frozen()
+    """Update an eval definition. Admin only.
 
+    Reads from the ``evals`` table (chunk 3b cutover).  The update is
+    persisted via ``create_or_update_eval`` which handles version stamping
+    and PolicyGate management internally.
+    """
     if principal.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can update eval definitions")
 
@@ -1586,34 +1610,74 @@ async def update_eval_definition(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await session.execute(
                 include_soft_deleted(
-                    select(EvalDefinition).where(
-                        EvalDefinition.id == eval_id,
-                        EvalDefinition.organisation_id == principal.organisation_id,
+                    select(Eval).where(
+                        Eval.id == eval_id,
+                        Eval.organisation_id == principal.organisation_id,
                     )
                 )
             )
-            eval_def = result.scalar_one_or_none()
-            if eval_def is None:
+            eval_row = result.scalar_one_or_none()
+            if eval_row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
 
             updates = req.model_dump(exclude_unset=True)
-            new_type = updates.get("eval_type", eval_def.eval_type)
+            new_type = updates.get("eval_type", eval_row.eval_type)
+
+            # Resolve current failure_behaviour from the PolicyGate (if any),
+            # falling back to "warn" for guardrail-typed / suite-scoped evals.
+            current_gate_result = await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_row.id,
+                    PolicyGate.organisation_id == principal.organisation_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+            current_gate = current_gate_result.scalar_one_or_none()
+            current_failure_behaviour = current_gate.action if current_gate is not None else "warn"
+
             new_behaviour = updates.get("failure_behaviour")
             if new_behaviour is None:
-                new_behaviour = eval_def.failure_behaviour
-            new_config = updates.get("config_json", eval_def.config_json)
+                new_behaviour = current_failure_behaviour
+            new_config = updates.get("config_json", eval_row.config_json)
             _validate_guardrail_request(
                 eval_type=new_type,
                 failure_behaviour=new_behaviour,
                 config_json=new_config,
             )
-            # FAR-382 versioning: snapshot the raw pre-edit config so a reversal
-            # is reconstructable, then bump the version — a rubric/config change
-            # is an explicitly version-scoped event, never a silent regression.
-            _stamp_eval_definition_version(eval_def)
-            for key, value in updates.items():
-                setattr(eval_def, key, value)
-            await session.flush()
+            # Redirect to Eval+PolicyGate via the shared helper — version
+            # stamping and PolicyGate management are handled internally.
+            try:
+                eval_row = await create_or_update_eval(
+                    session,
+                    org_id=principal.organisation_id,
+                    account_id=principal.account_id,
+                    pipeline_id=eval_row.pipeline_id,
+                    node_id=updates.get("node_id", eval_row.node_id),
+                    name=updates.get("name") or eval_row.name or "",
+                    eval_type=new_type,
+                    config_json=new_config,
+                    failure_behaviour=new_behaviour,
+                    pass_threshold=updates.get("pass_threshold", eval_row.pass_threshold),
+                    suite_id=updates.get("suite_id", eval_row.suite_id),
+                    eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
+                    existing_eval_id=eval_row.id,
+                )
+            except PolicyGateBindingViolationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"PolicyGate binding violation: {exc}",
+                ) from exc
+
+            # Reload the PolicyGate for the response mapping (it may have
+            # been created/updated by the helper).
+            gate_result = await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_row.id,
+                    PolicyGate.organisation_id == principal.organisation_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+            policy_gate = gate_result.scalar_one_or_none()
     except HTTPException:
         raise
     except IntegrityError:
@@ -1642,7 +1706,7 @@ async def update_eval_definition(
             detail="An unexpected error occurred while updating the eval definition.",
         ) from None
 
-    return _eval_def_to_dict(eval_def)
+    return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
 
 
 @router.delete(
@@ -1659,14 +1723,15 @@ async def delete_eval_definition(
 ) -> None:
     """Delete an eval definition. Admin only.
 
-    Two-step soft-delete (FAR-309 PR B): a GUARDRAIL eval definition is
-    SOFT-deleted (``deleted_at``/``deleted_by`` stamped) instead of hard
-    removed, so snapshot pins that reference it keep resolving to the
-    skipped-with-audit path rather than a dangling row. A second admin step
-    (``?purge=true``) hard-removes soft-deleted rows. Non-guardrail evals
-    keep their existing hard delete. Every soft-delete and purge writes an
-    org-scoped audit event (best-effort fail-open-with-log, matching the
-    admin_orgs audit pattern — a failed audit never rolls back the delete).
+    Reads from the ``evals`` table (chunk 3b cutover). Two-step soft-delete
+    (FAR-309 PR B): a guardrail eval is SOFT-deleted (``deleted_at`` /
+    ``deleted_by`` stamped on ``Eval`` and its live ``PolicyGate``, if any)
+    instead of hard-removed. A second admin step (``?purge=true``) hard-removes
+    soft-deleted rows — the ``PolicyGate`` cascades via ``ON DELETE CASCADE``,
+    but ``PolicyGateDecision`` rows block hard-delete via RESTRICT (mapped to
+    409). Non-guardrail evals keep their existing hard delete. Every
+    soft-delete and purge writes an org-scoped audit event (best-effort
+    fail-open-with-log — a failed audit never rolls back the delete).
     """
     if principal.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can delete eval definitions")
@@ -1677,30 +1742,46 @@ async def delete_eval_definition(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await session.execute(
                 include_soft_deleted(
-                    select(EvalDefinition).where(
-                        EvalDefinition.id == eval_id,
-                        EvalDefinition.organisation_id == principal.organisation_id,
+                    select(Eval).where(
+                        Eval.id == eval_id,
+                        Eval.organisation_id == principal.organisation_id,
                     )
                 )
             )
-            eval_def = result.scalar_one_or_none()
-            if eval_def is None:
+            eval_row = result.scalar_one_or_none()
+            if eval_row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
             # Capture identity BEFORE any mutation — a hard-deleted ORM
             # instance no longer exposes attributes.
-            eval_id_str = str(eval_def.id)
-            eval_name = eval_def.name
-            is_guardrail = eval_def.eval_type == "guardrail"
+            eval_id_str = str(eval_row.id)
+            eval_name = eval_row.name
+            is_guardrail = eval_row.eval_type == "guardrail"
             soft = is_guardrail and not purge
+
             if soft:
-                eval_def.deleted_at = datetime.now(UTC)
-                eval_def.deleted_by = principal.account_id
+                now = datetime.now(UTC)
+                eval_row.deleted_at = now
+                eval_row.deleted_by = principal.account_id
+                # Soft-delete the live PolicyGate (if any) in the same
+                # transaction — no orphaned gate enforcing silently.
+                gate_result = await session.execute(
+                    select(PolicyGate).where(
+                        PolicyGate.eval_id == eval_row.id,
+                        PolicyGate.organisation_id == principal.organisation_id,
+                        PolicyGate.deleted_at.is_(None),
+                    )
+                )
+                gate = gate_result.scalar_one_or_none()
+                if gate is not None:
+                    gate.deleted_at = now
+                    gate.deleted_by = principal.account_id
             else:
-                await session.delete(eval_def)
-            # The two-step soft-delete audit applies to GUARDRAIL rows only —
-            # a non-guardrail eval keeps its pre-PR-B hard delete (no audit
-            # event). ``eval_definition.soft_deleted`` / ``eval_definition.purged``
-            # are the only two event types this seam emits.
+                # Hard-delete: PolicyGate cascades via ON DELETE CASCADE;
+                # PolicyGateDecision rows block via RESTRICT (→ 409).
+                await session.delete(eval_row)
+
+            # The two-step soft-delete audit applies to guardrail rows only —
+            # a non-guardrail eval keeps its hard delete (no audit event).
             if is_guardrail:
                 try:
                     await append_audit_event(
@@ -1723,7 +1804,7 @@ async def delete_eval_definition(
         _log.exception(_CODE_EVALS_DELETE_EVAL_DEFINITION)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
+            detail="Cannot delete eval: existing decision rows prevent removal (RESTRICT)",
         ) from None
     except ProgrammingError:
         _log.exception(_CODE_EVALS_DELETE_EVAL_DEFINITION)
@@ -2237,24 +2318,38 @@ async def _insert_eval_definition(
     req: CreateEvalFromRunRequest,
     run: Run,
     config_json: dict[str, Any],
-) -> EvalDefinition:
-    """Persist the new eval definition in its own transaction."""
+) -> dict[str, Any]:
+    """Persist the new eval definition in its own transaction.
+
+    Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
+    Returns a legacy-compatible dict for the caller.
+    """
     try:
         async with session.begin():
-            eval_def = EvalDefinition(
-                organisation_id=principal.organisation_id,
-                pipeline_id=run.pipeline_id,
-                node_id=req.node_id,
-                name=req.name,
-                eval_type=req.eval_type,
-                config_json=config_json,
-                failure_behaviour="warn",
-                account_id=principal.account_id,
-                version=1,
-            )
-            session.add(eval_def)
-            await session.flush()
-            return eval_def
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            try:
+                eval_row = await create_or_update_eval(
+                    session,
+                    org_id=principal.organisation_id,
+                    account_id=principal.account_id,
+                    pipeline_id=run.pipeline_id,
+                    node_id=req.node_id,
+                    name=req.name,
+                    eval_type=req.eval_type,
+                    config_json=config_json,
+                    failure_behaviour="warn",
+                    pass_threshold=None,
+                    suite_id=None,
+                )
+            except PolicyGateBindingViolationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"PolicyGate binding violation: {exc}",
+                ) from exc
+            # Build a legacy-compatible dict for the caller
+            return _eval_def_to_dict(eval_row, failure_behaviour_override="warn")
     except HTTPException:
         raise
     except IntegrityError:
@@ -2315,7 +2410,7 @@ async def create_eval_from_run(
         )
     run, sample_output = await _eval_from_run_source(session, principal, req)
     config_json = _build_eval_config_json(req.eval_type, sample_output)
-    eval_def = await _insert_eval_definition(session, principal, req, run, config_json)
-    result = _eval_def_to_dict(eval_def)
-    result["sample_output"] = sample_output
-    return result
+    eval_dict = await _insert_eval_definition(session, principal, req, run, config_json)
+    # eval_dict is already a legacy-compatible dict from the redirect helper
+    eval_dict["sample_output"] = sample_output
+    return eval_dict

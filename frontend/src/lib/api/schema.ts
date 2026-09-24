@@ -6711,6 +6711,11 @@ export interface paths {
         /**
          * List Eval Definitions
          * @description List eval definitions for the caller's organisation.
+         *
+         *     Reads from the ``evals`` table (chunk 3b cutover).  Each row's
+         *     ``failure_behaviour`` response field is populated from the associated
+         *     ``PolicyGate.action`` (node-scoped evals with a gate) or defaults to
+         *     ``"warn"`` (guardrail-typed / suite-scoped).
          */
         get: operations["list_eval_definitions_api_v1_evals_get"];
         put?: never;
@@ -6948,11 +6953,19 @@ export interface paths {
         /**
          * Get Eval Definition
          * @description Get a single eval definition by ID.
+         *
+         *     Reads from the ``evals`` table (chunk 3b cutover).  Includes
+         *     soft-deleted rows for historical lookups.  The associated
+         *     ``PolicyGate`` (if any) is loaded for the response mapping.
          */
         get: operations["get_eval_definition_api_v1_evals__eval_id__get"];
         /**
          * Update Eval Definition
          * @description Update an eval definition. Admin only.
+         *
+         *     Reads from the ``evals`` table (chunk 3b cutover).  The update is
+         *     persisted via ``create_or_update_eval`` which handles version stamping
+         *     and PolicyGate management internally.
          */
         put: operations["update_eval_definition_api_v1_evals__eval_id__put"];
         post?: never;
@@ -6960,14 +6973,15 @@ export interface paths {
          * Delete Eval Definition
          * @description Delete an eval definition. Admin only.
          *
-         *     Two-step soft-delete (FAR-309 PR B): a GUARDRAIL eval definition is
-         *     SOFT-deleted (``deleted_at``/``deleted_by`` stamped) instead of hard
-         *     removed, so snapshot pins that reference it keep resolving to the
-         *     skipped-with-audit path rather than a dangling row. A second admin step
-         *     (``?purge=true``) hard-removes soft-deleted rows. Non-guardrail evals
-         *     keep their existing hard delete. Every soft-delete and purge writes an
-         *     org-scoped audit event (best-effort fail-open-with-log, matching the
-         *     admin_orgs audit pattern — a failed audit never rolls back the delete).
+         *     Reads from the ``evals`` table (chunk 3b cutover). Two-step soft-delete
+         *     (FAR-309 PR B): a guardrail eval is SOFT-deleted (``deleted_at`` /
+         *     ``deleted_by`` stamped on ``Eval`` and its live ``PolicyGate``, if any)
+         *     instead of hard-removed. A second admin step (``?purge=true``) hard-removes
+         *     soft-deleted rows — the ``PolicyGate`` cascades via ``ON DELETE CASCADE``,
+         *     but ``PolicyGateDecision`` rows block hard-delete via RESTRICT (mapped to
+         *     409). Non-guardrail evals keep their existing hard delete. Every
+         *     soft-delete and purge writes an org-scoped audit event (best-effort
+         *     fail-open-with-log — a failed audit never rolls back the delete).
          */
         delete: operations["delete_eval_definition_api_v1_evals__eval_id__delete"];
         options?: never;
@@ -8353,7 +8367,7 @@ export interface paths {
          * Apply Guardrail Config
          * @description Apply the pending proposal — the approve/merge step (admin only).
          *
-         *     Reconciles the live ``EvalDefinition`` rows to the proposed set and moves
+         *     Reconciles the live ``Eval`` rows to the proposed set and moves
          *     the pin to a clean applied state. 409 when there is no proposal to apply.
          *     Guardrails are safety controls, so the reconcile is gated by the same
          *     admin-only check the direct eval-definition API enforces (evals.py) — an

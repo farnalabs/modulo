@@ -694,12 +694,12 @@ class TestListEvalDefinitions(_AuthContext):
         assert result["error"] == "insufficient_scope"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.db.crud.eval_definition.list_eval_definitions")
+    @patch("modulo.db.crud.pagination.CursorPaginator.paginate", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server._session")
     async def test_returns_definitions_shape(
         self,
         mock_session: AsyncMock,
-        mock_db_list_eval_definitions: AsyncMock,
+        mock_paginate: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
         definition = MagicMock()
@@ -707,14 +707,19 @@ class TestListEvalDefinitions(_AuthContext):
         definition.name = "quality-eval"
         definition.eval_type = "json_schema"
         definition.pipeline_id = uuid.uuid4()
-        definition.failure_behaviour = "block"
         definition.pass_threshold = None
         definition.suite_id = None
-        page = _make_page_result([definition], total=1)
+
+        gate = MagicMock()
+        gate.eval_id = definition.id
+        gate.action = "block"
+        gate_result = MagicMock()
+        gate_result.scalars.return_value.all.return_value = [gate]
 
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=gate_result)
         mock_session.return_value = _make_session_context(mock_sesh)
-        mock_db_list_eval_definitions.return_value = page
+        mock_paginate.return_value = _make_page_result([definition], total=1)
 
         result = await list_eval_definitions()
 
@@ -729,36 +734,37 @@ class TestListEvalDefinitions(_AuthContext):
         assert result["has_more"] is False
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.db.crud.eval_definition.list_eval_definitions")
+    @patch("modulo.db.crud.pagination.CursorPaginator.paginate", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server._session")
     async def test_passes_pipeline_filter(
         self,
         mock_session: AsyncMock,
-        mock_db_list_eval_definitions: AsyncMock,
+        mock_paginate: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_sesh = AsyncMock()
         mock_session.return_value = _make_session_context(mock_sesh)
-        mock_db_list_eval_definitions.return_value = _make_page_result([])
+        mock_paginate.return_value = _make_page_result([])
 
         pid = uuid.uuid4()
         await list_eval_definitions(pipeline_id=str(pid))
 
-        mock_db_list_eval_definitions.assert_awaited_once()
-        assert mock_db_list_eval_definitions.await_args.kwargs["pipeline_id"] == pid
+        mock_paginate.assert_awaited_once()
+        stmt = mock_paginate.await_args.args[1]
+        assert pid in stmt.compile().params.values()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.db.crud.eval_definition.list_eval_definitions")
+    @patch("modulo.db.crud.pagination.CursorPaginator.paginate", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server._session")
     async def test_migration_required_when_programming_error(
         self,
         mock_session: AsyncMock,
-        mock_db_list_eval_definitions: AsyncMock,
+        mock_paginate: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_sesh = AsyncMock()
         mock_session.return_value = _make_session_context(mock_sesh)
-        mock_db_list_eval_definitions.side_effect = ProgrammingError("stmt", {}, Exception("boom"))
+        mock_paginate.side_effect = ProgrammingError("stmt", {}, Exception("boom"))
 
         result = await list_eval_definitions()
 

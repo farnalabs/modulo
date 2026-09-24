@@ -36,6 +36,7 @@ from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base
 from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.journey import Journey
@@ -63,6 +64,7 @@ _TABLES: list[Table] = cast(
         Journey.__table__,
         EvalDefinition.__table__,
         EvalResult.__table__,
+        Eval.__table__,
         AuditEvent.__table__,
         AuditChainHead.__table__,
         EnvironmentProfile.__table__,
@@ -110,8 +112,9 @@ async def _seed(session: AsyncSession) -> None:
 
 
 async def _seed_guardrail(session: AsyncSession, *, name: str = "no-secrets") -> None:
+    guardrail_id = uuid.uuid4()
     eval_def = EvalDefinition(
-        id=uuid.uuid4(),
+        id=guardrail_id,
         organisation_id=_ORG,
         pipeline_id=_PIPELINE,
         node_id=None,
@@ -128,6 +131,23 @@ async def _seed_guardrail(session: AsyncSession, *, name: str = "no-secrets") ->
         account_id=_ACCOUNT,
     )
     session.add(eval_def)
+    eval_row = Eval(
+        id=guardrail_id,
+        organisation_id=_ORG,
+        pipeline_id=_PIPELINE,
+        node_id=None,
+        name=name,
+        eval_type="guardrail",
+        config_json={
+            "action": "block",
+            "interception_point": "input",
+            "type": "regex",
+            "field": "body",
+            "pattern": r"SECRET_[A-Z0-9]{8}",
+        },
+        account_id=_ACCOUNT,
+    )
+    session.add(eval_row)
     await session.flush()
 
 

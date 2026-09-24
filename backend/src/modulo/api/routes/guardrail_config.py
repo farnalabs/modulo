@@ -10,17 +10,21 @@ URLs (mounted under ``/api/v1/guardrails/config``):
 
 The workflow is git-style: **propose** → **diff** → **apply**. Apply/reject
 are the admin-only "merge"/"discard" steps that reconcile the live
-``eval_type='guardrail'`` ``EvalDefinition`` rows the shipped interception seam
+``eval_type='guardrail'`` ``Eval`` rows the shipped interception seam
 consumes — gated by the same admin check as the direct eval-definition API;
 the config-as-code layer is an authoring/source-of-truth seam on top, never a
 change to the engine's semantics. Every state-changing step emits an audit
 event (summary payloads only — never raw config content).
+
+Chunk 3b cutover: writes target ``evals`` (via ``create_or_update_eval``),
+reads load from ``evals``, and deletes are soft-deletes on ``Eval`` rows.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -33,6 +37,7 @@ from modulo.api.dependencies import deny_break_glass_mint, get_db_session, requi
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine import EvalDefinition
+from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
 from modulo.core.guardrails import GuardrailConfigError, to_engine_definition
 from modulo.core.guardrails.config import (
     ConfigChange,
@@ -48,8 +53,8 @@ from modulo.core.guardrails.config import (
     to_eval_config,
     utc_now_iso,
 )
-from modulo.db.crud.guardrail_config import get_guardrail_pin, load_pipeline_guardrail_rows, set_guardrail_pin
-from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
+from modulo.db.crud.guardrail_config import get_guardrail_pin, set_guardrail_pin
+from modulo.db.models.eval import Eval
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -120,26 +125,30 @@ class GuardrailDriftResponse(BaseModel):
 async def _load_guardrail_definitions(session: AsyncSession, org_id: uuid.UUID) -> list[EvalDefinition]:
     """Load the org's LAYER-OWNED guardrail rows as engine DTOs.
 
-    Only ``node_id IS NULL`` rows are included — the org-level rows that apply
-    creates/updates/deletes. Node-bound rows authored via the graph-save flow
-    are deliberately excluded so the drift/export boundary matches the apply
-    ownership boundary: a freshly applied config with node-bound guardrails
-    present must read ``clean``, never permanent ``drift``. The interception
-    seam (``db/crud/run.py``) loads its own rows independently and is
-    unaffected — node-bound guardrails are still enforced at the edge.
+    Reads from the ``evals`` table (chunk 3b cutover). Only ``node_id IS NULL``
+    rows are included — the org-level rows that apply creates/updates/deletes.
+    Node-bound rows authored via the graph-save flow are deliberately excluded
+    so the drift/export boundary matches the apply ownership boundary: a
+    freshly applied config with node-bound guardrails present must read
+    ``clean``, never permanent ``drift``. The interception seam
+    (``db/crud/run.py``) loads its own rows independently and is unaffected —
+    node-bound guardrails are still enforced at the edge.
+
+    Guardrails pin ``failure_behaviour='warn'`` — the ``Eval`` table has no
+    ``failure_behaviour`` column; the DTO default is used.
     """
     rows = (
         (
             await session.execute(
-                select(EvalDefinitionRow).where(
-                    EvalDefinitionRow.organisation_id == org_id,
-                    EvalDefinitionRow.eval_type == "guardrail",
-                    EvalDefinitionRow.node_id.is_(None),
+                select(Eval).where(
+                    Eval.organisation_id == org_id,
+                    Eval.eval_type == "guardrail",
+                    Eval.node_id.is_(None),
                     # FAR-309 PR B: a soft-deleted guardrail is no longer a live
                     # row — it must not appear in the export/drift surface (its
                     # removal IS the drift, surfaced via the interception skip
                     # path instead).
-                    EvalDefinitionRow.deleted_at.is_(None),
+                    Eval.deleted_at.is_(None),
                 )
             )
         )
@@ -213,18 +222,26 @@ async def _load_pipeline_guardrail_rows_by_name(
     session: AsyncSession,
     pipeline: Pipeline,
     org_id: uuid.UUID,
-) -> tuple[Pipeline, dict[str, EvalDefinitionRow]]:
-    """Load one pipeline's live guardrail rows keyed by the config id (name)."""
-    rows = await load_pipeline_guardrail_rows(
-        session,
-        pipeline_id=pipeline.id,
-        organisation_id=org_id,
+) -> tuple[Pipeline, dict[str, Eval]]:
+    """Load one pipeline's live guardrail rows keyed by the config id (name).
+
+    Reads from the ``evals`` table (chunk 3b cutover). The shared CRUD
+    ``load_pipeline_guardrail_rows`` now also reads ``evals``.
+    """
+    result = await session.execute(
+        select(Eval).where(
+            Eval.pipeline_id == pipeline.id,
+            Eval.organisation_id == org_id,
+            Eval.eval_type == "guardrail",
+            Eval.deleted_at.is_(None),
+        )
     )
-    return pipeline, {row.name: row for row in rows}
+    rows = list(result.scalars().all())
+    return pipeline, {row.name: row for row in rows if row.name is not None}
 
 
 def _pipeline_collisions(
-    rows_by_name: dict[str, EvalDefinitionRow],
+    rows_by_name: dict[str, Eval],
     proposed_by_id: dict[str, Any],
     existing: list[str],
 ) -> list[str]:
@@ -241,16 +258,26 @@ def _pipeline_collisions(
     return colliding
 
 
-def _apply_guardrail_upserts(
+async def _apply_guardrail_upserts(
     session: AsyncSession,
     pipeline: Pipeline,
-    rows_by_name: dict[str, EvalDefinitionRow],
+    rows_by_name: dict[str, Eval],
     proposed_by_id: dict[str, Any],
     config_set: GuardrailConfigSet,
     org_id: uuid.UUID,
     account_id: uuid.UUID,
 ) -> None:
-    """Add missing guardrail rows and upsert the ones config-as-code owns."""
+    """Add missing guardrail rows and upsert the ones config-as-code owns.
+
+    For **new** guardrail items: creates an ``Eval`` row via the shared helper
+    with ``eval_type='guardrail'`` and ``node_id=None``. The helper's guardrail
+    branch (section 3.1) runs the config-vocabulary validator and persists the
+    ``Eval`` row only — no ``PolicyGate``, no ``validate_binding`` call.
+
+    For **existing** rows: updates ``config_json`` via the shared helper with
+    ``existing_eval_id`` set, so version-stamping is handled inside the helper
+    (bumps ``version``, snapshots ``pre_version_raw``).
+    """
     for gid, item in proposed_by_id.items():
         row = rows_by_name.get(gid)
         config_json = to_eval_config(
@@ -259,40 +286,59 @@ def _apply_guardrail_upserts(
             guardrail_timeout_seconds=config_set.guardrail_timeout_seconds,
         )
         if row is None:
-            session.add(
-                EvalDefinitionRow(
-                    organisation_id=org_id,
-                    pipeline_id=pipeline.id,
-                    node_id=None,
-                    name=gid,
-                    eval_type="guardrail",
-                    config_json=config_json,
-                    failure_behaviour="warn",
-                    account_id=account_id,
-                )
+            # New guardrail — create via shared helper (W7)
+            await create_or_update_eval(
+                session,
+                org_id=org_id,
+                account_id=account_id,
+                pipeline_id=pipeline.id,
+                node_id=None,
+                name=gid,
+                eval_type="guardrail",
+                config_json=config_json,
+                failure_behaviour="warn",
+                pass_threshold=None,
+                suite_id=None,
             )
         elif row.node_id is None:
-            # Only upsert rows the config-as-code layer owns. A node-bound
-            # row (graph-save flow) that collides on name must not be
-            # silently clobbered — mirror the deletion path's ownership
-            # check below.
-            row.config_json = config_json
+            # Existing guardrail owned by config-as-code — update via shared
+            # helper with existing_eval_id so version-stamping is not skipped.
+            await create_or_update_eval(
+                session,
+                org_id=org_id,
+                account_id=account_id,
+                pipeline_id=pipeline.id,
+                node_id=None,
+                name=gid,
+                eval_type="guardrail",
+                config_json=config_json,
+                failure_behaviour="warn",
+                pass_threshold=None,
+                suite_id=None,
+                existing_eval_id=row.id,
+            )
 
 
 async def _apply_guardrail_deletes(
     session: AsyncSession,
-    rows_by_name: dict[str, EvalDefinitionRow],
+    rows_by_name: dict[str, Eval],
     proposed_by_id: dict[str, Any],
+    account_id: uuid.UUID,
 ) -> None:
-    """Delete guardrail rows the config-as-code layer owns and no longer proposes.
+    """Soft-delete guardrail rows the config-as-code layer owns and no longer proposes.
 
-    Node-bound guardrails authored via the graph-save flow (node_id set) are
-    NOT config-as-code's to reconcile — deleting them would silently strip
-    guardrails the evals API bound to pipeline nodes.
+    Guardrails have no ``PolicyGate``, so only the ``Eval`` row is soft-deleted
+    (``deleted_at`` + ``deleted_by`` stamped). Node-bound guardrails authored
+    via the graph-save flow (``node_id`` set) are NOT config-as-code's to
+    reconcile — deleting them would silently strip guardrails the evals API
+    bound to pipeline nodes. Stays inside the existing single reconciliation
+    transaction.
     """
+    now = datetime.now(UTC)
     for name, row in rows_by_name.items():
         if name not in proposed_by_id and row.node_id is None:
-            await session.delete(row)
+            row.deleted_at = now
+            row.deleted_by = account_id
 
 
 async def _reconcile_guardrail_rows(
@@ -309,11 +355,12 @@ async def _reconcile_guardrail_rows(
     keyed by the stable config ``id`` (stored as the eval ``name``), making
     re-imports idempotent: present ids are upserted, absent ids are deleted.
 
-    Returns the list of proposed ids that collided with a node-bound row and
-    therefore could NOT be materialized. Collisions are detected BEFORE any
-    mutation — a single colliding pipeline fails the whole apply (the caller
-    turns this into a 409), so a collision is a clean no-op, never a partial
-    reconcile that would leave the applied pin instantly reporting drift.
+    Reads from the ``evals`` table (chunk 3b cutover). Returns the list of
+    proposed ids that collided with a node-bound row and therefore could NOT
+    be materialized. Collisions are detected BEFORE any mutation — a single
+    colliding pipeline fails the whole apply (the caller turns this into a
+    409), so a collision is a clean no-op, never a partial reconcile that
+    would leave the applied pin instantly reporting drift.
     """
     proposed_by_id = {item.id: item for item in config_set.guardrails}
     pipelines = (
@@ -328,7 +375,7 @@ async def _reconcile_guardrail_rows(
         .scalars()
         .all()
     )
-    pipelines_rows: list[tuple[Pipeline, dict[str, EvalDefinitionRow]]] = []
+    pipelines_rows: list[tuple[Pipeline, dict[str, Eval]]] = []
     colliding: list[str] = []
     for pipeline in pipelines:
         entry = await _load_pipeline_guardrail_rows_by_name(session, pipeline, org_id)
@@ -337,8 +384,8 @@ async def _reconcile_guardrail_rows(
     if colliding:
         return colliding
     for pipeline, rows_by_name in pipelines_rows:
-        _apply_guardrail_upserts(session, pipeline, rows_by_name, proposed_by_id, config_set, org_id, account_id)
-        await _apply_guardrail_deletes(session, rows_by_name, proposed_by_id)
+        await _apply_guardrail_upserts(session, pipeline, rows_by_name, proposed_by_id, config_set, org_id, account_id)
+        await _apply_guardrail_deletes(session, rows_by_name, proposed_by_id, account_id)
     await session.flush()
     return []
 
@@ -517,7 +564,7 @@ async def apply_guardrail_config(
 ) -> GuardrailApplyResponse:
     """Apply the pending proposal — the approve/merge step (admin only).
 
-    Reconciles the live ``EvalDefinition`` rows to the proposed set and moves
+    Reconciles the live ``Eval`` rows to the proposed set and moves
     the pin to a clean applied state. 409 when there is no proposal to apply.
     Guardrails are safety controls, so the reconcile is gated by the same
     admin-only check the direct eval-definition API enforces (evals.py) — an

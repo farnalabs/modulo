@@ -557,18 +557,28 @@ async def publish_eval_proposal(
                 mgr, session, record_id, req.node_id, principal.organisation_id
             )
 
-            eval_def = EvalDefinition(
-                organisation_id=principal.organisation_id,
-                pipeline_id=run.pipeline_id,
-                node_id=node_id,
-                name=req.name,
-                eval_type=req.eval_type,
-                config_json=req.config,
-                failure_behaviour="warn",
-                account_id=principal.account_id,
-            )
-            session.add(eval_def)
-            await session.flush()
+            from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
+            from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+
+            try:
+                eval_row = await create_or_update_eval(
+                    session,
+                    org_id=principal.organisation_id,
+                    account_id=principal.account_id,
+                    pipeline_id=run.pipeline_id,
+                    node_id=node_id,
+                    name=req.name,
+                    eval_type=req.eval_type,
+                    config_json=req.config,
+                    failure_behaviour="warn",
+                    pass_threshold=None,
+                    suite_id=None,
+                )
+            except PolicyGateBindingViolationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"PolicyGate binding violation: {exc}",
+                ) from exc
 
             await mgr.update_status(record_id, "resolved")
     except IntegrityError:
@@ -615,23 +625,23 @@ async def publish_eval_proposal(
         event_type="feedback.proposal_published",
         resource_id=record_id,
         payload={
-            "eval_definition_id": str(eval_def.id),
-            "pipeline_id": str(eval_def.pipeline_id),
-            "node_id": str(eval_def.node_id) if eval_def.node_id else None,
-            "eval_type": eval_def.eval_type,
-            "name": eval_def.name,
+            "eval_definition_id": str(eval_row.id),
+            "pipeline_id": str(eval_row.pipeline_id),
+            "node_id": str(eval_row.node_id) if eval_row.node_id else None,
+            "eval_type": eval_row.eval_type,
+            "name": eval_row.name,
         },
         log_key=_CODE_FEEDBACK_AUDIT_APPEND_FAILED,
     )
 
     return {
-        "id": str(eval_def.id),
+        "id": str(eval_row.id),
         "record_id": str(record_id),
-        "pipeline_id": str(eval_def.pipeline_id),
-        "node_id": str(eval_def.node_id) if eval_def.node_id else None,
-        "name": eval_def.name,
-        "eval_type": eval_def.eval_type,
-        "config": eval_def.config_json,
+        "pipeline_id": str(eval_row.pipeline_id),
+        "node_id": str(eval_row.node_id) if eval_row.node_id else None,
+        "name": eval_row.name,
+        "eval_type": eval_row.eval_type,
+        "config": eval_row.config_json,
         "feedback_status": "resolved",
     }
 

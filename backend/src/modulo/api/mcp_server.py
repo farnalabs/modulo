@@ -121,7 +121,6 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # CLOSED (auth error) — there must never be a process-global fallback, because
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
-from modulo.core.eval_engine.eval_definition_freeze import definition_frozen_response
 from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import get_registry, resolve_plan_context
 from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
@@ -173,7 +172,7 @@ from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
 
 if TYPE_CHECKING:
-    from modulo.db.models.eval_definition import EvalDefinition
+    pass
 
 _log = logging.getLogger(__name__)
 
@@ -3453,14 +3452,52 @@ async def list_eval_definitions(
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_eval_definitions")
-        from modulo.db.crud.eval_definition import list_eval_definitions as db_list_eval_definitions
 
         org_id = _ctx_org_id_val()
         pid = uuid.UUID(pipeline_id) if pipeline_id else None
         lim = max(1, min(limit, 100))
 
+        from modulo.db.crud.pagination import CursorPaginator
+        from modulo.db.models.eval import Eval
+        from modulo.db.models.policy_gate import PolicyGate as PolicyGateModel
+
         async with _session(org_id) as s:
-            result = await db_list_eval_definitions(s, org_id, pipeline_id=pid, cursor=cursor, limit=lim)
+            q = select(Eval).where(
+                Eval.organisation_id == org_id,
+                Eval.deleted_at.is_(None),
+            )
+            if pid is not None:
+                q = q.where(Eval.pipeline_id == pid)
+
+            paginator = CursorPaginator(sort_field="name", sort_dir="asc")
+            page = await paginator.paginate(
+                s,
+                q,
+                cursor=cursor,
+                limit=lim,
+                model=Eval,
+                compute_total=True,
+            )
+            rows = page.items
+
+            # Batch-load PolicyGates for failure_behaviour mapping.
+            gate_map: dict[uuid.UUID, Any] = {}
+            if rows:
+                eval_ids = [r.id for r in rows]
+                gates = (
+                    (
+                        await s.execute(
+                            select(PolicyGateModel).where(
+                                PolicyGateModel.eval_id.in_(eval_ids),
+                                PolicyGateModel.organisation_id == org_id,
+                                PolicyGateModel.deleted_at.is_(None),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                gate_map = {g.eval_id: g for g in gates}
 
         return {
             "data": [
@@ -3469,15 +3506,15 @@ async def list_eval_definitions(
                     "name": d.name,
                     "type": d.eval_type,
                     "pipeline_id": str(d.pipeline_id),
-                    "failure_behaviour": d.failure_behaviour,
-                    "pass_threshold": d.pass_threshold,
+                    "failure_behaviour": gate_map[d.id].action if d.id in gate_map else "warn",
+                    "pass_threshold": float(d.pass_threshold) if d.pass_threshold is not None else None,
                     "suite_id": d.suite_id,
                 }
-                for d in result.items
+                for d in rows
             ],
-            "total": result.total,
-            "next_cursor": result.next_cursor,
-            "has_more": result.has_more,
+            "total": page.total,
+            "next_cursor": page.next_cursor,
+            "has_more": page.has_more,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -3559,21 +3596,25 @@ def _parse_eval_ref_ids(
     return primary, node, None
 
 
-async def _load_eval_def(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> "EvalDefinition | None":
-    """Load an org-scoped EvalDefinition row; None when the row does not exist.
+async def _load_eval_def(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> Any:
+    """Load an org-scoped ``Eval`` row; ``None`` when the row does not exist.
 
-    Shared by the update and delete impls; the model import stays lazy per
-    this module's convention.
+    Return type is ``Eval | None`` (from ``modulo.db.models.eval``); written
+    as ``Any`` because the import is deferred inside the function body.
+
+    Consolidated single loader (chunk 3b cutover): reads from the ``evals``
+    table instead of ``eval_definitions``.  Used by the update (W6) and
+    delete (W9) impls.
     """
-    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.db.models.eval import Eval
     from modulo.db.soft_delete import include_soft_deleted
 
     return (
         await s.execute(
             include_soft_deleted(
-                select(EvalDefinition).where(
-                    EvalDefinition.id == eid,
-                    EvalDefinition.organisation_id == org_id,
+                select(Eval).where(
+                    Eval.id == eid,
+                    Eval.organisation_id == org_id,
                 )
             )
         )
@@ -3611,12 +3652,10 @@ async def _create_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Persist a new EvalDefinition; shared with the MCP tool wrapper."""
-    # FAR-1100 chunk 3 → 3b freeze: creation disabled between read cutover and
-    # write cutover.  Remove when chunk 3b lands (CO-8).
-    if (err := definition_frozen_response()) is not None:
-        return err
+    """Persist a new EvalDefinition; shared with the MCP tool wrapper.
 
+    Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
+    """
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("create_eval_definition")
@@ -3639,10 +3678,21 @@ async def _create_eval_definition_impl(
 
     cfg = config_json if config_json is not None else {}
 
-    if (guard_err := _eval_def_guardrail_validation_error(eval_type, failure_behaviour, cfg)) is not None:
-        return guard_err
+    from starlette.exceptions import HTTPException as StarletteHTTPException
 
-    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval, validate_guardrail_request
+    from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+
+    # Run guardrail validator; catch HTTPException and convert to MCP error dict
+    try:
+        validate_guardrail_request(
+            eval_type=eval_type,
+            failure_behaviour=failure_behaviour,
+            config_json=cfg,
+        )
+    except StarletteHTTPException as exc:
+        return {"error": "validation_failed", "detail": str(exc.detail)}
+
     from modulo.db.models.pipeline import Pipeline
 
     async with _session(org_id) as s:
@@ -3657,22 +3707,24 @@ async def _create_eval_definition_impl(
         if pipeline is None:
             return {"error": "pipeline_not_found", "detail": MSG_PIPELINE_NOT_FOUND}
 
-        eval_def = EvalDefinition(
-            organisation_id=org_id,
-            pipeline_id=pid,
-            node_id=nid,
-            name=name,
-            eval_type=eval_type,
-            config_json=cfg,
-            failure_behaviour=failure_behaviour,
-            pass_threshold=pass_threshold,
-            suite_id=suite_id,
-            account_id=account_id,
-            version=1,
-        )
-        s.add(eval_def)
-        await s.flush()
-        return _eval_def_to_dict(eval_def)
+        try:
+            eval_row = await create_or_update_eval(
+                s,
+                org_id=org_id,
+                account_id=account_id,
+                pipeline_id=pid,
+                node_id=nid,
+                name=name,
+                eval_type=eval_type,
+                config_json=cfg,
+                failure_behaviour=failure_behaviour,
+                pass_threshold=pass_threshold,
+                suite_id=suite_id,
+            )
+        except PolicyGateBindingViolationError as exc:
+            return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}
+
+        return _eval_def_to_dict(eval_row, failure_behaviour_override=failure_behaviour)
 
 
 @mcp.tool(
@@ -3761,25 +3813,6 @@ def _collect_eval_definition_updates(
     return updates
 
 
-def _eval_def_guardrail_validation_error(
-    eval_type: str,
-    failure_behaviour: str | None,
-    config_json: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Run the REST guardrail validator; returns a validation_failed dict or None."""
-    from modulo.api.routes.evals import _validate_guardrail_request
-
-    try:
-        _validate_guardrail_request(
-            eval_type=eval_type,
-            failure_behaviour=failure_behaviour,
-            config_json=config_json,
-        )
-    except StarletteHTTPException as exc:
-        return {"error": "validation_failed", "detail": str(exc.detail)}
-    return None
-
-
 async def _update_eval_definition_impl(
     eval_id: str,
     node_id: str | None,
@@ -3790,12 +3823,10 @@ async def _update_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper."""
-    # FAR-1100 chunk 3 → 3b freeze: editing disabled between read cutover and
-    # write cutover.  Remove when chunk 3b lands (CO-8).
-    if (err := definition_frozen_response()) is not None:
-        return err
+    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper.
 
+    Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
+    """
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("update_eval_definition")
@@ -3803,7 +3834,6 @@ async def _update_eval_definition_impl(
     from modulo.api.routes.evals import (
         _MSG_EVAL_DEFINITION_NOT_FOUND,
         _eval_def_to_dict,
-        _stamp_eval_definition_version,
     )
 
     val_err: dict[str, Any] | None = _assert_update_eval_definition_params(
@@ -3832,26 +3862,72 @@ async def _update_eval_definition_impl(
         suite_id=suite_id,
     )
 
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval, validate_guardrail_request
+    from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+
     async with _session(org_id) as s:
-        eval_def = await _load_eval_def(s, org_id, eid)
-        if eval_def is None:
+        eval_row = await _load_eval_def(s, org_id, eid)
+        if eval_row is None:
             return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
 
-        guard_err = _eval_def_guardrail_validation_error(
-            eval_type=updates.get("eval_type", eval_def.eval_type),
-            failure_behaviour=updates.get("failure_behaviour", eval_def.failure_behaviour),
-            config_json=updates.get("config_json", eval_def.config_json),
-        )
-        if guard_err is not None:
-            return guard_err
+        # Resolve current failure_behaviour from the PolicyGate (if any),
+        # falling back to "warn" for guardrail-typed / suite-scoped evals.
+        from modulo.db.models.policy_gate import PolicyGate as PolicyGateModel
 
-        # FAR-382: snapshot the pre-edit config, then bump the version so a
-        # rubric/config change is an explicitly version-scoped event.
-        _stamp_eval_definition_version(eval_def)
-        for key, value in updates.items():
-            setattr(eval_def, key, value)
-        await s.flush()
-        return _eval_def_to_dict(eval_def)
+        gate_result = await s.execute(
+            select(PolicyGateModel).where(
+                PolicyGateModel.eval_id == eval_row.id,
+                PolicyGateModel.organisation_id == org_id,
+                PolicyGateModel.deleted_at.is_(None),
+            )
+        )
+        current_gate = gate_result.scalar_one_or_none()
+        current_failure_behaviour = current_gate.action if current_gate is not None else "warn"
+
+        # Run guardrail validator; catch HTTPException and convert to MCP error dict
+        try:
+            validate_guardrail_request(
+                eval_type=updates.get("eval_type", eval_row.eval_type),
+                failure_behaviour=updates.get("failure_behaviour", current_failure_behaviour),
+                config_json=updates.get("config_json", eval_row.config_json),
+            )
+        except StarletteHTTPException as exc:
+            return {"error": "validation_failed", "detail": str(exc.detail)}
+
+        # Redirect to Eval+PolicyGate via the shared helper — version
+        # stamping and PolicyGate management are handled internally.
+        try:
+            eval_row = await create_or_update_eval(
+                s,
+                org_id=org_id,
+                account_id=eval_row.account_id,
+                pipeline_id=eval_row.pipeline_id,
+                node_id=updates.get("node_id", eval_row.node_id),
+                name=updates.get("name") or eval_row.name or "",
+                eval_type=updates.get("eval_type", eval_row.eval_type),
+                config_json=updates.get("config_json", eval_row.config_json),
+                failure_behaviour=updates.get("failure_behaviour", current_failure_behaviour),
+                pass_threshold=updates.get("pass_threshold", eval_row.pass_threshold),
+                suite_id=updates.get("suite_id", eval_row.suite_id),
+                eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
+                existing_eval_id=eid,
+            )
+        except PolicyGateBindingViolationError as exc:
+            return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}
+
+        # Reload the PolicyGate for the response mapping.
+        gate_result = await s.execute(
+            select(PolicyGateModel).where(
+                PolicyGateModel.eval_id == eval_row.id,
+                PolicyGateModel.organisation_id == org_id,
+                PolicyGateModel.deleted_at.is_(None),
+            )
+        )
+        policy_gate = gate_result.scalar_one_or_none()
+
+        return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
 
 
 @mcp.tool(
@@ -3921,7 +3997,15 @@ async def _audit_eval_def_delete(
 
 
 async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, Any]:
-    """Soft-delete or purge an EvalDefinition; shared with the MCP tool wrapper."""
+    """Soft-delete or purge an Eval; shared with the MCP tool wrapper.
+
+    Reads from the ``evals`` table (chunk 3b cutover). Soft-delete stamps
+    ``deleted_at``/``deleted_by`` on the ``Eval`` and its live ``PolicyGate``
+    (if any) in the same transaction. Hard-delete removes the ``Eval`` row
+    (``PolicyGate`` cascades via ``ON DELETE CASCADE``); ``PolicyGateDecision``
+    rows block hard-delete via RESTRICT — both keys checked (``eval_id``
+    direct and ``policy_gate_id`` cascade).
+    """
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("delete_eval_definition")
@@ -3939,20 +4023,49 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
     assert eid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
     async with _session(org_id) as s:
-        eval_def = await _load_eval_def(s, org_id, eid)
-        if eval_def is None:
+        eval_row = await _load_eval_def(s, org_id, eid)
+        if eval_row is None:
             return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
 
-        is_guardrail = eval_def.eval_type == "guardrail"
+        is_guardrail = eval_row.eval_type == "guardrail"
         soft = is_guardrail and not hard
-        eval_name = eval_def.name
+        eval_name = eval_row.name
         if soft:
-            eval_def.deleted_at = datetime.now(UTC)
-            eval_def.deleted_by = account_id
+            now = datetime.now(UTC)
+            eval_row.deleted_at = now
+            eval_row.deleted_by = account_id
+            # Soft-delete the live PolicyGate (if any) in the same
+            # transaction — no orphaned gate enforcing silently.
+            from modulo.db.models.policy_gate import PolicyGate
+
+            gate_result = await s.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_row.id,
+                    PolicyGate.organisation_id == org_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+            gate = gate_result.scalar_one_or_none()
+            if gate is not None:
+                gate.deleted_at = now
+                gate.deleted_by = account_id
         else:
-            await s.delete(eval_def)
+            # Hard-delete: PolicyGate cascades via ON DELETE CASCADE;
+            # PolicyGateDecision rows block via RESTRICT (both keys:
+            # eval_id direct + policy_gate_id cascade).
+            try:
+                await s.delete(eval_row)
+                await s.flush()
+            except IntegrityError:
+                return {
+                    "error": "delete_blocked_by_decisions",
+                    "detail": (
+                        "Cannot hard-delete eval: existing decision rows prevent"
+                        " removal (RESTRICT on eval_id and/or policy_gate_id)"
+                    ),
+                }
         if is_guardrail:
-            await _audit_eval_def_delete(s, org_id, account_id, eid, hard, soft, eval_name)
+            await _audit_eval_def_delete(s, org_id, account_id, eid, hard, soft, eval_name or "")
     return {"id": str(eid), "soft_deleted": soft, "hard_deleted": not soft}
 
 
