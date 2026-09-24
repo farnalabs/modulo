@@ -55,6 +55,7 @@ __all__ = [
     "EVENT_HITL_APPROVE_SWEEP",
     "EVENT_HITL_AWAITING",
     "EVENT_HITL_OVERDUE",
+    "EVENT_ORG_TRIGGERS_AUTO_PAUSED",
     "EVENT_RUN_FAILED",
     "EVENT_RUN_STALLED",
     "EVENT_SYSTEM_ANNOUNCEMENT",
@@ -136,6 +137,12 @@ EVENT_SYSTEM_ANNOUNCEMENT = "system_announcement"
 # FAR-190 — an ongoing trigger auto-deactivated after N consecutive no-delivery
 # runs. Payload is sanitised (identifiers/titles + allow-listed reason fields).
 EVENT_TRIGGER_DEACTIVATED = "trigger_deactivated"
+# FAR-1183 — the org cost-controls "Auto-stop on budget exceeded" toggle
+# tripped: the org crossed its daily spend limit / spend ceiling and the
+# org-wide trigger pause engaged automatically. Emitted in addition to the
+# ``org.triggers_auto_paused`` audit event; resuming stays a manual admin
+# action (the audit-log-convention event name carries the dot form).
+EVENT_ORG_TRIGGERS_AUTO_PAUSED = "org_triggers_auto_paused"
 # FAR-223 — a pinned guardrail could not be evaluated (soft-deleted live row)
 # or a block-action guardrail is non-conformant: the enforcement gap is a
 # paging alert so the operator sees the control has silently stopped enforcing.
