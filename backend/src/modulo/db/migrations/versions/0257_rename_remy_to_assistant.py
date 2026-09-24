@@ -25,12 +25,23 @@ already on, and the CREATE POLICY is guarded by a pg_policies existence
 check. ``public.enforce_same_organisation(...)`` is parameterised and needs
 no change; the renamed tenant triggers keep executing it.
 
-DATA (not covered by any table rename): ``system_config`` keys written under
-the old ``remy_config:`` prefix are rewritten to ``assistant_config:`` — the
-code's ``_CONFIG_KEY_PREFIX`` changed to ``assistant_config:`` in the same
-delivery, so any persisted per-org Remy config row would otherwise become
-unreachable. The UPDATE is idempotent (after the first run no row matches
-``LIKE 'remy_config:%'``) and guarded for table/column existence.
+DATA (not covered by any table rename):
+
+- ``system_config`` keys written under the old ``remy_config:`` prefix are
+  rewritten to ``assistant_config:`` — the code's ``_CONFIG_KEY_PREFIX``
+  changed to ``assistant_config:`` in the same delivery, so any persisted
+  per-org Remy config row would otherwise become unreachable. The UPDATE is
+  idempotent (after the first run no row matches ``LIKE 'remy_config:%'``)
+  and guarded for table/column existence.
+- ``feature_flag_catalog`` rows boot-seeded under the old names (``remy``,
+  ``remy_ui_driving``) are renamed to ``assistant``/``assistant_ui_driving``.
+  The seeder inserts with ``ON CONFLICT (name) DO NOTHING`` against a
+  ``name``-primary-key table, so the NEW name may already exist alongside the
+  OLD one (or vice-versa). Per flag, handled to avoid a unique violation: if
+  the new-name row exists, DELETE the old (zombie) row; else UPDATE the
+  old-name row to the new name. The old row's existence check makes a second
+  run a no-op. Postgres-only: the portable SQLite branch's test schema has no
+  catalog table.
 
 Ticket note: the ticket also lists ``ck_remy_skills_mode`` — no such
 constraint exists in any shipped migration or in the pre-rename model (the
@@ -147,6 +158,37 @@ _CONFIG_REVERSE_PG = (
     "THEN UPDATE system_config SET key = replace(key, 'assistant_config:', 'remy_config:') WHERE key LIKE 'assistant_config:%'; END IF; END $$;"
 )
 
+# Data rewrite (feature_flag_catalog boot-seeded flag names). Postgres-only:
+# ``name`` is the primary key and the boot seeder upserts with ``ON CONFLICT
+# (name) DO NOTHING``, so a naive UPDATE to the new name can collide with an
+# already-seeded new-name row. Per flag: if the new-name row exists, DELETE
+# the old one (the zombie); else UPDATE old -> new. Guarded on table/column
+# existence, and the outer ``old row exists`` check makes a re-run a no-op.
+_FLAG_CATALOG_RENAMES: tuple[tuple[str, str], ...] = (
+    ("remy", "assistant"),
+    ("remy_ui_driving", "assistant_ui_driving"),
+)
+
+
+def _rename_flag_catalog_sql(old: str, new: str) -> str:
+    """Rename one boot-seeded ``feature_flag_catalog`` flag, unique-safely.
+
+    If the NEW name already exists (seeder got there first), the OLD row is
+    deleted instead of renamed to avoid a primary-key violation on ``name``.
+    When neither/only the new name exists, the DELETE/UPDATE match nothing —
+    a second run of this migration is a no-op.
+    """
+    old, new = _validate_identifier(old), _validate_identifier(new)
+    return (
+        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='feature_flag_catalog') "  # noqa: S608  # nosec B608 - static table name, never caller data
+        "AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='feature_flag_catalog' AND column_name='name') THEN "
+        f"IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='{old}') THEN "  # nosec B608 - interpolates module-constant identifiers only, never caller data
+        f"IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='{new}') THEN "  # nosec B608 - interpolates module-constant identifiers only, never caller data
+        f"DELETE FROM feature_flag_catalog WHERE name='{old}'; "  # nosec B608 - interpolates module-constant identifiers only, never caller data
+        f"ELSE UPDATE feature_flag_catalog SET name='{new}' WHERE name='{old}'; END IF; "  # nosec B608 - interpolates module-constant identifiers only, never caller data
+        "END IF; END IF; END $$;"
+    )
+
 
 def _rename_table_sql(old: str, new: str) -> str:
     old, new = _validate_identifier(old), _validate_identifier(new)
@@ -254,16 +296,26 @@ def _migrate_config_keys(*, forward: bool) -> None:
         op.execute(_CONFIG_UPDATE_FORWARD if forward else _CONFIG_UPDATE_REVERSE)
 
 
+def _migrate_flag_catalog(*, forward: bool) -> None:
+    """Postgres-only: the portable branch's SQLite schema has no catalog."""
+    if op.get_bind().dialect.name != "postgresql":
+        return
+    for old, new in _FLAG_CATALOG_RENAMES:
+        op.execute(_rename_flag_catalog_sql(old, new) if forward else _rename_flag_catalog_sql(new, old))
+
+
 def upgrade() -> None:
     if op.get_bind().dialect.name == "postgresql":
         _upgrade_postgres()
     else:
         _upgrade_other()
     _migrate_config_keys(forward=True)
+    _migrate_flag_catalog(forward=True)
 
 
 def downgrade() -> None:
     _migrate_config_keys(forward=False)
+    _migrate_flag_catalog(forward=False)
     if op.get_bind().dialect.name == "postgresql":
         # Reverse order: triggers/indexes/constraints while the tables still
         # carry their assistant_* names, then the tables themselves.

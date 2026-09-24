@@ -84,6 +84,51 @@ _CONFIG_REVERSE = (
     "UPDATE system_config SET key = replace(key, 'assistant_config:', 'remy_config:') WHERE key LIKE "
     "'assistant_config:%'"
 )
+# feature_flag_catalog: each rename emits both the unique-safe UPDATE (new
+# name not yet present) and the DELETE of the old zombie row (new name
+# already seeded). Forward = remy -> assistant; reverse undoes it.
+_FLAG_CATALOG_FORWARD = (
+    "UPDATE feature_flag_catalog SET name='assistant' WHERE name='remy'",
+    "DELETE FROM feature_flag_catalog WHERE name='remy'",
+    "UPDATE feature_flag_catalog SET name='assistant_ui_driving' WHERE name='remy_ui_driving'",
+    "DELETE FROM feature_flag_catalog WHERE name='remy_ui_driving'",
+)
+_FLAG_CATALOG_REVERSE = (
+    "UPDATE feature_flag_catalog SET name='remy' WHERE name='assistant'",
+    "DELETE FROM feature_flag_catalog WHERE name='assistant'",
+    "UPDATE feature_flag_catalog SET name='remy_ui_driving' WHERE name='assistant_ui_driving'",
+    "DELETE FROM feature_flag_catalog WHERE name='assistant_ui_driving'",
+)
+# The full unique-safety branch per flag, in emission order: old-row-exists
+# guard, new-row-exists guard, then DELETE the old zombie / ELSE UPDATE.
+_FLAG_BRANCH_FORWARD = (
+    (
+        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='remy') THEN "
+        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='assistant') THEN "
+        "DELETE FROM feature_flag_catalog WHERE name='remy'; "
+        "ELSE UPDATE feature_flag_catalog SET name='assistant' WHERE name='remy'; END IF;"
+    ),
+    (
+        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='remy_ui_driving') THEN "
+        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='assistant_ui_driving') THEN "
+        "DELETE FROM feature_flag_catalog WHERE name='remy_ui_driving'; "
+        "ELSE UPDATE feature_flag_catalog SET name='assistant_ui_driving' WHERE name='remy_ui_driving'; END IF;"
+    ),
+)
+_FLAG_BRANCH_REVERSE = (
+    (
+        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='assistant') THEN "
+        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='remy') THEN "
+        "DELETE FROM feature_flag_catalog WHERE name='assistant'; "
+        "ELSE UPDATE feature_flag_catalog SET name='remy' WHERE name='assistant'; END IF;"
+    ),
+    (
+        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='assistant_ui_driving') THEN "
+        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='remy_ui_driving') THEN "
+        "DELETE FROM feature_flag_catalog WHERE name='assistant_ui_driving'; "
+        "ELSE UPDATE feature_flag_catalog SET name='remy_ui_driving' WHERE name='assistant_ui_driving'; END IF;"
+    ),
+)
 
 
 def _load_migration() -> ModuleType:
@@ -152,6 +197,19 @@ class TestPostgresUpgradeStructure:
     def test_rewrites_config_key_prefix(self, sql: str) -> None:
         assert _CONFIG_FORWARD in sql
 
+    @pytest.mark.parametrize("fragment", _FLAG_CATALOG_FORWARD)
+    def test_renames_catalog_flags(self, sql: str, fragment: str) -> None:
+        assert fragment in sql
+
+    def test_catalog_flag_rename_is_guarded_and_unique_safe(self, sql: str) -> None:
+        """Guarded on table/column existence; handles the unique-name hazard:
+        the new-name existence check gates a DELETE of the old row instead of
+        a colliding UPDATE (feature_flag_catalog.name is the primary key)."""
+        assert "table_name='feature_flag_catalog'" in sql
+        assert "column_name='name'" in sql
+        for fragment in _FLAG_BRANCH_FORWARD:
+            assert fragment in sql
+
     def test_every_statement_is_guarded(self, sql: str) -> None:
         """Idempotency: each emitted statement carries an existence guard."""
         for statement in sql.splitlines():
@@ -208,6 +266,15 @@ class TestPostgresDowngradeStructure:
 
     def test_reverses_config_key_prefix(self, sql: str) -> None:
         assert _CONFIG_REVERSE in sql
+
+    @pytest.mark.parametrize("fragment", _FLAG_CATALOG_REVERSE)
+    def test_reverses_catalog_flag_renames(self, sql: str, fragment: str) -> None:
+        assert fragment in sql
+
+    def test_catalog_flag_reversal_is_unique_safe(self, sql: str) -> None:
+        """Downgrade carries the same delete-old-zombie / update-else branch."""
+        for fragment in _FLAG_BRANCH_REVERSE:
+            assert fragment in sql
 
 
 def _scaffold(conn: sa.Connection) -> None:
