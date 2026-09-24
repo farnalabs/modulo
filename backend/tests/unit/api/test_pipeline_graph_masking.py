@@ -405,6 +405,87 @@ def test_snapshot_detail_masks_graph_nodes(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Run fixture export: GET /runs/{id}/export-fixture
+# ---------------------------------------------------------------------------
+
+_RUN_ID = uuid.uuid4()
+_RUN_PIPELINE_ID = uuid.uuid4()
+
+
+def test_export_fixture_masks_snapshot_graph_credentials(client: TestClient) -> None:
+    """The snapshot graph in the fixture export is masked like every other read.
+
+    Snapshots store the graph with REAL stored values (mask echoes are resolved
+    back to secrets on write), so serialising ``snapshot.graph_json`` raw would
+    leak node ``env_vars`` / ``context_files`` / parameter values to any caller
+    holding ``run.output`` — the same credential class the graph, snapshot
+    detail, MCP tool and composite-template reads mask.
+    """
+    from modulo.db.crud.run_node_outputs import RunBlobs
+
+    node = {
+        "id": "n1",
+        "node_type": "agent",
+        # Key tier (GITHUB_TOKEN) AND value tier (the ghp_ pattern under a
+        # key that is not itself key-classified).
+        "env_vars": {
+            "GITHUB_TOKEN": _GHP_SECRET,
+            "DEPLOY_NOTES": f"rollback to v1 with {_GHP_SECRET}",
+            "APP_URL": "https://example.com",
+        },
+        "context_files": {"/tmp/creds.txt": f"token={_STRIPE_SECRET}"},
+        "composite_parameter_values": {"cfg": {"api_key": _STRIPE_SECRET}},
+        "parameter_overrides": {"nested": {"password": "hunter2-secret"}},
+    }
+    graph_json = {"nodes": [node], "edges": []}
+    run = MagicMock()
+    run.id = _RUN_ID
+    run.pipeline_id = _RUN_PIPELINE_ID
+    run.snapshot_id = uuid.uuid4()
+    run.status = "complete"
+    run.input_payload = {"prompt": "ship it", "api_key": _GHP_SECRET}
+    run.outputs_json = {"node-1": "done"}
+    run.node_telemetry_json = None
+    snapshot = SimpleNamespace(id=run.snapshot_id, graph_json=graph_json)
+
+    with (
+        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
+        patch(
+            "modulo.api.routes.runs._load_snapshot_for_run",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "modulo.api.routes.runs.read_run_blobs",
+            new=AsyncMock(return_value=RunBlobs(outputs={"node-1": "done"}, telemetry={}, markers=None)),
+        ),
+        patch("modulo.api.routes.runs.set_rls_org", new=AsyncMock()),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # The snapshot graph must NOT carry the raw stored secrets.
+    graph_dump = json.dumps(body["snapshot_graph_json"])
+    assert _GHP_SECRET not in graph_dump
+    assert _STRIPE_SECRET not in graph_dump
+    assert "hunter2-secret" not in graph_dump
+
+    masked_node = body["snapshot_graph_json"]["nodes"][0]
+    assert masked_node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+    assert "rollback to v1 with" in masked_node["env_vars"]["DEPLOY_NOTES"]
+    # Non-secret values still surface so the fixture stays usable.
+    assert masked_node["env_vars"]["APP_URL"] == "https://example.com"
+    # Non-secret graph structure passes through unchanged.
+    assert body["snapshot_graph_json"]["edges"] == graph_json["edges"]
+
+    # input_payload / outputs_json masking is unchanged by the graph fix.
+    assert _GHP_SECRET not in json.dumps(body["input_payload"])
+    assert body["input_payload"] == {"prompt": "ship it", "api_key": SENSITIVE_VALUE_MASK}
+    assert body["outputs_json"] == {"node-1": "done"}
+
+
+# ---------------------------------------------------------------------------
 # MCP resource: modulo://pipelines/{id}/snapshots/{snapshot_id}
 # ---------------------------------------------------------------------------
 

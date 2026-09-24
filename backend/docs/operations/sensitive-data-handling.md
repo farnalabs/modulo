@@ -56,7 +56,7 @@ Masking is applied at these points:
 | `GET /api/v1/settings/observability` | `_mask_headers()` on OTLP headers | Known header keys |
 | `GET /api/v1/runs/{run_id}/nodes/{node_id}/output` | `_mask_output_value()` recursive traversal | Nested sensitive keys, depth-limited to 20 |
 | `GET /api/v1/runs/{run_id}/io` | `_mask_output_value()` on `outputs_json` | Nested sensitive keys |
-| `GET /api/v1/runs/{run_id}/export-fixture` | `_mask_output_value()` on `outputs_json` and `input_payload` | Nested sensitive keys |
+| `GET /api/v1/runs/{run_id}/export-fixture` | `_mask_output_value()` on `outputs_json` and `input_payload`; `mask_pipeline_graph_node()` on each node of `snapshot_graph_json` (via the shared snapshot-graph helper) | Nested sensitive keys; snapshot graph node credentials masked as on the graph read |
 | `POST /api/v1/runs/diff` | `_mask_output_value()` on both sides | Nested sensitive keys |
 | `POST /api/v1/runs/{run_id}/nodes/{node_id}/prompt/reveal` | `_mask_prompt_text()` / `_mask_message_list()` | Regex-based credential masking in prompt text |
 | `get_run_output` MCP tool | `_mask_output_value()` from `runs.py` | Nested sensitive keys, returns `masked_fields` list |
@@ -64,7 +64,6 @@ Masking is applied at these points:
 | `GET /api/v1/pipelines/{id}/graph` (and convert/revert responses) | `mask_pipeline_graph_node()` on every node | Sensitive env-var keys masked whole; remaining env values + context file contents redacted by the canonical secret-VALUE patterns; `composite_parameter_values` / `parameter_overrides` deep-masked |
 | `GET /api/v1/pipelines/{id}/snapshots/{snapshot_id}` | `mask_pipeline_graph_node()` on each node of `graph_json` | Same node masking as the graph read |
 | Snapshot diff endpoint | `mask_pipeline_graph_node()` on `nodes_added` / `nodes_removed` and the diffed graphs | Same node masking |
-
 | `GET /api/v1/composite-templates/...` (list / get / create / patch / restore / editor GET+PUT) | `mask_pipeline_graph_node()` on every node of `sub_pipeline_graph_json` (via `_mask_sub_pipeline_graph` / `_mask_template_response`) | Same node masking as the pipeline graph read; the editor PUT and the PATCH endpoint resolve mask echoes against the stored template nodes via `merge_masked_graph_nodes()` |
 | `POST /api/v1/pipelines/{id}/save-as-composite` | `mask_pipeline_graph_node()` on every copied node | Secret env values are masked BEFORE the template is persisted, so the org-readable template storage never receives them in the clear |
 | MCP `get_pipeline_graph` tool | `mask_pipeline_graph_node()` on every node of the response | Same node masking as the REST graph read |
