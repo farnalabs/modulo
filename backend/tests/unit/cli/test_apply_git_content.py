@@ -294,7 +294,7 @@ def test_diff_git_content_skips_equal_scalar_ref() -> None:
     from modulo.cli.apply.drift import _diff_git_content
 
     graph = {"nodes": [{"id": _NODE_ID, "agent_prompt": _PINNED_PROMPT_A}], "edges": []}
-    assert _diff_git_content(graph, graph) == []
+    assert not _diff_git_content(graph, graph)
 
 
 def test_diff_git_content_reports_command_list_commit_move() -> None:
@@ -318,7 +318,7 @@ def test_diff_git_content_skips_equal_command_ref() -> None:
     from modulo.cli.apply.drift import _diff_git_content
 
     graph = {"nodes": [{"id": _NODE_ID, "agent_commands": [_PINNED_PROMPT_A]}], "edges": []}
-    assert _diff_git_content(graph, graph) == []
+    assert not _diff_git_content(graph, graph)
 
 
 def test_diff_git_content_reports_command_added_on_one_side() -> None:
