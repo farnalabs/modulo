@@ -16383,11 +16383,6 @@ export interface components {
             /** Evaluated At */
             evaluated_at: string;
         };
-        /** RefreshRequest */
-        RefreshRequest: {
-            /** Refresh Token */
-            refresh_token: string;
-        };
         /** RegisterPublisherRequest */
         RegisterPublisherRequest: {
             /** Fingerprint Hex */
@@ -22591,11 +22586,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RefreshRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -22626,11 +22617,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RefreshRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

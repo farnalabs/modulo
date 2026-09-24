@@ -110,8 +110,12 @@ async def test_oidc_callback_runs_db_work_inside_begin() -> None:
         )
 
     assert resp.status_code == 307
-    assert "access_token=at" in resp.headers["location"]
-    assert "refresh_token=rt" in resp.headers["location"]
+    assert resp.headers["location"].endswith("#access_token=at")
+    # FAR-1197: the refresh token is no longer sent in the fragment — it rides
+    # in the httpOnly issuer cookie set on the redirect response.
+    set_cookies = "; ".join(resp.headers.getlist("set-cookie"))
+    assert "modulo_refresh" in set_cookies
+    assert "XSRF-TOKEN" in set_cookies
 
 
 async def test_saml_app_fallback_opens_scoped_transaction_when_caller_has_none() -> None:

@@ -548,15 +548,16 @@ async def test_oidc_callback_success_provisions_and_redirects_to_frontend_url(
     )
 
     params = _fragment_params(location)
-    assert set(params) == {"access_token", "refresh_token"}
+    assert set(params) == {"access_token"}
 
     # The issued access token identifies the provisioned identity in the org.
     access_payload = _jwt_payload(params["access_token"])
     assert access_payload["sub"] == email
     assert access_payload["org_id"] == str(world.org_id)
     assert access_payload["org_role"] == "viewer"  # provider's default_role
-    # The refresh JWT is a real rotation-family body (create_refresh_token).
-    refresh_payload = _jwt_payload(params["refresh_token"])
+    # The refresh JWT is a real rotation-family body (create_refresh_token);
+    # FAR-1197 moves it out of the fragment and into the httpOnly cookie.
+    refresh_payload = _jwt_payload(resp.cookies["modulo_refresh"])
     assert refresh_payload["purpose"] == "refresh"
     assert isinstance(refresh_payload.get("token_family"), str)
     assert refresh_payload["token_family"]

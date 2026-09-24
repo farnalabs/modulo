@@ -1458,8 +1458,10 @@ class TestOidcCallbackEndpointExtended:
 
             assert resp.status_code == 307
             location = resp.headers.get("location", "")
-            assert "access_token=at-oidc" in location
-            assert "refresh_token=rt-oidc" in location
+            assert location.endswith("#access_token=at-oidc")
+            # FAR-1197: refresh token moves to the httpOnly modulo_refresh cookie.
+            set_cookies = "; ".join(resp.headers.get_list("set-cookie"))
+            assert "modulo_refresh=rt-oidc" in set_cookies
 
 
 # ---------------------------------------------------------------------------

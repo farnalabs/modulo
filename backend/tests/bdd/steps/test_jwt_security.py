@@ -81,6 +81,39 @@ def _patch_active_account() -> Any:
     )
 
 
+def _arm_refresh_cookie(client: TestClient, token: str) -> None:
+    """FAR-1197: arm the httpOnly refresh transport in the TestClient jar.
+
+    Drops any modulo_refresh already in the jar first — the login response
+    seeds one, and duplicate same-name cookies make httpx raise
+    CookieConflict on read.
+    """
+    for cookie in list(client.cookies.jar):
+        if cookie.name == "modulo_refresh":
+            client.cookies.jar.clear(cookie.domain, cookie.path, cookie.name)
+    client.cookies.set("modulo_refresh", token)
+
+
+def _response_refresh_cookie(resp: Any) -> str | None:
+    """Read the fresh modulo_refresh value straight off the Set-Cookie headers."""
+    value = None
+    for raw in resp.headers.get_list("Set-Cookie"):
+        head = raw.split(";", 1)[0]
+        if "=" in head:
+            name, _, val = head.partition("=")
+            if name.strip() == "modulo_refresh":
+                value = val.strip()
+    return value
+
+
+def _post_refresh(client: TestClient) -> Any:
+    return client.post("/api/v1/auth/refresh")
+
+
+def _post_logout(client: TestClient) -> Any:
+    return client.post("/api/v1/auth/logout")
+
+
 # ---------------------------------------------------------------------------
 # Token-authenticated TestClient (overrides DB session but NOT get_current_user)
 # ---------------------------------------------------------------------------
@@ -156,10 +189,11 @@ def has_access_token(request: Any) -> None:
 
 @then("the response contains a refresh_token")
 def has_refresh_token(request: Any) -> None:
+    # FAR-1197: the refresh token rides in an httpOnly cookie, never the body.
     body = request.node.response.json()
-    assert "refresh_token" in body, f"Response missing refresh_token: {body}"
-    assert isinstance(body["refresh_token"], str), f"refresh_token is not a string: {body['refresh_token']}"
-    assert body["refresh_token"], "refresh_token is empty"
+    assert "refresh_token" not in body, f"refresh_token leaked into body: {body.keys()}"
+    cookie = request.node.response.cookies.get("modulo_refresh")
+    assert cookie, f"Response missing modulo_refresh cookie: {request.node.response.headers.get('set-cookie')}"
 
 
 # ===========================================================================
@@ -304,7 +338,7 @@ def logged_in_as(email: str, request: Any, ctx: dict[str, Any], token_client: Te
 
     body = resp.json()
     ctx["login_access_token"] = body["access_token"]
-    ctx["login_refresh_token"] = body["refresh_token"]
+    ctx["login_refresh_token"] = resp.cookies.get("modulo_refresh")
     ctx["token_family_id"] = str(family_id)
 
 
@@ -317,16 +351,14 @@ def refresh_with_stored_token(request: Any, ctx: dict[str, Any], token_client: T
         patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
-        resp = token_client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
-        )
+        _arm_refresh_cookie(token_client, refresh_token)
+        resp = _post_refresh(token_client)
         _store_response(request, ctx, resp)
 
     if resp.status_code == 200:
         body = resp.json()
         ctx["new_access_token"] = body.get("access_token")
-        ctx["new_refresh_token"] = body.get("refresh_token")
+        ctx["new_refresh_token"] = _response_refresh_cookie(resp)
 
 
 @then("the response contains a new access_token")
@@ -340,16 +372,21 @@ def has_new_access_token(request: Any, ctx: dict[str, Any]) -> None:
 @then("the response contains a new refresh_token")
 def has_new_refresh_token(request: Any, ctx: dict[str, Any]) -> None:
     body = request.node.response.json()
-    assert "refresh_token" in body, f"Response missing refresh_token: {body}"
+    assert "refresh_token" not in body, "refresh_token leaked into body on rotation"
     old_token = ctx.get("login_refresh_token")
-    assert body["refresh_token"] != old_token, "refresh_token was not rotated"
+    new_token = request.node.response.cookies.get("modulo_refresh")
+    assert new_token, f"Rotation response missing modulo_refresh cookie: {old_token}"
+    assert new_token != old_token, "refresh_token was not rotated"
 
 
 @then("the new tokens differ from the old pair")
 def tokens_differ_from_old(request: Any, ctx: dict[str, Any]) -> None:
     body = request.node.response.json()
     assert body["access_token"] != ctx.get("login_access_token"), "access_token was reused"
-    assert body["refresh_token"] != ctx.get("login_refresh_token"), "refresh_token was reused"
+    old_token = ctx.get("login_refresh_token")
+    new_token = ctx.get("new_refresh_token")
+    assert new_token is not None, "refresh_token was not rotated"
+    assert new_token != old_token, "refresh_token was reused"
 
 
 # ===========================================================================
@@ -384,10 +421,8 @@ def refresh_once(request: Any, ctx: dict[str, Any], token_client: TestClient) ->
         patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
-        resp = token_client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
-        )
+        _arm_refresh_cookie(token_client, refresh_token)
+        resp = _post_refresh(token_client)
         _store_response(request, ctx, resp)
 
 
@@ -399,10 +434,8 @@ def refresh_again_same_token(request: Any, ctx: dict[str, Any], token_client: Te
         patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
-        resp = token_client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
-        )
+        _arm_refresh_cookie(token_client, refresh_token)
+        resp = _post_refresh(token_client)
         _store_response(request, ctx, resp)
 
 
@@ -415,10 +448,8 @@ def refresh_again_within_grace(request: Any, ctx: dict[str, Any], token_client: 
         patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, True))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
-        resp = token_client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
-        )
+        _arm_refresh_cookie(token_client, refresh_token)
+        resp = _post_refresh(token_client)
         _store_response(request, ctx, resp)
 
 
@@ -431,10 +462,8 @@ def refresh_again_beyond_grace(request: Any, ctx: dict[str, Any], token_client: 
         patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
-        resp = token_client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
-        )
+        _arm_refresh_cookie(token_client, refresh_token)
+        resp = _post_refresh(token_client)
         _store_response(request, ctx, resp)
 
 
@@ -454,10 +483,8 @@ def error_suspected_theft(request: Any) -> None:
 def logout(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("login_refresh_token")
     with patch("modulo.api.routes.auth.blacklist_family", new=AsyncMock(return_value=True)):
-        resp = token_client.post(
-            "/api/v1/auth/logout",
-            json={"refresh_token": refresh_token},
-        )
+        _arm_refresh_cookie(token_client, refresh_token)
+        resp = _post_logout(token_client)
         _store_response(request, ctx, resp)
 
 
@@ -468,8 +495,6 @@ def refresh_rejected_after_logout(request: Any, ctx: dict[str, Any], token_clien
         patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(0, True, False))),
         patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
-        resp = token_client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
-        )
+        _arm_refresh_cookie(token_client, refresh_token)
+        resp = _post_refresh(token_client)
         assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"

@@ -115,7 +115,8 @@ def post_login(email: str, password: str, request, client):
     if resp.status_code == 200:
         data = resp.json()
         request.node._access_token = data.get("access_token")
-        request.node._refresh_token = data.get("refresh_token")
+        # FAR-1197: the refresh token rides in an httpOnly cookie, not the body.
+        request.node._refresh_token = resp.cookies.get("modulo_refresh")
 
 
 @then("the response contains an access_token")
@@ -143,10 +144,8 @@ def use_refresh_token(request, client):
         patch("modulo.api.routes.auth.resolve_role_from_membership", new_callable=AsyncMock, return_value="admin"),
         patch("modulo.api.routes.auth.advance_sequence", new_callable=AsyncMock, return_value=(1, False, False)),
     ):
-        resp = client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": request.node._refresh_token},
-        )
+        client.cookies.set("modulo_refresh", request.node._refresh_token)
+        resp = client.post("/api/v1/auth/refresh")
     request.node._resp = resp
     request.node._new_access_token = resp.json().get("access_token")
 

@@ -10,6 +10,7 @@ MSG_FEATURE_NOT_AVAILABLE = "Feature is not available. Run database migrations t
 MSG_THIS_FEATURE_NOT_AVAILABLE = "This feature is not available. Run database migrations to enable it."
 MSG_RESOURCE_ALREADY_EXISTS = "A resource with this value already exists"
 MSG_INTERNAL_SERVER_ERROR = "Internal server error"
+MSG_CSRF_FAILED = "CSRF validation failed"
 MSG_UNEXPECTED_ERROR = "An unexpected error occurred."
 MSG_UNEXPECTED_ERROR_NO_PERIOD = "An unexpected error occurred"
 MSG_DB_OPERATION_FAILED = "Database operation failed. Please try again later."

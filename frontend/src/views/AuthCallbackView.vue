@@ -22,19 +22,22 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { setAccessToken, setRefreshToken } from '../lib/api/client'
+import { setAccessToken } from '../lib/api/client'
 import { syncFromMe } from '../lib/mustChangePassword'
 
 const router = useRouter()
 
 onMounted(async () => {
-  const { access_token: accessToken, refresh_token: refreshToken } = parseFragmentTokens(window.location.hash)
+  const params = new URLSearchParams(window.location.hash.slice(1))
+  const accessToken = params.get('access_token')
   if (!accessToken) {
     router.replace('/login')
     return
   }
+  // FAR-1197: the SSO redirect no longer carries a refresh_token — the refresh
+  // token rides the httpOnly `modulo_refresh` cookie the backend sets on the
+  // same response.
   setAccessToken(accessToken)
-  if (refreshToken) setRefreshToken(refreshToken)
   // Strip the tokens from the URL so they are not left in the address bar /
   // browser history after the handoff is consumed.
   history.replaceState(null, '', window.location.pathname + window.location.search)
@@ -44,13 +47,4 @@ onMounted(async () => {
   await syncFromMe()
   router.replace('/')
 })
-
-function parseFragmentTokens(hash: string): { access_token?: string; refresh_token?: string } {
-  if (!hash || hash.length < 2) return {}
-  const params = new URLSearchParams(hash.slice(1))
-  return {
-    access_token: params.get('access_token') ?? undefined,
-    refresh_token: params.get('refresh_token') ?? undefined,
-  }
-}
 </script>

@@ -9,7 +9,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { api, getAccessToken, setAccessToken, setRefreshToken, onAuthChange, getInitialAuthState, shouldReRunAutoLogin, isDemoSession, wasDemoSessionEnded } from './lib/api/client'
+import { api, getAccessToken, setAccessToken, onAuthChange, getInitialAuthState, shouldReRunAutoLogin, isDemoSession, wasDemoSessionEnded } from './lib/api/client'
 import { getErrorTracker } from './lib/error-tracking'
 import { getAutoLoginConfig } from './config/runtime'
 import { applyMustChangePassword, syncFromMe, useMustChangePassword } from './lib/mustChangePassword'
@@ -77,7 +77,6 @@ async function runAutoLogin(navigateHome = false): Promise<boolean> {
     if (!res.ok) return false
     const data = await res.json()
     setAccessToken(data.access_token)
-    if (data.refresh_token) setRefreshToken(data.refresh_token)
     applyMustChangePassword(data.must_change_password)
     if (data.user) {
       const tracker = getErrorTracker()
