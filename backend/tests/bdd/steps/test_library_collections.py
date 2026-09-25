@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -39,6 +39,7 @@ from modulo.core.library_service.install import (
     CollectionNotPublishedError,
     PinResolutionError,
 )
+from modulo.core.library_service.primitive_types import MAX_COLLECTION_PINS
 from modulo.core.library_service.uninstall import InstallNotFoundError as UninstallInstallNotFoundError
 from tests.bdd.conftest import ORG_ID, _active_client, _store_response
 
@@ -99,6 +100,40 @@ def _uninstall_result(
     }
 
 
+def _mk_collection_primitive(
+    ctx: dict[str, Any],
+    *,
+    status: str,
+    slug: str = "my-collection",
+    pins: list[dict[str, str]] | None = None,
+) -> MagicMock:
+    """Build the ``LibraryPrimitive``-shaped object authoring routes return.
+
+    The create/update/publish routes read ``id`` / ``name`` / ``slug`` /
+    ``description`` / ``status`` / ``manifest_pins`` / ``trust_header`` /
+    ``created_at`` / ``updated_at`` / ``organisation_id`` / ``primitive_type``
+    off the object before shaping the ``CollectionResponse`` or enforcing draft
+    state in ``_load_draft_collection``.
+    """
+    prim = MagicMock()
+    prim.id = ctx.get("collection_id") or uuid.uuid4()
+    ctx["collection_id"] = prim.id
+    prim.organisation_id = ORG_ID
+    prim.name = ctx.get("collection_name") or "My Collection"
+    prim.slug = slug
+    prim.description = "A collection of test primitives"
+    prim.status = status
+    prim.manifest_pins = pins or [
+        {"slug": "input-schema", "version": "1.0"},
+        {"slug": "output-schema", "version": "2.0"},
+    ]
+    prim.trust_header = None
+    prim.primitive_type = "library_collection"
+    prim.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    prim.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+    return prim
+
+
 # ===========================================================================
 # Route-patch helpers
 # ===========================================================================
@@ -142,6 +177,7 @@ def _collection_exists(ctx: dict[str, Any]) -> None:
     ctx["collection_id"] = uuid.uuid4()
     ctx["install"] = _mk_install()
     ctx["install_id"] = ctx["install"].install_id
+    ctx["collection"] = _mk_collection_primitive(ctx, status="published", slug="my-collection")
 
 
 @given("a draft library collection exists")
@@ -152,6 +188,7 @@ def _draft_collection_exists(ctx: dict[str, Any]) -> None:
     ctx["install_error"] = CollectionNotPublishedError(
         "Collection 'Test Collection' must be published before installing (current status: draft)"
     )
+    ctx["collection"] = _mk_collection_primitive(ctx, status="draft")
 
 
 @given("the collection pins do not resolve")
@@ -329,3 +366,167 @@ def _error_mentions(ctx: dict[str, Any], text: str) -> None:
     body = ctx["response"].json()
     detail = body.get("detail", "") if isinstance(body, dict) else str(body)
     assert text.lower() in str(detail).lower(), f"Expected error to mention {text!r}, got {detail!r}"
+
+
+# ============================================================================
+# Authoring (FAR-760): create / update / publish a collection with manifest pins
+#
+# The create/update/publish routes under ``/api/v1/libraries/collections`` are
+# exercised end-to-end through the real routes with only the feature-flag /
+# RLS / CRUD seams patched, so the scenarios assert the actual authoring API
+# contract: draft state on create, duplicate-slug 409, draft-only mutation
+# (400 for a published collection), and publish-time pin validation (empty
+# manifest 422, duplicate pins 422, >MAX_COLLECTION_PINS 422, unknown
+# primitive 422, non-draft 400).
+# ============================================================================
+
+
+def _authoring_route_patch_ctx(ctx: dict[str, Any]) -> MagicMock:
+    """Return the collection primitive the patched CRUD seams hand back."""
+    if "collection" not in ctx:
+        ctx["collection"] = _mk_collection_primitive(ctx, status="draft")
+    return cast(MagicMock, ctx["collection"])
+
+
+# --- Authoring Given steps --------------------------------------------------
+
+
+@given(parsers.parse('the operator authors a collection named "{name}"'))
+def _operator_authors_collection(ctx: dict[str, Any], name: str) -> None:
+    ctx["collection_name"] = name
+    ctx["collection_slug"] = "my-collection"
+
+
+@given(parsers.parse('a collection with slug "{slug}" already exists'))
+def _collection_slug_exists(ctx: dict[str, Any], slug: str) -> None:
+    ctx["existing_slug"] = slug
+    ctx["slug_conflict"] = True
+
+
+@given("the collection pins resolve to known primitives")
+def _collection_pins_known(ctx: dict[str, Any]) -> None:
+    ctx["pin_lookup"] = "known"
+
+
+@given("the collection has an empty manifest")
+def _collection_manifest_empty(ctx: dict[str, Any]) -> None:
+    prim = _authoring_route_patch_ctx(ctx)
+    prim.manifest_pins = []
+
+
+@given("the collection pins are duplicated")
+def _collection_pins_duplicated(ctx: dict[str, Any]) -> None:
+    prim = _authoring_route_patch_ctx(ctx)
+    prim.manifest_pins = [
+        {"slug": "input-schema", "version": "1.0"},
+        {"slug": "input-schema", "version": "1.0"},
+    ]
+
+
+@given("the collection has more than 25 pins")
+def _collection_pins_over_cap(ctx: dict[str, Any]) -> None:
+    prim = _authoring_route_patch_ctx(ctx)
+    prim.manifest_pins = [
+        {"slug": f"schema-{i}", "version": "1.0"} for i in range(MAX_COLLECTION_PINS + 1)
+    ]
+
+
+# --- Authoring When steps ---------------------------------------------------
+
+
+@when(parsers.parse('the operator creates the collection with pins for "{spec}"'))
+def _operator_creates_collection(
+    ctx: dict[str, Any], request: pytest.FixtureRequest, patches: list[Any], spec: str
+) -> None:
+    client = _active_client(request)
+    prim = ctx.get("collection") or _mk_collection_primitive(ctx, status="draft")
+    existing = None
+    if ctx.get("slug_conflict"):
+        existing = MagicMock()
+        existing.slug = ctx["existing_slug"]
+    patches.append(patch(f"{_ROUTE}._require_library_collection_flag", new=AsyncMock()))
+    patches.append(patch(f"{_ROUTE}._set_rls_context", new=AsyncMock()))
+    patches.append(patch(f"{_ROUTE}.get_primitive_by_slug", new=AsyncMock(return_value=existing)))
+    patches.append(patch(f"{_ROUTE}.create_library_primitive", new=AsyncMock(return_value=prim)))
+    for p in patches:
+        p.start()
+
+    resp = client.post(
+        "/api/v1/libraries/collections",
+        json={
+            "name": ctx.get("collection_name") or "My Collection",
+            "slug": ctx.get("collection_slug") or "my-collection",
+            "manifest_pins": [_parse_pin_spec(spec)],
+        },
+    )
+    _store_response(request, ctx, resp)
+
+
+@when(parsers.parse('the operator updates the collection to pin "{spec}"'))
+def _operator_updates_collection(
+    ctx: dict[str, Any], request: pytest.FixtureRequest, patches: list[Any], spec: str
+) -> None:
+    client = _active_client(request)
+    prim = ctx.get("collection") or _mk_collection_primitive(ctx, status="draft")
+    prim.manifest_pins = [_parse_pin_spec(spec)]
+    patches.append(patch(f"{_ROUTE}._require_library_collection_flag", new=AsyncMock()))
+    patches.append(patch(f"{_ROUTE}._set_rls_context", new=AsyncMock()))
+    patches.append(patch(f"{_ROUTE}.get_primitive", new=AsyncMock(return_value=prim)))
+    for p in patches:
+        p.start()
+
+    resp = client.patch(
+        f"/api/v1/libraries/collections/{ctx['collection_id']}",
+        json={"manifest_pins": [_parse_pin_spec(spec)]},
+    )
+    _store_response(request, ctx, resp)
+
+
+@when("the operator publishes the collection")
+def _operator_publishes_collection(
+    ctx: dict[str, Any], request: pytest.FixtureRequest, patches: list[Any]
+) -> None:
+    client = _active_client(request)
+    prim = ctx.get("collection") or _mk_collection_primitive(ctx, status="draft")
+    lookup = ctx.get("pin_lookup")
+    if lookup == "known":
+        pin_prim = MagicMock()
+        pin_prim.slug = "input-schema"
+        pin_prim.version = "1.0"
+        pin_prim.primitive_type = "schema"
+        lookup_effect: Any = AsyncMock(return_value=pin_prim)
+    else:
+        lookup_effect = AsyncMock(return_value=None)
+
+    patches.append(patch(f"{_ROUTE}._require_library_collection_flag", new=AsyncMock()))
+    patches.append(patch(f"{_ROUTE}._set_rls_context", new=AsyncMock()))
+    patches.append(patch(f"{_ROUTE}.get_primitive", new=AsyncMock(return_value=prim)))
+    patches.append(patch(f"{_ROUTE}._lookup_pin_primitive", new=lookup_effect))
+    for p in patches:
+        p.start()
+
+    resp = client.post(f"/api/v1/libraries/collections/{ctx['collection_id']}/publish")
+    _store_response(request, ctx, resp)
+
+
+# --- Authoring Then steps ---------------------------------------------------
+
+
+@then(parsers.parse('the collection response has status "{expected}"'))
+def _collection_response_status(ctx: dict[str, Any], expected: str) -> None:
+    data = ctx["response"].json()
+    assert data.get("status") == expected, f"Expected collection status '{expected}', got {data.get('status')!r}"
+
+
+@then(parsers.parse('the collection response echoes manifest pins for "{spec}"'))
+def _collection_response_pins(ctx: dict[str, Any], spec: str) -> None:
+    data = ctx["response"].json()
+    pins = data.get("manifest_pins") or []
+    expected = _parse_pin_spec(spec)
+    assert expected in pins, f"Expected pin {expected} in response manifest_pins, got {pins!r}"
+
+
+def _parse_pin_spec(spec: str) -> dict[str, str]:
+    """Parse a ``slug@version`` pin spec (e.g. ``input-schema@1.0``) into a dict."""
+    slug, version = spec.split("@", 1)
+    return {"slug": slug, "version": version}

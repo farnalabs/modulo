@@ -65,16 +65,32 @@ gated behind the `library_collection` feature flag.
       installs (200, idempotent when already granted), 400 for local installs,
       404 for unknown installs (`library_collections.feature`,
       `steps/test_library_collections.py`)
+- [x] The authoring REST contract has executing BDD coverage too: creating a
+      collection returns 201 with `status=draft` and echoes the manifest pins,
+      a duplicate slug is 409; updating a draft replaces its pins (200) while
+      updating a published collection is 400; publishing a draft collection
+      validates pins — valid pins publish (200), an empty manifest / duplicate
+      pins / more than the 25-pin cap / an unknown pinned primitive are all
+      422, and publishing a non-draft collection is 400
+      (`library_collections.feature`, `steps/test_library_collections.py`)
 
 ## Known Gaps
 
-- **Collection authoring UI is flag-gated and not BDD-exercised** —
-  create/publish pin-validation authoring at `/library/collections/*` lives
-  behind the `library_collection` feature flag; install/uninstall/grant now
-  ships an executing BDD surface (`library_collections.feature`), while the
-  authoring surface remains unit/integration-covered only.
+- **Collection authoring UI is flag-gated** — create/publish authoring at
+  `/library/collections/*` lives behind the `library_collection` feature
+  flag; the authoring REST surface now ships an executing BDD contract
+  (`library_collections.feature`), but the flag-gated frontend authoring
+  forms themselves remain unit/integration-covered only (no E2E).
 
 ## QA History
+
+- 2026-09-25: **product-map walk** — closed the "authoring not BDD-exercised"
+  gap: `library_collections.feature` gained 10 authoring scenarios driving the
+  real `/api/v1/libraries/collections` create / update / publish routes (patched
+  flag/RLS/CRUD/pin-lookup seams) covering the draft create contract, the
+  duplicate-slug 409, the draft-only mutation rule (400 for published), and the
+  publish-time pin-validation error contract (empty manifest 422, duplicate pins
+  422, >25 pins 422, unknown primitive 422, non-draft 400).
 
 - 2026-09-22: **product-map walk** — closed the "No BDD feature file" gap:
   shipped `backend/tests/bdd/features/library/library_collections.feature`
