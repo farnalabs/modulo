@@ -265,3 +265,68 @@ class TestCancelledErrorPropagates:
                 session_factory=_session_factory(session),
                 org_id=org_id,
             )
+
+
+class TestDecisionStateUnchangedAfterPersistenceFailure:
+    """Criterion 16: the fail-open wrapper never mutates or reverses the
+    decision when persistence fails.
+
+    Captures the decision's in-memory state BEFORE the persistence attempt,
+    forces a persistence failure, then asserts the state is IDENTICAL after.
+    """
+
+    @pytest.mark.asyncio
+    async def test_outcome_identical_before_and_after(self) -> None:
+        snapshot = _snapshot()
+        # Resolve the outcome BEFORE persistence — this is the authoritative decision
+        outcome_before = resolve_policy_gate(snapshot)
+        assert outcome_before.action == "continue"
+        assert outcome_before.result is True
+        assert outcome_before.error is None
+
+        session = _failing_savepoint_session(RuntimeError("connection pool exhausted"))
+
+        # The persistence attempt must NOT raise
+        await _persist_decision_row(
+            snapshot,
+            outcome_before,
+            run_id,
+            session_factory=_session_factory(session),
+            org_id=org_id,
+        )
+
+        # Re-resolve the outcome AFTER persistence — the snapshot is immutable,
+        # so the outcome must be identical
+        outcome_after = resolve_policy_gate(snapshot)
+        assert outcome_after.action == outcome_before.action
+        assert outcome_after.result == outcome_before.result
+        assert outcome_after.eval_result_id == outcome_before.eval_result_id
+        assert outcome_after.error == outcome_before.error
+
+    @pytest.mark.asyncio
+    async def test_block_outcome_not_reversed_by_persistence_failure(self) -> None:
+        """A 'block' decision must NOT be reversed to 'continue' when persistence fails."""
+        snapshot = _snapshot()
+        outcome_before = resolve_policy_gate(snapshot)
+        # Override to simulate a block outcome
+        block_outcome = Outcome(
+            result=outcome_before.result,
+            action="block",
+            eval_result_id=outcome_before.eval_result_id,
+            error=outcome_before.error,
+        )
+
+        session = _failing_savepoint_session(IntegrityError("stmt", {}, Exception("fk")))
+
+        await _persist_decision_row(
+            snapshot,
+            block_outcome,
+            run_id,
+            session_factory=_session_factory(session),
+            org_id=org_id,
+        )
+
+        # The outcome object was not mutated
+        assert block_outcome.action == "block"
+        assert block_outcome.result == outcome_before.result
+        assert block_outcome.error == outcome_before.error

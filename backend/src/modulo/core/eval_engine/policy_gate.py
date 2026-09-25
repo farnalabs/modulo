@@ -24,7 +24,10 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from modulo.db.models.policy_gate_decision import PolicyGateDecision
 
 GUARDRAIL_EVAL_TYPE = "guardrail"
 
@@ -166,7 +169,7 @@ def build_decision_row(
     snapshot: EvalPolicySnapshot,
     outcome: Outcome,
     run_id: uuid.UUID,
-) -> Any:
+) -> PolicyGateDecision:
     """Construct a ``PolicyGateDecision`` ORM row from an evaluation outcome.
 
     Pure construction — never touches a database or a repository.

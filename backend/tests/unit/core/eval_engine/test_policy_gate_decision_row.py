@@ -69,7 +69,7 @@ def _outcome_defined_pass() -> Outcome:
     )
 
 
-class TestBuildDecisionRowColminariatePayloadColumns:
+class TestBuildDecisionRowColumnArityPayloadColumns:
     """Criterion 1: all six payload columns are populated from the inputs."""
 
     def test_defined_pass_outcome_populates_all_six_columns(self) -> None:

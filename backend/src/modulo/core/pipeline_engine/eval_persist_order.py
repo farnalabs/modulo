@@ -172,29 +172,32 @@ def _record_suite_incomplete(*, reason: str) -> None:
 # FAR-1102 chunk 4: decision-record persistence helpers
 # ---------------------------------------------------------------------------
 
-# Constraint name fragments that identify the two composite FKs on
-# policy_gate_decisions.  A referential failure from an unrelated constraint
-# would be misclassified as transient, but the only constraints on the table
-# are the two composite FKs and the CHECK (which cannot fire on a valid
-# resolved_action value).
-_REFERENTIAL_CONSTRAINT_FRAGMENTS = ("policy_gate", "evals")
-
 
 def _classify_persistence_failure(exc: BaseException) -> str:
     """Classify a decision-record persistence failure as ``referential`` or ``transient``.
 
-    A referential failure is an ``IntegrityError`` whose ``constraint_name``
-    matches one of the two composite FK constraint names on
-    ``policy_gate_decisions``.  Everything else is transient.
+    A referential failure is an ``IntegrityError`` whose constraint name
+    (extracted via the shared ``_extract_constraint_name`` helper which
+    handles asyncpg ``exc.orig`` and message parsing) matches one of the
+    two composite FK constraint names on ``policy_gate_decisions``.
+    Everything else is transient.
     """
     from sqlalchemy.exc import IntegrityError
 
     if isinstance(exc, IntegrityError):
-        constraint_name = getattr(exc, "constraint_name", None)
+        from modulo.db.crud.policy_gate_decision import (
+            _DECISION_FK_CONSTRAINTS,
+            _extract_constraint_name,
+        )
+
+        constraint_name = _extract_constraint_name(exc)
         if constraint_name is not None:
-            for fragment in _REFERENTIAL_CONSTRAINT_FRAGMENTS:
-                if fragment in constraint_name:
-                    return "referential"
+            if constraint_name in _DECISION_FK_CONSTRAINTS:
+                return "referential"
+            # Substring fallback for exact name unavailable (e.g. some drivers)
+            lower = constraint_name.lower()
+            if "policy_gate_decision" in lower:
+                return "referential"
     return "transient"
 
 
@@ -231,7 +234,7 @@ async def _persist_decision_row(
     """
     decision_row = build_decision_row(snapshot, outcome, run_id)
     try:
-        async with session_factory() as session, session.begin_nested():
+        async with session_factory() as session, session.begin(), session.begin_nested():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
             session.add(decision_row)
@@ -240,6 +243,8 @@ async def _persist_decision_row(
     except Exception as exc:
         failure_class = _classify_persistence_failure(exc)
         if failure_class == "referential":
+            from modulo.db.crud.policy_gate_decision import _extract_constraint_name
+
             _log.error(
                 "policy_gate_decision.persist_failed_referential",
                 extra={
@@ -248,7 +253,7 @@ async def _persist_decision_row(
                     "run_id": str(run_id),
                     "resolved_action": outcome.action,
                     "organisation_id": str(snapshot.policy_gate.organisation_id),
-                    "constraint_name": getattr(exc, "constraint_name", None),
+                    "constraint_name": _extract_constraint_name(exc),
                     "exception_message": str(exc),
                     "failure_class": "referential",
                 },
@@ -438,6 +443,15 @@ async def run_evals_persist_before_decide(
         # fail-CLOSED for block gates).
         if can_persist and eval_def.policy_gate_id is not None:
             assert session_factory is not None and org_id is not None and run_id is not None
+            if eval_def.policy_gate_node_id is None:
+                _log.warning(
+                    "eval_persist_order.policy_gate_node_id_missing",
+                    extra={
+                        "eval_id": str(eval_def.id),
+                        "policy_gate_id": str(eval_def.policy_gate_id),
+                        "eval_name": eval_def.name,
+                    },
+                )
             snapshot = EvalPolicySnapshot(
                 policy_gate=PolicyGateView(
                     id=eval_def.policy_gate_id,
