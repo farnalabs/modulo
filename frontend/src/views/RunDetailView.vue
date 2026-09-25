@@ -269,6 +269,9 @@
         <span v-if="rerunError" role="alert" class="ml-3 text-xs text-destructive">{{ rerunError }}</span>
       </div>
 
+      <!-- Analyze with the Assistant: root-cause analysis handoff for failed runs (FAR-1235) -->
+      <AnalyzeRunButton v-if="analyzeRunInfo && isAnalyzableFailure(analyzeRunInfo.status)" :run="analyzeRunInfo" />
+
       <!-- Trace ID -->
       <div v-if="run.trace_id" class="flex items-center gap-2">
         <span class="text-xs text-muted-foreground">{{ $t('views.RunDetailView.otel_trace_id') }}</span>
@@ -823,6 +826,8 @@ import RunErrorTag from '../components/shared/RunErrorTag.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import HitlGateCard from '../components/hitl/HitlGateCard.vue'
 import KnownFixesPanel from '../components/shared/KnownFixesPanel.vue'
+import AnalyzeRunButton from '../components/runs/AnalyzeRunButton.vue'
+import { isAnalyzableFailure, type AnalyzeRunInfo } from '../components/runs/analyzeRun'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
@@ -1523,6 +1528,38 @@ const isTerminal = computed(() => run.value != null && isTerminalStatus(run.valu
 const canCancel = computed(() => run.value != null && !isTerminalStatus(run.value.status))
 
 const canRerun = computed(() => isTerminal.value && !!run.value?.pipeline_id)
+
+/**
+ * Best-effort "which node failed" for the Analyze handoff (FAR-1235):
+ * per-node telemetry first (present for runs loaded from the API), then the
+ * live WebSocket state for a run this page watched fail. null when neither
+ * recorded a failure for a specific node.
+ */
+const failingNodeName = computed<string | null>(() => {
+  const telemetry = runIO.value?.node_telemetry as Record<string, unknown> | null ?? {}
+  for (const [name, value] of Object.entries(telemetry)) {
+    const status = (value as { status?: unknown } | null)?.status
+    if (status === 'failed') return name
+  }
+  const liveFailed = Object.entries(liveNodeStates.value).find(([, state]) => state === 'failed')
+  return liveFailed ? liveFailed[0] : null
+})
+
+/** Payload for the Analyze button — null until the run detail has loaded. */
+const analyzeRunInfo = computed<AnalyzeRunInfo | null>(() => {
+  const r = run.value
+  if (!r) return null
+  return {
+    runId: r.run_id,
+    runNumber: r.run_number ?? null,
+    pipelineId: r.pipeline_id,
+    pipelineName: r.pipeline_name ?? null,
+    status: r.status,
+    errorCode: r.error_code ?? null,
+    errorDetail: typeof r.error_detail === 'string' ? r.error_detail : null,
+    failingNode: failingNodeName.value,
+  }
+})
 
 function nodeStatusBadgeClass(node: NodeEntry): string {
   return statusBadgeClassFor(node.status)

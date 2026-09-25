@@ -45,6 +45,7 @@ from modulo.core.runtime_provider import (
     WorkspaceSpec,
 )
 from modulo.settings import Settings, get_settings
+from tests.unit.pipeline_engine.conftest import install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
@@ -218,6 +219,9 @@ async def test_flag_on_routes_through_provider_apply_isolation(monkeypatch: pyte
 
     fn = make_sandbox_agent_fn(_base_node_def())
     sandbox = await _completed_no_output_sandbox("sbx-flagon-iso")
+    # FAR-1050 R4: flag ON provisions through the dispatch seam, so the
+    # workspace ref the isolation primitive is addressed with comes from it.
+    install_fake_dispatch(monkeypatch, ref="sbx-flagon-iso")
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         pytest.raises(SandboxNodeFailedError),
@@ -256,6 +260,7 @@ async def test_flag_on_predicate_still_gates_no_policy_no_invocation(
 
     fn = make_sandbox_agent_fn(_base_node_def(read_only=False))
     sandbox = await _completed_no_output_sandbox("sbx-nopolicy")
+    install_fake_dispatch(monkeypatch, ref="sbx-nopolicy")
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         pytest.raises(SandboxNodeFailedError),
@@ -301,6 +306,7 @@ async def test_flag_on_capability_refusal_maps_to_terminal_named_code(
 
     fn = make_sandbox_agent_fn(_base_node_def())
     sandbox = await _completed_no_output_sandbox("sbx-refused")
+    install_fake_dispatch(monkeypatch, ref="sbx-refused")
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         pytest.raises(SandboxTierRefusedError) as excinfo,
