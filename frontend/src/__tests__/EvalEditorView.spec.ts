@@ -113,7 +113,6 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     LoadingSpinner: true,
     ErrorAlert: true,
     PageHeader: { template: '<div />' },
-    PageTabs: { template: '<div />' },
   }
 
   function mountView() {

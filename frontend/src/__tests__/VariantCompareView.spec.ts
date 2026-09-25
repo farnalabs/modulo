@@ -74,7 +74,7 @@ describe('VariantCompareView', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Variants')
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(false)
   })
 
   it('renders the pure agent return in the diff viewers with no telemetry keys', async () => {
