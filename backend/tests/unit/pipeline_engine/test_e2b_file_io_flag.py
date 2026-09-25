@@ -410,7 +410,6 @@ async def test_watchdog_fs_probe_flag_off_stays_on_the_legacy_handle(monkeypatch
 
     await wd.probe_filesystem()
 
-    assert sandbox.files.list.called
     assert sandbox.files.list.await_args.kwargs["path"] == "/"
 
 
