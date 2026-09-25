@@ -374,6 +374,46 @@ async def test_flag_off_stays_on_the_legacy_handle(monkeypatch: pytest.MonkeyPat
     builder.assert_not_awaited()
 
 
+async def test_flag_off_context_files_stay_on_the_legacy_handle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Flag OFF: the context-files write loop stays on ``sandbox.files.write``.
+
+    The flag-OFF dispatch test above runs with an empty ``context_files``
+    map, so the loop body (and the flag-OFF arm inside it) never executes.
+    This exercises the legacy arm explicitly and asserts the provider seam
+    is still never constructed.
+    """
+    _disable_flag(monkeypatch)
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    builder = AsyncMock(side_effect=AssertionError("provider builder must not run when the flag is OFF"))
+    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_file_io_provider", builder)
+
+    sandbox = _sandbox_mock("sbx-flagoff-ctx")
+    node_def = _base_node_def(context_files={"/home/user/context/notes.txt": "ctx-body"})
+    fn = make_sandbox_agent_fn(node_def)
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    sandbox.files.write.assert_any_await("/home/user/context/notes.txt", "ctx-body")
+    builder.assert_not_awaited()
+
+
+async def test_watchdog_fs_probe_flag_off_stays_on_the_legacy_handle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Site 4 (``files.list``): flag OFF lists through the legacy handle."""
+    _disable_flag(monkeypatch)
+    sandbox = _sandbox_mock("sbx-fs-flagoff")
+    sandbox.files.list = AsyncMock(return_value=[])
+    wd = _watchdog(sandbox=sandbox, watch_globs=["*.log"])
+    wd._fs_min_stat_interval = 0.0
+
+    await wd.probe_filesystem()
+
+    assert sandbox.files.list.called
+    assert sandbox.files.list.await_args.kwargs["path"] == "/"
+
+
 async def test_watchdog_fs_probe_flag_on_routes_through_the_provider(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
