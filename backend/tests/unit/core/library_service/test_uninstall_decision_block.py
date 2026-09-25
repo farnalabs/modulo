@@ -144,7 +144,7 @@ class TestUninstallCollectionPartialDecisionBlock:
         assert "policy_gate_decisions" in result["blocked"][0]["error"]
 
         # No detachments
-        assert len(result["detached"]) == 0
+        assert not result["detached"]
 
         # The install record itself is deleted (called for unblocked pipeline + install)
         session.delete.assert_any_await(install)

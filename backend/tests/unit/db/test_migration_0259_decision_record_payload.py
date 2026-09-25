@@ -105,13 +105,13 @@ class TestTemporaryUniquenessIndex:
     def test_upgrade_is_idempotent_when_index_exists(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_op = _FakeOp(dialect="postgresql", inspector=_FakeInspector(index_names=[_INDEX_NAME]))
         _run(monkeypatch, fake_op, "upgrade")
-        assert fake_op.created_indexes == []
+        assert not fake_op.created_indexes
 
     def test_upgrade_skips_index_on_non_postgres(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_op = _FakeOp(dialect="sqlite")
         _run(monkeypatch, fake_op, "upgrade")
         index_creates = [c for c in fake_op.created_indexes if c[0] == _INDEX_NAME]
-        assert len(index_creates) == 0
+        assert not index_creates
 
     def test_index_uses_bridge_name_signalling_temporary_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_op = _FakeOp(dialect="postgresql")
@@ -141,7 +141,7 @@ class TestTemporaryUniquenessIndex:
     def test_downgrade_idempotent_when_index_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_op = _FakeOp(dialect="postgresql", inspector=_FakeInspector(index_names=[]))
         _run(monkeypatch, fake_op, "downgrade")
-        assert fake_op.dropped_indexes == []
+        assert not fake_op.dropped_indexes
 
     def test_downgrade_keeps_payload_columns_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_op = _FakeOp(dialect="postgresql", inspector=_FakeInspector(index_names=[_INDEX_NAME]))

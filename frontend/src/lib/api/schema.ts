@@ -10730,6 +10730,10 @@ export interface components {
             detached: {
                 [key: string]: string;
             }[];
+            /** Blocked */
+            blocked?: {
+                [key: string]: string;
+            }[];
         };
         /** CollectionUpdateRequest */
         CollectionUpdateRequest: {
