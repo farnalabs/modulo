@@ -143,7 +143,10 @@ async def _seed_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uui
 async def _count_guardrail_rows(db_engine: AsyncEngine, org_id: uuid.UUID) -> int:
     async with db_engine.connect() as conn:
         row = await conn.execute(
-            text("SELECT count(*) FROM eval_definitions WHERE organisation_id = :oid AND eval_type = 'guardrail'"),
+            text(
+                "SELECT count(*) FROM evals "
+                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND deleted_at IS NULL"
+            ),
             {"oid": str(org_id)},
         )
         return int(row.scalar_one())
@@ -153,8 +156,9 @@ async def _guardrail_row_names(db_engine: AsyncEngine, org_id: uuid.UUID) -> lis
     async with db_engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT name FROM eval_definitions "
-                "WHERE organisation_id = :oid AND eval_type = 'guardrail' ORDER BY name",
+                "SELECT name FROM evals "
+                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND deleted_at IS NULL "
+                "ORDER BY name",
             ),
             {"oid": str(org_id)},
         )
@@ -292,7 +296,7 @@ async def test_propose_then_apply_creates_guardrail_rows(
     async with db_engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT pipeline_id, eval_type, config_json FROM eval_definitions "
+                "SELECT pipeline_id, eval_type, config_json FROM evals "
                 "WHERE organisation_id = :oid AND name = 'no-aws-keys'",
             ),
             {"oid": str(org_a)},
@@ -439,7 +443,7 @@ async def test_drift_reported_after_row_mutation(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "UPDATE eval_definitions SET config_json = jsonb_set(config_json::jsonb, "
+                "UPDATE evals SET config_json = jsonb_set(config_json::jsonb, "
                 "'{pattern}', '\"SK-[0-9A-Za-z]{32}\"'::jsonb) "
                 "WHERE organisation_id = :oid AND name = 'no-aws-keys'",
             ),
@@ -470,7 +474,7 @@ async def test_drift_poll_preserves_pending_proposal(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "UPDATE eval_definitions SET config_json = jsonb_set(config_json::jsonb, "
+                "UPDATE evals SET config_json = jsonb_set(config_json::jsonb, "
                 "'{pattern}', '\"SK-[0-9A-Za-z]{32}\"'::jsonb) "
                 "WHERE organisation_id = :oid AND name = 'no-aws-keys'",
             ),
@@ -530,9 +534,9 @@ async def test_apply_preserves_node_bound_guardrails(
         )
         await conn.execute(
             text(
-                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, failure_behaviour, account_id) "
-                "VALUES (:id, :oid, :pid, :nid, 'graph-node-guard', 'guardrail', :cfg, 'warn', :aid)",
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
+                "eval_type, config_json, account_id) "
+                "VALUES (:id, :oid, :pid, :nid, 'graph-node-guard', 'guardrail', CAST(:cfg AS jsonb), :aid)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -558,7 +562,7 @@ async def test_apply_preserves_node_bound_guardrails(
     async with db_engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT name, node_id FROM eval_definitions "
+                "SELECT name, node_id FROM evals "
                 "WHERE organisation_id = :oid AND eval_type = 'guardrail' ORDER BY name",
             ),
             {"oid": str(org_a)},
@@ -614,9 +618,9 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
         )
         await conn.execute(
             text(
-                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, failure_behaviour, account_id) "
-                "VALUES (:id, :oid, :pid, :nid, 'no-aws-keys', 'guardrail', :cfg, 'warn', :aid)",
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
+                "eval_type, config_json, account_id) "
+                "VALUES (:id, :oid, :pid, :nid, 'no-aws-keys', 'guardrail', CAST(:cfg AS jsonb), :aid)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -648,7 +652,7 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
     async with db_engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT node_id, config_json FROM eval_definitions "
+                "SELECT node_id, config_json FROM evals "
                 "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND name = 'no-aws-keys'",
             ),
             {"oid": str(org_a)},
@@ -667,7 +671,7 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
     async with db_engine.connect() as conn:
         org_rows = await conn.execute(
             text(
-                "SELECT count(*) FROM eval_definitions "
+                "SELECT count(*) FROM evals "
                 "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND node_id IS NULL",
             ),
             {"oid": str(org_a)},
@@ -693,7 +697,7 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
     async with db_engine.connect() as conn:
         names = await conn.execute(
             text(
-                "SELECT name, node_id FROM eval_definitions "
+                "SELECT name, node_id FROM evals "
                 "WHERE organisation_id = :oid AND eval_type = 'guardrail' ORDER BY name",
             ),
             {"oid": str(org_a)},
@@ -729,9 +733,9 @@ async def test_get_config_and_drift_fail_closed_on_legacy_guardrail_name(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, failure_behaviour, account_id) "
-                "VALUES (:id, :oid, :pid, NULL, 'Block AWS keys', 'guardrail', :cfg, 'warn', :aid)",
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
+                "eval_type, config_json, account_id) "
+                "VALUES (:id, :oid, :pid, NULL, 'Block AWS keys', 'guardrail', CAST(:cfg AS jsonb), :aid)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -861,7 +865,7 @@ async def test_operator_cannot_apply_or_reject(
     operator_a: uuid.UUID,
 ):
     """An operator holds ``eval.definition.create`` (the permission gate) but is
-    NOT an admin — the apply/reject reconcile mutates ``eval_definitions`` rows,
+    NOT an admin — the apply/reject reconcile mutates ``evals`` rows,
     so it must be gated by the same admin check the direct evals API enforces
     (which returns 403 for a non-admin operator). Without the admin gate the
     operator would get 200 here, a side-channel past the stricter API."""

@@ -31,6 +31,7 @@ from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.decorator import set_model_backend_hub
 from modulo.model_backends.base import ModelBackendBase
 from modulo.model_backends.stub.backend import StubModelBackend
+from tests.integration.conftest import EvalMirrorDefinition, insert_evals_mirror
 
 pytestmark = [
     pytest.mark.integration,
@@ -200,6 +201,21 @@ async def _seed_guardrail(
                 "fb": "block" if action == "block" else "warn",
                 "uid": str(account_id),
             },
+        )
+        # FAR-1101 chunk 3b cut the conformance reader's guardrail load over to
+        # ``evals``: mirror the legacy ``eval_definitions`` row (same UUID) or
+        # the mid-run re-check sees no bound guardrail and fails open.
+        await insert_evals_mirror(
+            conn,
+            EvalMirrorDefinition(
+                id=eval_id,
+                organisation_id=org_id,
+                pipeline_id=pipeline_id,
+                name=name,
+                eval_type="guardrail",
+                account_id=account_id,
+                config=config,
+            ),
         )
     return eval_id
 
