@@ -5101,13 +5101,11 @@ features:
             - "Onboarding telemetry preferences are tracked under feat-onboarding / feat-product-analytics"
     feat-org:
         description: Organization settings and feature flags
-        status: partial
+        status: covered
         behaviours:
             - "[x] Organization settings are configurable with team management and member roles"
             - "[x] Feature flags can be toggled per organisation"
-            - "[ ] Org-level feature flag governance and audit is partially wired"
-        deferrals:
-            - "Org-level feature flag governance and audit is tracked under feat-org"
+            - "[x] Org-level feature-flag override governance is auditable end to end: every set/clear/toggle of an org feature_overrides entry (PUT /api/v1/admin/feature-flags/{flag}, PUT/DELETE /{flag}/org-override) appends a tamper-evident audit event to the org chain (feature_flag_override_set / feature_flag_override_cleared, resource_type org, payload {flag_name, enabled}) — fail-open, so a broken audit append never rolls back the already-committed override (backend/src/modulo/api/routes/admin_feature_flags.py, backend/tests/unit/api/test_admin_feature_flags.py)"
     feat-pipelines:
         description: Visual pipeline editor, composite editor, and node categories
         status: covered

@@ -1,7 +1,9 @@
 """Unit tests for the admin feature-flags API endpoint."""
 
+import asyncio
 import uuid
 from collections.abc import Generator
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,7 +13,11 @@ from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.routes.admin_feature_flags import _enforce_team_tier_gate, _resolve_tier
+from modulo.api.routes.admin_feature_flags import (
+    _emit_org_flag_override_audit,
+    _enforce_team_tier_gate,
+    _resolve_tier,
+)
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
@@ -806,6 +812,212 @@ class TestOrgOverrideOrgIdGuard:
                 resp = no_org_client.delete(url)
             assert resp.status_code == 403, (method, resp.status_code, resp.text)
             assert "Organisation ID required" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Feature-flag override governance audit (feat-org)
+# ---------------------------------------------------------------------------
+# Org feature-flag overrides change what the whole org can run, so every
+# set / clear / toggle must land on the org's tamper-evident audit chain
+# (feature_flag_override_set / feature_flag_override_cleared). The audit is
+# fail-open: a broken append must never roll back the already-committed
+# override, and a raising audit helper must never fail the request.
+
+
+class TestOrgFlagOverrideAudit:
+    # Matches the ``client`` fixture's principal.organisation_id (a string).
+    _ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+    def _assert_set_audit(self, mock: AsyncMock, *, flag_name: str, enabled: bool) -> None:
+        mock.assert_awaited_once()
+        call = mock.await_args
+        kwargs = call.kwargs
+        assert kwargs["event_type"] == "feature_flag_override_set"
+        assert kwargs["resource_type"] == "org"
+        assert kwargs["resource_id"] == self._ORG_ID
+        assert kwargs["payload"] == {"flag_name": flag_name, "enabled": enabled}
+        assert kwargs["log_key"] == "feature_flags.audit_append_failed"
+        assert call.args[1].organisation_id == self._ORG_ID
+        assert call.args[1].org_role == "admin"
+        assert call.args[1].is_system_admin is True
+
+    @contextmanager
+    def _audit_env(self, *, org: MagicMock, audit: AsyncMock) -> Generator[None, None, None]:
+        """Patch the route collaborators shared by every emission test."""
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+                new=audit,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=AsyncMock(),
+            ),
+        ):
+            yield
+
+    def test_toggle_emits_override_set_audit(self, client: TestClient) -> None:
+        audit = AsyncMock()
+        with self._audit_env(org=_org_with_overrides(), audit=audit):
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
+        assert resp.status_code == 200
+        assert resp.json()["overridden"] is True
+        self._assert_set_audit(audit, flag_name="webhook_trigger", enabled=True)
+
+    def test_toggle_off_emits_override_set_audit(self, client: TestClient) -> None:
+        audit = AsyncMock()
+        with self._audit_env(org=_org_with_overrides(), audit=audit):
+            resp = client.put("/api/v1/admin/feature-flags/eval_system", json={"enabled": False})
+        assert resp.status_code == 200
+        self._assert_set_audit(audit, flag_name="eval_system", enabled=False)
+
+    def test_set_org_override_emits_override_set_audit(self, client: TestClient) -> None:
+        audit = AsyncMock()
+        with self._audit_env(org=_org_with_overrides(), audit=audit):
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger/org-override", json={"enabled": True})
+        assert resp.status_code == 200
+        self._assert_set_audit(audit, flag_name="webhook_trigger", enabled=True)
+
+    def test_clear_org_override_emits_override_cleared_audit(self, client: TestClient) -> None:
+        audit = AsyncMock()
+        with self._audit_env(org=_org_with_overrides(webhook_trigger=True), audit=audit):
+            resp = client.delete("/api/v1/admin/feature-flags/webhook_trigger/org-override")
+        assert resp.status_code == 200
+        audit.assert_awaited_once()
+        call = audit.await_args
+        kwargs = call.kwargs
+        assert kwargs["event_type"] == "feature_flag_override_cleared"
+        assert kwargs["resource_type"] == "org"
+        assert kwargs["resource_id"] == self._ORG_ID
+        assert kwargs["payload"] == {"flag_name": "webhook_trigger"}
+        assert kwargs["log_key"] == "feature_flags.audit_append_failed"
+
+    def test_audit_failure_is_fail_open(self, client: TestClient) -> None:
+        """A failing chain write must not fail the already-committed toggle.
+
+        ``_emit_org_flag_override_audit`` delegates the fail-open contract to
+        ``append_audit_event_isolated`` (pinned directly in
+        tests/unit/audit_logger/test_audit_logger.py), so this test drives the
+        real helper: the underlying chain append raises, the helper swallows
+        and logs it, and the request still succeeds.
+        """
+        org = _org_with_overrides()
+        with (
+            patch(
+                "modulo.core.audit_logger.append_audit_event",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("audit backend down"),
+            ),
+            patch("modulo.core.audit_logger.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.set_rls_user_context", new_callable=AsyncMock),
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=AsyncMock(),
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
+        assert resp.status_code == 200
+        assert resp.json()["overridden"] is True
+
+    async def test_audit_no_op_when_principal_has_no_organisation(self) -> None:
+        """No-op (never raise) when the principal carries no organisation.
+
+        The route 403s this principal upstream, but the helper must be safe to
+        call directly and must never be the thing that raises.
+        """
+        audit = AsyncMock()
+        principal = AuthenticatedPrincipal(
+            username="testuser",
+            organisation_id=None,
+            account_id="00000000-0000-0000-0000-000000000002",
+            org_role="admin",
+            is_system_admin=True,
+        )
+        with patch(
+            "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+            new=audit,
+        ):
+            await _emit_org_flag_override_audit(
+                MagicMock(),
+                principal,
+                flag_name="webhook_trigger",
+                enabled=True,
+            )
+        audit.assert_not_awaited()
+
+    async def test_audit_uses_neutral_role_sentinel_when_claim_absent(self) -> None:
+        """A principal without an org_role must not have one invented for RLS.
+
+        ``org_role`` feeds ``set_rls_user_context`` (``app.org_role``) inside
+        the audit transaction; a fabricated ``"admin"`` would misrepresent the
+        principal. Absent claim maps to the established neutral ``""`` sentinel
+        (the same fallback used when minting access tokens in
+        ``modulo/auth/jwt.py``).
+        """
+        audit = AsyncMock()
+        principal = AuthenticatedPrincipal(
+            username="testuser",
+            organisation_id=self._ORG_ID,
+            account_id="00000000-0000-0000-0000-000000000002",
+            org_role=None,
+            is_system_admin=True,
+        )
+        with patch(
+            "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+            new=audit,
+        ):
+            await _emit_org_flag_override_audit(
+                MagicMock(),
+                principal,
+                flag_name="webhook_trigger",
+                enabled=True,
+            )
+        audit.assert_awaited_once()
+        org_role = audit.await_args.args[1].org_role
+        assert org_role == ""
+
+    async def test_audit_reraises_cancelled_error(self) -> None:
+        """Cancellation must propagate, never be swallowed by the fail-open helper."""
+        principal = AuthenticatedPrincipal(
+            username="testuser",
+            organisation_id=self._ORG_ID,
+            account_id="00000000-0000-0000-0000-000000000002",
+            org_role="admin",
+            is_system_admin=True,
+        )
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+                side_effect=asyncio.CancelledError,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _emit_org_flag_override_audit(
+                MagicMock(),
+                principal,
+                flag_name="webhook_trigger",
+                enabled=True,
+            )
 
 
 # ---------------------------------------------------------------------------
