@@ -100,6 +100,12 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 
 ## QA History
 
+- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+  manifest `feat-library` registry entry with this tracker (both now
+  `status: covered`): the FAR-760 collections authoring behaviour this entry ticks
+  is now also ticked in the manifest registry (draft → update pins → publish,
+  endpoint 404s with `library_collection` off), with the default-off flag gate
+  recorded as a deferral rather than a missing behaviour.
 - 2026-09-21: **product-map walk** — closed the composite
   content_json boundary gap: `composite_library.feature`'s "Composite content_json
   validation — missing required fields returns error" scenario (previously

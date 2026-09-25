@@ -102,6 +102,13 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   triggered/run via the suite machinery, not a standalone cron in the eval API.
 
 ## QA History
+- 2026-09-25: **Improve Architecture product-map walk** — closed the stale
+  `feat-evals` registry gap: manifest now `status: covered` and ticks the
+  comparison surface that #972 had left unchecked — `GET /api/v1/runs/{run_id}/evals`
+  + `POST /api/v1/evals/compare` (verified against `test_evals_compare.py`) and the
+  variant eval-score/prompt-diff/coverage comparison surfaces owned by
+  `feat-variants`. The genuinely missing per-token breakdown sub-surface stays
+  tracked under `feat-variants`.
 - 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/evals/editor`, `/evals/proposals`

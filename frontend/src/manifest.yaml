@@ -4918,22 +4918,22 @@ features:
             - "[x] The orphan reconciler (system cron, 5 min) lists labelled workspace containers machine-scoped by the modulo.machine.id label, cross-references active runs fail-safe (any cross-reference error aborts the sweep destroying nothing and emits runner.reconciler.sweep_aborted), destroys orphans past the 5-min grace with a destroy-path false-positive re-check (suspected_false_positive is the rollback signal), applies the 24h max-lifetime backstop regardless of run state, runs LOG-ONLY until RUNNER_RECONCILER_DESTROY_ENABLED=true, and exposes the advisory runner_workspace_reconcile liveness check on /healthz/ready"
     feat-evals:
         description: Evaluation editor and proposal queue
-        status: partial
+        status: covered
         behaviours:
             - "[x] The eval editor creates, configures, and deletes evaluation definitions per pipeline node"
             - "[x] The proposal queue surfaces eval proposals for review and allows publishing to pipelines"
-            - "[ ] Variant comparison for eval results across model versions is partially wired"
+            - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
         deferrals:
-            - "Variant comparison and batch run evaluation details are tracked under feat-variants"
+            - "Per-token eval breakdown comparison is the remaining deferred comparison sub-surface, tracked under feat-variants"
     feat-feedback:
         description: Feedback inbox
-        status: partial
+        status: covered
         behaviours:
             - "[x] The feedback inbox lists open feedback items with pipeline context and status filtering"
             - "[x] Feedback items can be reviewed, dismissed, and corrected with correction runs spawned"
-            - "[ ] Feedback-to-eval gap detection and automatic proposal generation is partially wired"
+            - "[x] Feedback-to-eval gap detection and proposal generation ship end to end: POST /api/v1/feedback/{record_id}/detect-gap runs eval-gap detection over a feedback record producing an eval proposal, GET /api/v1/feedback/proposals lists the queue, and POST /api/v1/feedback/proposals/{record_id}/publish promotes a proposal into a live eval definition — a non-eval-gap record is refused (docs/product-map/improve/feedback.md, backend/tests/unit/api/test_feedback_endpoint.py)"
         deferrals:
-            - "Automatic eval-gap detection and proposal generation from feedback is tracked under feat-feedback"
+            - "Eval-gap detection is model-assisted — it depends on a configured model backend; there is no deterministic fallback classifier for gap detection"
     feat-guardrails:
         description: Guardrail policies
         status: partial
@@ -4971,13 +4971,13 @@ features:
             - "Complex nested conditional routing is tracked under feat-router"
     feat-library:
         description: Reusable pipeline templates and the template library
-        status: partial
+        status: covered
         behaviours:
             - "[x] The library lists native and community primitives with search and type filtering"
             - "[x] Library items can be copied into the org with the CopyToAdaptWizard"
-            - "[ ] Library collections authoring and publishing is flag-gated behind library_collection"
+            - "[x] Library collections authoring and publishing ship behind the library_collection feature flag: a collection is created as a draft, its manifest pins are updated while draft, and it is published — invalid/duplicate pins, an empty manifest and more than MAX_COLLECTION_PINS are rejected 422, a duplicate slug is 409, and every collection endpoint 404s when the flag is off (docs/product-map/library/library.md, backend/tests/unit/api/test_library_collection.py)"
         deferrals:
-            - "Library collections authoring is flag-gated behind library_collection (see FAR-760)"
+            - "Collections authoring is gated behind the default-off library_collection feature flag per org (FAR-760); collection install/uninstall + community trust gates are tracked under feat-library-collections"
     feat-library-collections:
         description: Install, uninstall, and manage library collection installs
         status: covered
@@ -5002,9 +5002,10 @@ features:
         behaviours:
             - "[x] Stripe webhook handling verifies signatures and processes invoice.paid events"
             - "[x] Tier catalogue endpoints resolve plan tiers and feature entitlements"
-            - "[ ] License-based feature gating for all registered features is partially wired"
+            - "[x] Plan/license-based gating is wired at the composition root (require_feature / get_plan_context): the Team-tier licensed surfaces (SSO providers, /api/v1/teams, audit export, admin spend limits) return 402 naming the gated feature without a valid Team license and pass with one; the license resolves from the org settings with a system-license fallback (team_gates.feature, docs/product-map/licensing/license.md)"
+            - "[ ] License-driven gating is not applied to EVERY registered feat-* surface — gating targets the licensed Team-tier surfaces, not the whole feature registry"
         deferrals:
-            - "License-based feature gating across all features is tracked under feat-license"
+            - "Universal license gating of every registered feature is tracked under feat-license"
     feat-lifecycle-maps:
         description: Lifecycle maps and stage workflows
         status: covered
@@ -5091,9 +5092,10 @@ features:
         behaviours:
             - "[x] The onboarding wizard guides new users through connector setup and schema creation"
             - "[x] Onboarding creates initial pipeline templates and library items"
-            - "[ ] Onboarding telemetry preferences and skip logic are partially wired"
+            - "[x] Skip logic ships: per-action complete/skip (POST /api/v1/onboarding/actions/{id}/complete|skip) and whole-wizard dismiss (POST /api/v1/onboarding/dismiss) persist and recompute progress (docs/product-map/auth/onboarding.md)"
+            - "[ ] Onboarding telemetry/opt-in preferences are not wired into the wizard"
         deferrals:
-            - "Onboarding telemetry preferences are tracked under feat-onboarding"
+            - "Onboarding telemetry preferences are tracked under feat-onboarding / feat-product-analytics"
     feat-org:
         description: Organization settings and feature flags
         status: partial
@@ -5105,7 +5107,7 @@ features:
             - "Org-level feature flag governance and audit is tracked under feat-org"
     feat-pipelines:
         description: Visual pipeline editor, composite editor, and node categories
-        status: partial
+        status: covered
         behaviours:
             - "[x] The pipeline editor creates, edits, and saves pipeline graphs with nodes and edges"
             - "[x] Composite editor supports expand-only composite nodes"
@@ -5113,9 +5115,9 @@ features:
             - "[x] Pipeline save creates an immutable snapshot tagged version_kind='edit'"
             - "[x] release_channel support allows triggers to bind to stable/canary channels"
             - "[x] diff_snapshots surfaces port-signature deltas with impact oracle"
-            - "[ ] Pipeline-level run recovery and retry endpoints are partially wired"
+            - "[x] Run recovery and retry are shipped across the run surface: checkpoint/resume replays a failed run from its last checkpoint (pipelines/checkpoint_resume.feature), a terminal run re-runs via POST /api/v1/runs/{run_id}/rerun, and a failed node recovers via POST /api/v1/runs/{run_id}/nodes/{node_id}/recover (run-level details under feat-runs, docs/product-map/pipelines/pipelines.md)"
         deferrals:
-            - "Run-level recovery/retry is handled per-node via recover-node route (see feat-runs)"
+            - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
     feat-plugins:
         description: Plugin registry
         status: partial
@@ -5283,14 +5285,14 @@ features:
             - "[x] Org-level license management: GET/PUT/DELETE on /api/v1/admin/orgs/{org_id}/license resolves/stores/clears the org's settings_json.license_key via parse_and_verify, falls back to the system license, and is role-gated (GET org.license.view / PUT+DELETE org.license.manage) — BDD: system_admin_orgs.feature"
     feat-teams:
         description: Users, teams, and role-based access
-        status: partial
+        status: covered
         behaviours:
             - "[x] Team management supports creating teams, adding members, and setting roles"
             - "[x] Role-based access control enforces permissions across endpoints"
             - "[x] User invitations work with email-based enrollment"
-            - "[ ] Team-level resource scoping and cross-team data isolation is partially wired"
+            - "[x] Team-level resource scoping and cross-team data isolation ship end to end: a team cannot see or enumerate another team's team-scoped pipelines (404 / omitted counts, no 'N hidden' enumeration leak), cross-team connector binding is refused as connector_team_mismatch, team-scoped pipeline visibility + view-as-team admin flows are enforced, and RBAC roles (admin/operator/runner/viewer) gate team surfaces (backend/src/modulo/core/team_visibility.py, backend/src/modulo/auth/team_rbac.py; cross_team_isolation.feature / team_pipeline_visibility.feature / view_as_team.feature, test_team_visibility.py)"
         deferrals:
-            - "Team-level resource scoping is tracked under feat-teams"
+            - "Org-level membership/role grants and the team entity lifecycle are tracked under feat-teams-org-entity"
     feat-triggers:
         description: Manual, webhook, and scheduled triggers
         status: covered
@@ -5359,9 +5361,10 @@ features:
             - "[x] Variant comparison renders side-by-side run metrics and eval scores"
             - "[x] Batch runs create variants in insertion order under a batch_id"
             - "[x] Coverage gaps are reported via get_coverage_gaps"
-            - "[ ] Per-node eval score and per-token breakdown comparison is partially wired"
+            - "[x] Per-node eval score comparison is shipped: comparison surfaces include eval scores per node, prompt diffs and coverage gaps (variants/variant_groups.feature, docs/product-map/improve/variants.md)"
+            - "[ ] Per-token breakdown comparison across variants is not shipped (docs/product-map/improve/variants.md Known Gaps)"
         deferrals:
-            - "Per-node eval score and per-token breakdown comparison is tracked under feat-variants"
+            - "Per-token breakdown comparison is tracked under feat-variants"
 sidebar_groups:
     build:
         label: BUILD
