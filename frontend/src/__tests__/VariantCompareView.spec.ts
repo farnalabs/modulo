@@ -42,6 +42,7 @@ vi.mock('../lib/api/client', () => ({
 import { api } from '../lib/api/client'
 import VariantCompareView from '../views/VariantCompareView.vue'
 import VariantGroupBuilder from '../components/variants/VariantGroupBuilder.vue'
+import PageTabs from '../components/PageTabs.vue'
 
 const groupWithVariants = {
   id: 'g1',
@@ -74,7 +75,20 @@ describe('VariantCompareView', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Variants')
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(false)
+  })
+
+  it('does not render the redundant page-level tab strip (FAR-1236)', async () => {
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="variant-compare-group-select"]').exists()).toBe(true)
+    })
+    expect(wrapper.findComponent(PageTabs).exists()).toBe(false)
   })
 
   it('renders the pure agent return in the diff viewers with no telemetry keys', async () => {

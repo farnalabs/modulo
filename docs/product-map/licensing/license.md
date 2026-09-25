@@ -93,6 +93,11 @@ executing BDD surface (`licensing/stripe_billing.feature`), both cited above.
 
 ## QA History
 
+- 2026-09-25: **Improve Architecture product-map walk** — sharpened the
+  manifest `feat-license` registry entry: the shipped composition-root gating
+  (`require_feature` / `get_plan_context`, Team-tier 402 gates verified here) is now
+  ticked, while the not-yet-universal "gating across EVERY registered feature"
+  claim stays unchecked (partial). No behaviour change — registry accuracy only.
 - 2026-09-23: **product-map review pass** — closed `feat-license`'s
   "`stripe_webhook.py` / `admin_tiers.py` not behaviour-covered" gap
   (`docs/product-map/licensing/license.md`). Registered the new

@@ -67,6 +67,7 @@ vi.mock('../lib/api/variantBatches', () => ({
 
 import VariantBatchCompareView from '../views/VariantBatchCompareView.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import PageTabs from '../components/PageTabs.vue'
 
 const run = (overrides: Record<string, unknown> = {}) => ({
   run_id: 'r1',
@@ -114,6 +115,16 @@ describe('VariantBatchCompareView', () => {
     batchMocks.fetchVariantBatches.mockResolvedValue({ data: mockComparisons(), error: undefined })
     batchMocks.softDeleteVariantBatch.mockResolvedValue({})
     batchMocks.reFireVariantBatch.mockResolvedValue({ data: mockBatch({ status: 'running' }), error: undefined })
+  })
+
+  it('does not render the redundant page-level tab strip (FAR-1236)', async () => {
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="variant-batch-status"]').exists()).toBe(true)
+    expect(wrapper.findComponent(PageTabs).exists()).toBe(false)
   })
 
   it('renders the ranked table from the route batch JSON with fixed columns', async () => {

@@ -508,6 +508,13 @@ def test_update_pipeline_rejects_ceiling_below_existing_default(client: TestClie
     with (
         patch("modulo.api.routes.pipelines.update_pipeline") as update,
         patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        # FAR-1222: the merge is validated against the row SELECTed FOR UPDATE
+        # by the in-txn team gate — keep the locked row identical to the row
+        # under test.
+        patch(
+            "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+            new=AsyncMock(return_value=current),
+        ),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
         patch("modulo.api.routes.pipelines.append_audit_event"),
@@ -532,6 +539,10 @@ def test_update_pipeline_rejects_default_above_existing_ceiling(client: TestClie
     with (
         patch("modulo.api.routes.pipelines.update_pipeline") as update,
         patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch(
+            "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+            new=AsyncMock(return_value=current),
+        ),
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
         patch("modulo.api.routes.pipelines.append_audit_event"),
@@ -541,6 +552,59 @@ def test_update_pipeline_rejects_default_above_existing_ceiling(client: TestClie
             json={"default_autonomy_level": "fully_autonomous"},
         )
 
+    assert resp.status_code == 422
+    assert "must be >=" in resp.json()["detail"]
+    update.assert_not_awaited()
+
+
+def test_update_pipeline_ceiling_validated_against_locked_row(client: TestClient) -> None:
+    """FAR-1222: the ceiling/default merge runs AFTER the team gate refreshed the row.
+
+    SQLAlchemy's identity map means the endpoint's unlocked read
+    (``get_pipeline``) and the ``FOR UPDATE`` re-select inside the SAME session
+    resolve to the SAME ``Pipeline`` instance — the helper does not hand back a
+    second object, it refreshes the shared one (``populate_existing=True``).
+    The earlier version of this test mocked TWO different instances, which the
+    identity map can never produce, so it passed with or without the refresh.
+
+    Modelled here the way it actually behaves: the mocked helper mutates the
+    very instance ``get_pipeline`` returned, exactly as the refresh does. The
+    row starts at ``manual_approval`` (what the unlocked read saw) and is
+    ``fully_autonomous`` by the time the merge validates — so a
+    ``notify_on_complete`` ceiling must be rejected with 422.
+
+    This pins the endpoint's ordering (refresh before validate) and its use of
+    the helper's row. The proof that the REAL helper's re-select refreshes —
+    and that dropping ``populate_existing`` reopens the TOCTOU — is
+    tests/integration/test_pipeline_autonomy_ceiling_locking.py, which runs the
+    real helper against real Postgres and fails without the execution option.
+    """
+    row = _make_pipeline()
+    row.default_autonomy_level = "manual_approval"
+    row.max_autonomy_level = None
+    helper_calls: list[object] = []
+
+    async def _reapply(session: object, principal: object, pipeline_id: object, **kwargs: object) -> MagicMock:
+        # The refresh, in miniature: same instance, attributes overwritten
+        # from the locked row.
+        helper_calls.append(pipeline_id)
+        row.default_autonomy_level = "fully_autonomous"
+        return row
+
+    with (
+        patch("modulo.api.routes.pipelines.update_pipeline") as update,
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=row)),
+        patch("modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=_reapply),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"max_autonomy_level": "notify_on_complete"},
+        )
+
+    assert len(helper_calls) == 1, "the in-txn team gate re-select did not run"
     assert resp.status_code == 422
     assert "must be >=" in resp.json()["detail"]
     update.assert_not_awaited()

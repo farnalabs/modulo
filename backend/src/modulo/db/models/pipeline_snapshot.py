@@ -23,6 +23,30 @@ class PipelineSnapshot(OrgScoped):
             name="ck_pipeline_snapshots_created_kind",
         ),
         CheckConstraint("channel IN ('none','stable','canary')", name="ck_pipeline_snapshots_channel"),
+        # FAR-1223: the autonomy ceiling frozen into the snapshot carries the
+        # SAME vocabulary the live column is guarded by (0256 added the column
+        # to both tables but only checked `pipelines`; 0259 closes the gap).
+        CheckConstraint(
+            "max_autonomy_level IS NULL OR "
+            "max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            name="ck_pipeline_snapshots_max_autonomy_level",
+        ),
+        # FAR-1223: the frozen default gets the SAME vocabulary the live
+        # `pipelines.default_autonomy_level` column is guarded by
+        # (ck_pipelines_autonomy_level, since 0003/0110). NULL passes BOTH
+        # forms: under Postgres three-valued logic a NULL operand makes the
+        # CHECK predicate NULL, which satisfies the constraint, so the live
+        # form's missing NULL arm changes nothing - the live column is
+        # nullable too (0110 DROP NOT NULLs it and PATCH
+        # {"default_autonomy_level": null} stores NULL despite its server
+        # default of manual_approval). This snapshot column is nullable by
+        # design (0110 dropped NOT NULL and no server default exists), so its
+        # NULL arm is stated explicitly and means "nothing was frozen".
+        CheckConstraint(
+            "default_autonomy_level IS NULL OR "
+            "default_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            name="ck_pipeline_snapshots_default_autonomy_level",
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(

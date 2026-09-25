@@ -133,6 +133,12 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   covers the DB-backed pre-run checks.
 
 ## QA History
+- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+  manifest `feat-pipelines` registry entry with this tracker (both now
+  `status: covered`): the "'run recovery and retry' partially wired" unchecked item
+  from #972 is closed — recovery/retry ships across the run surface (checkpoint/resume
+  BDD below, `POST /api/v1/runs/{run_id}/rerun` and per-node recover under `feat-runs`);
+  the absence of a pipeline-level batch recovery endpoint is kept as a deferral.
 - 2026-09-23: **product-map review pass** — resolved the last four
   `@awaiting-implementation` BDD gaps tracked under the pipelines directory.
   All of them were stale placeholder drafts whose behaviour is already shipped

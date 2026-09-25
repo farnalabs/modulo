@@ -1,10 +1,5 @@
 <template>
   <div class="page-wide">
-    <PageTabs :tabs="[
-      { label: 'Evals', to: '/evals/editor' },
-      { label: 'Proposals', to: '/evals/proposals' },
-      { label: 'Variants', to: '/variants/compare' },
-    ]" />
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
@@ -222,7 +217,6 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
-import PageTabs from '../components/PageTabs.vue'
 import Button from 'primevue/button'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { formatMoney } from '../lib/money'

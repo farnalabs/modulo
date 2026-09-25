@@ -83,7 +83,6 @@ an echoed value is restored from storage, an echo with no stored counterpart
 is dropped (fail closed), and keys the caller removed stay removed. The same
 invariant holds on the MCP tool surface and on the composite-template editor /
 PATCH surfaces.
-
 **CLI hashing parity (FAR-1232).** The declarative `modulo apply` CLI compares
 its YAML declarations against the API's MASKED reads, so the CLI carries its own
 redaction (`strip_secret_shaped_graph` in `modulo/cli/apply/models.py`): pipeline

@@ -233,7 +233,7 @@ async def test_flag_off_caller_hits_urllib_not_provider(monkeypatch: pytest.Monk
     builder.assert_not_awaited()
 
 
-async def test_flag_on_caller_hits_provider_not_urllib(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_flag_on_caller_hits_provider_not_urllib(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     _enable_flag(monkeypatch)
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake = FakeRuntimeProvider(b"provider-fixed-tail")
@@ -275,9 +275,13 @@ async def test_flag_on_caller_hits_provider_not_urllib(monkeypatch: pytest.Monke
     # pre-kill ordering preserved on the flag-ON path
     assert events[0] == "fetch"
     assert events.index("fetch") < events.index("kill")
+    # FAR-1050 R2b: the prompt write went through the ABC primitive, not the
+    # legacy ``sandbox.files`` handle (bytes landed in the fake's store).
+    assert any(e.startswith("write:") for e in fake_file_io.events)
+    assert not sandbox.files.write.called
 
 
-async def test_flag_on_timeout_kill_path_uses_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_flag_on_timeout_kill_path_uses_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """T6 site 1 (stalled/timed-out → pre-kill probe) routes through the provider.
 
     ``commands.run`` raises so ``cmd_result`` is None; the flag-ON arm must call
@@ -309,12 +313,19 @@ async def test_flag_on_timeout_kill_path_uses_provider(monkeypatch: pytest.Monke
 
     assert fake.calls == [("sbx-timeout", 6000)]
     legacy.assert_not_awaited()
+    # FAR-1050 R2b: writes + the stall-path log re-read went through the ABC
+    # primitives; the legacy handle was never touched.
+    assert any(e.startswith("write:") for e in fake_file_io.events)
+    assert not sandbox.files.write.called
 
 
-async def test_flag_on_schema_failure_path_uses_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_flag_on_schema_failure_path_uses_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """T6 site 3 (declared-schema violation → SandboxNodeFailedError) uses provider."""
     _enable_flag(monkeypatch)
     monkeypatch.setenv("E2B_API_KEY", "test-key")
+    # FAR-1050 R2b: output.json is read through ``read_file`` now, so the
+    # payload the schema validator sees comes from the fake's byte store.
+    fake_file_io.files["/home/user/output.json"] = b'{"summary": "done"}'
     fake = FakeRuntimeProvider(b"schema-tail")
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
@@ -338,10 +349,16 @@ async def test_flag_on_schema_failure_path_uses_provider(monkeypatch: pytest.Mon
     legacy.assert_not_awaited()
 
 
-async def test_flag_on_generic_exception_path_uses_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    """T6 site 4 (generic exception envelope) routes through the provider."""
+async def test_flag_on_generic_exception_path_uses_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+    """T6 site 4 (generic exception envelope) routes through the provider.
+
+    FAR-1050 R2b: the write failure is injected on the FLAG-ON path (the fake
+    provider's ``write_file``) — ``sandbox.files.write`` is a plain mock that
+    must stay untouched, which is what makes this test prove the routing.
+    """
     _enable_flag(monkeypatch)
     monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake_file_io.write_error = RuntimeError("e2b file write exploded")
     fake = FakeRuntimeProvider(b"exc-tail")
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
@@ -353,7 +370,7 @@ async def test_flag_on_generic_exception_path_uses_provider(monkeypatch: pytest.
     fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30))
     sandbox = MagicMock()
     sandbox.sandbox_id = "sbx-exc"
-    sandbox.files.write = AsyncMock(side_effect=RuntimeError("e2b file write exploded"))
+    sandbox.files.write = AsyncMock()
     sandbox.files.read = AsyncMock(return_value="")
     sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
     sandbox.commands.run = AsyncMock()
@@ -365,6 +382,8 @@ async def test_flag_on_generic_exception_path_uses_provider(monkeypatch: pytest.
     assert result["output"]["status"] == "failed"
     assert fake.calls == [("sbx-exc", 6000)]
     legacy.assert_not_awaited()
+    assert any(e.startswith("write:") for e in fake_file_io.events)
+    assert not sandbox.files.write.called
 
 
 # ---------------------------------------------------------------------------

@@ -59,6 +59,13 @@ created per run, transition through a validated state machine
 
 ## QA History
 
+- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+  manifest `feat-feedback` registry entry with this tracker (both now
+  `status: covered`): the unchecked "gap detection partially wired" item from #972
+  is closed — detection, the proposals queue and publish all ship
+  (`POST /api/v1/feedback/{record_id}/detect-gap`, `GET /api/v1/feedback/proposals`,
+  `POST /api/v1/feedback/proposals/{record_id}/publish`; `test_feedback_endpoint.py`).
+  The model-assisted detection limitation stays as a Known Gap.
 - 2026-09-18: **product-map review pass** — closed the "No standalone
   BDD step file for the inbox/proposals endpoints" gap. Registered
   `eval/feedback_inbox.feature` into the executing BDD suite from the new

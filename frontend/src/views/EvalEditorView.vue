@@ -1,12 +1,6 @@
 <template>
   <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
-    <PageTabs :tabs="[
-      { label: $t('views.EvalEditorView.tab_evals'), to: '/evals/editor' },
-      { label: $t('views.EvalEditorView.tab_proposals'), to: '/evals/proposals' },
-      { label: $t('views.EvalEditorView.tab_variants'), to: '/variants/compare' },
-    ]" />
-
     <div class="page-wide">
     <PageHeader :title="$t('views.EvalEditorView.eval_editor')" :subtitle="$t('views.EvalEditorView.create_and_manage_eval_definitions')" />
 
@@ -284,7 +278,6 @@ import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
-import PageTabs from "../components/PageTabs.vue"
 import { Pencil, Trash2 } from '@lucide/vue'
 import { api } from '../lib/api/client'
 
