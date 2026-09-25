@@ -4898,6 +4898,13 @@ features:
             - "Cost-probe ledger self-healing (core/cost_controller/probe.py) tracks run-total vs breakdown consistency as an operational probe, not a surfaced admin report"
     feat-dashboard:
         description: Home dashboard, metrics overview, and saved views
+        status: partial
+        behaviours:
+            - "[x] The dashboard renders token spend, eval rate, and run activity widgets"
+            - "[x] Dashboard metrics are scoped to the caller's organisation with per-team breakdown"
+            - "[ ] Saved Views (`/admin/views`, `GET/POST/PATCH/DELETE /api/v1/views` gated by `view_modes`) are configurable with custom filters and column layouts"
+        deferrals:
+            - "Saved Views are deferred from the MVP nav — the `/admin/views` route and its `/api/v1/views` CRUD surface are hidden via `visibility: private_preview`; restore from git history when re-enabling (FAR-546)"
     feat-environments:
         description: Environment profiles
         status: covered
@@ -4911,10 +4918,31 @@ features:
             - "[x] The orphan reconciler (system cron, 5 min) lists labelled workspace containers machine-scoped by the modulo.machine.id label, cross-references active runs fail-safe (any cross-reference error aborts the sweep destroying nothing and emits runner.reconciler.sweep_aborted), destroys orphans past the 5-min grace with a destroy-path false-positive re-check (suspected_false_positive is the rollback signal), applies the 24h max-lifetime backstop regardless of run state, runs LOG-ONLY until RUNNER_RECONCILER_DESTROY_ENABLED=true, and exposes the advisory runner_workspace_reconcile liveness check on /healthz/ready"
     feat-evals:
         description: Evaluation editor and proposal queue
+        status: partial
+        behaviours:
+            - "[x] The eval editor creates, configures, and deletes evaluation definitions per pipeline node"
+            - "[x] The proposal queue surfaces eval proposals for review and allows publishing to pipelines"
+            - "[ ] Variant comparison for eval results across model versions is partially wired"
+        deferrals:
+            - "Variant comparison and batch run evaluation details are tracked under feat-variants"
     feat-feedback:
         description: Feedback inbox
+        status: partial
+        behaviours:
+            - "[x] The feedback inbox lists open feedback items with pipeline context and status filtering"
+            - "[x] Feedback items can be reviewed, dismissed, and corrected with correction runs spawned"
+            - "[ ] Feedback-to-eval gap detection and automatic proposal generation is partially wired"
+        deferrals:
+            - "Automatic eval-gap detection and proposal generation from feedback is tracked under feat-feedback"
     feat-guardrails:
         description: Guardrail policies
+        status: partial
+        behaviours:
+            - "[x] Guardrail policies are configurable per organisation with pass/fail thresholds"
+            - "[x] Guardrail enforcement is applied at pipeline runtime with typed violation responses"
+            - "[ ] Guardrail policy templates and cross-org inheritance are partially wired"
+        deferrals:
+            - "Policy templates and cross-org inheritance are tracked under feat-guardrails"
     feat-hitl:
         description: Human-in-the-loop approval gates and review
         status: covered
@@ -4934,8 +4962,22 @@ features:
             - "[x] HITL autonomy resolution clamps a context-setter's autonomy_recommendation to the pipeline's max_autonomy_level ceiling (pinned into the run snapshot as the reserved `_pipeline_max_autonomy` run_context key): a recommendation may lower autonomy freely, may raise only up to the ceiling — with no explicit ceiling the effective ceiling is the pipeline default, so a recommendation can only lower — and each clamp appends a run.autonomy_recommendation_clamped audit event (gate_id, requested, effective, ceiling); human_only gates still always fire"
     feat-router:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
+        status: partial
+        behaviours:
+            - "[x] Router nodes compile to ordered JMESPath rules with a default fallback edge"
+            - "[x] The graph validator enforces router node topology constraints at save time"
+            - "[ ] Conditional routing with complex nested conditions is partially wired"
+        deferrals:
+            - "Complex nested conditional routing is tracked under feat-router"
     feat-library:
         description: Reusable pipeline templates and the template library
+        status: partial
+        behaviours:
+            - "[x] The library lists native and community primitives with search and type filtering"
+            - "[x] Library items can be copied into the org with the CopyToAdaptWizard"
+            - "[ ] Library collections authoring and publishing is flag-gated behind library_collection"
+        deferrals:
+            - "Library collections authoring is flag-gated behind library_collection (see FAR-760)"
     feat-library-collections:
         description: Install, uninstall, and manage library collection installs
         status: covered
@@ -4956,6 +4998,13 @@ features:
             - "[x] Each unique connector_type_id referenced by any agent in the collection gets a checklist entry with status=pending; the runnability check verifies all entries are configured+bound"
     feat-license:
         description: Feature licensing and plan tiers
+        status: partial
+        behaviours:
+            - "[x] Stripe webhook handling verifies signatures and processes invoice.paid events"
+            - "[x] Tier catalogue endpoints resolve plan tiers and feature entitlements"
+            - "[ ] License-based feature gating for all registered features is partially wired"
+        deferrals:
+            - "License-based feature gating across all features is tracked under feat-license"
     feat-lifecycle-maps:
         description: Lifecycle maps and stage workflows
         status: covered
@@ -5038,16 +5087,64 @@ features:
             - "[x] OTel *trace* span capture is BDD-exercised against the REAL LangGraphOtelBridge seams (otel_traces.feature, network-free and DB-free): chain spans stamp the set_run_context organisation_id / pipeline_id attributes per node execution, a tool callback becomes a child span under its parent node span (child parent.span_id == parent context.span_id), connector callbacks carry no credential fields in span attributes, and a telemetry-disabled provider (no span processor) exports no spans"
     feat-onboarding:
         description: First-run onboarding wizard for new users and organizations
+        status: partial
+        behaviours:
+            - "[x] The onboarding wizard guides new users through connector setup and schema creation"
+            - "[x] Onboarding creates initial pipeline templates and library items"
+            - "[ ] Onboarding telemetry preferences and skip logic are partially wired"
+        deferrals:
+            - "Onboarding telemetry preferences are tracked under feat-onboarding"
     feat-org:
         description: Organization settings and feature flags
+        status: partial
+        behaviours:
+            - "[x] Organization settings are configurable with team management and member roles"
+            - "[x] Feature flags can be toggled per organisation"
+            - "[ ] Org-level feature flag governance and audit is partially wired"
+        deferrals:
+            - "Org-level feature flag governance and audit is tracked under feat-org"
     feat-pipelines:
         description: Visual pipeline editor, composite editor, and node categories
+        status: partial
+        behaviours:
+            - "[x] The pipeline editor creates, edits, and saves pipeline graphs with nodes and edges"
+            - "[x] Composite editor supports expand-only composite nodes"
+            - "[x] Node categories are configurable for pipeline organization"
+            - "[x] Pipeline save creates an immutable snapshot tagged version_kind='edit'"
+            - "[x] release_channel support allows triggers to bind to stable/canary channels"
+            - "[x] diff_snapshots surfaces port-signature deltas with impact oracle"
+            - "[ ] Pipeline-level run recovery and retry endpoints are partially wired"
+        deferrals:
+            - "Run-level recovery/retry is handled per-node via recover-node route (see feat-runs)"
     feat-plugins:
         description: Plugin registry
+        status: partial
+        behaviours:
+            - "[x] The plugin registry lists installed plugins and their entry point groups"
+            - "[x] Plugins support connector, model-backend, eval, and schema-type entry points"
+            - "[ ] Plugin lifecycle management (install, enable, disable, uninstall) is partially wired"
+        deferrals:
+            - "Plugin lifecycle management is tracked under feat-plugins"
     feat-product-analytics:
         description: Product usage and adoption analytics for system administrators
+        status: partial
+        behaviours:
+            - "[x] The product analytics page shows usage and adoption metrics for system administrators"
+            - "[x] Consent and enforcement toggles are configurable per instance"
+            - "[ ] Product analytics export and scheduling is partially wired"
+        deferrals:
+            - "Product analytics export and scheduling is tracked under feat-product-analytics"
     feat-assistant:
         description: Modulo assistant configuration and skills
+        status: partial
+        behaviours:
+            - "[x] The assistant settings page configures providers, models, and system prompts"
+            - "[x] Skills can be added, edited, and deleted with triggers and tool permissions"
+            - "[x] Safety settings include rate limits, nogo patterns, and allowed selectors"
+            - "[x] The /assistant page provides an AI assistant interface with analytics"
+            - "[ ] Assistant auto-execute thresholds and guidance tuning are partially wired"
+        deferrals:
+            - "Assistant auto-execute thresholds and guidance tuning are tracked under feat-assistant"
     feat-runs:
         description: Run execution, history, detail, and output diffs
         status: covered
@@ -5170,6 +5267,11 @@ features:
             - SAML single logout (SLO) and SCIM deprovisioning are not implemented yet
     feat-system-config:
         description: System-level configuration administration
+        status: covered
+        behaviours:
+            - "[x] System configuration endpoints are accessible and return configuration values"
+            - "[x] System config entries support create, update, delete with proper access control"
+            - "[x] DELETE coverage for system config entries is BDD-tested"
     feat-system-orgs:
         description: System-level organization administration
         status: covered
@@ -5181,6 +5283,14 @@ features:
             - "[x] Org-level license management: GET/PUT/DELETE on /api/v1/admin/orgs/{org_id}/license resolves/stores/clears the org's settings_json.license_key via parse_and_verify, falls back to the system license, and is role-gated (GET org.license.view / PUT+DELETE org.license.manage) — BDD: system_admin_orgs.feature"
     feat-teams:
         description: Users, teams, and role-based access
+        status: partial
+        behaviours:
+            - "[x] Team management supports creating teams, adding members, and setting roles"
+            - "[x] Role-based access control enforces permissions across endpoints"
+            - "[x] User invitations work with email-based enrollment"
+            - "[ ] Team-level resource scoping and cross-team data isolation is partially wired"
+        deferrals:
+            - "Team-level resource scoping is tracked under feat-teams"
     feat-triggers:
         description: Manual, webhook, and scheduled triggers
         status: covered
@@ -5244,6 +5354,14 @@ features:
             - Route-level webhook validation failures (HMAC/timestamp) roll back with the request and do not persist a TriggerEvent for those typed errors in that path (documented pre-existing limitation)
     feat-variants:
         description: Variant comparison and AB test models
+        status: partial
+        behaviours:
+            - "[x] Variant comparison renders side-by-side run metrics and eval scores"
+            - "[x] Batch runs create variants in insertion order under a batch_id"
+            - "[x] Coverage gaps are reported via get_coverage_gaps"
+            - "[ ] Per-node eval score and per-token breakdown comparison is partially wired"
+        deferrals:
+            - "Per-node eval score and per-token breakdown comparison is tracked under feat-variants"
 sidebar_groups:
     build:
         label: BUILD
