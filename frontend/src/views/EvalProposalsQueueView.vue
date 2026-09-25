@@ -1,12 +1,6 @@
 <template>
   <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
-    <PageTabs :tabs="[
-      { label: $t('views.EvalEditorView.tab_evals'), to: '/evals/editor' },
-      { label: $t('views.EvalEditorView.tab_proposals'), to: '/evals/proposals' },
-      { label: $t('views.EvalEditorView.tab_variants'), to: '/variants/compare' },
-    ]" />
-
     <div class="page-wide">
     <PageHeader :title="$t('views.EvalProposalsQueueView.title')" :subtitle="$t('views.EvalProposalsQueueView.subtitle')" />
 
@@ -122,7 +116,6 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import Button from 'primevue/button'
-import PageTabs from "../components/PageTabs.vue"
 import EmptyState from '../components/shared/EmptyState.vue'
 import { formatDateShortWithTime } from '../lib/formatDate'
 
