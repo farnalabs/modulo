@@ -27,6 +27,19 @@ These tests run against real Postgres (testcontainer) and cover the REAL path:
    exact TOCTOU window), then asserts the PATCH is rejected with 422 and the
    row is left untouched. Without the refresh the endpoint validates against
    the stale default and answers 200.
+3. ``test_patch_to_the_pre_change_owner_is_blocked_for_a_non_member`` covers
+   the AUTHZ half of the same refresh. ``_assert_team_transition_allowed``
+   compares the payload's target team against ``current.owner_team_id``, and
+   the endpoint computes ``ownership_changed`` from the same attribute - both
+   read POST-lock values ONLY because the helper's ``populate_existing=True``
+   refreshes the identity-mapped instance. The test flips the pipeline's
+   ``owner_team_id`` in the unlocked-read -> lock window and PATCHes it back
+   to the pre-change owner from a NON-member: the refreshed row makes that a
+   reassignment (403), while the stale row makes it look like a no-op (200).
+4. ``test_patch_reports_rebind_compared_against_the_post_lock_owner`` is the
+   succeeding sibling: a caller who IS a member of both teams gets 200 with
+   ``connector_rebind_required`` true, which only holds when
+   ``ownership_changed`` compared the payload against the POST-lock owner.
 """
 
 from __future__ import annotations
@@ -52,8 +65,8 @@ _MANUAL = "manual_approval"
 _FULL = "fully_autonomous"
 _CEILING_BELOW_FULL = "notify_on_complete"
 
-_LEVEL_SQL = "SELECT default_autonomy_level FROM pipelines WHERE id = :id"
 _LEVEL_AND_CEILING_SQL = "SELECT default_autonomy_level, max_autonomy_level FROM pipelines WHERE id = :id"
+_SCOPE_SQL = "SELECT visibility, owner_team_id FROM pipelines WHERE id = :id"
 
 
 def _auth_headers(org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin") -> dict[str, str]:
@@ -282,5 +295,220 @@ async def test_patch_accepts_a_ceiling_that_the_locked_row_still_allows(
         default_level, ceiling = await _read_levels(db_engine, pipeline_id)
         assert default_level == _MANUAL
         assert ceiling == _CEILING_BELOW_FULL
+    finally:
+        await _cleanup(db_engine, pipeline_id)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1222 authz half: the SAME refresh must drive the team-transition gate
+# ---------------------------------------------------------------------------
+
+
+async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
+    """A NON-admin ``operator`` account in ``org_id`` (committed).
+
+    The shared ``test_user`` fixture holds the ``admin`` org role, and BOTH
+    ``_reapply_team_gate_inside_mutation_txn`` and
+    ``_assert_team_transition_allowed`` return early for admins - so the authz
+    half needs its own principal. ``pipeline.update`` floors at ``operator``.
+    """
+    account_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
+                "VALUES (:id, :email, :name, 'hash', 'local', true)"
+            ),
+            {
+                "id": str(account_id),
+                "email": f"far1222-{account_id.hex[:12]}@example.com",
+                "name": "FAR-1222 operator",
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                "VALUES (:mid, :aid, :oid, 'operator')"
+            ),
+            {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
+        )
+    return account_id
+
+
+async def _seed_team(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    *,
+    member_id: uuid.UUID | None,
+    label: str,
+) -> uuid.UUID:
+    """A committed team, plus an optional membership row, via the ORM CRUD layer.
+
+    Mirrors the seeding pattern the other team-gate integration tests use
+    (``create_team`` needs the org RLS GUC set on the session; the raw
+    ``teams`` INSERT would have to hand-supply every NOT NULL column).
+    """
+    from modulo.db.crud.team import create_team
+    from modulo.db.crud.team_membership import add_team_member
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_id)})
+        team = await create_team(
+            session,
+            org_id=org_id,
+            name=f"far1222-{label}-{uuid.uuid4().hex[:6]}",
+            account_id=owner_id,
+        )
+        if member_id is not None:
+            await add_team_member(session, org_id=org_id, team_id=team.id, account_id=member_id, role="operator")
+        return team.id
+
+
+async def _set_scope_committed(
+    db_engine: AsyncEngine,
+    pipeline_id: uuid.UUID,
+    *,
+    visibility: str,
+    owner_team_id: uuid.UUID,
+) -> None:
+    """A CONCURRENT transaction re-scopes the pipeline and COMMITs.
+
+    Same shape as ``_set_default_committed``: its own connection, so it is a
+    genuine second transaction rather than part of the session under test.
+    """
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE pipelines SET visibility = :vis, owner_team_id = :tid WHERE id = :id"),
+            {"vis": visibility, "tid": str(owner_team_id), "id": str(pipeline_id)},
+        )
+
+
+async def _read_scope(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> tuple[str, str]:
+    async with db_engine.connect() as conn:
+        row = (await conn.execute(text(_SCOPE_SQL), {"id": str(pipeline_id)})).one()
+    return str(row[0]), str(row[1])
+
+
+async def test_patch_to_the_pre_change_owner_is_blocked_for_a_non_member(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """The refreshed POST-lock row drives the new-team membership gate (403).
+
+    ``_assert_team_transition_allowed`` only re-checks membership of the
+    payload's target team when ``_is_owner_reassignment(new, current)`` says the
+    payload DIFFERS from the current owner. Both ``_get_pipeline_or_404``
+    (unlocked) and the helper's ``FOR UPDATE`` re-select resolve to the SAME
+    identity-mapped instance, so without the helper's ``populate_existing=True``
+    the gate compares against the PRE-change owner: the payload then looks like
+    a no-op, the membership check is skipped, and a NON-member could hand the
+    pipeline back to a team they do not belong to.
+
+    Sequence (the same hook pattern as the ceiling race above):
+
+    1. the row starts ``visibility='org'`` under a team the caller is NOT a
+       member of, so the request-time team dependency passes (org-visible
+       rows are not team-gated) while the caller still cannot join that team;
+    2. the hook commits ``visibility='team', owner=<the caller's own team>``
+       inside the unlocked-read -> lock window;
+    3. the caller PATCHes ``owner_team_id`` back to the pre-change team.
+
+    With the refresh the locked row is (team, caller's team): the current-team
+    gate passes (member) and the new-team gate sees a reassignment to a team
+    the caller does NOT belong to -> 403. Without the refresh the gate reads
+    (org, pre-change team): nothing is team-private and the reassignment
+    comparison is False, so the PATCH would commit -> 200.
+    """
+    operator = await _seed_operator_account(db_engine, test_org)
+    pre_team = await _seed_team(db_engine, test_org, test_user, member_id=None, label="pre")
+    locked_team = await _seed_team(db_engine, test_org, test_user, member_id=operator, label="locked")
+    pipeline_id = await _insert_pipeline(db_engine, test_org, operator)
+    await _set_scope_committed(db_engine, pipeline_id, visibility="org", owner_team_id=pre_team)
+
+    original = pipelines_route._get_pipeline_or_404
+    raced = False
+
+    async def _unlocked_read_then_rescope(session: AsyncSession, pid: uuid.UUID) -> Pipeline:
+        nonlocal raced
+        row = await original(session, pid)
+        if not raced:
+            raced = True
+            await _set_scope_committed(db_engine, pid, visibility="team", owner_team_id=locked_team)
+        return row
+
+    try:
+        with patch.object(pipelines_route, "_get_pipeline_or_404", new=_unlocked_read_then_rescope):
+            resp = await integration_client.patch(
+                f"/api/v1/pipelines/{pipeline_id}",
+                json={"owner_team_id": str(pre_team)},
+                headers=_auth_headers(test_org, operator, role="operator"),
+            )
+
+        assert raced, "the endpoint never performed its unlocked read"
+        assert resp.status_code == 403, resp.text
+        assert "Cannot reassign a pipeline to a team you are not a member of" in resp.json()["detail"]
+
+        # The rejected PATCH left the concurrent flip intact.
+        visibility, owner = await _read_scope(db_engine, pipeline_id)
+        assert visibility == "team"
+        assert owner == str(locked_team)
+    finally:
+        await _cleanup(db_engine, pipeline_id)
+
+
+async def test_patch_reports_rebind_compared_against_the_post_lock_owner(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """``ownership_changed`` (-> ``connector_rebind_required``) reads the POST-lock owner.
+
+    Same race as the 403 above, but the caller is a member of BOTH teams, so
+    the refreshed gate lets the PATCH through. The payload restores the
+    pre-change owner, which the PRE-lock row already held: comparing against
+    the stale value would report ``ownership_changed = False``, while the
+    refreshed comparison (pre-change team != the team the lock just read)
+    reports True. A regression that drops ``populate_existing=True`` therefore
+    flips this response field to false.
+    """
+    operator = await _seed_operator_account(db_engine, test_org)
+    pre_team = await _seed_team(db_engine, test_org, test_user, member_id=operator, label="pre")
+    locked_team = await _seed_team(db_engine, test_org, test_user, member_id=operator, label="locked")
+    pipeline_id = await _insert_pipeline(db_engine, test_org, operator)
+    await _set_scope_committed(db_engine, pipeline_id, visibility="org", owner_team_id=pre_team)
+
+    original = pipelines_route._get_pipeline_or_404
+    raced = False
+
+    async def _unlocked_read_then_rescope(session: AsyncSession, pid: uuid.UUID) -> Pipeline:
+        nonlocal raced
+        row = await original(session, pid)
+        if not raced:
+            raced = True
+            await _set_scope_committed(db_engine, pid, visibility="team", owner_team_id=locked_team)
+        return row
+
+    try:
+        with patch.object(pipelines_route, "_get_pipeline_or_404", new=_unlocked_read_then_rescope):
+            resp = await integration_client.patch(
+                f"/api/v1/pipelines/{pipeline_id}",
+                json={"owner_team_id": str(pre_team)},
+                headers=_auth_headers(test_org, operator, role="operator"),
+            )
+
+        assert raced, "the endpoint never performed its unlocked read"
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["connector_rebind_required"] is True, (
+            "ownership_changed was computed from the pre-lock owner, not the locked row"
+        )
+
+        visibility, owner = await _read_scope(db_engine, pipeline_id)
+        assert visibility == "team"
+        assert owner == str(pre_team)
     finally:
         await _cleanup(db_engine, pipeline_id)

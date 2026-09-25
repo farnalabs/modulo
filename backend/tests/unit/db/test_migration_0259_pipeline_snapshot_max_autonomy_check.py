@@ -159,8 +159,3 @@ class TestModelParity:
         for constraint in _CONSTRAINTS:
             assert constraint in declared, f"model missing {constraint}"
             assert constraint in source, f"migration missing {constraint}"
-
-
-# ``pytest`` is imported late so the module-level helpers above stay importable
-# without it being needed for collection-time discovery of the classes.
-import pytest  # noqa: E402
