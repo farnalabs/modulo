@@ -7,7 +7,7 @@ eval_result_id, run_id, policy_gate_version.
 
 import uuid
 
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -35,6 +35,19 @@ class PolicyGateDecision(OrgScoped):
         CheckConstraint(
             "resolved_action IN ('continue', 'warn', 'block')",
             name="ck_policy_gate_decisions_resolved_action",
+        ),
+        # Temporary uniqueness index (FAR-1102 chunk 4, decision-records slice):
+        # one decision-record row per (run, gate, eval result) so repeated
+        # backfill/reconciliation sweeps are idempotent. Rows with
+        # eval_result_id IS NULL are unbounded (PostgreSQL treats NULLs as
+        # distinct). Bridge toward the decision-record backfill/reconciliation
+        # owner in the FAR-1102 decision-records track — not a destination.
+        Index(
+            "ix_tmp_policy_gate_decisions_run_gate_result",
+            "run_id",
+            "policy_gate_id",
+            "eval_result_id",
+            unique=True,
         ),
     )
 

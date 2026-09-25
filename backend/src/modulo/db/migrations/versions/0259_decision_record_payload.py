@@ -67,6 +67,38 @@ def upgrade() -> None:
             "resolved_action IN ('continue', 'warn', 'block')",
         )
 
+        # 3. Temporary uniqueness index (FAR-1102 chunk 4, decision-records slice).
+        #    Returns exactly one decision-record row per (run, gate, eval result),
+        #    making repeated backfill/reconciliation sweeps idempotent for real
+        #    execution outcomes; rows with eval_result_id IS NULL are unbounded
+        #    by PostgreSQL semantics (NULLs compare distinct) and stay custodial.
+        #    Owner: the cross-slice decision-record backfill/reconciliation
+        #    reconcile-and-backfill work item (FAR-1102 decision-records track).
+        #    This is a bridge index toward that owner, not a destination: policy
+        #    gate decisions may legitimately repeat for the same (run, gate)
+        #    across distinct eval results, so once reconciliation owns the
+        #    duplicate check this index should be dropped by a follow-up
+        #    migration (bridge, not destination).
+        index_name = "ix_tmp_policy_gate_decisions_run_gate_result"
+        inspector = sa.inspect(op.get_bind())
+        existing_index_names = {ix["name"] for ix in inspector.get_indexes("policy_gate_decisions")}
+        if index_name not in existing_index_names:
+            op.create_index(
+                index_name,
+                "policy_gate_decisions",
+                ["run_id", "policy_gate_id", "eval_result_id"],
+                unique=True,
+            )
+
+
+def _drop_decision_uniqueness_index() -> None:
+    """Best-effort drop of the temporary uniqueness index (idempotent)."""
+    index_name = "ix_tmp_policy_gate_decisions_run_gate_result"
+    inspector = sa.inspect(op.get_bind())
+    existing_index_names = {ix["name"] for ix in inspector.get_indexes("policy_gate_decisions")}
+    if index_name in existing_index_names:
+        op.drop_index(index_name, table_name="policy_gate_decisions")
+
 
 def downgrade() -> None:
     if _is_postgres():
@@ -75,6 +107,7 @@ def downgrade() -> None:
             "policy_gate_decisions",
             type_="check",
         )
+        _drop_decision_uniqueness_index()
     op.drop_column("policy_gate_decisions", "policy_gate_version")
     op.drop_column("policy_gate_decisions", "run_id")
     op.drop_column("policy_gate_decisions", "eval_result_id")

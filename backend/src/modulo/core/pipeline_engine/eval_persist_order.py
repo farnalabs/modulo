@@ -244,7 +244,7 @@ async def _persist_decision_row(
                 "policy_gate_decision.persist_failed_referential",
                 extra={
                     "policy_gate_id": str(snapshot.policy_gate.id),
-                    "eval_id": str(outcome.eval_id) if outcome.eval_id else None,
+                    "eval_id": str(snapshot.eval.id),
                     "run_id": str(run_id),
                     "resolved_action": outcome.action,
                     "organisation_id": str(snapshot.policy_gate.organisation_id),
