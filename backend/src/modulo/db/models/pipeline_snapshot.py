@@ -31,6 +31,18 @@ class PipelineSnapshot(OrgScoped):
             "max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipeline_snapshots_max_autonomy_level",
         ),
+        # FAR-1223: the frozen default gets the SAME vocabulary the live
+        # `pipelines.default_autonomy_level` column is guarded by
+        # (ck_pipelines_autonomy_level, since 0003/0110). Unlike the live
+        # column (which always carries a value via its server default and so
+        # has no NULL arm), this column is nullable by design — 0110 dropped
+        # NOT NULL and no server default exists — so NULL is permitted and
+        # means "nothing was frozen".
+        CheckConstraint(
+            "default_autonomy_level IS NULL OR "
+            "default_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            name="ck_pipeline_snapshots_default_autonomy_level",
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(

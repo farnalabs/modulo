@@ -2652,7 +2652,20 @@ async def _reapply_team_gate_inside_mutation_txn(
     )
     if not include_deleted:
         stmt = stmt.where(Pipeline.deleted_at.is_(None))
-    current = (await session.execute(stmt.with_for_update())).scalar_one_or_none()
+    current = (
+        await session.execute(
+            stmt.with_for_update()
+            # populate_existing: SQLAlchemy's identity map returns the SAME
+            # instance for a re-selected row, with its ORIGINAL (pre-lock)
+            # attribute values, unless told to refresh. Callers that pre-fetch
+            # the row (e.g. update_pipeline_endpoint's unlocked
+            # _get_pipeline_or_404) would otherwise get their stale instance
+            # back and the FOR UPDATE re-read would be a no-op — the ceiling
+            # validation and team/ownership reads would run against pre-lock
+            # data, reopening the very TOCTOU this lock exists to close.
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if current is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     if _is_admin(principal):
@@ -2887,6 +2900,10 @@ async def update_pipeline_endpoint(
             # stale unlocked read can otherwise both commit and store
             # ceiling < default. The helper keeps the 404 (gone row) and 403
             # (team-private row, non-member) semantics of the unlocked read.
+            # NOTE: the unlocked read above and this locked re-select resolve to
+            # the SAME identity-mapped instance; the helper's
+            # populate_existing=True refreshes its attributes from the locked
+            # row, so both names below read post-lock values.
             locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             await _assert_team_transition_allowed(session, principal, current, updates)
             # FAR-1163: a PATCH may set only one of default/max — validate the
@@ -2894,11 +2911,13 @@ async def update_pipeline_endpoint(
             # default, so it never violates on its own).
             if "default_autonomy_level" in updates or "max_autonomy_level" in updates:
                 merged_default = updates.get("default_autonomy_level", locked.default_autonomy_level)
-                merged_ceiling = (
-                    updates["max_autonomy_level"]
-                    if "max_autonomy_level" in updates
-                    else getattr(locked, "max_autonomy_level", None)
-                )
+                # ``dict.get`` returns the stored value whenever the key is
+                # present (even an explicit null), which is exactly
+                # "updates[k] if k in updates else the row's value".
+                # ``locked`` is the FOR UPDATE row: ``max_autonomy_level``
+                # has existed since migration 0256, so read it directly —
+                # its NULL arm (no ceiling configured) is the only fallback.
+                merged_ceiling = updates.get("max_autonomy_level", locked.max_autonomy_level)
                 try:
                     # Lenient: a stored non-string/unparseable ceiling does not
                     # constrain resolution either (it falls back to default).
