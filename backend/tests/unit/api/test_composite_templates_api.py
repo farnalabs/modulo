@@ -1158,3 +1158,51 @@ class TestCompositeTemplateMasking:
         }
         response_node = resp.json()["sub_pipeline_graph_json"]["nodes"][0]
         assert response_node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+
+    def test_mask_sub_pipeline_graph_non_dict_returns_empty(self) -> None:
+        """A missing / non-dict graph masks to an empty graph, never echoes it."""
+        from modulo.api.routes.composite_templates import _mask_sub_pipeline_graph
+
+        assert _mask_sub_pipeline_graph(None) == {}
+        assert _mask_sub_pipeline_graph("not-a-graph") == {}  # type: ignore[arg-type]
+
+    def test_patch_graph_missing_template_returns_404(self, client: TestClient) -> None:
+        """A graph-bearing PATCH on a vanished template 404s before the write.
+
+        The mask-echo resolver reads the current template to restore echoed
+        secrets; if the template is gone there is nothing to resolve against, so
+        the request must fail rather than persist a mask literal.
+        """
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/api/v1/composite-templates/{uuid.uuid4()}",
+                json={"sub_pipeline_graph_json": {"nodes": [{"id": "n1"}], "edges": []}},
+            )
+        assert resp.status_code == 404
+
+    def test_patch_graph_with_non_dict_stored_graph_keeps_incoming_nodes(self, client: TestClient) -> None:
+        """A stored graph that is not a dict yields no stored nodes to merge.
+
+        The echo resolver must tolerate a null / malformed stored graph on an
+        otherwise valid template rather than raising, and take the incoming
+        nodes wholesale when there is nothing to resolve against.
+        """
+        stored = _make_template(sub_pipeline_graph_json=None)
+        stored_after = _make_template(sub_pipeline_graph_json={"nodes": [{"id": "n1"}], "edges": []})
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=stored),
+            patch(
+                "modulo.api.routes.composite_templates.update_composite_template",
+                return_value=stored_after,
+            ) as upd,
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}",
+                json={"sub_pipeline_graph_json": {"nodes": [{"id": "n1"}], "edges": []}},
+            )
+        assert resp.status_code == 200
+        assert upd.await_args.args[2]["sub_pipeline_graph_json"]["nodes"] == [{"id": "n1"}]

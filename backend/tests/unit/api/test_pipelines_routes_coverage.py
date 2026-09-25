@@ -1555,6 +1555,47 @@ def test_diff_snapshots_happy_path(client: tuple[TestClient, AsyncMock]) -> None
     assert secret not in resp.text
 
 
+def test_diff_snapshots_non_dict_and_non_list_payloads_pass_through(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Defensive: only plain dict / list payloads enter the FAR-1181 maskers.
+
+    A mapping that is not a ``dict`` (or a sequence that is not a ``list``) is
+    left untouched by the masking step and coerced by the response model — the
+    maskers index by key, so they must never receive an arbitrary object.
+    """
+    from collections import UserDict
+
+    http, _session = client
+    result = {
+        "snapshot_a": UserDict({"id": str(_SNAP_ID), "graph": {"nodes": [], "edges": []}}),
+        "snapshot_b": UserDict({"id": str(uuid.uuid4()), "graph": {"nodes": [], "edges": []}}),
+        "nodes_added": (),
+        "nodes_removed": (),
+        "nodes_modified": [],
+        "edges_added": [],
+        "edges_removed": [],
+        "edges_modified": [],
+        "semantic": {},
+    }
+    with (
+        patch(f"{_PREFIX}diff_snapshots", new=AsyncMock(return_value=result)),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.post(
+                f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/diff",
+                json={"snapshot_a_id": str(_SNAP_ID), "snapshot_b_id": str(uuid.uuid4())},
+            )
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["snapshot_a"] == {"id": str(_SNAP_ID), "graph": {"nodes": [], "edges": []}}
+    assert body["nodes_added"] == []
+
+
 # ---------------------------------------------------------------------------
 # Folder move
 # ---------------------------------------------------------------------------

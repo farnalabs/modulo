@@ -727,3 +727,113 @@ def test_v2_export_carries_no_graph_nodes() -> None:
     assert "graph_nodes_json" not in dump
     assert _GHP_SECRET not in dump
     assert _STRIPE_SECRET not in dump
+
+
+# ---------------------------------------------------------------------------
+# Defensive branches in the FAR-1181 strip / merge / snapshot helpers
+# ---------------------------------------------------------------------------
+
+
+def test_strip_graph_node_credentials_passes_non_dict_nodes_through() -> None:
+    """A non-dict entry in ``graph_nodes`` is echoed unchanged, never indexed."""
+    from modulo.core.workflow_import_export import strip_graph_node_credentials
+
+    nodes, redactions = strip_graph_node_credentials(["not-a-node", None])  # type: ignore[list-item]
+
+    assert nodes == ["not-a-node", None]
+    assert redactions == []
+
+
+def test_strip_graph_node_credentials_fails_closed_when_stripping_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A detector failure drops every credential field wholesale.
+
+    Fail-closed: an export must never emit a raw credential because a detector
+    misfired, so the field goes and the removal is recorded as
+    ``stripping_failed`` for the import-side warning.
+    """
+    from modulo.core import workflow_import_export as wix
+    from modulo.core.workflow_import_export import strip_graph_node_credentials
+
+    def _boom(_node: dict[str, Any]) -> Any:
+        raise RuntimeError("detector misfired")
+
+    monkeypatch.setattr(wix, "_strip_node_credentials", _boom)
+    node = {
+        "id": "n-fail",
+        "label": "kept",
+        "env_vars": {"GITHUB_TOKEN": _GHP_SECRET},
+        "composite_parameter_values": {"cfg": {"api_key": _STRIPE_SECRET}},
+    }
+
+    nodes, redactions = strip_graph_node_credentials([node])
+
+    assert nodes[0] == {"id": "n-fail", "label": "kept"}
+    assert {r["field"] for r in redactions} == {"env_vars", "composite_parameter_values"}
+    assert {r["reason"] for r in redactions} == {"stripping_failed"}
+
+
+def test_has_secret_value_ignores_non_string_and_empty() -> None:
+    """The value-tier detector is a no-op for non-strings and the empty string."""
+    from modulo.core.workflow_import_export import _has_secret_value
+
+    assert _has_secret_value(None) is False
+    assert _has_secret_value("") is False
+    assert _has_secret_value(123) is False
+
+
+def test_strip_context_files_keeps_clean_content() -> None:
+    """Only secret-bearing file CONTENT is removed; clean files survive."""
+    from modulo.core.workflow_import_export import _strip_context_files
+
+    kept, redactions = _strip_context_files(
+        "n1",
+        {"/tmp/ok.txt": "no credential here", "/tmp/creds.txt": f"token={_STRIPE_SECRET}"},
+    )
+
+    assert kept == {"/tmp/ok.txt": "no credential here"}
+    assert redactions == [
+        {"node_id": "n1", "field": "context_files", "path": "/tmp/creds.txt", "reason": "secret_value"}
+    ]
+
+
+def test_strip_deep_values_walks_lists_and_drops_secret_elements() -> None:
+    """Deep parameter values are walked through nested LISTS as well as dicts."""
+    from modulo.core.workflow_import_export import _strip_deep_values
+
+    redactions: list[dict[str, str]] = []
+    value = {
+        "headers": [f"Authorization: Bearer {_GHP_SECRET}", "public", {"password": "p"}, 7],
+        "keep": "ok",
+    }
+
+    result = _strip_deep_values("n1", "parameter_overrides", value, "", redactions)
+
+    assert result == {"headers": ["public", {}, 7], "keep": "ok"}
+    assert {(r["path"], r["reason"]) for r in redactions} == {
+        ("headers[0]", "secret_value"),
+        ("headers[2].password", "sensitive_key"),
+    }
+
+
+def test_merge_masked_graph_nodes_skips_non_dict_and_id_less_stored_nodes() -> None:
+    """Stored-node indexing tolerates malformed entries and keeps the valid ones."""
+    incoming = [{"id": "n1", "env_vars": {"TOKEN": SENSITIVE_VALUE_MASK}}]
+    stored = [  # type: ignore[list-item]
+        "not-a-node",
+        {"id": None, "env_vars": {"TOKEN": "ignored"}},
+        {"id": "n1", "env_vars": {"TOKEN": "stored-secret"}},
+    ]
+
+    merged = merge_masked_graph_nodes(incoming, stored)
+
+    assert merged == [{"id": "n1", "env_vars": {"TOKEN": "stored-secret"}}]
+
+
+def test_masked_snapshot_graph_passes_through_non_dict() -> None:
+    """A null / non-dict snapshot graph is returned unchanged, not indexed."""
+    from modulo.api.routes.pipelines import _masked_snapshot_graph
+
+    assert _masked_snapshot_graph(None) is None
+    assert _masked_snapshot_graph(["x"]) == ["x"]
