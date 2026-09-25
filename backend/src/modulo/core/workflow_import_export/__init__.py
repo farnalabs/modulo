@@ -1237,7 +1237,12 @@ async def materialize_import(
         session=session,
         org_id=org_id,
         created_by=created_by,
-        warnings=warnings or [],
+        # NOT ``warnings or []``: an EMPTY caller-supplied list is falsy, so
+        # that idiom silently swaps in a fresh list and the caller (e.g.
+        # ``install_collection``, which persists this list as the install's
+        # warnings) never sees anything the import appended. An omitted/None
+        # still gets its own list.
+        warnings=[] if warnings is None else warnings,
         owner_team_id=owner_team_id,
         overrides=_ImportOverrides(
             model_backends=model_backend_overrides or {},

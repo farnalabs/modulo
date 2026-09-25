@@ -395,6 +395,7 @@ def _build_bundle_from_pins(
     agents: list[dict[str, Any]] = []
     graph_nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
+    redacted_credentials: list[dict[str, Any]] = []
 
     schema_ids_by_slug = {p.slug: str(p.id) for p in resolved_pins if p.primitive_type == "schema"}
 
@@ -419,6 +420,16 @@ def _build_bundle_from_pins(
             edges.extend(workflow_content.get("edges", []))
             agents.extend(workflow_content.get("agents", []))
             schemas.extend(workflow_content.get("schemas", []))
+            # FAR-1181: the embedded workflow bundle may carry the export's
+            # credential-redaction record (a v1 export STRIPS node credentials
+            # and records what it removed). The record is the only thing that
+            # lets ``materialize_import`` warn the operator which keys to
+            # re-provision — dropping it here would install the stripped nodes
+            # silently. Merge every embedded pin's record so a multi-workflow
+            # collection warns about all of them.
+            embedded_redactions = workflow_content.get("redacted_credentials")
+            if isinstance(embedded_redactions, list):
+                redacted_credentials.extend(entry for entry in embedded_redactions if isinstance(entry, dict))
         elif ptype == "pipeline_template":
             _append_pipeline_template_pin(pin, content, agents, graph_nodes, edges, schema_ids_by_slug)
         elif ptype == "agent":
@@ -442,6 +453,9 @@ def _build_bundle_from_pins(
         "agents": agents,
         "schemas": schemas,
         "edges": edges,
+        # Same top-level key the v1 importer reads off an export bundle — the
+        # collection-install path runs through the identical warning mechanism.
+        "redacted_credentials": redacted_credentials,
     }
 
 
