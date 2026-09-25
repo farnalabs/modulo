@@ -937,6 +937,9 @@ elements:
       - testid: collection-install-error
         type: element
         dynamic_testid: false
+      - testid: collection-install-warnings
+        type: element
+        dynamic_testid: false
       - testid: collection-publish
         type: button
         dynamic_testid: false
