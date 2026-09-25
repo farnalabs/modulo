@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import type { Stubs } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { nextTick } from 'vue'
 
 const testRoute = vi.hoisted(() => ({
@@ -37,7 +38,27 @@ vi.mock('vue-router', () => ({
     isReady: vi.fn().mockResolvedValue(undefined),
     install: vi.fn(),
   })),
-  createRouter: vi.fn(() => ({})),
+  // RunDetailView pulls in the Analyze action (FAR-1235), whose assistant
+  // store chain imports @/router — that module calls beforeEach/afterEach/
+  // onError on the router it builds at import time, so the stub must answer them.
+  createRouter: vi.fn(() => ({
+    install: vi.fn(),
+    push: vi.fn(),
+    replace: vi.fn(),
+    resolve: vi.fn(),
+    go: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    beforeEach: vi.fn(),
+    afterEach: vi.fn(),
+    onError: vi.fn(),
+    currentRoute: { value: {} },
+    getRoutes: vi.fn(() => []),
+    addRoute: vi.fn(),
+    removeRoute: vi.fn(),
+    hasRoute: vi.fn(() => false),
+    isReady: vi.fn(() => Promise.resolve(true)),
+  })),
   createWebHistory: vi.fn(() => ({})),
 }))
 
@@ -71,7 +92,9 @@ function baseRun(overrides: Record<string, unknown> = {}) {
 
 function mountView(options: { stubs?: Stubs } = {}) {
   return mount(RunDetailView, {
-    global: options.stubs ? { stubs: options.stubs } : undefined,
+    // The Analyze action (FAR-1235) reads plan/assistant stores, so the
+    // view's test host needs an active Pinia.
+    global: { plugins: [createPinia()], ...(options.stubs ? { stubs: options.stubs } : {}) },
   })
 }
 
