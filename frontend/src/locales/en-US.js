@@ -3378,6 +3378,21 @@ export default {
       "one_warning": "1 warning",
       "n_warnings": "{count} warnings"
     },
+    "AnalyzeRunButton": {
+      "analyze": "Analyze",
+      "checking_configuration": "Checking the Assistant configuration...",
+      "assistant_not_configured": "The Assistant is not configured. Add a model backend with credentials to enable analysis.",
+      "assistant_busy": "The Assistant is already responding. Wait for it to finish, then try again.",
+      "session_name": "Analyze run {run}",
+      "status_starting": "Starting a root-cause analysis conversation...",
+      "status_started": "Root-cause analysis started for {pipeline}. Follow it in the Assistant panel.",
+      "status_failed": "Failed to start the analysis: {message}",
+      "seed_header": "Please do a root-cause analysis of a failed run.\nRun: {run}\nPipeline: {pipeline}\nStatus: {status}",
+      "seed_error_code": "Error code: {code}",
+      "seed_error_detail": "Error detail:\n{detail}",
+      "seed_failing_node": "Failing node: {node}",
+      "seed_request": "Work out the most likely root cause of this failure, cite the evidence in the run, and suggest concrete fixes."
+    },
     "ViewToggle": {
       "saved_views": "Saved Views",
       "select_a_saved_view": "Select a saved view..."

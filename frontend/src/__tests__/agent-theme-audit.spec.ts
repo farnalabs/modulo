@@ -7,6 +7,27 @@ vi.mock('vue-router', () => ({
   useRouter: vi.fn(() => ({ push: vi.fn(), isReady: vi.fn(() => Promise.resolve()) })),
   useRoute: vi.fn(() => ({ name: 'login', params: { id: 'test-id' }, path: '/', query: {} })),
   RouterLink: { template: '<a><slot /></a>' },
+  // RunDetailView pulls in the Analyze action (FAR-1235), whose assistant
+  // store chain imports @/router — that module builds a router on import.
+  createRouter: vi.fn(() => ({
+    install: vi.fn(),
+    push: vi.fn(),
+    replace: vi.fn(),
+    resolve: vi.fn(),
+    go: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    beforeEach: vi.fn(),
+    afterEach: vi.fn(),
+    onError: vi.fn(),
+    currentRoute: { value: {} },
+    getRoutes: vi.fn(() => []),
+    addRoute: vi.fn(),
+    removeRoute: vi.fn(),
+    hasRoute: vi.fn(() => false),
+    isReady: vi.fn(() => Promise.resolve(true)),
+  })),
+  createWebHistory: vi.fn(() => ({})),
 }))
 
 vi.mock('../composables/useApi', () => ({

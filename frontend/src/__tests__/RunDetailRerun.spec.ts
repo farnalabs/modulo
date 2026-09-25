@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { nextTick } from 'vue'
 
 let mockRunStatus = 'complete'
@@ -87,7 +88,9 @@ import RunDetailView from '../views/RunDetailView.vue'
 import { api } from '../lib/api/client'
 
 function mountView() {
-  return mount(RunDetailView)
+  // The Analyze action (FAR-1235) reads plan/assistant stores, so the view's
+  // test host needs an active Pinia.
+  return mount(RunDetailView, { global: { plugins: [createPinia()] } })
 }
 
 beforeEach(() => {

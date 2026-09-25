@@ -94,11 +94,15 @@ export const useAssistantStore = defineStore('assistant', () => {
     }
   }
 
-  async function createSession() {
+  /**
+   * Create a new chat session. `name` seeds the session title (optional —
+   * the server derives one from the conversation when it is left null).
+   */
+  async function createSession(options?: { name?: string | null }) {
     error.value = null
     try {
       const resp = await api.POST('/api/v1/assistant/sessions', {
-        body: { name: null, provider: null, model: null, context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS } as unknown as components['schemas']['CreateSessionRequest'],
+        body: { name: options?.name ?? null, provider: null, model: null, context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS } as unknown as components['schemas']['CreateSessionRequest'],
       })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
