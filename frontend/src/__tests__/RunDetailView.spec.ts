@@ -2742,3 +2742,86 @@ describe('RunDetailView Analyze action (FAR-1235)', () => {
     wrapper.unmount()
   })
 })
+
+// ---------------------------------------------------------------------------
+// FAR-1233 cancellation transparency: a distinct human-readable message per
+// cancel-reason code, plus the neutral fallback for runs cancelled before the
+// reason columns shipped (cancel_reason = null).
+// ---------------------------------------------------------------------------
+describe('RunDetailView cancellation reason (FAR-1233)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function cancelledDetail(cancelReason: string | null, cancelledBy: string | null = 'system') {
+    return {
+      run_id: 'test-run-id',
+      pipeline_id: 'test-pipeline',
+      status: 'cancelled',
+      total_cost_usd: 1.23,
+      token_consumption: null,
+      node_token_usage: null,
+      trace_id: null,
+      cancel_reason: cancelReason,
+      cancelled_by: cancelledBy,
+    }
+  }
+
+  async function mountCancelled(data: Record<string, unknown>) {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') {
+        return Promise.resolve({ data: { gates: [] }, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/work-items/enrichment') {
+        return Promise.resolve({ data: null, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  it('renders a distinct message for each cancel reason', async () => {
+    const expected: Record<string, string> = {
+      user_requested: 'An operator cancelled it on request.',
+      agent_requested: 'An agent cancelled it through the API.',
+      hitl_gate_expired: 'It was cancelled automatically: the human review gate expired without a decision.',
+      hitl_gate_missing: 'It was cancelled automatically: the human review gate was never created.',
+    }
+    for (const [reason, message] of Object.entries(expected)) {
+      const wrapper = await mountCancelled(cancelledDetail(reason))
+      const el = wrapper.find('[data-testid="run-detail-cancel-reason-message"]')
+      expect(el.exists()).toBe(true)
+      expect(el.text()).toBe(message)
+      wrapper.unmount()
+    }
+  })
+
+  it('falls back to the neutral message when no reason was recorded', async () => {
+    const wrapper = await mountCancelled(cancelledDetail(null, null))
+    const el = wrapper.find('[data-testid="run-detail-cancel-reason-message"]')
+    expect(el.exists()).toBe(true)
+    expect(el.text()).toBe('Reason not recorded.')
+    wrapper.unmount()
+  })
+
+  it('attributes a system-owned cancellation', async () => {
+    const wrapper = await mountCancelled(cancelledDetail('hitl_gate_expired', 'system'))
+    expect(wrapper.find('[data-testid="run-detail-cancelled-by"]').text()).toBe('Cancelled by the system')
+    wrapper.unmount()
+  })
+
+  it('hides the cancellation panel for a run that is not cancelled', async () => {
+    const wrapper = await mountCancelled({ ...cancelledDetail('user_requested'), status: 'complete' })
+    expect(wrapper.find('[data-testid="run-detail-cancel-reason"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})

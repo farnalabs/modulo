@@ -532,6 +532,11 @@ class TestCancelRun(_AuthContext):
 
         assert result == {"run_id": str(run.id), "cancellation_requested": True}
         mock_request_cancellation.assert_awaited_once()
+        # FAR-1233: the MCP tool is the AGENT-initiated cancel leg — it stamps
+        # ``agent_requested`` and the authenticated caller as the actor.
+        kwargs = mock_request_cancellation.await_args.kwargs
+        assert kwargs["reason"] == "agent_requested"
+        assert kwargs["actor"] == str(_PLACEHOLDER_USER_ID)
         # A STREAMED (non-paused) run is routed through finalize_cost.
         mock_finalize_cancelled.assert_awaited_once()
 

@@ -332,6 +332,29 @@
         <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
       </div>
 
+      <!-- Cancellation reason (FAR-1233): WHY this run was cancelled.
+           Rendered for every cancelled run — the reason itself degrades to a
+           neutral "not recorded" message when the run predates the
+           cancel-reason columns (cancelReasonMessage handles the fallback). -->
+      <div
+        v-if="run.status === 'cancelled'"
+        data-testid="run-detail-cancel-reason"
+        class="mb-4 rounded-lg border border-border bg-muted/40 p-4"
+      >
+        <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.cancel_reason_title') }}</h3>
+        <p
+          data-testid="run-detail-cancel-reason-message"
+          role="status"
+          aria-live="polite"
+          class="text-sm text-muted-foreground"
+        >{{ cancelReasonMessage }}</p>
+        <p
+          v-if="cancelledByLabel"
+          data-testid="run-detail-cancelled-by"
+          class="mt-1 text-xs text-muted-foreground"
+        >{{ cancelledByLabel }}</p>
+      </div>
+
       <!-- FAR-706: curated known-fix entries matched against the raw error detail -->
       <KnownFixesPanel :fixes="run.known_fixes" />
 
@@ -1559,6 +1582,32 @@ const analyzeRunInfo = computed<AnalyzeRunInfo | null>(() => {
     errorDetail: typeof r.error_detail === 'string' ? r.error_detail : null,
     failingNode: failingNodeName.value,
   }
+})
+
+// FAR-1233 cancellation transparency: one message per cancel-reason code
+// (the backend's closed vocabulary), keyed to i18n entries so no code or raw
+// backend string is ever rendered to the user. An unknown/absent reason —
+// every run cancelled before the columns shipped — falls back to the neutral
+// "reason not recorded" message rather than guessing a cause.
+const CANCEL_REASON_MESSAGE_KEYS: Record<string, string> = {
+  user_requested: 'views.RunDetailView.cancel_reason_user_requested',
+  agent_requested: 'views.RunDetailView.cancel_reason_agent_requested',
+  hitl_gate_expired: 'views.RunDetailView.cancel_reason_hitl_gate_expired',
+  hitl_gate_missing: 'views.RunDetailView.cancel_reason_hitl_gate_missing',
+}
+
+const cancelReasonMessage = computed(() => {
+  const key = CANCEL_REASON_MESSAGE_KEYS[run.value?.cancel_reason ?? '']
+  return t(key ?? 'views.RunDetailView.cancel_reason_unknown')
+})
+
+// Attribution line under the reason: the ``system`` sentinel gets its own
+// copy; an acting account id is shortened like every other id on this page.
+const cancelledByLabel = computed(() => {
+  const by = run.value?.cancelled_by
+  if (!by) return ''
+  if (by === 'system') return t('views.RunDetailView.cancelled_by_system')
+  return t('views.RunDetailView.cancelled_by_actor', { actor: shortId(by) })
 })
 
 function nodeStatusBadgeClass(node: NodeEntry): string {

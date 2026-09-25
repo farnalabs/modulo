@@ -171,7 +171,13 @@ from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_ACTIONABLE_RUN_STATUSES, TERMINAL_STATUSES, Run
+from modulo.db.models.run import (
+    AWAITING_HUMAN_STATUS,
+    CANCEL_REASON_AGENT_REQUESTED,
+    HITL_ACTIONABLE_RUN_STATUSES,
+    TERMINAL_STATUSES,
+    Run,
+)
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
@@ -4150,7 +4156,17 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
         # forfeits its accrued cost (cost_components_partial_spend_lost
         # log).
         was_paused = run.status in ("awaiting_human", "claimed", "hitl_parked")
-        run = await request_cancellation(s, rid)
+        # FAR-1233: this is the AGENT-initiated cancel leg (the MCP tool), so
+        # the reason distinguishes it from an operator clicking Cancel in the
+        # UI. The acting account is read fail-open (absent -> the caller
+        # degrades to the ``system`` sentinel instead of failing the tool).
+        _actor = _ctx_user_id.get(None)
+        run = await request_cancellation(
+            s,
+            rid,
+            reason=CANCEL_REASON_AGENT_REQUESTED,
+            actor=str(_actor) if _actor is not None else None,
+        )
         if not was_paused:
             await finalize_cancelled_run(s, run_id=rid, org_id=org_id)
     if run is None:
