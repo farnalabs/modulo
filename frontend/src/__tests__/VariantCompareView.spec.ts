@@ -75,7 +75,7 @@ describe('VariantCompareView', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Variants')
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(false)
   })
 
   it('does not render the redundant page-level tab strip (FAR-1236)', async () => {
