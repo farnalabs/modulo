@@ -41,12 +41,12 @@ def _extract_constraint_name(exc: object) -> str | None:
     ``detail`` attribute with the constraint name in its standard error format).
     """
     name = getattr(exc, "constraint_name", None)
-    if name:
+    if isinstance(name, str):
         return name
     orig = getattr(exc, "orig", None)
     if orig is not None:
         name = getattr(orig, "constraint_name", None)
-        if name:
+        if isinstance(name, str):
             return name
         # asyncpg ForeignKeyViolationError message format:
         # '...violates foreign key constraint "constraint_name"...'
