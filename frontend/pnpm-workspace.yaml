@@ -15,8 +15,8 @@ overrides:
   "@redocly/openapi-core>js-yaml": "4.3.2"
   "postcss>nanoid": "^6.0.0"
   rollup: "4.63.4"
-  "@tanstack/query-core": "5.103.1"
-  "@tanstack/vue-query": "5.103.1"
+  "@tanstack/query-core": "5.103.2"
+  "@tanstack/vue-query": "5.103.2"
 minimumReleaseAgeExclude:
   - '@rollup/rollup-android-arm-eabi@4.63.0'
   - '@rollup/rollup-android-arm64@4.63.0'
@@ -113,6 +113,7 @@ minimumReleaseAgeExclude:
   - '@datadog/js-core@0.0.15'
   - '@lucide/vue@1.46.0'
   - '@lucide/vue@1.47.0'
+  - '@lucide/vue@1.48.0'
   - '@types/node@26.6.1'
   - '@sentry/browser@10.75.0'
   - '@sentry/browser-utils@10.75.0'
